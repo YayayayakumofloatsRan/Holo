@@ -24,7 +24,14 @@ from kernel_v3.retrieval.http_provider import HttpFetchProvider, HttpTransportRe
 from kernel_v3.retrieval.inspection import inspect_retrieval_providers
 from kernel_v3.retrieval.live_config import LiveCrawlSearchConfig, LiveHttpFetchConfig, LiveJsonHttpSearchConfig, LiveRetrievalConfig
 from kernel_v3.retrieval.operator import RetrievalOperator, register_retrieval_tool
-from kernel_v3.retrieval.providers import FakeFetchProvider, FakeSearchProvider, FetchResponse, provider_capability
+from kernel_v3.retrieval.providers import (
+    FakeFetchProvider,
+    FakeSearchProvider,
+    FetchResponse,
+    UnconfiguredFetchProvider,
+    UnconfiguredSearchProvider,
+    provider_capability,
+)
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
 from kernel_v3.retrieval.source_query_provider import ResearchSourceQuerySearchProvider
 
@@ -68,6 +75,8 @@ __all__ = [
     "SearchSource",
     "SecEdgarSearchProvider",
     "SourceDirectorySearchProvider",
+    "UnconfiguredFetchProvider",
+    "UnconfiguredSearchProvider",
     "inspect_retrieval_providers",
     "provider_capability",
     "register_retrieval_tool",

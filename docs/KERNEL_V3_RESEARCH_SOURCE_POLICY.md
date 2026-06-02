@@ -13,7 +13,8 @@ through before their evidence can support a final answer.
   source is authoritative.
 - Raw fetched bodies still go to `ArtifactStore`; journal records contain
   previews, hashes, assessments, diagnostics, evidence, and citations.
-- Unit tests remain offline and use fake providers.
+- Unit tests remain offline and may explicitly instantiate fixture providers;
+  default runtime retrieval does not fabricate sources.
 
 ## Finance Fundamentals Profile
 
@@ -183,7 +184,8 @@ Rules:
   context only; raw page bodies are never embedded in access audit records
 - retrieval journals `retrieval_corpus_document` only when a corpus store is
   configured
-- default tests use fake providers and do not require network access
+- deterministic tests may explicitly instantiate fixture providers, but
+  production defaults must not fabricate retrieval sources or fetched bodies
 
 This keeps the future live web path auditable: provider output becomes fetched
 artifact, source-assessed evidence, citation, and corpus metadata instead of an
@@ -208,8 +210,8 @@ web corpus before asking for live web access:
 This makes the webpage database a first-class retrieval source while preserving
 the existing PolicyGate boundary for future live network providers.
 Retrieval query-plan and report diagnostics include these provider capabilities,
-so a resident operator can audit whether a run used corpus-only, fake, or
-future live-capable providers.
+so a resident operator can audit whether a run used corpus-only, inline
+operator-provided body, unconfigured, or future live-capable providers.
 
 Composite search providers fail soft across provider boundaries. If one search
 provider raises, the fallback chain records the provider id, failure status, and
@@ -435,7 +437,7 @@ holo-v3 \
 
 This command is read-only. It does not retrieve, fetch, index, or read artifact
 bodies. It reports provider capabilities, `network_access`, profile awareness,
-and operator-facing issues such as using a generic fake provider for a directed
+and operator-facing issues such as an unconfigured provider for a directed
 finance profile. It also inspects composite provider configuration; for
 example, an empty fallback search chain is reported as an error before any
 resident run can mistake the configuration for a usable search provider.
@@ -451,16 +453,17 @@ holo-v3 \
   --corpus-log .state/kernel_v3/corpus.jsonl \
   --corpus-index .state/kernel_v3/corpus.sqlite \
   retrieve "AAPL 2024 revenue" \
+  --body "AAPL 2024 10-K revenue from the indexed filing body" \
   --uri "https://www.sec.gov/Archives/edgar/data/320193/filing.htm" \
   --title "Apple Form 10-K" \
   --profile finance_fundamentals \
   --index-corpus
 ```
 
-The command above still uses the bounded fake provider unless a host supplies a
-different provider in code. `--index-corpus` only persists safe corpus metadata:
-raw/body fields and secret-like metadata keys or values are omitted before a
-document is recorded. The raw body is stored in the artifact log.
+The command above uses an explicit inline body supplied by the operator; it does
+not synthesize a fake fetched page. `--index-corpus` only persists safe corpus
+metadata: raw/body fields and secret-like metadata keys or values are omitted
+before a document is recorded. The raw body is stored in the artifact log.
 
 The indexed corpus can then be inspected:
 
@@ -530,13 +533,13 @@ holo-v3 \
   resident run-once --worker-id research-worker
 ```
 
-When a corpus store is configured, the default retrieval operator first queries
+When a corpus store is configured, the default retrieval operator queries
 `research_corpus`. If it finds a matching document, it fetches the body from the
-artifact store and stays offline. If it finds no match, it falls back to the
-bounded fake provider used by tests and indexes the resulting fetched document
-into the corpus. This is the resident-safe skeleton for future live providers:
-live web search can be added behind PolicyGate later without changing the
-agent loop or making unit tests depend on network access.
+artifact store and stays offline. If it finds no match, retrieval fails closed
+with insufficient evidence unless a live retrieval operator has been explicitly
+configured. This is the resident-safe skeleton for future live providers: live
+web search can be added behind PolicyGate later without changing the agent loop
+or making deterministic tests depend on network access.
 
 ## Agent Research Profile
 

@@ -55,14 +55,14 @@ from kernel_v3.research import (
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
-    FakeFetchProvider,
-    FakeSearchProvider,
-    FallbackSearchProvider,
+    FetchResponse,
     LiveRetrievalConfig,
     RetrievalOperator,
     RoutingFetchProvider,
     SearchGoal,
     SearchSource,
+    UnconfiguredFetchProvider,
+    UnconfiguredSearchProvider,
     inspect_retrieval_providers,
 )
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
@@ -356,8 +356,8 @@ def main(argv: list[str] | None = None) -> int:
     retrieve_parser.add_argument("query")
     retrieve_parser.add_argument("--synthesizer", choices=["fake", "model"], default="fake")
     retrieve_parser.add_argument("--body", default=None)
-    retrieve_parser.add_argument("--uri", default="https://example.test/holo-v3-cli")
-    retrieve_parser.add_argument("--title", default="Holo v3 CLI evidence")
+    retrieve_parser.add_argument("--uri", default="inline://holo-v3-cli")
+    retrieve_parser.add_argument("--title", default="Holo v3 CLI inline evidence")
     retrieve_parser.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
     retrieve_parser.add_argument("--max-sources", type=int, default=5)
     retrieve_parser.add_argument("--max-fetches", type=int, default=3)
@@ -366,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     retrieve_parser.add_argument("--from-corpus", action="store_true")
 
     retrieval_providers_parser = sub.add_parser("retrieval-providers")
-    retrieval_providers_parser.add_argument("--mode", choices=["default", "fake", "corpus", "live-http"], default="default")
+    retrieval_providers_parser.add_argument("--mode", choices=["default", "corpus", "live-http"], default="default")
     retrieval_providers_parser.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
 
     corpus_parser = sub.add_parser("corpus")
@@ -1901,13 +1901,11 @@ def _retrieval_provider_command(args) -> dict[str, object]:
 
 
 def _retrieval_operator_for_mode(mode: str, args) -> tuple[RetrievalOperator, str]:
-    if mode == "fake":
-        return _fake_retrieval_operator(), "fake"
     if mode == "corpus":
         corpus_store = _corpus_store(args, create_default=True)
         artifact_store = _artifact_store(args, create_default=False) or ArtifactStore.in_memory()
         if corpus_store is None:
-            return _fake_retrieval_operator(), "fake"
+            return _unconfigured_retrieval_operator(), "unconfigured"
         return (
             RetrievalOperator(
                 search_provider=CorpusSearchProvider(corpus_store),
@@ -1918,7 +1916,7 @@ def _retrieval_operator_for_mode(mode: str, args) -> tuple[RetrievalOperator, st
     corpus_store = _runtime_corpus_store(args)
     artifact_store = _runtime_artifact_store(args) or ArtifactStore.in_memory()
     if corpus_store is None:
-        return _fake_retrieval_operator(), "fake"
+        return _unconfigured_retrieval_operator(), "unconfigured"
     return _inspectable_retrieval_operator(artifact_store=artifact_store, corpus_store=corpus_store), "default"
 
 
@@ -1928,37 +1926,17 @@ def _inspectable_retrieval_operator(
     corpus_store: ResearchCorpusStore | None,
 ) -> RetrievalOperator:
     if corpus_store is None:
-        return _fake_retrieval_operator()
-    source = _inspection_source()
+        return _unconfigured_retrieval_operator()
     return RetrievalOperator(
-        search_provider=FallbackSearchProvider(
-            [
-                CorpusSearchProvider(corpus_store),
-                FakeSearchProvider({"inspection": [source]}),
-            ]
-        ),
-        fetch_provider=RoutingFetchProvider(
-            routes={"research_corpus": CorpusFetchProvider(artifact_store)},
-            fallback=FakeFetchProvider({source.uri: "inspection fixture"}),
-        ),
+        search_provider=CorpusSearchProvider(corpus_store),
+        fetch_provider=CorpusFetchProvider(artifact_store),
     )
 
 
-def _fake_retrieval_operator() -> RetrievalOperator:
-    source = _inspection_source()
+def _unconfigured_retrieval_operator() -> RetrievalOperator:
     return RetrievalOperator(
-        search_provider=FakeSearchProvider({"inspection": [source]}),
-        fetch_provider=FakeFetchProvider({source.uri: "inspection fixture"}),
-    )
-
-
-def _inspection_source() -> SearchSource:
-    return SearchSource(
-        source_id="src-retrieval-inspection",
-        uri="https://example.test/holo-v3-retrieval-inspection",
-        title="Holo v3 retrieval inspection fixture",
-        snippet="Inspection fixture for provider capability reporting.",
-        provider="fake",
+        search_provider=UnconfiguredSearchProvider(reason="retrieval_source_not_configured"),
+        fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
     )
 
 
@@ -1970,7 +1948,7 @@ def _run_retrieve(
     synthesizer_mode: str,
     artifact_store: ArtifactStore | None = None,
     corpus_store: ResearchCorpusStore | None = None,
-    source_uri: str = "https://example.test/holo-v3-cli",
+    source_uri: str = "inline://holo-v3-cli",
     source_title: str = "Holo v3 CLI evidence",
     research_profile_id: str | None = None,
     max_sources: int = 5,
@@ -1998,17 +1976,18 @@ def _run_retrieve(
             corpus_store=active_corpus,
         )
     else:
+        if body is None:
+            return {"status": "failed", "reason": "retrieval_source_not_configured"}
         source = SearchSource(
             source_id="src-cli-1",
             uri=source_uri,
             title=source_title,
             snippet=query,
-            provider="fake",
+            provider="inline_user_body",
         )
-        retrieval_body = body or f"{query} evidence from a fake bounded retrieval provider."
         operator = RetrievalOperator(
-            search_provider=FakeSearchProvider({query: [source]}),
-            fetch_provider=FakeFetchProvider({source.uri: retrieval_body}),
+            search_provider=_InlineSearchProvider(source),
+            fetch_provider=_InlineFetchProvider(source.uri, body),
             corpus_store=active_corpus,
         )
     report = operator.run(
@@ -2021,7 +2000,7 @@ def _run_retrieve(
     )
     payload: dict[str, object] = {
         "status": "ok",
-        "mode": "corpus" if from_corpus else "fake",
+        "mode": "corpus" if from_corpus else "inline",
         "network_access": operator.network_access,
         "provider_capabilities": operator.provider_capabilities(),
         "report": report.to_dict(),
@@ -2055,6 +2034,37 @@ def _run_retrieve(
         )
         payload["synthesis"] = answer.to_dict()
     return payload
+
+
+class _InlineSearchProvider:
+    provider_id = "inline_user_body_search"
+    live_network = False
+    default_enabled = True
+    profile_aware = False
+    supported_research_profiles: list[str] = []
+
+    def __init__(self, source: SearchSource) -> None:
+        self.source = source
+
+    def search(self, query: str, *, goal: SearchGoal, plan) -> list[SearchSource]:
+        return [self.source]
+
+
+class _InlineFetchProvider:
+    provider_id = "inline_user_body_fetch"
+    live_network = False
+    default_enabled = True
+    profile_aware = False
+    supported_research_profiles: list[str] = []
+
+    def __init__(self, uri: str, body: str) -> None:
+        self.uri = uri
+        self.body = body
+
+    def fetch(self, source: SearchSource) -> FetchResponse:
+        if source.uri != self.uri:
+            return FetchResponse(status="failed", body="", diagnostics={"reason": "inline_uri_mismatch", "uri": source.uri})
+        return FetchResponse(status="ok", body=self.body)
 
 
 def _research_metadata(research_profile_id: str | None) -> dict[str, object]:

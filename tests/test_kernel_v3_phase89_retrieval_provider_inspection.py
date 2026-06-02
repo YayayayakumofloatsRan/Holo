@@ -137,11 +137,11 @@ def test_phase89_cli_retrieval_providers_is_read_only(tmp_path: Path, capsys) ->
     )
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["status"] == "ok"
-    assert payload["mode"] == "fake"
+    assert payload["status"] == "attention"
+    assert payload["mode"] == "unconfigured"
     assert payload["network_access"] is False
-    assert payload["provider_capabilities"][0]["provider_id"] == "fake_search"
-    assert payload["inspection"]["issues"][0]["code"] == "research_profile_not_provider_native"
+    assert payload["provider_capabilities"][0]["provider_id"] == "unconfigured_search"
+    assert payload["inspection"]["issues"][0]["code"] == "retrieval_provider_disabled_by_default"
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
@@ -179,9 +179,7 @@ def test_phase89_cli_retrieval_providers_flattens_default_corpus_chain(tmp_path:
     chain = payload["inspection"]["diagnostics"]["provider_chain"]
     chain_ids = {(item["provider_kind"], item["provider_id"]) for item in chain}
     assert ("search", "research_corpus") in chain_ids
-    assert ("search", "fake_search") in chain_ids
     assert ("fetch", "research_corpus_fetch") in chain_ids
-    assert ("fetch", "fake_fetch") in chain_ids
     assert payload["inspection"]["issues"] == []
     assert JournalStore(journal_path, index_path=index_path).records() == []
 

@@ -7,7 +7,9 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors import FakeJsonProvider, FakeMalformedJsonProvider, ProcessorFabric, ProcessorRouter
+from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
+from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
 from kernel_v3.trace import TraceRenderer
 
 
@@ -26,7 +28,11 @@ def test_phase6_direct_answer_completes_in_one_loop_and_journals_final_answer():
 def test_phase6_retrieval_answer_uses_retrieval_run_then_synthesizer():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()
-    result = AgentRuntime(journal=journal, artifact_store=artifacts).run("Kernel v3 retrieval", mode="retrieval")
+    corpus = _corpus_with_document(artifacts, query_text="Kernel v3 retrieval")
+    result = AgentRuntime(journal=journal, artifact_store=artifacts, research_corpus_store=corpus).run(
+        "Kernel v3 retrieval",
+        mode="retrieval",
+    )
 
     assert result.status == "completed"
     assert result.final_answer is not None
@@ -37,6 +43,21 @@ def test_phase6_retrieval_answer_uses_retrieval_run_then_synthesizer():
     assert journal.records(task_id=result.task_id, kind="processor_request")
     assert result.final_answer["citation_refs"]
     assert result.final_answer["used_evidence"]
+    capabilities = journal.records(task_id=result.task_id, kind="retrieval_query_plan")[0].data["diagnostics"]["provider_capabilities"]
+    assert capabilities[0]["provider_id"] == "research_corpus"
+
+
+def test_phase6_default_retrieval_without_source_returns_failure_report_not_fake_evidence():
+    journal = JournalStore.in_memory()
+    result = AgentRuntime(journal=journal, artifact_store=ArtifactStore.in_memory()).run("Kernel v3 retrieval", mode="retrieval")
+
+    assert result.status == "failed"
+    assert result.final_answer is None
+    assert result.failure_report is not None
+    capabilities = journal.records(task_id=result.task_id, kind="retrieval_query_plan")[0].data["diagnostics"]["provider_capabilities"]
+    assert capabilities[0]["provider_id"] == "unconfigured_search"
+    assert not journal.records(task_id=result.task_id, kind="retrieval_evidence")
+    assert not journal.records(task_id=result.task_id, kind="retrieval_citation")
 
 
 def test_phase6_retrieval_answer_refuses_final_when_citations_required_but_absent():
@@ -241,7 +262,12 @@ def test_phase6_model_planner_failure_returns_failure_report_not_user_prompt():
 
 def test_phase6_trace_evidence_artifacts_and_retrieval_trace_render_complete_path():
     journal = JournalStore.in_memory()
-    result = AgentRuntime(journal=journal).run("Kernel v3 retrieval", mode="retrieval")
+    artifacts = ArtifactStore.in_memory()
+    corpus = _corpus_with_document(artifacts, query_text="Kernel v3 retrieval")
+    result = AgentRuntime(journal=journal, artifact_store=artifacts, research_corpus_store=corpus).run(
+        "Kernel v3 retrieval",
+        mode="retrieval",
+    )
     renderer = TraceRenderer(journal)
 
     trace = renderer.render_task(result.task_id, verbose=True)
@@ -276,13 +302,63 @@ def test_phase6_loop_controller_remains_tool_name_agnostic():
 def test_phase6_cli_agent_answer_and_inspect_run(tmp_path: Path):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
+    artifact_log = tmp_path / "artifacts.jsonl"
+    corpus_log = tmp_path / "corpus.jsonl"
+    corpus_index = tmp_path / "corpus.sqlite"
 
-    agent = _run_cli("--journal", str(journal), "--index", str(index), "agent", "Kernel v3 retrieval", "--mode", "retrieval")
+    _run_cli(
+        "--journal",
+        str(journal),
+        "--index",
+        str(index),
+        "--artifact-log",
+        str(artifact_log),
+        "--corpus-log",
+        str(corpus_log),
+        "--corpus-index",
+        str(corpus_index),
+        "retrieve",
+        "Kernel v3 retrieval",
+        "--body",
+        "Kernel v3 retrieval corpus evidence from local indexed source.",
+        "--index-corpus",
+    )
+
+    agent = _run_cli(
+        "--journal",
+        str(journal),
+        "--index",
+        str(index),
+        "--artifact-log",
+        str(artifact_log),
+        "--corpus-log",
+        str(corpus_log),
+        "--corpus-index",
+        str(corpus_index),
+        "agent",
+        "Kernel v3 retrieval",
+        "--mode",
+        "retrieval",
+    )
     agent_payload = json.loads(agent.stdout)
     assert agent_payload["status"] == "completed"
     assert agent_payload["final_answer"]["citation_refs"]
 
-    answer = _run_cli("--journal", str(journal), "--index", str(index), "answer", "Kernel v3 retrieval", "--citations-required")
+    answer = _run_cli(
+        "--journal",
+        str(journal),
+        "--index",
+        str(index),
+        "--artifact-log",
+        str(artifact_log),
+        "--corpus-log",
+        str(corpus_log),
+        "--corpus-index",
+        str(corpus_index),
+        "answer",
+        "Kernel v3 retrieval",
+        "--citations-required",
+    )
     answer_payload = json.loads(answer.stdout)
     assert answer_payload["status"] == "completed"
     assert answer_payload["final_answer"]["citation_refs"]
@@ -309,3 +385,44 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=True,
     )
+
+
+def _corpus_with_document(artifacts: ArtifactStore, *, query_text: str) -> ResearchCorpusStore:
+    corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 101)
+    uri = "local://kernel-v3/retrieval-corpus"
+    title = "Kernel v3 retrieval corpus source"
+    body = f"{query_text} corpus evidence from a local indexed source."
+    source = SearchSource(
+        source_id="src-local-corpus",
+        uri=uri,
+        title=title,
+        snippet=query_text,
+        provider="local_corpus_seed",
+    )
+    artifact = artifacts.write_blob(
+        kind="retrieval_fetched_document",
+        payload=body,
+        metadata={"uri": uri, "source_id": source.source_id, "title": title},
+    )
+    corpus.record_document(
+        corpus_document_from_retrieval(
+            document=FetchedDocument(
+                document_id="doc-local-corpus",
+                goal_id="goal-local-corpus",
+                source_id=source.source_id,
+                uri=uri,
+                title=title,
+                artifact_id=artifact.artifact_id,
+                payload_hash=artifact.payload_hash,
+                preview=body[:160],
+                size_bytes=len(body.encode("utf-8")),
+                metadata={"mime_type": "text/plain"},
+            ),
+            source=source,
+            goal=SearchGoal(goal_id="goal-local-corpus", query=query_text),
+            task_id="task-local-corpus",
+            run_id="run-local-corpus",
+            fetched_at_ms=101,
+        )
+    )
+    return corpus

@@ -27,7 +27,8 @@ def test_phase87_agent_execution_metadata_applies_research_profile_to_retrieval(
     assert action["payload"]["max_sources"] == 10
     assert action["payload"]["max_fetches"] == 4
     assert report["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
-    assert report["diagnostics"]["reason"] == "no_primary_source_for_research_profile"
+    assert report["diagnostics"]["reason"] == "insufficient_evidence"
+    assert report["diagnostics"]["provider_capabilities"][0]["provider_id"] == "unconfigured_search"
     assert journal.records(task_id=result.task_id, kind="retrieval_source_assessment")
 
 
@@ -96,7 +97,8 @@ def test_phase87_cli_agent_exposes_research_profile_flag(tmp_path: Path) -> None
     assert action["payload"]["max_queries"] == 4
     assert action["payload"]["max_fetches"] == 8
     assert report["diagnostics"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
-    assert report["diagnostics"]["reason"] == "no_primary_source_for_research_profile"
+    assert report["diagnostics"]["reason"] == "insufficient_evidence"
+    assert report["diagnostics"]["provider_capabilities"][0]["provider_id"] == "unconfigured_search"
 
 
 def _retrieval_intake() -> dict[str, object]:

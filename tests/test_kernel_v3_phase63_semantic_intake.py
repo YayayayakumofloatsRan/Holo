@@ -1,6 +1,9 @@
 from kernel_v3.agent import AgentRuntime, analyze_goal
+from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric, malformed_fabric
+from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
+from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
 
 
 def test_phase63_roleplay_request_is_scoped_direct_response_not_echo():
@@ -243,7 +246,13 @@ def test_phase63_model_semantic_intake_preserves_simple_retrieval_route():
         journal=journal,
     )
 
-    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+    artifacts = ArtifactStore.in_memory()
+    result = AgentRuntime(
+        journal=journal,
+        processor_fabric=fabric,
+        artifact_store=artifacts,
+        research_corpus_store=_corpus_with_document(artifacts, query_text="current facts request"),
+    ).run(
         "an unseen current-facts request",
         mode="auto",
         semantic_mode="model",
@@ -254,6 +263,47 @@ def test_phase63_model_semantic_intake_preserves_simple_retrieval_route():
     assert result.status == "completed"
     assert intake["primary_intent"] == "retrieval_research"
     assert intake["suggested_mode"] == "retrieval_answer"
+
+
+def _corpus_with_document(artifacts: ArtifactStore, *, query_text: str) -> ResearchCorpusStore:
+    corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 101)
+    uri = "local://kernel-v3/phase63-corpus"
+    title = "Phase63 local corpus source"
+    body = f"{query_text} corpus evidence from a local indexed source."
+    source = SearchSource(
+        source_id="src-phase63-corpus",
+        uri=uri,
+        title=title,
+        snippet=query_text,
+        provider="local_corpus_seed",
+    )
+    artifact = artifacts.write_blob(
+        kind="retrieval_fetched_document",
+        payload=body,
+        metadata={"uri": uri, "source_id": source.source_id, "title": title},
+    )
+    corpus.record_document(
+        corpus_document_from_retrieval(
+            document=FetchedDocument(
+                document_id="doc-phase63-corpus",
+                goal_id="goal-phase63-corpus",
+                source_id=source.source_id,
+                uri=uri,
+                title=title,
+                artifact_id=artifact.artifact_id,
+                payload_hash=artifact.payload_hash,
+                preview=body[:160],
+                size_bytes=len(body.encode("utf-8")),
+                metadata={"mime_type": "text/plain"},
+            ),
+            source=source,
+            goal=SearchGoal(goal_id="goal-phase63-corpus", query=query_text),
+            task_id="task-phase63-corpus",
+            run_id="run-phase63-corpus",
+            fetched_at_ms=101,
+        )
+    )
+    return corpus
 
 
 def test_phase63_model_semantic_intake_drives_open_ended_decomposition():

@@ -820,9 +820,10 @@ memory provenance refs and artifact refs, using metadata/blob presence checks
 only. If a research profile is configured, doctor asks corpus inspection for
 that profile's scoped health instead of relying on global corpus health; a
 healthy unrelated corpus no longer hides an empty or stale finance corpus.
-Retrieval-provider inspection is capability-only: it reports fake/corpus/
-future-live provider metadata, network capability, and research-profile support
-without running retrieval or reading artifact bodies. Retrieval-provider errors,
+Retrieval-provider inspection is capability-only: it reports unconfigured,
+corpus, inline, or future-live provider metadata, network capability, and
+research-profile support without running retrieval or reading artifact bodies.
+Retrieval-provider errors,
 such as an empty fallback search chain, are promoted into the doctor status and
 recommended actions so a resident supervisor does not mistake an unusable
 research configuration for a healthy worker. Doctor also isolates component

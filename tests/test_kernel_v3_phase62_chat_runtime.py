@@ -9,8 +9,11 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.chat.console import handle_chat_line, render_chat_activity, render_chat_result
 from kernel_v3.chat.contracts import ChatRuntimeResult
+from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
+from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
+from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
 
 
 def test_phase62_two_turns_share_thread_id():
@@ -420,7 +423,13 @@ def test_phase62_chat_passes_model_semantic_mode_to_agent_runtime():
         },
         journal=journal,
     )
-    agent = AgentRuntime(journal=journal, processor_fabric=fabric)
+    artifacts = ArtifactStore.in_memory()
+    agent = AgentRuntime(
+        journal=journal,
+        processor_fabric=fabric,
+        artifact_store=artifacts,
+        research_corpus_store=_corpus_with_document(artifacts, query_text="current external evidence"),
+    )
     chat = ChatRuntime(journal=journal, agent_runtime=agent, semantic_mode="model")
 
     result = chat.receive("an unseen request that needs current evidence", thread_id="thread-model-chat")
@@ -1122,3 +1131,44 @@ def _clarify_intake() -> dict:
         "response_hint": None,
         "clarification_question": "请问您对什么内容不太明白？",
     }
+
+
+def _corpus_with_document(artifacts: ArtifactStore, *, query_text: str) -> ResearchCorpusStore:
+    corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 101)
+    uri = "local://kernel-v3/phase62-corpus"
+    title = "Phase62 local corpus source"
+    body = f"{query_text} corpus evidence from a local indexed source."
+    source = SearchSource(
+        source_id="src-phase62-corpus",
+        uri=uri,
+        title=title,
+        snippet=query_text,
+        provider="local_corpus_seed",
+    )
+    artifact = artifacts.write_blob(
+        kind="retrieval_fetched_document",
+        payload=body,
+        metadata={"uri": uri, "source_id": source.source_id, "title": title},
+    )
+    corpus.record_document(
+        corpus_document_from_retrieval(
+            document=FetchedDocument(
+                document_id="doc-phase62-corpus",
+                goal_id="goal-phase62-corpus",
+                source_id=source.source_id,
+                uri=uri,
+                title=title,
+                artifact_id=artifact.artifact_id,
+                payload_hash=artifact.payload_hash,
+                preview=body[:160],
+                size_bytes=len(body.encode("utf-8")),
+                metadata={"mime_type": "text/plain"},
+            ),
+            source=source,
+            goal=SearchGoal(goal_id="goal-phase62-corpus", query=query_text),
+            task_id="task-phase62-corpus",
+            run_id="run-phase62-corpus",
+            fetched_at_ms=101,
+        )
+    )
+    return corpus

@@ -41,11 +41,9 @@ from kernel_v3.research import (
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
-    FakeFetchProvider,
-    FallbackSearchProvider,
     RetrievalOperator,
-    RoutingFetchProvider,
-    SearchSource,
+    UnconfiguredFetchProvider,
+    UnconfiguredSearchProvider,
     register_retrieval_tool,
 )
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
@@ -350,10 +348,9 @@ class AgentRuntime:
         if recipe.mode in {"workspace_answer", "workspace_write"}:
             if self.workspace_root is not None:
                 return ToolRegistry.with_permissioned_workspace(root=self.workspace_root, artifact_store=self.artifact_store)
-            return ToolRegistry.with_fake_workspace_tools(
-                files=self.workspace_files or {"README.md": "Holo Kernel v3 workspace evidence."},
-                artifact_store=self.artifact_store,
-            )
+            if self.workspace_files:
+                return ToolRegistry.with_fake_workspace_tools(files=self.workspace_files, artifact_store=self.artifact_store)
+            return ToolRegistry.with_builtin_respond()
         if recipe.mode == "system_answer":
             return ToolRegistry.with_builtin_respond()
         return ToolRegistry.with_builtin_respond()
@@ -2845,32 +2842,15 @@ def _default_retrieval_operator(
     artifact_store: ArtifactStore,
     corpus_store: ResearchCorpusStore | None,
 ) -> RetrievalOperator:
-    source = SearchSource(
-        source_id="src-agent-default",
-        uri="https://example.test/holo-v3-agent",
-        title="Holo v3 agent evidence",
-        snippet=goal,
-        provider="fake",
-    )
-    body = f"{goal} evidence from bounded fake retrieval for Holo Kernel v3 agent runtime."
-    fake_fetch = FakeFetchProvider({source.uri: body})
     if corpus_store is not None:
         return RetrievalOperator(
-            search_provider=FallbackSearchProvider(
-                [
-                    CorpusSearchProvider(corpus_store),
-                    _AnyQuerySearchProvider(source),
-                ]
-            ),
-            fetch_provider=RoutingFetchProvider(
-                routes={"research_corpus": CorpusFetchProvider(artifact_store)},
-                fallback=fake_fetch,
-            ),
+            search_provider=CorpusSearchProvider(corpus_store),
+            fetch_provider=CorpusFetchProvider(artifact_store),
             corpus_store=corpus_store,
         )
     return RetrievalOperator(
-        search_provider=_AnyQuerySearchProvider(source),
-        fetch_provider=fake_fetch,
+        search_provider=UnconfiguredSearchProvider(reason="retrieval_source_not_configured"),
+        fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
     )
 
 
@@ -3044,14 +3024,6 @@ def _merge_retrieval_payload(base: JsonObject, extra: JsonObject) -> JsonObject:
         else:
             merged[key] = value
     return merged
-
-
-class _AnyQuerySearchProvider:
-    def __init__(self, source: SearchSource) -> None:
-        self.source = source
-
-    def search(self, query, *, goal, plan):
-        return [self.source]
 
 
 def _file_target(goal: str) -> str | None:

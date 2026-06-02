@@ -4,7 +4,9 @@ from kernel_v3.chat import ChatRuntime
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
+from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
+from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
 
 
 def test_phase81_model_semantics_are_journaled_as_validated_task_graph():
@@ -99,7 +101,7 @@ def test_phase81_simple_retrieval_graph_selects_retrieval_recipe():
         journal=journal,
     )
 
-    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+    result = _agent_with_corpus(journal, fabric).run(
         "an unseen current documentation request",
         mode="auto",
         semantic_mode="model",
@@ -146,7 +148,7 @@ def test_phase81_open_semantic_label_routes_by_capability_not_intent_table():
         journal=journal,
     )
 
-    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+    result = _agent_with_corpus(journal, fabric).run(
         "unseen market landscape request",
         mode="auto",
         semantic_mode="model",
@@ -811,13 +813,75 @@ def _chat_with_semantic_plan(journal: JournalStore, response: dict, *, chat_rout
     if chat_routes is not None:
         responses["chat.route"] = chat_routes
     fabric = fake_fabric(responses, journal=journal)
-    agent = AgentRuntime(journal=journal, processor_fabric=fabric)
+    agent = _agent_with_corpus(
+        journal,
+        fabric,
+        workspace_files={"README.md": "Holo workspace file evidence for semantic task plans."},
+    )
     return ChatRuntime(
         journal=journal,
         agent_runtime=agent,
         semantic_mode="model",
         turn_router_mode="model" if chat_routes is not None else "fake",
     )
+
+
+def _agent_with_corpus(
+    journal: JournalStore,
+    fabric,
+    *,
+    workspace_files: dict[str, str] | None = None,
+) -> AgentRuntime:
+    artifacts = ArtifactStore.in_memory()
+    corpus = _corpus_with_document(artifacts, query_text="current documentation market API surface")
+    return AgentRuntime(
+        journal=journal,
+        artifact_store=artifacts,
+        processor_fabric=fabric,
+        research_corpus_store=corpus,
+        workspace_files=workspace_files,
+    )
+
+
+def _corpus_with_document(artifacts: ArtifactStore, *, query_text: str) -> ResearchCorpusStore:
+    corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 101)
+    uri = "local://kernel-v3/phase81-corpus"
+    title = "Phase81 local corpus source"
+    body = f"{query_text} corpus evidence from a local indexed source."
+    source = SearchSource(
+        source_id="src-phase81-corpus",
+        uri=uri,
+        title=title,
+        snippet=query_text,
+        provider="local_corpus_seed",
+    )
+    artifact = artifacts.write_blob(
+        kind="retrieval_fetched_document",
+        payload=body,
+        metadata={"uri": uri, "source_id": source.source_id, "title": title},
+    )
+    corpus.record_document(
+        corpus_document_from_retrieval(
+            document=FetchedDocument(
+                document_id="doc-phase81-corpus",
+                goal_id="goal-phase81-corpus",
+                source_id=source.source_id,
+                uri=uri,
+                title=title,
+                artifact_id=artifact.artifact_id,
+                payload_hash=artifact.payload_hash,
+                preview=body[:160],
+                size_bytes=len(body.encode("utf-8")),
+                metadata={"mime_type": "text/plain"},
+            ),
+            source=source,
+            goal=SearchGoal(goal_id="goal-phase81-corpus", query=query_text),
+            task_id="task-phase81-corpus",
+            run_id="run-phase81-corpus",
+            fetched_at_ms=101,
+        )
+    )
+    return corpus
 
 
 def _chat_route(route: str, *, command: str | None = None, reasons: list[str] | None = None) -> dict:

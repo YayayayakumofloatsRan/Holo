@@ -47,8 +47,8 @@ def test_phase85_cli_indexes_searches_and_reuses_corpus_without_network(tmp_path
     document_id = indexed_payload["corpus_documents"][0]["document_id"]
 
     assert indexed_payload["network_access"] is False
-    assert indexed_payload["provider_capabilities"][0]["provider_id"] == "fake_search"
-    assert indexed_payload["provider_capabilities"][1]["provider_id"] == "fake_fetch"
+    assert indexed_payload["provider_capabilities"][0]["provider_id"] == "inline_user_body_search"
+    assert indexed_payload["provider_capabilities"][1]["provider_id"] == "inline_user_body_fetch"
     assert indexed_payload["report"]["status"] == "sufficient"
     assert RAW_ONLY_SENTINEL not in indexed.stdout
 

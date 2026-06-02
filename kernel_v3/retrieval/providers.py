@@ -42,6 +42,31 @@ class FakeSearchProvider:
         return list(self.results_by_query.get(query.lower(), []))
 
 
+class UnconfiguredSearchProvider:
+    provider_id = "unconfigured_search"
+    live_network = False
+    default_enabled = False
+    profile_aware = False
+    supported_research_profiles: list[str] = []
+
+    def __init__(self, *, reason: str = "retrieval_source_not_configured") -> None:
+        self.reason = reason
+        self.capability_diagnostics = {"reason": reason}
+        self._last_search_diagnostics: JsonObject = {}
+
+    def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
+        self._last_search_diagnostics = {
+            "provider_id": self.provider_id,
+            "status": "empty",
+            "reason": self.reason,
+            "query_preview": query[:160],
+        }
+        return []
+
+    def search_diagnostics(self) -> JsonObject:
+        return dict(self._last_search_diagnostics)
+
+
 class FakeFetchProvider:
     provider_id = "fake_fetch"
     live_network = False
@@ -64,6 +89,25 @@ class FakeFetchProvider:
                 diagnostics={"reason": "missing_fake_fetch_fixture", "uri": source.uri},
             )
         return response
+
+
+class UnconfiguredFetchProvider:
+    provider_id = "unconfigured_fetch"
+    live_network = False
+    default_enabled = False
+    profile_aware = False
+    supported_research_profiles: list[str] = []
+
+    def __init__(self, *, reason: str = "retrieval_fetch_not_configured") -> None:
+        self.reason = reason
+        self.capability_diagnostics = {"reason": reason}
+
+    def fetch(self, source: SearchSource) -> FetchResponse:
+        return FetchResponse(
+            status="failed",
+            body="",
+            diagnostics={"reason": self.reason, "uri": source.uri},
+        )
 
 
 def provider_capability(provider: object, *, provider_kind: str) -> RetrievalProviderCapability:

@@ -17,13 +17,17 @@ from kernel_v3.agent.workloop import (
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import Feedback, Observation
 from kernel_v3.journal import JournalStore
+from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
+from kernel_v3.retrieval.contracts import FetchedDocument, SearchGoal, SearchSource
 
 
 def test_phase61_retrieval_with_new_citation_finalizes_and_journals_decisions():
     journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    corpus = _corpus_with_document(artifacts, query_text="Kernel v3 retrieval")
 
-    result = AgentRuntime(journal=journal, artifact_store=ArtifactStore.in_memory()).run(
+    result = AgentRuntime(journal=journal, artifact_store=artifacts, research_corpus_store=corpus).run(
         "Kernel v3 retrieval",
         mode="retrieval",
     )
@@ -92,7 +96,8 @@ def test_phase61_retrieval_resume_gets_fresh_repetition_budget_and_unique_action
 def test_phase61_retrieval_resume_does_not_reuse_previous_run_evidence():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()
-    first = AgentRuntime(journal=journal, artifact_store=artifacts).run("grounded topic", mode="retrieval")
+    corpus = _corpus_with_document(artifacts, query_text="grounded topic")
+    first = AgentRuntime(journal=journal, artifact_store=artifacts, research_corpus_store=corpus).run("grounded topic", mode="retrieval")
     failing_runtime = AgentRuntime(
         journal=journal,
         artifact_store=artifacts,
@@ -407,8 +412,44 @@ def _retrieval_recipe() -> TaskRecipe:
 def test_phase61_cli_inspect_workloop_final_answer_and_failure_report(tmp_path: Path):
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
+    artifact_log = tmp_path / "artifacts.jsonl"
+    corpus_log = tmp_path / "corpus.jsonl"
+    corpus_index = tmp_path / "corpus.sqlite"
 
-    ok = _run_cli("--journal", str(journal), "--index", str(index), "agent", "Kernel v3 retrieval", "--mode", "retrieval")
+    _run_cli(
+        "--journal",
+        str(journal),
+        "--index",
+        str(index),
+        "--artifact-log",
+        str(artifact_log),
+        "--corpus-log",
+        str(corpus_log),
+        "--corpus-index",
+        str(corpus_index),
+        "retrieve",
+        "Kernel v3 retrieval",
+        "--body",
+        "Kernel v3 retrieval corpus evidence from local indexed source.",
+        "--index-corpus",
+    )
+
+    ok = _run_cli(
+        "--journal",
+        str(journal),
+        "--index",
+        str(index),
+        "--artifact-log",
+        str(artifact_log),
+        "--corpus-log",
+        str(corpus_log),
+        "--corpus-index",
+        str(corpus_index),
+        "agent",
+        "Kernel v3 retrieval",
+        "--mode",
+        "retrieval",
+    )
     ok_payload = json.loads(ok.stdout)
     workloop = _run_cli("--journal", str(journal), "--index", str(index), "inspect-workloop", ok_payload["task_id"])
     final = _run_cli("--journal", str(journal), "--index", str(index), "final-answer", ok_payload["task_id"])
@@ -444,3 +485,44 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=True,
     )
+
+
+def _corpus_with_document(artifacts: ArtifactStore, *, query_text: str) -> ResearchCorpusStore:
+    corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 101)
+    uri = "local://kernel-v3/workloop-corpus"
+    title = "Kernel v3 workloop corpus source"
+    body = f"{query_text} corpus evidence from a local indexed source."
+    source = SearchSource(
+        source_id="src-workloop-corpus",
+        uri=uri,
+        title=title,
+        snippet=query_text,
+        provider="local_corpus_seed",
+    )
+    artifact = artifacts.write_blob(
+        kind="retrieval_fetched_document",
+        payload=body,
+        metadata={"uri": uri, "source_id": source.source_id, "title": title},
+    )
+    corpus.record_document(
+        corpus_document_from_retrieval(
+            document=FetchedDocument(
+                document_id="doc-workloop-corpus",
+                goal_id="goal-workloop-corpus",
+                source_id=source.source_id,
+                uri=uri,
+                title=title,
+                artifact_id=artifact.artifact_id,
+                payload_hash=artifact.payload_hash,
+                preview=body[:160],
+                size_bytes=len(body.encode("utf-8")),
+                metadata={"mime_type": "text/plain"},
+            ),
+            source=source,
+            goal=SearchGoal(goal_id="goal-workloop-corpus", query=query_text),
+            task_id="task-workloop-corpus",
+            run_id="run-workloop-corpus",
+            fetched_at_ms=101,
+        )
+    )
+    return corpus
