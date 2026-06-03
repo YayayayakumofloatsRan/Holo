@@ -138,6 +138,12 @@ Kernel v3 currently contains the infrastructure for:
   a `goal_id`, the host binds it to the next incomplete required planned
   retrieval subgoal. The model can focus on query/source/strategy while the
   host preserves plan coverage and termination semantics;
+- retrieval payload normalization separates "what to extract" from "where to
+  fetch". If semantic intake or a host plan supplies a meaningful query plus an
+  explicit URL, and the model planner later emits a URL-only `retrieval.run`
+  query, the host preserves the semantic query and moves the URL into
+  `metadata.source_urls`. This keeps direct-source tasks from losing extraction
+  terms while still forcing citations to come from the requested source;
 - explicit multi-query retrieval payloads: when a model/host payload supplies
   `queries` or `query_templates`, Holo derives a safe default `max_queries` from
   that list so one retrieval subgoal can run multiple bounded search attempts
@@ -205,6 +211,10 @@ Kernel v3 currently contains the infrastructure for:
   rows such as concept, unit, value, fiscal period, form, filing date, and
   accession number before evidence ranking; generic JSON/CSV still uses
   bounded readable projections;
+- finance/technical research profiles can be inferred from structured semantic
+  domains as well as explicit capability names. This keeps a model packet like
+  `domain=finance_fundamentals` connected to the finance source policy even if
+  the planner only proposes a generic `retrieval.run`;
 - durable-memory proposals, approval/rejection, recall, deletion, export, and
   context injection;
 - active memory recall inside the agent loop through `memory.recall`: the model
@@ -216,7 +226,7 @@ Kernel v3 currently contains the infrastructure for:
   planner/evaluator step. This is not direct memory writeback and not a
   fixed-response RAG shortcut;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;
-- finance-fundamentals research profile and local corpus-backed retrieval.
+- finance-fundamentals research profile and local corpus-backed retrieval;
 - model-planner retrieval binding that applies host-validated research profile
   defaults from semantic intake/task plans before tool execution;
 - retrieval workloop feedback that carries missing query facets and missing
@@ -333,6 +343,10 @@ Kernel v3 currently contains the infrastructure for:
   manifest's `network_fetch_cost_field` and default cost when checking network
   guards, so model-supplied payload fields such as `network_fetch_count` cannot
   exaggerate or bypass the configured budget.
+- final-answer quality checks enforce explicit source requirements. When the
+  user or semantic metadata names a required source URL, the answer may only
+  pass if at least one used citation resolves to that URL or a safe prefix of
+  it; citations from unrelated search results do not satisfy the task.
 
 Live model and live retrieval are not default unit-test dependencies. Online
 `chat`, `agent`, and resident `run/run-once` now get bounded live web-discovery

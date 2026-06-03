@@ -803,6 +803,20 @@ def test_phase5_deepseek_v4_router_can_use_provider_default_output_tokens_and_te
     assert planner.parameters["temperature"] == 0.2
 
 
+def test_phase5_deepseek_v4_auto_route_budgets_are_not_truncation_prone():
+    router = deepseek_v4_router(profile="fast", max_output_tokens="auto")
+
+    planner = router.route("planner.propose")
+    synthesizer = router.route("synthesizer.answer")
+
+    assert planner.model == DEEPSEEK_V4_FLASH
+    assert planner.parameters["thinking"] == "disabled"
+    assert planner.parameters["max_tokens"] >= 2048
+    assert synthesizer.model == DEEPSEEK_V4_FLASH
+    assert synthesizer.parameters["thinking"] == "disabled"
+    assert synthesizer.parameters["max_tokens"] >= 4096
+
+
 def test_phase5_route_parameters_are_journaled_and_sent_to_provider_request():
     journal = JournalStore.in_memory()
     fabric = ProcessorFabric(

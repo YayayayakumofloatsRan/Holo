@@ -178,29 +178,29 @@ def deepseek_v4_routes(
     if profile == "fast":
         specs = {
             "chat.route": (DEEPSEEK_V4_FLASH, "disabled", 384),
-            "semantic.intake": (DEEPSEEK_V4_FLASH, "disabled", 768),
-            "planner.propose": (DEEPSEEK_V4_FLASH, "disabled", 512),
-            "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 512),
-            "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 768),
-            "mission.assess": (DEEPSEEK_V4_FLASH, "disabled", 768),
+            "semantic.intake": (DEEPSEEK_V4_FLASH, "disabled", 1536),
+            "planner.propose": (DEEPSEEK_V4_FLASH, "disabled", 2048),
+            "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 1024),
+            "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 4096),
+            "mission.assess": (DEEPSEEK_V4_FLASH, "disabled", 1536),
         }
     elif profile == "quality":
         specs = {
             "chat.route": (DEEPSEEK_V4_FLASH, "disabled", 384),
-            "semantic.intake": (DEEPSEEK_V4_PRO, "enabled", 1024),
-            "planner.propose": (DEEPSEEK_V4_PRO, "enabled", 1024),
-            "evaluator.assess": (DEEPSEEK_V4_PRO, "enabled", 768),
-            "synthesizer.answer": (DEEPSEEK_V4_PRO, "enabled", 1536),
-            "mission.assess": (DEEPSEEK_V4_PRO, "enabled", 1024),
+            "semantic.intake": (DEEPSEEK_V4_PRO, "enabled", 4096),
+            "planner.propose": (DEEPSEEK_V4_PRO, "enabled", 4096),
+            "evaluator.assess": (DEEPSEEK_V4_PRO, "enabled", 2048),
+            "synthesizer.answer": (DEEPSEEK_V4_PRO, "enabled", 8192),
+            "mission.assess": (DEEPSEEK_V4_PRO, "enabled", 4096),
         }
     elif profile == "balanced":
         specs = {
             "chat.route": (DEEPSEEK_V4_FLASH, "disabled", 384),
-            "semantic.intake": (DEEPSEEK_V4_FLASH, "disabled", 1024),
-            "planner.propose": (DEEPSEEK_V4_FLASH, "disabled", 1024),
-            "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 768),
-            "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 1536),
-            "mission.assess": (DEEPSEEK_V4_FLASH, "disabled", 1024),
+            "semantic.intake": (DEEPSEEK_V4_FLASH, "disabled", 2048),
+            "planner.propose": (DEEPSEEK_V4_FLASH, "disabled", 3072),
+            "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 1536),
+            "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 6144),
+            "mission.assess": (DEEPSEEK_V4_FLASH, "disabled", 2048),
         }
     else:
         raise ValueError(f"unknown DeepSeek V4 routing profile: {profile}")

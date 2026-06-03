@@ -73,6 +73,21 @@ _FINANCE_RESEARCH_PROFILE_CAPABILITIES = {
     "finance.macro_data",
     "finance.competitive_landscape",
 }
+_FINANCE_INTENT_KINDS = {
+    "finance_fundamentals",
+    "finance_fundamentals_research",
+    "finance_fundamentals_research_plan",
+    "financial_research",
+    "fundamentals_research",
+    "market_research",
+}
+_FINANCE_DOMAINS = {
+    "finance",
+    "finance_fundamentals",
+    "financial_research",
+    "fundamentals_research",
+    "market_research",
+}
 _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES = {
     "technical.documentation_research",
     "technical.api_documentation",
@@ -85,6 +100,14 @@ _TECHNICAL_DOCUMENTATION_INTENT_KINDS = {
     "api_documentation",
     "developer_docs",
     "sdk_documentation",
+}
+_TECHNICAL_DOCUMENTATION_DOMAINS = {
+    "technical",
+    "technical_research",
+    "technical_documentation",
+    "technical_documentation_research",
+    "developer_docs",
+    "api_documentation",
 }
 
 DEFAULT_RETRIEVAL_MAX_STEPS = 2048
@@ -1001,12 +1024,23 @@ class AgentRuntime:
 
     def _final_answer_quality_gaps(self, answer: FinalAnswer, *, recipe: TaskRecipe) -> list[str]:
         profile = answer_profile_from_dict(_answer_profile_metadata(recipe))
-        return answer_quality_gaps(
+        gaps = answer_quality_gaps(
             answer.answer,
             profile=profile,
             citation_refs=answer.citation_refs,
             used_evidence=answer.used_evidence,
         )
+        required_urls = _required_retrieval_source_urls(recipe)
+        if required_urls:
+            citations = _retrieval_citations(self.journal, answer.task_id, answer.run_id)
+            cited_urls = {
+                citation.uri.strip()
+                for citation in citations
+                if citation.citation_id in set(answer.citation_refs) and citation.uri.strip()
+            }
+            if not any(_same_url_or_prefix(cited_url, required_url) for cited_url in cited_urls for required_url in required_urls):
+                gaps.append("required_source_url_citation_missing")
+        return gaps
 
     def _append_final_quality_check(self, answer: FinalAnswer, *, recipe: TaskRecipe, gaps: list[str]) -> None:
         profile = _answer_profile_metadata(recipe)
@@ -1462,6 +1496,7 @@ def _bind_model_action_to_recipe(
         return action
     if action.name == "retrieval.run":
         payload = dict(action.payload)
+        payload = _preserve_retrieval_capability_context(payload, recipe=recipe)
         payload.setdefault("goal_id", _next_required_retrieval_goal_id(context, recipe) or "goal-agent-retrieval")
         payload.setdefault("query", goal)
         payload.setdefault("max_spans_per_document", 2)
@@ -1470,6 +1505,46 @@ def _bind_model_action_to_recipe(
         payload = _apply_research_depth_defaults(payload)
         return replace(action, payload=payload)
     return action
+
+
+def _preserve_retrieval_capability_context(payload: JsonObject, *, recipe: TaskRecipe) -> JsonObject:
+    """Keep source seeds and semantic extraction targets separate for retrieval.run."""
+
+    capability_args = _retrieval_capability_args(recipe)
+    if not capability_args:
+        return payload
+    updated = dict(payload)
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    urls = _retrieval_payload_urls(capability_args)
+    urls.extend(_retrieval_payload_urls(updated))
+    if urls:
+        existing = _metadata_url_values(metadata, keys=("source_url", "source_urls"))
+        source_urls = _ordered_unique([*existing, *urls])
+        metadata["source_urls"] = source_urls
+    cap_metadata = capability_args.get("metadata")
+    cap_metadata = cap_metadata if isinstance(cap_metadata, dict) else {}
+    for key in (
+        "research_profile",
+        "research_profile_id",
+        "research_depth",
+        "research_task_kind",
+        "source_authority_requirement",
+    ):
+        value = cap_metadata.get(key, capability_args.get(key))
+        if isinstance(value, str) and value:
+            metadata.setdefault(key, value)
+    cap_query = capability_args.get("query")
+    current_query = updated.get("query")
+    if (
+        isinstance(cap_query, str)
+        and cap_query.strip()
+        and not _looks_like_url(cap_query)
+        and (not isinstance(current_query, str) or _looks_like_url(current_query))
+    ):
+        updated["query"] = cap_query.strip()
+    if metadata:
+        updated["metadata"] = metadata
+    return updated
 
 
 def _next_required_retrieval_goal_id(context: ContextBundle, recipe: TaskRecipe) -> str | None:
@@ -4021,16 +4096,28 @@ def _research_profile_id(recipe: TaskRecipe) -> str | None:
             return value
     if _semantic_has_any_capability(semantic, _FINANCE_RESEARCH_PROFILE_CAPABILITIES):
         return FINANCE_FUNDAMENTALS_PROFILE_ID
+    if _semantic_has_any_intent_kind(semantic, _FINANCE_INTENT_KINDS):
+        return FINANCE_FUNDAMENTALS_PROFILE_ID
+    if _semantic_has_any_domain(semantic, _FINANCE_DOMAINS):
+        return FINANCE_FUNDAMENTALS_PROFILE_ID
     if _semantic_has_any_capability(semantic, _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES):
         return TECHNICAL_DOCUMENTATION_PROFILE_ID
     if _semantic_has_any_intent_kind(semantic, _TECHNICAL_DOCUMENTATION_INTENT_KINDS):
         return TECHNICAL_DOCUMENTATION_PROFILE_ID
+    if _semantic_has_any_domain(semantic, _TECHNICAL_DOCUMENTATION_DOMAINS):
+        return TECHNICAL_DOCUMENTATION_PROFILE_ID
     plan = _task_execution_plan_metadata(recipe)
     if _plan_has_any_capability(plan, _FINANCE_RESEARCH_PROFILE_CAPABILITIES):
+        return FINANCE_FUNDAMENTALS_PROFILE_ID
+    if _plan_has_any_step_kind(plan, _FINANCE_INTENT_KINDS):
+        return FINANCE_FUNDAMENTALS_PROFILE_ID
+    if _plan_has_any_domain(plan, _FINANCE_DOMAINS):
         return FINANCE_FUNDAMENTALS_PROFILE_ID
     if _plan_has_any_capability(plan, _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES):
         return TECHNICAL_DOCUMENTATION_PROFILE_ID
     if _plan_has_any_step_kind(plan, _TECHNICAL_DOCUMENTATION_INTENT_KINDS):
+        return TECHNICAL_DOCUMENTATION_PROFILE_ID
+    if _plan_has_any_domain(plan, _TECHNICAL_DOCUMENTATION_DOMAINS):
         return TECHNICAL_DOCUMENTATION_PROFILE_ID
     return None
 
@@ -4424,6 +4511,65 @@ def _merge_retrieval_payload(base: JsonObject, extra: JsonObject) -> JsonObject:
     return merged
 
 
+def _retrieval_payload_urls(payload: JsonObject) -> list[str]:
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    values = _metadata_url_values(payload, keys=("url", "urls", "source_url", "source_urls"))
+    values.extend(_metadata_url_values(metadata, keys=("url", "urls", "source_url", "source_urls")))
+    query = payload.get("query")
+    if isinstance(query, str):
+        values.extend(_urls_in_text(query))
+    return _ordered_unique(values)
+
+
+def _metadata_url_values(container: JsonObject, *, keys: tuple[str, ...]) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        value = container.get(key)
+        if isinstance(value, str) and _looks_like_url(value):
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(item for item in value if isinstance(item, str) and _looks_like_url(item))
+    return values
+
+
+def _urls_in_text(text: str) -> list[str]:
+    return _ordered_unique([
+        item.rstrip(").,;，。；")
+        for item in re.findall(r"https?://[^\s\"'<>]+", text)
+        if _looks_like_url(item.rstrip(").,;，。；"))
+    ])
+
+
+def _looks_like_url(value: str) -> bool:
+    stripped = value.strip()
+    return stripped.startswith("https://") or stripped.startswith("http://")
+
+
+def _required_retrieval_source_urls(recipe: TaskRecipe) -> list[str]:
+    values: list[str] = []
+    values.extend(_retrieval_payload_urls(_retrieval_capability_args(recipe)))
+    execution = _execution_metadata(recipe)
+    mission = execution.get("research_mission")
+    if isinstance(mission, dict):
+        root_goal = mission.get("root_goal")
+        if isinstance(root_goal, str):
+            values.extend(_urls_in_text(root_goal))
+    mission_context = _mission_context_metadata(recipe)
+    mission_state = mission_context.get("mission_state")
+    if isinstance(mission_state, dict):
+        root_goal = mission_state.get("root_goal")
+        if isinstance(root_goal, str):
+            values.extend(_urls_in_text(root_goal))
+    return _ordered_unique(values)
+
+
+def _same_url_or_prefix(actual: str, required: str) -> bool:
+    left = actual.strip().rstrip("/")
+    right = required.strip().rstrip("/")
+    return left == right or left.startswith(f"{right}?") or left.startswith(f"{right}#")
+
+
 def _file_target(goal: str) -> str | None:
     for raw in goal.replace("，", " ").replace(",", " ").split():
         token = raw.strip("'\"`。；;:：")
@@ -4574,6 +4720,41 @@ def _semantic_has_any_intent_kind(semantic: JsonObject, kinds: set[str]) -> bool
     )
 
 
+def _semantic_has_any_domain(semantic: JsonObject, domains: set[str]) -> bool:
+    candidates = _semantic_domain_values(semantic)
+    return bool(domains.intersection(candidates))
+
+
+def _semantic_domain_values(semantic: JsonObject) -> set[str]:
+    values: set[str] = set()
+    for key in ("domain", "task_domain", "research_domain"):
+        value = semantic.get(key)
+        if isinstance(value, str) and value.strip():
+            values.add(value.strip().lower())
+    metadata = semantic.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("domain", "task_domain", "research_domain"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                values.add(value.strip().lower())
+    intents = semantic.get("intents")
+    if isinstance(intents, list):
+        for item in intents:
+            if not isinstance(item, dict):
+                continue
+            for key in ("domain", "task_domain", "research_domain"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    values.add(value.strip().lower())
+            item_metadata = item.get("metadata")
+            if isinstance(item_metadata, dict):
+                for key in ("domain", "task_domain", "research_domain"):
+                    value = item_metadata.get(key)
+                    if isinstance(value, str) and value.strip():
+                        values.add(value.strip().lower())
+    return values
+
+
 def _plan_has_capability(plan: JsonObject, capability: str) -> bool:
     return _plan_has_any_capability(plan, {capability})
 
@@ -4598,6 +4779,27 @@ def _plan_has_any_step_kind(plan: JsonObject, kinds: set[str]) -> bool:
         for step in steps
         if isinstance(step, dict)
     )
+
+
+def _plan_has_any_domain(plan: JsonObject, domains: set[str]) -> bool:
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return False
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        metadata = step.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        node_metadata = metadata.get("node_metadata")
+        node_metadata = node_metadata if isinstance(node_metadata, dict) else {}
+        profile = node_metadata.get("state_profile")
+        profile = profile if isinstance(profile, dict) else {}
+        for container in (step, metadata, node_metadata, profile):
+            for key in ("domain", "task_domain", "research_domain"):
+                value = container.get(key)
+                if isinstance(value, str) and value.strip().lower() in domains:
+                    return True
+    return False
 
 
 def _step_capabilities(raw_step: JsonObject) -> list[str]:

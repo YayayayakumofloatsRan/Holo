@@ -1,9 +1,11 @@
-from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent import AgentRuntime, FinalAnswer
+from kernel_v3.agent.runtime import task_recipe
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import (
+    DirectUrlSearchProvider,
     FakeFetchProvider,
     FallbackSearchProvider,
     QueryPlan,
@@ -161,6 +163,241 @@ def test_phase98_sec_edgar_provider_is_profile_gated():
 
     assert sources == []
     assert provider.search_diagnostics()["reason"] == "not_finance_profile"
+
+
+def test_phase98_agent_infers_finance_profile_from_finance_intent_kind_without_capability_marker():
+    journal = JournalStore.in_memory()
+    goal = "Use SEC companyfacts to summarize NVIDIA revenue."
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "finance_fundamentals_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "finance_fundamentals_research",
+                        "text": goal,
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "CIK0001045810 Revenues NetIncomeLoss",
+                                    "metadata": {"sec_cik": "1045810"},
+                                }
+                            }
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            },
+            "planner.propose": {
+                "action_id": "act-sec-companyfacts",
+                "kind": "tool",
+                "name": "retrieval.run",
+                "description": "fetch SEC companyfacts",
+                "payload": {
+                    "query": "CIK0001045810 Revenues NetIncomeLoss",
+                    "metadata": {"sec_cik": "1045810"},
+                },
+                "reasons": ["use official SEC companyfacts"],
+                "score": 0.95,
+                "side_effect_class": "read",
+            },
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider([SecEdgarSearchProvider()]),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json": (
+                    "SEC companyfacts JSON includes NVIDIA Revenues unit USD val 81615000000 "
+                    "and NetIncomeLoss unit USD val 18775000000."
+                ),
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(goal, mode="auto", semantic_mode="model", planner_mode="model")
+
+    action = journal.records(task_id=result.task_id, kind="action")[0]
+    assert action.data["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
+    assert any(
+        source["metadata"].get("source_kind") == "sec_companyfacts_json"
+        for source in search.data["sources"]
+    )
+
+
+def test_phase98_agent_preserves_semantic_query_and_source_url_for_direct_sec_payload():
+    journal = JournalStore.in_memory()
+    sec_url = "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json"
+    goal = f"Summarize NVIDIA revenue and net income from {sec_url}"
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "retrieve_and_summarize_financials",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "retrieve_and_summarize_financials",
+                        "text": goal,
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "domain": "finance_fundamentals",
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "NVIDIA revenue net income SEC companyfacts",
+                                    "url": sec_url,
+                                }
+                            },
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            },
+            "planner.propose": {
+                "action_id": "act-sec-url-only",
+                "kind": "tool",
+                "name": "retrieval.run",
+                "description": "fetch SEC companyfacts URL",
+                "payload": {
+                    "query": sec_url,
+                    "metadata": {"search_strategy": "structured"},
+                },
+                "reasons": ["use supplied SEC URL"],
+                "score": 0.95,
+                "side_effect_class": "read",
+            },
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FallbackSearchProvider([DirectUrlSearchProvider(), SecEdgarSearchProvider()]),
+        fetch_provider=FakeFetchProvider(
+            {
+                sec_url: (
+                    "SEC companyfacts official financial statements entityName=NVIDIA CORP "
+                    "metric=revenue concept=Revenues value=81615000000 unit=USD form=10-K. "
+                    "SEC companyfacts official financial statements entityName=NVIDIA CORP "
+                    "metric=net income concept=NetIncomeLoss value=18775000000 unit=USD form=10-K."
+                ),
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(goal, mode="auto", semantic_mode="model", planner_mode="model")
+
+    action = journal.records(task_id=result.task_id, kind="action")[0]
+    assert action.data["payload"]["query"] == "NVIDIA revenue net income SEC companyfacts"
+    assert action.data["payload"]["metadata"]["source_urls"] == [sec_url]
+    assert action.data["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
+    search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
+    assert search.data["sources"][0]["uri"] == sec_url
+    assert journal.records(task_id=result.task_id, kind="retrieval_evidence")
+
+
+def test_phase98_final_answer_quality_requires_citation_from_explicit_source_url():
+    journal = JournalStore.in_memory()
+    runtime = AgentRuntime(journal=journal, artifact_store=ArtifactStore.in_memory())
+    sec_url = "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json"
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "execution_metadata": {
+                "research_mission": {
+                    "root_goal": f"Summarize NVIDIA revenue from {sec_url}",
+                }
+            }
+        },
+    )
+    journal.append(
+        task_id="task-quality",
+        run_id="run-quality",
+        step_id=None,
+        kind="retrieval_citation",
+        data={
+            "citation_id": "cite-wrong",
+            "goal_id": "goal-quality",
+            "evidence_id": "ev-wrong",
+            "artifact_id": "artifact-wrong",
+            "uri": "https://example.com/not-sec",
+            "title": "Wrong source",
+            "quote": "Revenue example.",
+            "span_start": 0,
+            "span_end": 16,
+            "metadata": {},
+        },
+    )
+    wrong = FinalAnswer(
+        answer="NVIDIA revenue was reported.",
+        citation_refs=["cite-wrong"],
+        used_evidence=["ev-wrong"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-quality",
+        run_id="run-quality",
+        trace_refs=[],
+    )
+
+    assert "required_source_url_citation_missing" in runtime._final_answer_quality_gaps(wrong, recipe=recipe)
+
+    journal.append(
+        task_id="task-quality",
+        run_id="run-quality",
+        step_id=None,
+        kind="retrieval_citation",
+        data={
+            "citation_id": "cite-sec",
+            "goal_id": "goal-quality",
+            "evidence_id": "ev-sec",
+            "artifact_id": "artifact-sec",
+            "uri": sec_url,
+            "title": "SEC companyfacts",
+            "quote": "Revenue SEC fact.",
+            "span_start": 0,
+            "span_end": 17,
+            "metadata": {},
+        },
+    )
+    correct = FinalAnswer(
+        answer="NVIDIA revenue was reported.",
+        citation_refs=["cite-sec"],
+        used_evidence=["ev-sec"],
+        limitations=[],
+        confidence=0.9,
+        task_id="task-quality",
+        run_id="run-quality",
+        trace_refs=[],
+    )
+
+    assert "required_source_url_citation_missing" not in runtime._final_answer_quality_gaps(correct, recipe=recipe)
 
 
 def test_phase98_agent_uses_sec_provider_in_multi_step_finance_loop():
