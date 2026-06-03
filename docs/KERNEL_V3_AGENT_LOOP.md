@@ -100,6 +100,40 @@ the host may switch that resume run out of the previous retrieval recipe so the
 workloop can finalize a limited fallback answer rather than cycling forever
 behind a retrieval evidence gate.
 
+## Active Memory Recall
+
+Durable memory is now available to the loop as a read-only host tool:
+`memory.recall`. This is separate from passive context injection and separate
+from memory writeback. Passive durable-memory snapshots remain small context
+sections compiled by `ContextPackCompiler`; active recall lets the planner
+propose an explicit tool step when the task depends on prior preferences,
+workspace/project conventions, current-thread continuity, or questions such as
+"what do you remember".
+
+`memory.recall` supports workspace/project scope, current-thread scope, or both.
+It returns memory ids, summaries, bounded body previews, scope, provenance refs,
+artifact refs, hashes, and diagnostics. It does not expose raw secret values,
+does not commit memory, and does not let the model modify memory state. Each
+recall is audited in `MemoryStore` through `memory_items_recalled`; the journal
+receives only the safe observation payload.
+
+In model mode the flow is still the normal host-owned loop:
+
+1. semantic intake may mark the task with `durable_memory.search` or
+   `durable_memory.read`;
+2. the task graph maps that capability to `memory.recall`;
+3. the planner proposes one `memory.recall` action with a query and
+   `scope_mode`;
+4. `PolicyGate` validates the read-only tool action;
+5. `ToolRegistry` executes the host operator;
+6. the observation re-enters evaluator/workloop;
+7. the next planner step can respond or continue based on the recalled memory.
+
+The workloop counts successful memory recall as progress, but it does not
+finalize a direct/semantic task from the recall observation alone. A
+direct/semantic finalization needs either an explicit final answer in evaluator
+feedback or a successful user-facing `respond` observation.
+
 ## Adaptive Processor Generation
 
 Live processor calls pass through a host-owned generation policy before the

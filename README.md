@@ -188,6 +188,14 @@ Kernel v3 currently contains the infrastructure for:
   bounded readable projections;
 - durable-memory proposals, approval/rejection, recall, deletion, export, and
   context injection;
+- active memory recall inside the agent loop through `memory.recall`: the model
+  may propose a read-only memory lookup for prior preferences, workspace/project
+  conventions, thread continuity, or "what do you remember" style questions;
+  the host recalls committed durable memory from workspace/project scope,
+  current-thread scope, or both, journals only safe previews/refs/hashes, audits
+  the access in the memory log, and feeds the observation back into the next
+  planner/evaluator step. This is not direct memory writeback and not a
+  fixed-response RAG shortcut;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;
 - finance-fundamentals research profile and local corpus-backed retrieval.
 - model-planner retrieval binding that applies host-validated research profile
@@ -874,6 +882,7 @@ Targeted smoke commands:
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase98_sec_edgar_provider.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase99_source_query_provider.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase100_issuer_identity.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3_phase110_active_memory_recall.py
 ```
 
 Optional live checks must be explicitly gated by environment variables and must

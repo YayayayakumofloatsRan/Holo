@@ -280,6 +280,19 @@ def assess_progress(
             signals.append(ProgressSignal(signal_type="new_file_write", ref=str(path or record.record_id), weight=0.45))
         elif record.kind == "observation" and record.data.get("source") == "tool:system.time" and record.data.get("status") == "ok":
             signals.append(ProgressSignal(signal_type="new_system_observation", ref=record.record_id, weight=0.35))
+        elif record.kind == "observation" and record.data.get("source") == "tool:memory.recall" and record.data.get("status") == "ok":
+            content = record.data.get("content")
+            combined = content.get("combined") if isinstance(content, dict) else None
+            total = combined.get("total") if isinstance(combined, dict) else 0
+            weight = 0.35 if isinstance(total, int) and total > 0 else 0.12
+            signals.append(
+                ProgressSignal(
+                    signal_type="new_memory_recall",
+                    ref=record.record_id,
+                    weight=weight,
+                    diagnostics={"total": total if isinstance(total, int) else 0},
+                )
+            )
         elif record.kind == "retrieval_search_attempt" and record.data.get("status") == "failed":
             signals.append(ProgressSignal(signal_type="new_failure_diagnostic", ref=record.record_id, weight=0.1))
     if (
@@ -568,7 +581,7 @@ def decide_termination(
     decision = feedback.status
     reason = feedback.stop_reason or feedback.status
     if feedback.status == "final_answer_ready":
-        if evidence.sufficient:
+        if _feedback_can_finalize(feedback=feedback, observation=observation, evidence=evidence, recipe=recipe):
             decision = "final_answer"
             reason = "evidence_sufficient"
         elif not recipe.allowed_tools:
@@ -596,7 +609,7 @@ def decide_termination(
         elif recipe.mode == "workspace_answer" and _feedback_requires_workspace_file_read(feedback):
             decision = "continue"
             reason = "workspace_file_read_requested"
-        elif evidence.sufficient and recipe.mode in {
+        elif _evidence_can_finalize(observation=observation, evidence=evidence, recipe=recipe) and recipe.mode in {
             "semantic_answer",
             "retrieval_answer",
             "workspace_answer",
@@ -626,7 +639,7 @@ def decide_termination(
             decision = "blocked"
             reason = "policy_or_tool_blocked"
     elif feedback.status in {"failed", "step_limit_exceeded"}:
-        if evidence.sufficient and feedback.status == "failed":
+        if _evidence_can_finalize(observation=observation, evidence=evidence, recipe=recipe) and feedback.status == "failed":
             decision = "final_answer"
             reason = (
                 "evidence_sufficient_overrode_processor_failure"
@@ -726,6 +739,37 @@ def _successful_response_can_finalize(
     content = observation.content
     text = content.get("text") if isinstance(content, dict) else None
     return isinstance(text, str) and bool(text.strip())
+
+
+def _evidence_can_finalize(
+    *,
+    observation: Observation | None,
+    evidence: EvidenceSufficiency,
+    recipe: TaskRecipe,
+) -> bool:
+    if not evidence.sufficient:
+        return False
+    if recipe.mode in {"direct_answer", "semantic_answer"}:
+        return _successful_response_can_finalize(observation=observation, evidence=evidence, recipe=recipe)
+    return True
+
+
+def _feedback_can_finalize(
+    *,
+    feedback: Feedback,
+    observation: Observation | None,
+    evidence: EvidenceSufficiency,
+    recipe: TaskRecipe,
+) -> bool:
+    if not evidence.sufficient:
+        return False
+    if recipe.mode in {"direct_answer", "semantic_answer"}:
+        if _successful_response_can_finalize(observation=observation, evidence=evidence, recipe=recipe):
+            return True
+        if feedback.answer is None or not feedback.answer.strip():
+            return False
+        return not recipe.citations_required
+    return True
 
 
 def _feedback_indicates_host_block(feedback: Feedback) -> bool:

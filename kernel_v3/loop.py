@@ -208,6 +208,8 @@ class LoopControllerV3:
                             "task_id": task.task_id,
                             "run_id": task.run_id,
                             "step_id": step_id,
+                            "thread_id": task.thread_id,
+                            "input_text": task.input_text,
                         },
                     )
                     observation = self._bind_observation(task.run_id, action, tool_result.observation)

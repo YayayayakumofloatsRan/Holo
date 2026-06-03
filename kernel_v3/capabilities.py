@@ -53,6 +53,7 @@ SAFE_SEMANTIC_CAPABILITIES = frozenset(
         "durable_memory.read",
         "durable_memory.search",
         "durable_memory.propose",
+        "memory.recall",
         "artifact.create",
         "artifact.read",
         "data.table.analyze",
@@ -1335,6 +1336,7 @@ def _tool_capabilities(
         "network.fetch": ("web.fetch", "retrieval", "Fetch a URL through a bounded network tool."),
         "shell.exec": ("shell.exec", "system", "Execute an allowlisted shell command."),
         "system.time": ("system.time", "system", "Read current host time with an explicit timezone."),
+        "memory.recall": ("durable_memory.search", "memory", "Recall committed workspace/project and thread memory."),
     }
     for tool_name, manifest in manifests.items():
         capability_id, family, description = mappings.get(

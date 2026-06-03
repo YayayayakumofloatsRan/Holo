@@ -33,10 +33,19 @@ _RETRIEVAL_CAPABILITIES = {
 }
 _WORKSPACE_READ_CAPABILITIES = {"workspace.list", "workspace.search", "file.read", "workspace:read"}
 _WORKSPACE_WRITE_CAPABILITIES = {"workspace.write", "workspace:write"}
+_MEMORY_READ_CAPABILITIES = {"durable_memory.read", "durable_memory.search", "memory.recall"}
 _SYSTEM_TOOL_CAPABILITIES = {"system.time"}
 _SYSTEM_HOST_CAPABILITIES = {"system.environment"}
 _SYSTEM_CAPABILITIES = _SYSTEM_TOOL_CAPABILITIES | _SYSTEM_HOST_CAPABILITIES | {"system.process"}
-_EXECUTABLE_TOOL_CAPABILITIES = {"retrieval.run", "workspace.list", "workspace.search", "file.read", "workspace.write", "system.time"}
+_EXECUTABLE_TOOL_CAPABILITIES = {
+    "retrieval.run",
+    "workspace.list",
+    "workspace.search",
+    "file.read",
+    "workspace.write",
+    "memory.recall",
+    "system.time",
+}
 _FINANCE_FUNDAMENTALS_PROFILE_ID = "finance_fundamentals"
 _TECHNICAL_DOCUMENTATION_PROFILE_ID = "technical_documentation"
 _TECHNICAL_DOCUMENTATION_CAPABILITIES = {
@@ -533,6 +542,8 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
         return "semantic_answer"
     if _has_any(capabilities, _RETRIEVAL_CAPABILITIES):
         return "retrieval_answer"
+    if _has_any(capabilities, _MEMORY_READ_CAPABILITIES):
+        return "semantic_answer"
     if _has_any(capabilities, _WORKSPACE_WRITE_CAPABILITIES):
         return "workspace_write"
     if _has_any(capabilities, _WORKSPACE_READ_CAPABILITIES):
@@ -558,6 +569,8 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
     capabilities = set(node.required_capabilities)
     if capabilities & _RETRIEVAL_CAPABILITIES:
         return "retrieval.run"
+    if capabilities & _MEMORY_READ_CAPABILITIES:
+        return "memory.recall"
     if capabilities & _WORKSPACE_WRITE_CAPABILITIES:
         return "workspace.write"
     if "workspace.list" in capabilities:
@@ -585,6 +598,8 @@ def _capability_plan(capabilities: list[str]) -> JsonObject:
     tools = [capability for capability in capabilities if capability in _EXECUTABLE_TOOL_CAPABILITIES]
     if _has_any(capabilities, _RETRIEVAL_CAPABILITIES) and "retrieval.run" not in tools:
         tools.append("retrieval.run")
+    if _has_any(capabilities, _MEMORY_READ_CAPABILITIES) and "memory.recall" not in tools:
+        tools.append("memory.recall")
     if "workspace:write" in capabilities and "workspace.write" not in tools:
         tools.append("workspace.write")
     return {
@@ -595,6 +610,7 @@ def _capability_plan(capabilities: list[str]) -> JsonObject:
             for capability in {
                 *_RETRIEVAL_CAPABILITIES,
                 *_WORKSPACE_READ_CAPABILITIES,
+                *_MEMORY_READ_CAPABILITIES,
             }
         ),
     }
@@ -609,6 +625,7 @@ def _evidence_required(kind: str, capabilities: list[str], *, metadata: JsonObje
         for capability in {
             *_RETRIEVAL_CAPABILITIES,
             *_WORKSPACE_READ_CAPABILITIES,
+            *_MEMORY_READ_CAPABILITIES,
         }
     ):
         return True
@@ -690,6 +707,7 @@ def _is_non_tool_semantic_node(capabilities: list[str]) -> bool:
         _RETRIEVAL_CAPABILITIES
         | _WORKSPACE_READ_CAPABILITIES
         | _WORKSPACE_WRITE_CAPABILITIES
+        | _MEMORY_READ_CAPABILITIES
         | _SYSTEM_TOOL_CAPABILITIES
     )
     return not any(capability in tool_capabilities for capability in capabilities)

@@ -28,7 +28,7 @@ from kernel_v3.interaction import interaction_preferences, normalize_response_la
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.loop import LoopControllerV3
-from kernel_v3.memory import MemoryPipeline, MemoryStore
+from kernel_v3.memory import MEMORY_RECALL_TOOL_NAME, MemoryPipeline, MemoryStore, register_memory_tools
 from kernel_v3.mission.thread_rag import ThreadWorkingMemoryProvider
 from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
@@ -247,6 +247,7 @@ class AgentRuntime:
                 "execution_metadata": dict(execution_metadata or {}),
             },
         )
+        recipe = _with_active_memory_access(recipe, enabled=self.memory_store is not None)
         recipe = _with_planned_action_count(goal, recipe)
         recipe = _with_runtime_loop_budget(recipe, planner_mode=planner_mode)
         registry = self._registry(recipe, goal)
@@ -401,16 +402,25 @@ class AgentRuntime:
                 journal=self.journal,
                 artifact_store=self.artifact_store,
             )
-            return registry
+            return self._with_memory_tools(registry)
         if recipe.mode in {"workspace_answer", "workspace_write"}:
             if self.workspace_root is not None:
-                return ToolRegistry.with_permissioned_workspace(root=self.workspace_root, artifact_store=self.artifact_store)
+                return self._with_memory_tools(ToolRegistry.with_permissioned_workspace(root=self.workspace_root, artifact_store=self.artifact_store))
             if self.workspace_files:
-                return ToolRegistry.with_fake_workspace_tools(files=self.workspace_files, artifact_store=self.artifact_store)
-            return ToolRegistry.with_builtin_respond()
+                return self._with_memory_tools(ToolRegistry.with_fake_workspace_tools(files=self.workspace_files, artifact_store=self.artifact_store))
+            return self._with_memory_tools(ToolRegistry.with_builtin_respond())
         if recipe.mode == "system_answer":
-            return ToolRegistry.with_builtin_respond()
-        return ToolRegistry.with_builtin_respond()
+            return self._with_memory_tools(ToolRegistry.with_builtin_respond())
+        return self._with_memory_tools(ToolRegistry.with_builtin_respond())
+
+    def _with_memory_tools(self, registry: ToolRegistry) -> ToolRegistry:
+        if self.memory_store is None:
+            return registry
+        return register_memory_tools(
+            registry,
+            store=self.memory_store,
+            journal=self.journal,
+        )
 
     def _planner(
         self,
@@ -1282,6 +1292,8 @@ class _RecipeEvaluator:
             path = content.get("path")
             answer = f"已写入 `{path}`。" if isinstance(path, str) and path else None
             return _feedback(run_id, self.calls, "final_answer_ready", "completed", answer, [])
+        if observation.source == f"tool:{MEMORY_RECALL_TOOL_NAME}" and observation.status == "ok":
+            return _feedback(run_id, self.calls, "continue", None, None, ["respond_from_memory_recall"])
         if observation.status in {"failed", "not_implemented"}:
             return _feedback(run_id, self.calls, "failed", "observation_failed", None, ["successful observation"])
         if self.expected_action_count > self.calls:
@@ -1469,6 +1481,30 @@ def task_recipe(
         context_budget_mode="truncate",
         mode="direct_answer",
         metadata=recipe_metadata,
+    )
+
+
+def _with_active_memory_access(recipe: TaskRecipe, *, enabled: bool) -> TaskRecipe:
+    if not enabled or recipe.mode == "clarify_first":
+        return recipe
+    if recipe.citations_required and recipe.mode in {"direct_answer", "semantic_answer"}:
+        return recipe
+    if MEMORY_RECALL_TOOL_NAME in recipe.allowed_tools:
+        return recipe
+    metadata = dict(recipe.metadata)
+    metadata["active_memory_recall"] = {
+        "enabled": True,
+        "tool": MEMORY_RECALL_TOOL_NAME,
+        "scope_modes": ["workspace", "thread", "both"],
+        "rule": "The model may propose memory.recall; the host validates and returns previews/refs only.",
+    }
+    return replace(
+        recipe,
+        allowed_tools=[*recipe.allowed_tools, MEMORY_RECALL_TOOL_NAME],
+        max_steps=max(recipe.max_steps, 4),
+        max_tool_calls=max(recipe.max_tool_calls, 2),
+        max_total_artifact_bytes=max(recipe.max_total_artifact_bytes, 512_000),
+        metadata=metadata,
     )
 
 
@@ -1930,6 +1966,32 @@ def _actions_from_plan_step(goal: str, recipe: TaskRecipe, step: JsonObject) -> 
                 )
             )
         return actions
+    if tool_name == MEMORY_RECALL_TOOL_NAME:
+        payloads = _capability_payloads_from_step(step, MEMORY_RECALL_TOOL_NAME)
+        if not payloads:
+            memory_args = _capability_args_from_step(step, "durable_memory.search") or _capability_args_from_step(step, "durable_memory.read")
+            payloads = [memory_args or {}]
+        actions = []
+        for item_index, args in enumerate(payloads, start=1):
+            query = _string_value(args.get("query")) or _string_value(args.get("goal")) or _string_value(step.get("goal")) or goal
+            scope_mode = _string_value(args.get("scope_mode")) or _string_value(args.get("scope")) or "both"
+            payload: JsonObject = {"query": query, "scope_mode": scope_mode}
+            limit = args.get("limit")
+            if isinstance(limit, int):
+                payload["limit"] = limit
+            actions.append(
+                CandidateAction(
+                    action_id=f"act-plan-{sequence}-{item_index}-memory-recall",
+                    kind="tool",
+                    name=MEMORY_RECALL_TOOL_NAME,
+                    description=str(step.get("goal") or "recall durable memory"),
+                    score=1.0,
+                    payload=payload,
+                    reasons=["semantic_task_plan"],
+                    side_effect_class="read",
+                )
+            )
+        return actions
     if tool_name == "system.time":
         payloads = _capability_payloads_from_step(step, "system.time")
         if not payloads:
@@ -1992,6 +2054,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     semantic = _semantic_intake_metadata(recipe)
     preferences = _interaction_preferences_metadata(recipe)
     state_profile_summary = _state_profile_summary_metadata(recipe)
+    active_memory = _active_memory_directive(recipe)
     if recipe.mode == "retrieval_answer":
         return {
             "mode": recipe.mode,
@@ -2031,6 +2094,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
+            "active_memory": active_memory,
         }
     if recipe.mode == "workspace_answer":
         return {
@@ -2066,6 +2130,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
+            "active_memory": active_memory,
         }
     if recipe.mode == "workspace_write":
         return {
@@ -2098,16 +2163,18 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
+            "active_memory": active_memory,
         }
     if recipe.mode == "semantic_answer":
         return {
             "mode": recipe.mode,
-            "required_first_action": {"kind": "respond", "name": None, "side_effect_class": "none"},
-            "allowed_tools": [],
-            "forbidden": ["all tool actions", "memory writes", "external side effects"],
+            "required_outcome": "answer the user; use memory.recall first when prior workspace/thread memory is needed",
+            "allowed_tools": list(recipe.allowed_tools),
+            "forbidden": ["memory writes", "external side effects"],
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
+            "active_memory": active_memory,
             "state_space_rule": (
                 "Preserve broad semantic domains and limitations. Do not collapse "
                 "professional, planning, communication, data, resident, transport, "
@@ -2124,6 +2191,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
+            "active_memory": active_memory,
         }
     if recipe.mode == "system_answer":
         return {
@@ -2139,15 +2207,41 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "interaction_preferences": preferences,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
+            "active_memory": active_memory,
         }
     return {
         "mode": recipe.mode,
-        "required_first_action": {"kind": "respond", "name": None, "side_effect_class": "none"},
-        "allowed_tools": [],
-        "forbidden": ["all tool actions"],
+        "required_outcome": "answer the user; use memory.recall first when prior workspace/thread memory is needed",
+        "allowed_tools": list(recipe.allowed_tools),
+        "forbidden": ["memory writes", "external side effects"],
         "interaction_preferences": preferences,
         "semantic_intake": semantic,
         "semantic_state_profile_summary": state_profile_summary,
+        "active_memory": active_memory,
+    }
+
+
+def _active_memory_directive(recipe: TaskRecipe) -> JsonObject:
+    if MEMORY_RECALL_TOOL_NAME not in recipe.allowed_tools:
+        return {"enabled": False}
+    metadata = recipe.metadata.get("active_memory_recall")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    return {
+        "enabled": True,
+        "tool": MEMORY_RECALL_TOOL_NAME,
+        "side_effect_class": "read",
+        "use_when": [
+            "the user asks about prior memory, preferences, or previous conversation",
+            "workspace/project conventions could affect the answer",
+            "thread continuity is required before responding",
+        ],
+        "payload_contract": {
+            "query": "short semantic query for memory recall",
+            "scope_mode": "workspace, thread, or both",
+            "limit": "optional items per scope",
+        },
+        "host_boundary": metadata.get("rule")
+        or "The host validates, executes, journals, and returns previews/refs only.",
     }
 
 
