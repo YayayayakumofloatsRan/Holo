@@ -186,6 +186,48 @@ def test_phase61_repeated_failed_fetch_target_sets_repetition_signal():
     assert signal.repeat_count == 2
 
 
+def test_phase61_default_failed_fetch_repetition_limit_allows_deep_retrieval_retry():
+    assert WorkloopConfig().repeated_failed_fetch_limit == 64
+
+
+def test_phase61_retrieval_rejection_diagnostic_counts_as_progress():
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-rejection-progress",
+        run_id="run-1",
+        step_id="step-1",
+        kind="retrieval_evidence_rejections",
+        data={
+            "goal_id": "goal-1",
+            "rejected_count": 8,
+            "items": [],
+            "diagnostics": {"reasons": {"target_entity_mismatch": 8}},
+        },
+    )
+
+    progress = assess_progress(
+        journal,
+        task_id="task-rejection-progress",
+        run_id="run-1",
+        step_id="step-1",
+        observation=Observation(
+            observation_id="obs-rejection-progress",
+            run_id="run-1",
+            kind="tool_result",
+            status="ok",
+            source="tool:retrieval.run",
+            content={"report": {"status": "insufficient_evidence", "evidence_ids": [], "citation_ids": []}},
+            observed_at_ms=1,
+            action_id="act-rejection-progress",
+            tool_call_id=None,
+        ),
+    )
+
+    assert progress.made_progress is True
+    assert progress.progress_type == "new_retrieval_rejection_diagnostic"
+    assert progress.signals[0]["diagnostics"]["reasons"] == {"target_entity_mismatch": 8}
+
+
 def test_phase61_repeated_missing_evidence_item_sets_repetition_signal():
     journal = JournalStore.in_memory()
     for index in range(3):

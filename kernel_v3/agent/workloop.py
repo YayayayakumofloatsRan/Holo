@@ -104,7 +104,7 @@ class TerminationDecision(Contract):
 class WorkloopConfig:
     repeated_action_limit: int = 16
     repeated_missing_evidence_limit: int = 32
-    repeated_failed_fetch_limit: int = 2
+    repeated_failed_fetch_limit: int = 64
     no_progress_step_limit: int = 16
 
 
@@ -249,6 +249,19 @@ def assess_progress(
             signals.append(ProgressSignal(signal_type="new_evidence", ref=str(record.data.get("evidence_id", record.record_id)), weight=0.35))
         elif record.kind == "retrieval_citation":
             signals.append(ProgressSignal(signal_type="new_citation", ref=str(record.data.get("citation_id", record.record_id)), weight=0.4))
+        elif record.kind == "retrieval_evidence_rejections":
+            diagnostics = record.data.get("diagnostics") if isinstance(record.data.get("diagnostics"), dict) else {}
+            signals.append(
+                ProgressSignal(
+                    signal_type="new_retrieval_rejection_diagnostic",
+                    ref=record.record_id,
+                    weight=0.12,
+                    diagnostics={
+                        "rejected_count": record.data.get("rejected_count", 0),
+                        "reasons": diagnostics.get("reasons", {}),
+                    },
+                )
+            )
         elif record.kind == "observation" and record.data.get("source") == "tool:file.read" and record.data.get("status") == "ok":
             content = record.data.get("content")
             path = content.get("path") if isinstance(content, dict) else None

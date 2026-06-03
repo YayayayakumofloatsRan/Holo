@@ -131,7 +131,7 @@ MISSION_ASSESS_SCHEMA = JsonSchema(
         "coverage_score": "number",
         "covered_requirements": "list",
         "missing_requirements": "list",
-        "next_directive": "dict",
+        "next_directive": "dict|null",
         "confidence": "number",
         "reason_summary": "str",
     },
@@ -231,6 +231,12 @@ When feedback.status is continue, inspect feedback.missing_evidence and the late
 When context.state.agent_replan_hints.status is needs_replan, use its retrieval gaps, suggested_query_hints, suggested_search_strategies, do_not_finalize_until, and avoid_repeating fields to propose one materially different safe action. Do not answer as final while any do_not_finalize_until rule is unmet.
 When context.state.mission_context is present, treat mission_context.mission_state.root_goal as the global objective for the whole task, not merely as commentary. Use mission_context.directive and context.state.thread_rag_context to understand previous attempts, evidence, failures, and conversation continuity. If the previous run failed but the mission directive says continue, propose a materially different safe action instead of giving up or asking the user by default.
 For retrieval/research tasks with configured retrieval capability, be persistent before giving up: broaden or narrow the query, try English and local-language variants, add official-source terms, use company/entity aliases, prefer source-directory/structured providers when present, and change search_strategy when previous attempts were empty. Most retrieval misses can be improved by changing query formulation or source family. Ask the user only when a critical target, permission, or required scope is genuinely missing.
+When retrieval feedback or rejected_evidence_reasons mention target_entity_mismatch,
+the previous sources matched only part of the target name or a different entity.
+Replan with explicit entity disambiguation: quoted full target phrase, known
+aliases, industry/location/source terms, negative ambiguity terms when useful,
+and a different source family. Do not treat partial-name pages as evidence for
+the target entity.
 When context.state.agent_replan_hints.retrieval.suggested_filing_documents is
 present, prefer one of its suggested_payload objects for the next
 retrieval.run. These are host-derived SEC filing continuations from previously
@@ -306,7 +312,7 @@ MISSION_ASSESS_PROMPT_CONTRACT = """Return one JSON object matching mission.asse
 Fields: decision one of continue/final_answer/ask_user/failure_report/blocked,
 coverage_score number 0..1, covered_requirements string array,
 missing_requirements string array, unsupported_claims string array,
-next_directive object, confidence number 0..1, reason_summary string.
+next_directive object or null, confidence number 0..1, reason_summary string.
 The root_goal is the global user objective. Compare the latest run_delta and
 agent_result against that root_goal, not merely against the last tool call.
 If the latest tool/search/retrieval failed but a materially different safe

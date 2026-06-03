@@ -232,6 +232,21 @@ Kernel v3 currently contains the infrastructure for:
   broadly, then select a smaller source-authority/facet-aware evidence package
   before journaling citations and calling the synthesizer. This keeps deep
   research loops from dumping every candidate span into the final model packet;
+- generic target-entity consistency for deep retrieval: when a query contains a
+  clear multi-token target such as a named organization, retrieval ranks
+  sources by target match and rejects spans whose page only matches a partial or
+  different entity. Rejected spans are journaled with
+  `target_entity_mismatch`, required/missing target phrases, and previews, so
+  the next planner packet can change the disambiguation strategy instead of
+  treating noisy pages as citations;
+- retrieval rejection diagnostics now count as workloop progress. Wrong-entity
+  pages, failed source families, and other rejected evidence do not satisfy the
+  task, but they are useful feedback for the next loop iteration and mission
+  directive;
+- deep-retrieval repetition guards are sized for real research. Repeated failed
+  fetch targets no longer stop the loop after two misses by default; mission
+  supervision still caps total iterations and can return a failure report when
+  all materially different strategies are exhausted;
 - finance fundamentals source directory entries for SEC/EDGAR, SEC structured
   data, SEC CIK/ticker mapping, SEC archives, SEC financial statement datasets,
   company IR, US/global official statistics, China/HK/UK/Canada/Australia/Japan/

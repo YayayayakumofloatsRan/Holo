@@ -385,6 +385,9 @@ class RetrievalOperator:
                             "reason": qualification.get("reason"),
                             "missing_profile_facets": qualification.get("missing_profile_facets", []),
                             "missing_finance_facets": qualification.get("missing_finance_facets", []),
+                            "required_target_phrases": qualification.get("required_target_phrases", []),
+                            "matched_target_phrases": qualification.get("matched_target_phrases", []),
+                            "missing_target_phrases": qualification.get("missing_target_phrases", []),
                             "preview": _preview(item.text, self.preview_chars),
                         }
                     )

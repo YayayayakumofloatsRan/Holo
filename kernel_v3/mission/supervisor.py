@@ -38,7 +38,7 @@ class MissionSupervisor:
         processor_fabric: ProcessorFabric | None = None,
         assessor_mode: str = "rule",
         max_iterations: int = 6,
-        no_progress_iteration_limit: int = 2,
+        no_progress_iteration_limit: int = 6,
     ) -> None:
         self.journal = journal
         self.processor_fabric = processor_fabric
@@ -159,13 +159,14 @@ class MissionSupervisor:
         coverage_score = _coverage_score(result, evidence_refs=evidence_refs, citation_refs=citation_refs, missing=missing)
         no_progress_count = _no_progress_count(mission) + (0 if _has_material_progress(result, run_delta) else 1)
         hard_block = _hard_block_reason(result)
+        final_answer_covers_goal = _final_answer_covers_mission(result)
         can_continue = (
-            result.status != "completed"
+            (result.status != "completed" or (result.final_answer is not None and not final_answer_covers_goal))
             and hard_block is None
             and index < self.max_iterations
             and no_progress_count < self.no_progress_iteration_limit
         )
-        if result.status == "completed" and result.final_answer is not None:
+        if result.status == "completed" and result.final_answer is not None and final_answer_covers_goal:
             decision = "final_answer"
             reason = "mission_goal_covered_by_final_answer"
             next_directive = None
@@ -373,6 +374,8 @@ def _directive_for_gap(
 
 def _mission_missing_requirements(mission: MissionState, result: AgentRuntimeResult, *, run_delta: JsonObject) -> list[str]:
     missing: list[str] = []
+    if result.status == "completed" and result.final_answer is not None and not _final_answer_covers_mission(result):
+        missing.extend(_final_answer_missing_requirements(result))
     failure = result.failure_report if isinstance(result.failure_report, dict) else {}
     missing.extend(_string_list(failure.get("missing_evidence")))
     for feedback in run_delta.get("feedback", []) if isinstance(run_delta.get("feedback"), list) else []:
@@ -387,7 +390,7 @@ def _mission_missing_requirements(mission: MissionState, result: AgentRuntimeRes
 
 
 def _coverage_score(result: AgentRuntimeResult, *, evidence_refs: list[str], citation_refs: list[str], missing: list[str]) -> float:
-    if result.status == "completed" and result.final_answer is not None:
+    if result.status == "completed" and result.final_answer is not None and _final_answer_covers_mission(result):
         return 1.0
     score = 0.0
     if evidence_refs:
@@ -404,9 +407,46 @@ def _coverage_score(result: AgentRuntimeResult, *, evidence_refs: list[str], cit
 
 
 def _has_material_progress(result: AgentRuntimeResult, run_delta: JsonObject) -> bool:
-    if result.status == "completed" and result.final_answer is not None:
+    if result.status == "completed" and result.final_answer is not None and _final_answer_covers_mission(result):
         return True
-    return bool(_string_list(run_delta.get("evidence_refs")) or _string_list(run_delta.get("citation_refs")))
+    if _string_list(run_delta.get("evidence_refs")) or _string_list(run_delta.get("citation_refs")):
+        return True
+    for report in run_delta.get("retrieval_reports", []) if isinstance(run_delta.get("retrieval_reports"), list) else []:
+        if not isinstance(report, dict):
+            continue
+        rejected_count = report.get("rejected_evidence_count")
+        if isinstance(rejected_count, int) and rejected_count > 0:
+            return True
+    return False
+
+
+def _final_answer_covers_mission(result: AgentRuntimeResult) -> bool:
+    final_answer = result.final_answer if isinstance(result.final_answer, dict) else {}
+    if not final_answer:
+        return False
+    confidence = _float_between(final_answer.get("confidence"), default=0.0)
+    if confidence <= 0.05:
+        return False
+    if result.mode == "retrieval_answer":
+        citation_refs = _string_list(final_answer.get("citation_refs"))
+        used_evidence = _string_list(final_answer.get("used_evidence"))
+        if not citation_refs and not used_evidence:
+            return False
+    return True
+
+
+def _final_answer_missing_requirements(result: AgentRuntimeResult) -> list[str]:
+    final_answer = result.final_answer if isinstance(result.final_answer, dict) else {}
+    missing: list[str] = []
+    confidence = _float_between(final_answer.get("confidence"), default=0.0)
+    if confidence <= 0.05:
+        missing.append("supported_final_answer")
+    if result.mode == "retrieval_answer":
+        if not _string_list(final_answer.get("citation_refs")):
+            missing.append("citation_refs")
+        if not _string_list(final_answer.get("used_evidence")):
+            missing.append("used_evidence")
+    return missing or ["mission_goal_uncovered_by_final_answer"]
 
 
 def _hard_block_reason(result: AgentRuntimeResult) -> str | None:

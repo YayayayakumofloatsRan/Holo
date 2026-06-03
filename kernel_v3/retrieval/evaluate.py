@@ -28,6 +28,7 @@ from kernel_v3.retrieval.contracts import (
     EvidenceItem,
     SearchGoal,
 )
+from kernel_v3.retrieval.targeting import assess_target_entity_coverage, target_entity_diagnostics
 
 
 def qualify_evidence_candidate(
@@ -43,6 +44,15 @@ def qualify_evidence_candidate(
             research_profile=research_profile,
         )
     )
+    target_diagnostics = target_entity_diagnostics(goal.query, [evidence.title, evidence.uri, evidence.text])
+    if bool(target_diagnostics.get("target_entity_required")):
+        result["target_entity"] = target_diagnostics
+        result["required_target_phrases"] = target_diagnostics.get("required_target_phrases", [])
+        result["matched_target_phrases"] = target_diagnostics.get("matched_target_phrases", [])
+        result["missing_target_phrases"] = target_diagnostics.get("missing_target_phrases", [])
+        if not bool(target_diagnostics.get("target_entity_satisfied")):
+            result["accepted"] = False
+            result["reason"] = "target_entity_mismatch"
     if _is_finance_profile(goal=goal, research_profile=research_profile):
         _add_finance_compatibility_fields(result)
     return result
@@ -70,6 +80,19 @@ class EvidenceEvaluator:
         if sufficient and facet_diagnostics["missing_query_facets"]:
             sufficient = False
             reason = "query_facets_missing"
+
+        target_diagnostics = assess_target_entity_coverage(
+            goal.query,
+            [f"{item.title} {item.uri} {item.text}" for item in evidence],
+        )
+        diagnostics.update(target_diagnostics)
+        if (
+            sufficient
+            and target_diagnostics["target_entity_required"]
+            and target_diagnostics["missing_target_phrases"]
+        ):
+            sufficient = False
+            reason = "target_entity_mismatch"
 
         profile_diagnostics = assess_profile_evidence_coverage(
             goal=goal,

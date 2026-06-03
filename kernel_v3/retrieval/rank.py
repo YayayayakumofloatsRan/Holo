@@ -3,6 +3,7 @@ from __future__ import annotations
 from kernel_v3.research.contracts import ResearchProfile
 from kernel_v3.research.source_policy import assess_search_source
 from kernel_v3.retrieval.contracts import RankedSource, SearchGoal, SearchSource
+from kernel_v3.retrieval.targeting import target_entity_diagnostics
 
 
 QUERY_TEXT_LIMIT = 500
@@ -42,6 +43,11 @@ def rank_sources(
         metadata = dict(source.metadata)
         source_kind_adjustment = _source_kind_score_adjustment(metadata)
         source_family_adjustment = _source_family_preference_adjustment(goal.metadata, metadata)
+        target_diagnostics = target_entity_diagnostics(goal.query, [source.title, source.snippet, source.uri])
+        target_adjustment = _target_entity_score_adjustment(target_diagnostics)
+        if bool(target_diagnostics.get("target_entity_required")):
+            metadata["target_entity"] = target_diagnostics
+            reasons.append("target_entity_match" if bool(target_diagnostics.get("target_entity_satisfied")) else "target_entity_mismatch")
         if research_profile is not None:
             assessment = assess_search_source(source, profile=research_profile)
             score = (
@@ -49,11 +55,12 @@ def rank_sources(
                 + (assessment.authority_score * 0.8)
                 + source_kind_adjustment
                 + source_family_adjustment
+                + target_adjustment
             )
             metadata["source_assessment"] = assessment.to_dict()
             reasons.append(f"authority:{assessment.authority_level}")
         else:
-            score = term_score + source_kind_adjustment + source_family_adjustment
+            score = term_score + source_kind_adjustment + source_family_adjustment + target_adjustment
         ranked.append(
             RankedSource(
                 source_id=source.source_id,
@@ -141,6 +148,14 @@ def _preferred_source_families(metadata: dict[str, object]) -> set[str]:
     if metadata.get("research_task_kind") == "macro_data":
         return {"government_statistic", "central_bank_statistic", "treasury_data"}
     return set()
+
+
+def _target_entity_score_adjustment(diagnostics: dict[str, object]) -> float:
+    if not bool(diagnostics.get("target_entity_required")):
+        return 0.0
+    if bool(diagnostics.get("target_entity_satisfied")):
+        return 0.28
+    return -0.62
 
 
 def _term_aliases(term: str) -> list[str]:

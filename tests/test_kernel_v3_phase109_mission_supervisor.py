@@ -1,12 +1,15 @@
 import json
 
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.contracts import AgentRuntimeResult
 from kernel_v3.agent.workloop import WorkloopConfig
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
 from kernel_v3.mission import MissionRuntime, ThreadWorkingMemoryProvider
 from kernel_v3.processors import ProcessorFabric, ProcessorRouter
+from kernel_v3.processors.contracts import MISSION_ASSESS_SCHEMA
+from kernel_v3.processors.fabric import validate_json_schema
 from kernel_v3.processors.usage import usage_from_text
 from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
@@ -135,6 +138,56 @@ def test_phase109_mission_and_thread_rag_are_in_model_planner_packet():
     assert state["mission_context"]["mission_state"]["root_goal"] == "解释一下全局任务监督闭环"
     assert state["thread_rag_context"]["kind"] == "thread_rag_context"
     assert journal.records(task_id=result.task_id, kind="mission_assessment")
+
+
+def test_phase109_mission_schema_accepts_null_next_directive_for_terminal_decisions():
+    assert (
+        validate_json_schema(
+            {
+                "decision": "failure_report",
+                "coverage_score": 0.0,
+                "covered_requirements": [],
+                "missing_requirements": ["target evidence"],
+                "unsupported_claims": [],
+                "next_directive": None,
+                "confidence": 0.8,
+                "reason_summary": "No safe continuation remains.",
+            },
+            MISSION_ASSESS_SCHEMA,
+        )
+        is None
+    )
+
+
+def test_phase109_mission_does_not_finalize_low_confidence_failure_answer():
+    journal = JournalStore.in_memory()
+    supervisor = MissionRuntime(
+        agent_runtime=AgentRuntime(journal=journal),
+        max_iterations=2,
+    ).supervisor
+    mission = supervisor.start(root_goal="Find Citadel Security scale and operations", thread_id="thread-citadel")
+    result = AgentRuntimeResult(
+        status="completed",
+        task_id="task-mission-fixture",
+        run_id="run-mission-fixture",
+        mode="retrieval_answer",
+        recipe_id="recipe-mission-fixture",
+        final_answer={
+            "answer": "The available evidence does not identify Citadel Security.",
+            "citation_refs": [],
+            "used_evidence": [],
+            "limitations": ["No matching target evidence was found."],
+            "confidence": 0.0,
+        },
+        failure_report=None,
+        trace_refs=[],
+    )
+
+    _updated, assessment = supervisor.assess(mission, result, index=1)
+
+    assert assessment.decision == "continue"
+    assert "supported_final_answer" in assessment.missing_requirements
+    assert assessment.next_directive is not None
 
 
 def test_phase109_thread_working_memory_is_thread_scoped():
