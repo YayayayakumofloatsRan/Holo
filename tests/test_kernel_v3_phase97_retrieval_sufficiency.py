@@ -9,6 +9,13 @@ from kernel_v3.retrieval import (
     SearchSource,
 )
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator
+from kernel_v3.retrieval.targeting import target_entity_phrases
+
+
+def test_phase97_target_entity_detection_ignores_direct_url_tokens():
+    query = "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json RevenueFromContractWithCustomerExcludingAssessedTax NetIncomeLoss"
+
+    assert target_entity_phrases(query) == []
 
 
 def test_phase97_evidence_evaluator_requires_requested_query_facets():

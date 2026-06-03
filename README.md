@@ -78,6 +78,14 @@ normal thread-history surface.
 
 ## Current Capability Snapshot
 
+Recent kernel-v3 hardening is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-03_RETRIEVAL_LOOP_HARDENING.md`. The current
+retrieval loop counts actual tool observations rather than payload-declared
+fetch budgets, model-visible context compacts large mission/retrieval/runtime
+payloads before processor calls, and SEC companyfacts/direct-URL retrieval now
+preserves structured financial evidence such as concept, metric, period, filing,
+and value fields.
+
 Kernel v3 currently contains the infrastructure for:
 
 - bounded planner -> policy -> tool -> evaluator loops;

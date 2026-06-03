@@ -193,7 +193,10 @@ def test_phase96_json_extraction_flattens_sec_companyfacts_for_evidence() -> Non
     assert "form=10-K" in text
     assert spans
     assert spans[0].metadata["text_mode"] == "sec_companyfacts_readable_text"
-    assert "companyfacts" in spans[0].text.lower() or "Revenues" in spans[0].text
+    assert "companyfacts" in spans[0].text.lower()
+    assert "concept=Revenues" in spans[0].text
+    assert "metric=revenue" in spans[0].text
+    assert "val=391035000000" in spans[0].text
 
 
 def test_phase96_finance_profile_expands_companyfacts_extraction_terms() -> None:

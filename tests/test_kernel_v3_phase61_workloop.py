@@ -699,7 +699,7 @@ def test_phase61_failure_report_contains_attempts_missing_evidence_observations_
     assert report["trace_refs"]
 
 
-def test_phase61_loop_guard_is_finalized_by_workloop_before_agent_result():
+def test_phase61_network_budget_does_not_preempt_tool_observation_when_budget_remains():
     journal = JournalStore.in_memory()
     fetch_provider = _LiveFetchProvider()
     runtime = AgentRuntime(
@@ -726,11 +726,12 @@ def test_phase61_loop_guard_is_finalized_by_workloop_before_agent_result():
 
     assert result.status == "failed"
     assert result.failure_report["reason"] == "max_network_fetches"
-    assert fetch_provider.called is False
-    assert journal.records(task_id=result.task_id, kind="guard")[-1].data["stop_reason"] == "max_network_fetches"
+    observations = journal.records(task_id=result.task_id, kind="observation")
+    assert observations[0].data["status"] == "ok"
+    assert observations[1].data["content"]["reason"] == "max_network_fetches"
+    assert journal.records(task_id=result.task_id, kind="guard")[-1].data["network_fetches"] == 1
     decision = journal.records(task_id=result.task_id, kind="termination_decision")[-1].data
     assert decision["decision"] == "failure_report"
-    assert decision["reason"] == "max_network_fetches"
     assert journal.records(task_id=result.task_id, kind="progress_assessment")
     assert journal.records(task_id=result.task_id, kind="evidence_sufficiency")
 

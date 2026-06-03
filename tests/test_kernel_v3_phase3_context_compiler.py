@@ -134,6 +134,59 @@ def test_context_pack_hash_changes_when_source_journal_changes():
     assert after.source_refs == ["ledger-2", "ledger-3", "ledger-4", "artifact-obs-1"]
 
 
+def test_context_pack_compacts_retrieval_report_observation_content():
+    journal, artifacts, task = _seed_context_inputs()
+    huge_provider_diagnostics = {
+        "provider_capabilities": [{"provider_id": f"provider-{index}", "diagnostics": {"long": "x" * 1000}} for index in range(50)],
+        "evaluation_diagnostics": {
+            "missing_finance_facets": ["revenue", "balance_sheet", "numeric_financial_fact"],
+            "missing_query_facets": ["official source"],
+            "source_authority": {"primary_source_count": 1, "source_families": ["structured_regulatory_data"]},
+        },
+        "rejected_evidence_reasons": {"target_entity_mismatch": 12},
+        "fetch_attempt_count": 2,
+        "search_attempt_count": 1,
+        "reason": "insufficient_evidence",
+    }
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-2",
+        kind="observation",
+        data={
+            "observation_id": "obs-retrieval",
+            "kind": "tool_result",
+            "status": "ok",
+            "source": "tool:retrieval.run",
+            "content": {
+                "report": {
+                    "report_id": "report-1",
+                    "goal_id": "goal-1",
+                    "status": "insufficient_evidence",
+                    "preview": "short preview",
+                    "diagnostics": huge_provider_diagnostics,
+                }
+            },
+        },
+        observation_ref="obs-retrieval",
+    )
+
+    pack = ContextPackCompiler(
+        artifact_store=artifacts,
+        memory_read=MemoryRead(journal=journal, artifact_store=artifacts),
+        token_budget=1000000,
+        section_budget=200000,
+    ).compile(task, journal, step_id="step-2")
+
+    encoded = json.dumps(pack.to_dict(), ensure_ascii=False)
+    recent = next(section for section in pack.sections if section["name"] == "recent_observations")
+    report = recent["records"][-1]["content"]["report"]
+    assert report["status"] == "insufficient_evidence"
+    assert report["missing_finance_facets"] == ["revenue", "balance_sheet", "numeric_financial_fact"]
+    assert "provider_capabilities" not in encoded
+    assert "x" * 200 not in encoded
+
+
 def test_context_pack_recent_observations_memory_refs_and_citations_use_same_window():
     journal = JournalStore.in_memory()
     task = SessionEngine.from_journal(journal).start("inspect sequence", thread_id="thread-a", journal=journal)

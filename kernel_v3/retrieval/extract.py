@@ -101,7 +101,12 @@ def extract_spans(
     if not text:
         return []
     spans: list[ExtractedSpan] = []
-    for candidate in _ranked_span_candidates(text, terms):
+    candidates = (
+        _ranked_structured_line_candidates(text, terms)
+        if text_mode == "sec_companyfacts_readable_text"
+        else _ranked_span_candidates(text, terms)
+    )
+    for candidate in candidates:
         spans.append(
             ExtractedSpan(
                 span_id=f"span-{document.document_id}-{len(spans) + 1}",
@@ -172,6 +177,38 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
                         }
                     )
             start = index + max(1, len(term))
+    return sorted(
+        candidates,
+        key=lambda item: (
+            -float(item["score"]),
+            -len(item["matched_terms"]),
+            int(item["start_offset"]),
+        ),
+    )
+
+
+def _ranked_structured_line_candidates(text: str, terms: list[str]) -> list[dict]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    header = lines[0]
+    candidates: list[dict] = []
+    offset = 0
+    for line in lines:
+        lower = line.lower()
+        matched = [candidate for candidate in terms if candidate in lower]
+        if matched:
+            snippet = _normalize_span(f"{header} {line}")
+            candidates.append(
+                {
+                    "start_offset": offset,
+                    "end_offset": offset + len(line),
+                    "text": snippet,
+                    "matched_terms": matched,
+                    "score": min(1.0, len(matched) / max(1, len(terms))),
+                }
+            )
+        offset += len(line) + 1
     return sorted(
         candidates,
         key=lambda item: (
@@ -289,8 +326,8 @@ def _extract_sec_companyfacts_readable_text(body: str) -> str:
                         )
                     )
                     if len(lines) >= STRUCTURED_LINE_LIMIT:
-                        return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
-    return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
+                        return "\n".join(lines)[:READABLE_TEXT_LIMIT]
+    return "\n".join(lines)[:READABLE_TEXT_LIMIT]
 
 
 def _recent_companyfacts_records(records: list[object]) -> list[object]:

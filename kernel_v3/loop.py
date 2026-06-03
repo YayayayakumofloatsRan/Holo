@@ -441,7 +441,7 @@ class LoopControllerV3:
             action.kind == "tool"
             and self._is_network_action(action, manifest=manifest)
             and self.max_network_fetches is not None
-            and network_fetches + self._network_action_cost(action, manifest=manifest) > self.max_network_fetches
+            and network_fetches >= self.max_network_fetches
         ):
             return "max_network_fetches"
         return None

@@ -41,7 +41,7 @@ def rank_sources(
         term_score = hits / max(1, len(terms))
         reasons = ["query_term_match"] if hits else ["provider_result"]
         metadata = dict(source.metadata)
-        source_kind_adjustment = _source_kind_score_adjustment(metadata)
+        source_kind_adjustment = _source_kind_score_adjustment(metadata, query=goal.query)
         source_family_adjustment = _source_family_preference_adjustment(goal.metadata, metadata)
         target_diagnostics = target_entity_diagnostics(goal.query, [source.title, source.snippet, source.uri])
         target_adjustment = _target_entity_score_adjustment(target_diagnostics)
@@ -108,16 +108,32 @@ def _source_haystack(source: SearchSource) -> str:
     return f"{source.title} {source.snippet} {uri_text}".lower()
 
 
-def _source_kind_score_adjustment(metadata: dict[str, object]) -> float:
+def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "") -> float:
     source_kind = metadata.get("source_kind")
+    query_text = query.lower()
+    submissions_intent = any(
+        marker in query_text
+        for marker in (
+            "submissions",
+            "accession",
+            "primarydocument",
+            "primary document",
+            "filing metadata",
+            "filing chronology",
+        )
+    )
     if source_kind == "sec_primary_filing_document":
         return 0.55
     if source_kind == "sec_complete_submission_text":
         return 0.52
-    if source_kind == "sec_submissions_json":
-        return 0.48
     if source_kind == "sec_companyfacts_json":
-        return 0.46
+        if submissions_intent:
+            return 0.38
+        return 0.50
+    if source_kind == "sec_submissions_json":
+        if submissions_intent:
+            return 0.51
+        return 0.42
     if source_kind in {"sec_ticker_cik_directory", "sec_edgar_search", "sec_filing_directory"}:
         return -0.32
     if source_kind == "sec_edgar_browse":

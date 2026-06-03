@@ -1146,35 +1146,44 @@ class _AgentContextCompiler:
         ]
         semantic_profiles = _state_profiles_metadata(self.recipe)
         semantic_profile_summary = _state_profile_summary_metadata(self.recipe)
-        mission_context = _mission_context_metadata(self.recipe)
-        thread_rag_context = _thread_rag_context_metadata(self.recipe) or self.thread_memory.compile(
+        capability_state = capability_catalog(
+            tool_manifests=self.tool_manifests,
+            allowed_tools=self.recipe.allowed_tools,
+            allowed_permissions=_recipe_allowed_permissions(self.recipe),
+            mode=self.recipe.mode,
+        )
+        mission_context = _compact_mission_context_for_prompt(_mission_context_metadata(self.recipe))
+        thread_rag_context = _compact_thread_rag_context_for_prompt(
+            _thread_rag_context_metadata(self.recipe)
+        ) or self.thread_memory.compile(
             journal,
             thread_id=task.thread_id,
             task_id=task.task_id,
             mission_id=_mission_id_from_context(mission_context),
         )
+        thread_rag_context = _compact_thread_rag_context_for_prompt(thread_rag_context)
         state = redact_journal_data(
             {
                 "task_id": task.task_id,
                 "run_id": task.run_id,
                 "thread_id": task.thread_id,
                 "input_text": task.input_text,
-                "agent_recipe": self.recipe.to_dict(),
-                "capability_catalog": capability_catalog(
-                    tool_manifests=self.tool_manifests,
+                "agent_recipe": _compact_agent_recipe_for_prompt(self.recipe),
+                "capability_catalog": _compact_capability_catalog_for_prompt(
+                    capability_state,
                     allowed_tools=self.recipe.allowed_tools,
-                    allowed_permissions=_recipe_allowed_permissions(self.recipe),
-                    mode=self.recipe.mode,
                 ),
-                "semantic_state_space": semantic_state_space_catalog(),
+                "semantic_state_space": _compact_semantic_state_space_for_prompt(semantic_state_space_catalog()),
                 "semantic_state_profiles": semantic_profiles,
                 "semantic_state_profile_summary": semantic_profile_summary,
-                "research_source_directory": _research_source_directory_metadata(self.recipe),
+                "research_source_directory": _compact_research_source_directory_for_prompt(
+                    _research_source_directory_metadata(self.recipe)
+                ),
                 "retrieval_capability_state": _retrieval_capability_state(
                     self.tool_manifests,
                     recipe=self.recipe,
                 ),
-                "agent_runtime_directive": _planner_directive(self.recipe),
+                "agent_runtime_directive": _compact_agent_runtime_directive_for_prompt(_planner_directive(self.recipe)),
                 "agent_retrieval_plan_state": _agent_retrieval_plan_state(
                     journal,
                     task_id=task.task_id,
@@ -3514,6 +3523,343 @@ def _thread_rag_context_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _compact_agent_recipe_for_prompt(recipe: TaskRecipe) -> JsonObject:
+    data = recipe.to_dict()
+    metadata = dict(data.get("metadata")) if isinstance(data.get("metadata"), dict) else {}
+    execution = dict(metadata.get("execution_metadata")) if isinstance(metadata.get("execution_metadata"), dict) else {}
+    if "mission_context" in execution:
+        execution["mission_context"] = _compact_mission_context_for_prompt(execution.get("mission_context"))
+    if "thread_rag_context" in execution:
+        execution["thread_rag_context"] = _compact_thread_rag_context_for_prompt(execution.get("thread_rag_context"))
+    if "thread_working_context" in execution:
+        execution["thread_working_context"] = _compact_thread_working_context_for_prompt(execution.get("thread_working_context"))
+    metadata = {
+        "allowed_permissions": _string_list(metadata.get("allowed_permissions")),
+        "active_memory_recall": _compact_simple_dict(metadata.get("active_memory_recall"), limit=8),
+        "answer_profile": _compact_simple_dict(metadata.get("answer_profile"), limit=16),
+        "research_mission": _compact_simple_dict(metadata.get("research_mission"), limit=16),
+        "execution_metadata": {
+            "agent_loop": _compact_simple_dict(execution.get("agent_loop"), limit=8),
+            "context_budget": _compact_simple_dict(execution.get("context_budget"), limit=12),
+            "interaction_preferences": _compact_simple_dict(execution.get("interaction_preferences"), limit=8),
+            "answer_profile": _compact_simple_dict(execution.get("answer_profile"), limit=16),
+            "research_mission": _compact_simple_dict(execution.get("research_mission"), limit=16),
+            "mission_context": execution.get("mission_context", {}),
+            "thread_rag_context": execution.get("thread_rag_context", {}),
+            "thread_working_context": execution.get("thread_working_context", {}),
+        },
+    }
+    data["metadata"] = metadata
+    return data
+
+
+def _compact_capability_catalog_for_prompt(value: object, *, allowed_tools: list[str]) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    capabilities = []
+    for item in value.get("capabilities") or []:
+        if not isinstance(item, dict):
+            continue
+        capabilities.append(
+            {
+                "capability_id": item.get("capability_id"),
+                "family": item.get("family"),
+                "tool_name": item.get("tool_name"),
+                "status": item.get("status"),
+                "side_effect_class": item.get("side_effect_class"),
+                "permissions_required": _string_list(item.get("permissions_required"))[:4],
+                "description": _text_preview(item.get("description"), limit=96),
+            }
+        )
+    return {
+        "version": value.get("version"),
+        "mode": value.get("mode"),
+        "families": value.get("families"),
+        "executable_tools": _string_list(value.get("executable_tools")),
+        "not_configured": _string_list(value.get("not_configured")),
+        "planned": _string_list(value.get("planned")),
+        "capabilities": capabilities,
+        "allowed_tools": list(allowed_tools),
+        "host_rule": "The model proposes only these high-level actions; the host validates payload schema and policy before execution.",
+    }
+
+
+def _compact_research_source_directory_for_prompt(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    entries: list[JsonObject] = []
+    for item in value[:12]:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        templates = metadata.get("query_url_templates") if isinstance(metadata.get("query_url_templates"), list) else []
+        entries.append(
+            {
+                "source_id": item.get("source_id"),
+                "title": _text_preview(item.get("title"), limit=180),
+                "profile_id": item.get("profile_id"),
+                "source_family": item.get("source_family"),
+                "authority_level": item.get("authority_level"),
+                "base_url": item.get("base_url"),
+                "allowed_hosts": _string_list(item.get("allowed_hosts"))[:6],
+                "query_hints": _string_list(item.get("query_hints"))[:4],
+                "use_cases": _string_list(item.get("use_cases"))[:4],
+                "crawl_notes": _string_list(item.get("crawl_notes"))[:3],
+                "query_url_templates": [
+                    {
+                        "template_id": template.get("template_id"),
+                        "title": _text_preview(template.get("title"), limit=120),
+                        "source_kind": template.get("source_kind"),
+                        "required_values": _string_list(template.get("required_values"))[:4],
+                    }
+                    for template in templates[:3]
+                    if isinstance(template, dict)
+                ],
+            }
+        )
+    return entries
+
+
+def _compact_semantic_state_space_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    families = value.get("families") if isinstance(value.get("families"), dict) else {}
+    selected_families = {
+        str(key): _string_list(item)[:16]
+        for key, item in families.items()
+    }
+    return {
+        "version": value.get("version"),
+        "modes": _string_list(value.get("modes"))[:16],
+        "task_domains": _string_list(value.get("task_domains"))[:24],
+        "state_dimensions": _compact_state_dimensions_for_prompt(value.get("state_dimensions")),
+        "families": selected_families,
+        "semantic_slots": _string_list(value.get("semantic_slots"))[:24],
+        "host_rule": "Use this as a semantic map only; concrete execution still requires a valid ActionProposal.",
+    }
+
+
+def _compact_agent_runtime_directive_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "mode": value.get("mode"),
+        "allowed_tools": _string_list(value.get("allowed_tools")),
+        "forbidden": _string_list(value.get("forbidden")),
+        "required_first_action": _compact_simple_dict(value.get("required_first_action"), limit=8),
+        "allowed_non_tool_actions": [
+            _compact_simple_dict(item, limit=8)
+            for item in list(value.get("allowed_non_tool_actions") or [])[:4]
+            if isinstance(item, dict)
+        ],
+        "active_memory": _compact_simple_dict(value.get("active_memory"), limit=10),
+        "answer_profile": _compact_simple_dict(value.get("answer_profile"), limit=16),
+        "final_answer_contract": _compact_simple_dict(value.get("final_answer_contract"), limit=16),
+        "search_strategy_hint": _compact_simple_dict(value.get("search_strategy_hint"), limit=12),
+        "interaction_preferences": _compact_simple_dict(value.get("interaction_preferences"), limit=8),
+        "semantic_state_profile_summary": _compact_simple_dict(value.get("semantic_state_profile_summary"), limit=16),
+        "state_space_rule": _text_preview(value.get("state_space_rule"), limit=360),
+        "host_rule": "Do not ask the user unless critical permission or missing target cannot be inferred; tool failures are observations for replanning.",
+    }
+
+
+def _compact_state_dimensions_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for key, item in list(value.items())[:40]:
+        if isinstance(item, list):
+            result[str(key)] = _string_list(item)[:16]
+    return result
+
+
+def _compact_mission_context_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    state = value.get("mission_state")
+    directive = value.get("directive")
+    result: JsonObject = {
+        "instruction": _text_preview(value.get("instruction"), limit=360),
+    }
+    if isinstance(state, dict):
+        coverage = state.get("coverage_map") if isinstance(state.get("coverage_map"), dict) else {}
+        result["mission_state"] = {
+            "mission_id": state.get("mission_id"),
+            "thread_id": state.get("thread_id"),
+            "root_goal": _text_preview(state.get("root_goal"), limit=720),
+            "status": state.get("status"),
+            "active_task_id": state.get("active_task_id"),
+            "last_run_id": state.get("last_run_id"),
+            "iteration_count": state.get("iteration_count"),
+            "open_gaps": _string_list(state.get("open_gaps"))[:24],
+            "blocked_reasons": _string_list(state.get("blocked_reasons"))[-8:],
+            "attempted_strategies": _string_list(state.get("attempted_strategies"))[-16:],
+            "coverage_map": _compact_coverage_map_for_prompt(coverage),
+            "directive": _compact_mission_directive_for_prompt(state.get("directive")),
+        }
+    if isinstance(directive, dict):
+        result["directive"] = _compact_mission_directive_for_prompt(directive)
+    return {key: val for key, val in result.items() if val not in ({}, [], None, "")}
+
+
+def _compact_coverage_map_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "mission_id": value.get("mission_id"),
+        "coverage_score": value.get("coverage_score"),
+        "missing_requirements": _string_list(value.get("missing_requirements"))[:24],
+        "evidence_refs": _string_list(value.get("evidence_refs"))[:16],
+        "citation_refs": _string_list(value.get("citation_refs"))[:16],
+        "diagnostics": _compact_simple_dict(value.get("diagnostics"), limit=12),
+        "requirements": [
+            _compact_requirement_for_prompt(item)
+            for item in list(value.get("requirements") or [])[:12]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _compact_requirement_for_prompt(value: JsonObject) -> JsonObject:
+    return {
+        "requirement_id": value.get("requirement_id"),
+        "text": _text_preview(value.get("text"), limit=240),
+        "status": value.get("status"),
+        "missing_reason": _text_preview(value.get("missing_reason"), limit=160),
+        "evidence_refs": _string_list(value.get("evidence_refs"))[:8],
+        "citation_refs": _string_list(value.get("citation_refs"))[:8],
+    }
+
+
+def _compact_mission_directive_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "directive_id": value.get("directive_id"),
+        "mission_id": value.get("mission_id"),
+        "root_goal": _text_preview(value.get("root_goal"), limit=720),
+        "strategy": value.get("strategy"),
+        "next_subgoal": _text_preview(value.get("next_subgoal"), limit=240),
+        "missing_requirements": _string_list(value.get("missing_requirements"))[:24],
+        "avoid_repeating": _string_list(value.get("avoid_repeating"))[-12:],
+        "stop_conditions": _string_list(value.get("stop_conditions"))[:8],
+        "reason": _text_preview(value.get("reason"), limit=240),
+        "suggested_actions": [
+            _compact_simple_dict(item, limit=8)
+            for item in list(value.get("suggested_actions") or [])[:4]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _compact_thread_rag_context_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "kind": value.get("kind") or "thread_rag_context",
+        "thread_id": value.get("thread_id"),
+        "task_id": value.get("task_id"),
+        "mission_id": value.get("mission_id"),
+        "context_hash": value.get("context_hash"),
+        "recent_turns": [_compact_simple_dict(item, limit=8) for item in list(value.get("recent_turns") or [])[-8:] if isinstance(item, dict)],
+        "recent_results": [_compact_simple_dict(item, limit=8) for item in list(value.get("recent_results") or [])[-4:] if isinstance(item, dict)],
+        "recent_task_trace": [_compact_trace_item_for_prompt(item) for item in list(value.get("recent_task_trace") or [])[-12:] if isinstance(item, dict)],
+        "evidence_refs": _string_list(value.get("evidence_refs"))[:16],
+        "citation_refs": _string_list(value.get("citation_refs"))[:16],
+        "failure_diagnostics": [_compact_failure_for_prompt(item) for item in list(value.get("failure_diagnostics") or [])[-3:] if isinstance(item, dict)],
+    }
+
+
+def _compact_thread_working_context_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result = _compact_simple_dict(value, limit=24)
+    for key in ("recent_turns", "recent_results", "recent_conversation", "recent_task_trace"):
+        item = value.get(key)
+        if isinstance(item, list):
+            result[key] = [_compact_simple_dict(child, limit=8) for child in item[-8:] if isinstance(child, dict)]
+    for key in ("pending_question", "original_task", "current_turn", "last_agent_result", "resume_semantics"):
+        item = value.get(key)
+        if isinstance(item, dict):
+            result[key] = _compact_simple_dict(item, limit=12)
+        elif isinstance(item, str):
+            result[key] = _text_preview(item, limit=720)
+    return result
+
+
+def _compact_trace_item_for_prompt(value: JsonObject) -> JsonObject:
+    kind = value.get("kind")
+    if kind == "observation":
+        return {
+            "record_ref": value.get("record_ref"),
+            "kind": kind,
+            "source": value.get("source"),
+            "status": value.get("status"),
+            "content_preview": _text_preview(value.get("content_preview"), limit=220),
+        }
+    if kind == "action":
+        return {
+            "record_ref": value.get("record_ref"),
+            "kind": kind,
+            "name": value.get("name"),
+            "side_effect_class": value.get("side_effect_class"),
+            "description": _text_preview(value.get("description"), limit=180),
+            "reasons": _string_list(value.get("reasons"))[:3],
+            "payload_hash": value.get("payload_hash"),
+        }
+    if kind == "retrieval_report":
+        return {
+            "record_ref": value.get("record_ref"),
+            "kind": kind,
+            "goal_id": value.get("goal_id"),
+            "status": value.get("status"),
+            "reason": value.get("reason"),
+            "missing_query_facets": _string_list(value.get("missing_query_facets"))[:12],
+            "missing_finance_facets": _string_list(value.get("missing_finance_facets"))[:12],
+            "rejected_evidence_count": value.get("rejected_evidence_count"),
+            "preview": _text_preview(value.get("preview"), limit=220),
+        }
+    return _compact_simple_dict(value, limit=10)
+
+
+def _compact_failure_for_prompt(value: JsonObject) -> JsonObject:
+    return {
+        "record_ref": value.get("record_ref"),
+        "reason": value.get("reason"),
+        "missing_evidence": _string_list(value.get("missing_evidence"))[:16],
+        "attempted_actions": _string_list(value.get("attempted_actions"))[-8:],
+        "next_possible_action": value.get("next_possible_action"),
+        "user_help_needed": value.get("user_help_needed"),
+    }
+
+
+def _compact_simple_dict(value: object, *, limit: int) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for key, item in list(value.items())[:limit]:
+        if isinstance(item, str):
+            result[str(key)] = _text_preview(item, limit=240)
+        elif isinstance(item, (int, float, bool)) or item is None:
+            result[str(key)] = item
+        elif isinstance(item, list):
+            result[str(key)] = [
+                _text_preview(child, limit=160) if isinstance(child, str) else child
+                for child in item[:8]
+                if isinstance(child, (str, int, float, bool)) or child is None
+            ]
+        elif isinstance(item, dict):
+            result[str(key)] = _compact_simple_dict(item, limit=8)
+    return result
+
+
+def _text_preview(value: object, *, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
 def _mission_id_from_context(context: JsonObject) -> str | None:
     state = context.get("mission_state")
     if isinstance(state, dict) and isinstance(state.get("mission_id"), str):
@@ -3538,7 +3884,14 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
     ):
         value = metadata.get(key)
         if isinstance(value, dict):
-            context[key] = dict(value)
+            if key == "mission_context":
+                context[key] = _compact_mission_context_for_prompt(value)
+            elif key == "thread_rag_context":
+                context[key] = _compact_thread_rag_context_for_prompt(value)
+            elif key == "thread_working_context":
+                context[key] = _compact_thread_working_context_for_prompt(value)
+            else:
+                context[key] = dict(value)
     return context
 
 

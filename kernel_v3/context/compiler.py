@@ -507,9 +507,79 @@ def _compact_content(content: JsonObject) -> JsonObject:
     for key, value in content.items():
         if isinstance(value, str):
             compacted[key] = _compact_text(value, limit=256)
+        elif key == "report" and isinstance(value, dict):
+            compacted[key] = _compact_retrieval_report_content(value)
+        elif isinstance(value, dict):
+            compacted[key] = _compact_nested_content(value)
+        elif isinstance(value, list):
+            compacted[key] = [_compact_nested_content(item) if isinstance(item, dict) else item for item in value[:8]]
         else:
             compacted[key] = value
     return compacted
+
+
+def _compact_nested_content(value: JsonObject) -> JsonObject:
+    result: JsonObject = {}
+    for key, item in list(value.items())[:24]:
+        if isinstance(item, str):
+            result[key] = _compact_text(item, limit=160)
+        elif isinstance(item, (int, float, bool)) or item is None:
+            result[key] = item
+        elif isinstance(item, list):
+            result[key] = [
+                _compact_nested_content(child) if isinstance(child, dict) else _compact_text(str(child), limit=80)
+                for child in item[:8]
+            ]
+        elif isinstance(item, dict):
+            result[key] = _compact_nested_content(item)
+    return result
+
+
+def _compact_retrieval_report_content(report: JsonObject) -> JsonObject:
+    diagnostics = report.get("diagnostics") if isinstance(report.get("diagnostics"), dict) else {}
+    evaluation = diagnostics.get("evaluation_diagnostics") if isinstance(diagnostics.get("evaluation_diagnostics"), dict) else {}
+    return {
+        "report_id": report.get("report_id"),
+        "goal_id": report.get("goal_id"),
+        "status": report.get("status"),
+        "preview": _compact_text(str(report.get("preview") or ""), limit=360),
+        "evidence_count": diagnostics.get("evidence_count", report.get("evidence_count")),
+        "citation_count": diagnostics.get("citation_count", len(report.get("citation_ids", [])) if isinstance(report.get("citation_ids"), list) else None),
+        "fetch_attempt_count": diagnostics.get("fetch_attempt_count"),
+        "search_attempt_count": diagnostics.get("search_attempt_count"),
+        "reason": diagnostics.get("reason"),
+        "missing_query_facets": _string_list(evaluation.get("missing_query_facets"))[:12],
+        "missing_finance_facets": _string_list(evaluation.get("missing_finance_facets"))[:12],
+        "missing_profile_facets": _string_list(evaluation.get("missing_profile_facets"))[:12],
+        "source_authority": _compact_source_authority(evaluation.get("source_authority")),
+        "rejected_evidence_count": diagnostics.get("rejected_evidence_count"),
+        "rejected_evidence_reasons": _compact_rejection_reasons(diagnostics.get("rejected_evidence_reasons")),
+    }
+
+
+def _compact_source_authority(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    families = value.get("source_families")
+    return {
+        "best_authority_score": value.get("best_authority_score"),
+        "primary_source_count": value.get("primary_source_count"),
+        "secondary_source_count": value.get("secondary_source_count"),
+        "weak_source_count": value.get("weak_source_count"),
+        "source_families": [str(item) for item in families[:8]] if isinstance(families, list) else [],
+    }
+
+
+def _compact_rejection_reasons(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): value[key] for key in list(value)[:8]}
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
 
 
 def _compact_artifact(artifact: JsonObject) -> JsonObject:

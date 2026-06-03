@@ -460,7 +460,7 @@ def test_phase4_live_capable_retrieval_manifest_is_network_budgeted_before_fetch
     assert fetch_provider.called is False
 
 
-def test_phase4_network_budget_accounts_for_declared_fetch_cost_before_execution():
+def test_phase4_network_budget_allows_execution_when_budget_remains_despite_large_declared_fetch_cost():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()
     registry = ToolRegistry()
@@ -502,17 +502,13 @@ def test_phase4_network_budget_accounts_for_declared_fetch_cost_before_execution
     result = loop.run("retrieve live evidence")
 
     observation = journal.records(task_id=result.task_id, kind="observation")[0]
-    guard = journal.records(task_id=result.task_id, kind="guard")[0]
-    assert result.stop_reason == "max_network_fetches"
-    assert observation.data["content"]["reason"] == "max_network_fetches"
-    assert guard.data["network_fetches"] == 0
-    assert guard.data["requested_network_fetches"] == 3
-    assert guard.data["projected_network_fetches"] == 3
-    assert guard.data["max_network_fetches"] == 1
-    assert fetch_provider.called is False
+    assert result.status == "completed"
+    assert observation.data["status"] == "ok"
+    assert fetch_provider.called is True
+    assert not journal.records(task_id=result.task_id, kind="guard")
 
 
-def test_phase4_network_budget_uses_bounded_preflight_and_actual_fetch_attempts():
+def test_phase4_network_budget_uses_actual_fetch_attempts_after_execution():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()
     registry = ToolRegistry.with_builtin_respond()
@@ -613,10 +609,9 @@ def test_phase4_network_budget_uses_manifest_default_fetch_cost_when_payload_omi
 
     result = loop.run("retrieve live evidence")
 
-    guard = journal.records(task_id=result.task_id, kind="guard")[0]
-    assert result.stop_reason == "max_network_fetches"
-    assert guard.data["requested_network_fetches"] == 3
-    assert fetch_provider.called is False
+    assert result.status == "completed"
+    assert fetch_provider.called is True
+    assert not journal.records(task_id=result.task_id, kind="guard")
 
 
 def test_phase4_network_budget_ignores_model_supplied_network_fetch_count_when_manifest_declares_cost_field():

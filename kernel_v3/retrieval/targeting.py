@@ -5,6 +5,7 @@ import re
 
 ENTITY_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9&'.-]*")
 QUOTED_PHRASE_RE = re.compile(r'"([^"\n]{2,120})"|“([^”\n]{2,120})”|\'([^\'\n]{2,120})\'')
+URL_RE = re.compile(r"https?://[^\s<>'\")\]]+", re.IGNORECASE)
 
 GENERIC_QUERY_TERMS = {
     "about",
@@ -53,6 +54,17 @@ GENERIC_QUERY_TERMS = {
     "valuation",
     "work",
     "works",
+    "cashandcashequivalentsatcarryingvalue",
+    "earningspersharediluted",
+    "grossprofit",
+    "liabilities",
+    "netcashprovidedbyusedinoperatingactivities",
+    "netincomeloss",
+    "operatingincomeloss",
+    "profitloss",
+    "revenuefromcontractwithcustomerexcludingassessedtax",
+    "salesrevenuenet",
+    "stockholdersequity",
 }
 
 LEGAL_SUFFIX_TERMS = {
@@ -75,6 +87,7 @@ LEGAL_SUFFIX_TERMS = {
 
 
 def target_entity_phrases(query: str) -> list[str]:
+    query = URL_RE.sub(" ", query)
     phrases: list[str] = []
     for match in QUOTED_PHRASE_RE.finditer(query):
         raw = next((group for group in match.groups() if group), "")

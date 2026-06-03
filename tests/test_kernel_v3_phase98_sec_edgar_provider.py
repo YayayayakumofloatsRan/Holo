@@ -11,6 +11,7 @@ from kernel_v3.retrieval import (
     SearchGoal,
     SecEdgarSearchProvider,
 )
+from kernel_v3.retrieval.rank import rank_sources
 
 
 def test_phase98_sec_edgar_provider_builds_structured_sources_from_cik_metadata():
@@ -40,6 +41,26 @@ def test_phase98_sec_edgar_provider_builds_structured_sources_from_cik_metadata(
     ]
     assert all(source.metadata["authority_level"] == "primary" for source in sources)
     assert provider.search_diagnostics()["cik_present"] is True
+
+
+def test_phase98_sec_companyfacts_ranks_before_submissions_for_finance_evidence():
+    provider = SecEdgarSearchProvider()
+    goal = SearchGoal(
+        goal_id="goal-sec-ranking",
+        query="CIK0001045810 Revenues NetIncomeLoss Assets Liabilities CashAndCashEquivalents",
+        max_sources=5,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "sec_cik": "1045810",
+            "source_authority_requirement": "primary",
+        },
+    )
+    sources = provider.search(goal.query, goal=goal, plan=_plan())
+
+    ranked = rank_sources(goal, sources)
+    ranked_kinds = [item.metadata["source_kind"] for item in ranked]
+
+    assert ranked_kinds.index("sec_companyfacts_json") < ranked_kinds.index("sec_submissions_json")
 
 
 def test_phase98_sec_edgar_provider_builds_archive_document_sources_from_accession_metadata():
