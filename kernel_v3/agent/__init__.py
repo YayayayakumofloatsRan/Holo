@@ -24,9 +24,12 @@ from kernel_v3.agent.workloop import (
     WorkloopIteration,
     WorkloopState,
 )
+from kernel_v3.mission import MissionRuntime, MissionSupervisor
 
 __all__ = [
     "AgentRuntime",
+    "MissionRuntime",
+    "MissionSupervisor",
     "AgentRuntimeResult",
     "analyze_goal",
     "analyze_goal_with_processor",

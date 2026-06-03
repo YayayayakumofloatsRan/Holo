@@ -14,6 +14,7 @@ DEEPSEEK_V4_TASK_TYPES = (
     "planner.propose",
     "evaluator.assess",
     "synthesizer.answer",
+    "mission.assess",
 )
 
 
@@ -181,6 +182,7 @@ def deepseek_v4_routes(
             "planner.propose": (DEEPSEEK_V4_FLASH, "disabled", 512),
             "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 512),
             "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 768),
+            "mission.assess": (DEEPSEEK_V4_FLASH, "disabled", 768),
         }
     elif profile == "quality":
         specs = {
@@ -189,6 +191,7 @@ def deepseek_v4_routes(
             "planner.propose": (DEEPSEEK_V4_PRO, "enabled", 1024),
             "evaluator.assess": (DEEPSEEK_V4_PRO, "enabled", 768),
             "synthesizer.answer": (DEEPSEEK_V4_PRO, "enabled", 1536),
+            "mission.assess": (DEEPSEEK_V4_PRO, "enabled", 1024),
         }
     elif profile == "balanced":
         specs = {
@@ -197,6 +200,7 @@ def deepseek_v4_routes(
             "planner.propose": (DEEPSEEK_V4_FLASH, "disabled", 1024),
             "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 768),
             "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 1536),
+            "mission.assess": (DEEPSEEK_V4_FLASH, "disabled", 1024),
         }
     else:
         raise ValueError(f"unknown DeepSeek V4 routing profile: {profile}")

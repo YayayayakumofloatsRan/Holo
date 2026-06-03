@@ -124,6 +124,21 @@ CHAT_ROUTE_SCHEMA = JsonSchema(
 )
 
 
+MISSION_ASSESS_SCHEMA = JsonSchema(
+    name="mission.assess",
+    required={
+        "decision": "str",
+        "coverage_score": "number",
+        "covered_requirements": "list",
+        "missing_requirements": "list",
+        "next_directive": "dict",
+        "confidence": "number",
+        "reason_summary": "str",
+    },
+    optional={"unsupported_claims": "list"},
+)
+
+
 CHAT_ROUTE_PROMPT_CONTRACT = """Return one JSON object matching chat.route.
 Fields: route string, command string or null, target_task_id string or null,
 confidence number 0..1, reasons string array.
@@ -214,6 +229,7 @@ Treat compound user requests as multiple subrequests. If the context contains a 
 When context.state.agent_retrieval_plan_state contains planned_subgoals, choose a retrieval.run goal_id from that list, usually next_recommended_goal_id, and preserve that goal_id in the payload so host coverage can track progress.
 When feedback.status is continue, inspect feedback.missing_evidence and the latest observations, then propose a materially new next action when one is available. Avoid repeating the same action payload unless the context shows new progress or the host explicitly asks for a retry.
 When context.state.agent_replan_hints.status is needs_replan, use its retrieval gaps, suggested_query_hints, suggested_search_strategies, do_not_finalize_until, and avoid_repeating fields to propose one materially different safe action. Do not answer as final while any do_not_finalize_until rule is unmet.
+When context.state.mission_context is present, treat mission_context.mission_state.root_goal as the global objective for the whole task, not merely as commentary. Use mission_context.directive and context.state.thread_rag_context to understand previous attempts, evidence, failures, and conversation continuity. If the previous run failed but the mission directive says continue, propose a materially different safe action instead of giving up or asking the user by default.
 For retrieval/research tasks with configured retrieval capability, be persistent before giving up: broaden or narrow the query, try English and local-language variants, add official-source terms, use company/entity aliases, prefer source-directory/structured providers when present, and change search_strategy when previous attempts were empty. Most retrieval misses can be improved by changing query formulation or source family. Ask the user only when a critical target, permission, or required scope is genuinely missing.
 When context.state.agent_replan_hints.retrieval.suggested_filing_documents is
 present, prefer one of its suggested_payload objects for the next
@@ -264,6 +280,7 @@ answer string or null, stop_reason string or null, missing_evidence string array
 Example:
 {"status":"continue","answer":null,"stop_reason":null,"missing_evidence":["official source citation"]}
 Evaluate whether the latest observation is enough and whether the host should continue.
+If context.state.mission_context is present, evaluate the latest observation against the mission root_goal and directive. A failed tool observation is evidence about what happened, not by itself a reason to stop; return continue when another materially different safe action can still advance the mission.
 If the latest observation is a successful respond with user-visible text and no required evidence/tool work remains,
 return final_answer_ready. Return needs_user_input only when the latest observation explicitly asks the user,
 a critical missing argument prevents any safe next action, or host context marks user input as required.
@@ -283,3 +300,19 @@ If evidence does not support part of the task_goal, state that limit in limitati
 For roleplay/persona text, avoid parenthesized stage directions or action narration unless the user explicitly requested that format.
 Match the user's language when it is clear from the context.
 If a response_language preference is present in the prompt payload, use it as the default when the user's requested language is unclear or mixed."""
+
+
+MISSION_ASSESS_PROMPT_CONTRACT = """Return one JSON object matching mission.assess.
+Fields: decision one of continue/final_answer/ask_user/failure_report/blocked,
+coverage_score number 0..1, covered_requirements string array,
+missing_requirements string array, unsupported_claims string array,
+next_directive object, confidence number 0..1, reason_summary string.
+The root_goal is the global user objective. Compare the latest run_delta and
+agent_result against that root_goal, not merely against the last tool call.
+If the latest tool/search/retrieval failed but a materially different safe
+strategy remains, choose continue and write that strategy in next_directive.
+Do not ask the user unless a critical missing argument, permission, or explicit
+user interruption requires it. Do not mark final_answer unless the host-provided
+agent_result already contains a final answer or the evidence/coverage in the
+payload is sufficient. Do not invent sources, citations, tools, memory writes, or
+permissions. Provide a concise reason_summary, not chain-of-thought."""

@@ -29,6 +29,7 @@ from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MemoryPipeline, MemoryStore
+from kernel_v3.mission.thread_rag import ThreadWorkingMemoryProvider
 from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner, ProcessorFabric, ProcessorRouter, Synthesizer
@@ -974,6 +975,7 @@ class _AgentContextCompiler:
             manifest for manifest in tool_manifests if manifest.name in set(recipe.allowed_tools)
         ]
         self.memory_store = memory_store
+        self.thread_memory = ThreadWorkingMemoryProvider()
 
     def compile(self, task: TaskState, journal: JournalStore) -> ContextBundle:
         context_budget = _context_budget_metadata(self.recipe)
@@ -1020,6 +1022,13 @@ class _AgentContextCompiler:
         ]
         semantic_profiles = _state_profiles_metadata(self.recipe)
         semantic_profile_summary = _state_profile_summary_metadata(self.recipe)
+        mission_context = _mission_context_metadata(self.recipe)
+        thread_rag_context = _thread_rag_context_metadata(self.recipe) or self.thread_memory.compile(
+            journal,
+            thread_id=task.thread_id,
+            task_id=task.task_id,
+            mission_id=_mission_id_from_context(mission_context),
+        )
         state = redact_journal_data(
             {
                 "task_id": task.task_id,
@@ -1054,7 +1063,9 @@ class _AgentContextCompiler:
                     run_id=task.run_id,
                     recipe=self.recipe,
                 ),
+                "mission_context": mission_context,
                 "thread_working_context": _thread_working_context_metadata(self.recipe),
+                "thread_rag_context": thread_rag_context,
                 "context_pack_hash": pack.payload_hash,
                 "sections": pack.sections,
                 "source_refs": pack.source_refs,
@@ -3224,11 +3235,36 @@ def _thread_working_context_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _mission_context_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = _execution_metadata(recipe).get("mission_context")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _thread_rag_context_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = _execution_metadata(recipe).get("thread_rag_context")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _mission_id_from_context(context: JsonObject) -> str | None:
+    state = context.get("mission_state")
+    if isinstance(state, dict) and isinstance(state.get("mission_id"), str):
+        return str(state["mission_id"])
+    mission_id = context.get("mission_id")
+    return str(mission_id) if isinstance(mission_id, str) and mission_id else None
+
+
 def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
     if not isinstance(metadata, dict):
         return {}
     context: JsonObject = {}
-    for key in ("thread_working_context", "task_execution_step", "interaction_preferences", "agent_loop"):
+    for key in (
+        "thread_working_context",
+        "thread_rag_context",
+        "mission_context",
+        "task_execution_step",
+        "interaction_preferences",
+        "agent_loop",
+    ):
         value = metadata.get(key)
         if isinstance(value, dict):
             context[key] = dict(value)

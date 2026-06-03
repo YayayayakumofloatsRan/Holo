@@ -28,11 +28,13 @@ from kernel_v3.interaction import DEFAULT_RESPONSE_LANGUAGE, normalize_response_
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MemoryPipeline, MemoryStore
+from kernel_v3.mission import MissionRuntime
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import (
     CHAT_ROUTE_PROMPT_CONTRACT,
     EVALUATOR_PROMPT_CONTRACT,
     EVALUATOR_SCHEMA,
+    MISSION_ASSESS_PROMPT_CONTRACT,
     PLANNER_SCHEMA,
     PLANNER_PROMPT_CONTRACT,
     SEMANTIC_INTAKE_PROMPT_CONTRACT,
@@ -604,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
     model_packet.add_argument("--provider", choices=["deepseek", "openai_compatible"], default="deepseek")
     model_packet.add_argument(
         "--task-type",
-        choices=["chat.route", "semantic.intake", "planner.propose", "evaluator.assess", "synthesizer.answer"],
+        choices=["chat.route", "semantic.intake", "planner.propose", "evaluator.assess", "synthesizer.answer", "mission.assess"],
         default="planner.propose",
     )
     model_packet.add_argument("--goal", default="你能做什么？你是谁")
@@ -640,28 +642,31 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         artifact_store = _runtime_artifact_store(args)
         research_corpus_store = _runtime_corpus_store(args)
-        runtime = _agent_runtime(
-            journal,
-            live_model=_agent_uses_live_model(args),
-            model=args.model,
-            profile=args.profile,
-            thinking=_thinking_override(args.thinking),
-            reasoning_effort=args.reasoning_effort,
-            max_output_tokens=args.max_output_tokens,
-            temperature=args.temperature,
-            generation_mode=args.generation_mode,
-            latency_target=args.latency_target,
-            response_language=_response_language_for_args(args),
-            artifact_store=artifact_store,
-            memory_store=_memory_store(args, create_default=True),
-            research_corpus_store=research_corpus_store,
-            retrieval_operator=_build_live_retrieval_operator(
-                live_retrieval,
+        runtime = _mission_runtime(
+            _agent_runtime(
+                journal,
+                live_model=_agent_uses_live_model(args),
+                model=args.model,
+                profile=args.profile,
+                thinking=_thinking_override(args.thinking),
+                reasoning_effort=args.reasoning_effort,
+                max_output_tokens=args.max_output_tokens,
+                temperature=args.temperature,
+                generation_mode=args.generation_mode,
+                latency_target=args.latency_target,
+                response_language=_response_language_for_args(args),
                 artifact_store=artifact_store,
-                corpus_store=research_corpus_store,
-            )
-            if live_retrieval is not None
-            else None,
+                memory_store=_memory_store(args, create_default=True),
+                research_corpus_store=research_corpus_store,
+                retrieval_operator=_build_live_retrieval_operator(
+                    live_retrieval,
+                    artifact_store=artifact_store,
+                    corpus_store=research_corpus_store,
+                )
+                if live_retrieval is not None
+                else None,
+            ),
+            live_model=_agent_uses_live_model(args),
         )
         payload = runtime.run(
             args.goal,
@@ -1112,6 +1117,14 @@ def _agent_runtime(
     )
 
 
+def _mission_runtime(runtime: AgentRuntime, *, live_model: bool) -> MissionRuntime:
+    return MissionRuntime(
+        agent_runtime=runtime,
+        assessor_mode="model" if live_model else "rule",
+        max_iterations=6,
+    )
+
+
 def _chat_runtime(
     journal: JournalStore,
     *,
@@ -1138,25 +1151,26 @@ def _chat_runtime(
     default_mode: str = "auto",
     execution_metadata: JsonObject | None = None,
 ) -> ChatRuntime:
+    agent_runtime = _agent_runtime(
+        journal,
+        live_model=live_model,
+        model=model,
+        profile=profile,
+        thinking=thinking,
+        reasoning_effort=reasoning_effort,
+        max_output_tokens=max_output_tokens,
+        temperature=temperature,
+        generation_mode=generation_mode,
+        latency_target=latency_target,
+        response_language=response_language,
+        artifact_store=artifact_store,
+        memory_store=memory_store,
+        research_corpus_store=research_corpus_store,
+        retrieval_operator=retrieval_operator,
+    )
     return ChatRuntime(
         journal=journal,
-        agent_runtime=_agent_runtime(
-            journal,
-            live_model=live_model,
-            model=model,
-            profile=profile,
-            thinking=thinking,
-            reasoning_effort=reasoning_effort,
-            max_output_tokens=max_output_tokens,
-            temperature=temperature,
-            generation_mode=generation_mode,
-            latency_target=latency_target,
-            response_language=response_language,
-            artifact_store=artifact_store,
-            memory_store=memory_store,
-            research_corpus_store=research_corpus_store,
-            retrieval_operator=retrieval_operator,
-        ),
+        agent_runtime=_mission_runtime(agent_runtime, live_model=live_model),
         memory_store=memory_store,
         planner_mode=planner_mode,
         evaluator_mode=evaluator_mode,
@@ -2257,6 +2271,18 @@ def _packet_prompt(task_type: str, goal: str) -> str:
             },
             "evidence": [{"evidence_id": "ev-1", "text_preview": "Evidence preview goes here."}],
             "citations": [{"citation_id": "cite-1", "evidence_id": "ev-1", "quote_preview": "Evidence preview goes here."}],
+        }
+    elif task_type == "mission.assess":
+        payload = {
+            "contract": MISSION_ASSESS_PROMPT_CONTRACT,
+            "mission_state": {
+                "mission_id": "mission-preview",
+                "root_goal": goal,
+                "status": "running",
+                "open_gaps": ["official evidence"],
+            },
+            "agent_result": {"status": "failed", "failure_report": {"reason": "retrieval_empty"}},
+            "run_delta": {"actions": [{"name": "retrieval.run"}], "evidence_refs": [], "citation_refs": []},
         }
     else:
         payload = {

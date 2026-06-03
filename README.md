@@ -17,6 +17,9 @@ reference only. New kernel work should start from `kernel_v3/`,
 - `kernel_v3/agent/`: single-agent runtime, task recipes, semantic task graph,
   semantic state profiles, workloop termination, and final answer/failure
   report assembly.
+- `kernel_v3/mission/`: global mission supervisor, mission directives, run-delta
+  assessment, and thread-scoped working-memory/RAG context for long task
+  continuity.
 - `kernel_v3/capabilities.py`: host-visible capability/state catalog spanning
   conversation, roleplay, document/report work, workspace, retrieval, web
   research, finance, memory, artifact, data, code, project, resident,
@@ -80,6 +83,15 @@ Kernel v3 currently contains the infrastructure for:
 - bounded planner -> policy -> tool -> evaluator loops;
 - workloop progress, repetition, evidence sufficiency, and termination
   decisions;
+- mission-level global task supervision above the inner loop. The inner
+  `LoopControllerV3` still owns step execution, while `MissionRuntime` compares
+  each run against the original user goal, journals coverage/gaps, and either
+  issues a new `MissionDirective`, finalizes, asks for genuinely missing user
+  input, or returns a failure report;
+- `mission.assess` processor packets for optional model-backed coverage
+  assessment. The model can suggest coverage and next strategy, but the host
+  validates the decision and never lets mission assessment execute tools,
+  bypass policy, or commit memory;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file
@@ -154,6 +166,10 @@ Kernel v3 currently contains the infrastructure for:
   original task, recent turns, latest result/failure, and bounded task traces
   are compacted into semantic/planner context so follow-up turns can continue
   the same task without relying on phrase tables;
+- thread-scoped RAG/working-memory context for the agent loop: recent turns,
+  assistant results, task traces, evidence refs, citation refs, and failure
+  diagnostics are compacted from the journal and injected into planner/evaluator
+  packets. This is thread-local and does not write durable memory;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;
 - bounded retrieval with evidence/citation reports and source quality policy;

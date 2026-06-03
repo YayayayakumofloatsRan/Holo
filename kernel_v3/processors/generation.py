@@ -6,7 +6,7 @@ from kernel_v3.contracts import JsonObject
 
 
 LATENCY_TARGETS = {"fast", "balanced", "quality", "thorough"}
-STRUCTURED_TASK_TYPES = {"chat.route", "semantic.intake", "planner.propose", "evaluator.assess"}
+STRUCTURED_TASK_TYPES = {"chat.route", "semantic.intake", "planner.propose", "evaluator.assess", "mission.assess"}
 DEEPSEEK_FLASH_MODEL = "deepseek-v4-flash"
 DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
 DEEPSEEK_MODELS = {DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL, "deepseek-reasoner"}
