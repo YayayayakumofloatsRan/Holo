@@ -24,6 +24,7 @@ from kernel_v3.retrieval.contracts import (
     SearchGoal,
     SearchSource,
 )
+from kernel_v3.retrieval.evidence_compaction import EvidenceCandidate, compact_evidence_candidates
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator, is_discovery_goal, qualify_evidence_candidate
 from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
@@ -303,6 +304,7 @@ class RetrievalOperator:
             )
 
         spans = []
+        evidence_candidates: list[EvidenceCandidate] = []
         evidence: list[EvidenceItem] = []
         citations = []
         rejected_evidence: list[JsonObject] = []
@@ -381,47 +383,46 @@ class RetrievalOperator:
                             "uri": item.uri,
                             "title": item.title,
                             "reason": qualification.get("reason"),
+                            "missing_profile_facets": qualification.get("missing_profile_facets", []),
                             "missing_finance_facets": qualification.get("missing_finance_facets", []),
                             "preview": _preview(item.text, self.preview_chars),
                         }
                     )
                     continue
-                if len(evidence) >= evidence_item_limit:
-                    rejected_evidence.append(
-                        {
-                            "evidence_id": item.evidence_id,
-                            "source_id": item.source_id,
-                            "document_id": item.document_id,
-                            "uri": item.uri,
-                            "title": item.title,
-                            "reason": "evidence_item_limit_reached",
-                            "preview": _preview(item.text, self.preview_chars),
-                        }
-                    )
-                    continue
-                evidence.append(item)
-                _append(
-                    journal,
-                    task_id,
-                    run_id,
-                    f"{step_id_prefix}-evidence-{len(evidence)}",
-                    "retrieval_evidence",
-                    item.to_dict(),
-                    action_ref=action_ref,
-                    artifact_refs=[document.artifact_id],
-                )
-                citation = citation_from_evidence(item, span)
-                citations.append(citation)
-                _append(
-                    journal,
-                    task_id,
-                    run_id,
-                    f"{step_id_prefix}-citation-{len(citations)}",
-                    "retrieval_citation",
-                    citation.to_dict(),
-                    action_ref=action_ref,
-                    artifact_refs=[document.artifact_id],
-                )
+                evidence_candidates.append(EvidenceCandidate(evidence=item, span=span))
+
+        selected_candidates, compaction_rejections, compaction_diagnostics = compact_evidence_candidates(
+            evidence_candidates,
+            goal=goal,
+            research_profile=research_profile,
+            limit=evidence_item_limit,
+        )
+        rejected_evidence.extend(compaction_rejections)
+        for candidate in selected_candidates:
+            item = candidate.evidence
+            evidence.append(item)
+            _append(
+                journal,
+                task_id,
+                run_id,
+                f"{step_id_prefix}-evidence-{len(evidence)}",
+                "retrieval_evidence",
+                item.to_dict(),
+                action_ref=action_ref,
+                artifact_refs=[item.artifact_id],
+            )
+            citation = citation_from_evidence(item, candidate.span)
+            citations.append(citation)
+            _append(
+                journal,
+                task_id,
+                run_id,
+                f"{step_id_prefix}-citation-{len(citations)}",
+                "retrieval_citation",
+                citation.to_dict(),
+                action_ref=action_ref,
+                artifact_refs=[item.artifact_id],
+            )
 
         if rejected_evidence:
             _append(
@@ -505,6 +506,8 @@ class RetrievalOperator:
                 "search_attempt_count": len(search_attempt_ids),
                 "fetch_attempt_count": len(fetch_attempt_ids),
                 "candidate_span_count": len(spans),
+                "evidence_candidate_count": len(evidence_candidates),
+                "evidence_compaction": compaction_diagnostics,
                 "evidence_item_limit": evidence_item_limit,
                 "rejected_evidence_count": len(rejected_evidence),
                 "rejected_evidence_reasons": _count_by_key(rejected_evidence, "reason"),

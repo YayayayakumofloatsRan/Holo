@@ -22,6 +22,10 @@ _FAMILY_SCORES = {
     "central_bank_statistic": 0.86,
     "treasury_data": 0.86,
     "fund_disclosure": 0.84,
+    "standards_body": 0.92,
+    "official_documentation": 0.88,
+    "official_guidance": 0.86,
+    "source_repository": 0.82,
     "market_data_provider": 0.72,
     "portfolio_risk_data_provider": 0.7,
     "credit_rating_agency": 0.66,
@@ -163,6 +167,26 @@ _REPUTABLE_NEWS_DOMAINS = {
     "ft.com",
     "www.ft.com",
 }
+_STANDARDS_BODY_DOMAINS = {
+    "ietf.org",
+    "www.ietf.org",
+    "rfc-editor.org",
+    "www.rfc-editor.org",
+    "w3.org",
+    "www.w3.org",
+    "iso.org",
+    "www.iso.org",
+    "nist.gov",
+    "www.nist.gov",
+}
+_SOURCE_REPOSITORY_DOMAINS = {
+    "github.com",
+    "www.github.com",
+    "gitlab.com",
+    "www.gitlab.com",
+    "bitbucket.org",
+    "www.bitbucket.org",
+}
 
 
 def assess_search_source(source: "SearchSource", *, profile: ResearchProfile) -> SourceAssessment:
@@ -261,6 +285,10 @@ def classify_source_family(*, uri: str, title: str, metadata: JsonObject | None 
         return "government_statistic", "recognized_government_statistic_domain"
     if _host_matches(host, _FUND_DISCLOSURE_DOMAINS):
         return "fund_disclosure", "recognized_fund_disclosure_domain"
+    if _host_matches(host, _STANDARDS_BODY_DOMAINS):
+        return "standards_body", "recognized_standards_body_domain"
+    if _host_matches(host, _SOURCE_REPOSITORY_DOMAINS):
+        return "source_repository", "recognized_source_repository_domain"
     if _host_matches(host, _MARKET_DATA_DOMAINS):
         return "market_data_provider", "recognized_market_data_domain"
     if _host_matches(host, _CREDIT_RATING_DOMAINS):
@@ -271,6 +299,8 @@ def classify_source_family(*, uri: str, title: str, metadata: JsonObject | None 
         return "reputable_news", "recognized_reputable_news_domain"
     if _looks_like_company_ir(host, path):
         return "company_ir", "recognized_company_ir_pattern"
+    if _looks_like_official_documentation(host=host, path=path, title=title_l):
+        return "official_documentation", "recognized_official_documentation_surface"
     if "10-k" in title_l or "10 k" in title_l or "annual report" in title_l:
         return "generic_web", "untrusted_domain_mentions_primary_document"
     if "earnings release" in title_l or "quarterly results" in title_l:
@@ -300,6 +330,14 @@ def _host_matches(host: str, domains: set[str]) -> bool:
 def _looks_like_company_ir(host: str, path: str) -> bool:
     labels = host.split(".")
     return "investor" in labels or "investors" in labels or "ir" in labels or "/investor" in path or "/ir/" in path
+
+
+def _looks_like_official_documentation(*, host: str, path: str, title: str) -> bool:
+    if host.startswith("docs.") or host.startswith("developer.") or host.startswith("developers."):
+        return True
+    if any(part in path for part in ("/docs", "/documentation", "/api-reference", "/reference", "/developers")):
+        return True
+    return any(marker in title for marker in ("documentation", "docs", "api reference", "developer docs"))
 
 
 def _hash(payload: JsonObject) -> str:

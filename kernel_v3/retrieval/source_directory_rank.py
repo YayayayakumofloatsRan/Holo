@@ -31,8 +31,12 @@ def rank_source_directory_entries(
     source_family = _metadata_string(metadata, "source_family")
     if source_family:
         preferred_families.add(source_family)
+    matched_directory_targets = _matched_directory_targets(entries, query_terms)
     scored: list[tuple[float, int, object, list[str]]] = []
     for index, entry in enumerate(entries):
+        entry_targets = _entry_target_terms(entry)
+        if matched_directory_targets and entry_targets and not matched_directory_targets.intersection(entry_targets):
+            continue
         text = source_directory_entry_text(entry).lower()
         matched = _matched_query_terms(query_terms, text)
         score = _base_score(query_terms=query_terms, matched=matched)
@@ -69,8 +73,12 @@ def rank_source_directory_sources(
     source_family = _metadata_string(metadata, "source_family")
     if source_family:
         preferred_families.add(source_family)
+    matched_directory_targets = _matched_source_targets(sources, query_terms)
     scored: list[tuple[float, int, SearchSource, list[str]]] = []
     for index, source in enumerate(sources):
+        source_targets = _source_target_terms(source)
+        if matched_directory_targets and source_targets and not matched_directory_targets.intersection(source_targets):
+            continue
         text = source_directory_source_text(source).lower()
         matched = _matched_query_terms(query_terms, text)
         score = _base_score(query_terms=query_terms, matched=matched)
@@ -155,6 +163,37 @@ def source_directory_source_text(source: SearchSource) -> str:
     return " ".join(pieces)
 
 
+def _matched_directory_targets(entries: list[object], query_terms: list[str]) -> set[str]:
+    targets: set[str] = set()
+    query_set = set(query_terms)
+    for entry in entries:
+        for target in _entry_target_terms(entry):
+            if target in query_set:
+                targets.add(target)
+    return targets
+
+
+def _matched_source_targets(sources: list[SearchSource], query_terms: list[str]) -> set[str]:
+    targets: set[str] = set()
+    query_set = set(query_terms)
+    for source in sources:
+        for target in _source_target_terms(source):
+            if target in query_set:
+                targets.add(target)
+    return targets
+
+
+def _entry_target_terms(entry: object) -> set[str]:
+    metadata = getattr(entry, "metadata", {})
+    if not isinstance(metadata, dict):
+        return set()
+    return {item.lower() for item in _metadata_string_list(metadata, "target_terms")}
+
+
+def _source_target_terms(source: SearchSource) -> set[str]:
+    return {item.lower() for item in _metadata_string_list(source.metadata, "target_terms")}
+
+
 def source_directory_task_boost(*, family: str, task_text: str, candidate_text: str) -> float:
     if not task_text:
         return 0.0
@@ -181,6 +220,17 @@ def source_directory_task_boost(*, family: str, task_text: str, candidate_text: 
     if "fundamental" in task_text or "filing" in task_text or "revenue" in task_text or "margin" in task_text:
         if family in {"regulatory_filing", "structured_regulatory_data", "company_ir", "exchange_filing"}:
             boost += 0.25
+    if (
+        "documentation" in task_text
+        or "api" in task_text
+        or "developer" in task_text
+        or "endpoint" in task_text
+        or "authentication" in task_text
+    ):
+        if family in {"official_documentation", "source_repository", "standards_body", "official_guidance"}:
+            boost += 0.35
+        elif "documentation" in candidate_text or "api reference" in candidate_text:
+            boost += 0.12
     return boost
 
 

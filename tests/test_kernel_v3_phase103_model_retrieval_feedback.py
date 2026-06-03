@@ -408,7 +408,10 @@ def test_phase103_planned_subgoal_coverage_feedback_drives_model_retry() -> None
     ] == ["goal-plan-1-2"]
     final_evidence = journal.records(task_id=result.task_id, kind="evidence_sufficiency")[-1].data
     assert final_evidence["diagnostics"]["planned_retrieval_coverage"]["sufficient"] is True
-    assert len(result.final_answer["citation_refs"]) == 4
+    assert len(result.final_answer["citation_refs"]) == 3
+    final_citations = journal.records(task_id=result.task_id, kind="retrieval_citation")
+    final_citation_uris = [record.data["uri"] for record in final_citations]
+    assert weak_margin_url not in final_citation_uris
 
 
 def test_phase103_model_planner_uses_sec_filing_continuation_hint_for_next_loop() -> None:

@@ -20,6 +20,10 @@ _RETRIEVAL_CAPABILITIES = {
     "finance.market_data",
     "finance.macro_data",
     "finance.competitive_landscape",
+    "technical.documentation_research",
+    "technical.api_documentation",
+    "technical.developer_docs",
+    "technical.source_repository",
     "retrieval.run",
     "web.research",
     "web.search",
@@ -34,6 +38,13 @@ _SYSTEM_HOST_CAPABILITIES = {"system.environment"}
 _SYSTEM_CAPABILITIES = _SYSTEM_TOOL_CAPABILITIES | _SYSTEM_HOST_CAPABILITIES | {"system.process"}
 _EXECUTABLE_TOOL_CAPABILITIES = {"retrieval.run", "workspace.list", "workspace.search", "file.read", "workspace.write", "system.time"}
 _FINANCE_FUNDAMENTALS_PROFILE_ID = "finance_fundamentals"
+_TECHNICAL_DOCUMENTATION_PROFILE_ID = "technical_documentation"
+_TECHNICAL_DOCUMENTATION_CAPABILITIES = {
+    "technical.documentation_research",
+    "technical.api_documentation",
+    "technical.developer_docs",
+    "technical.source_repository",
+}
 
 
 def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
@@ -305,6 +316,30 @@ def _default_capability_args_for_node(node: TaskGraphNode) -> JsonObject:
     capabilities = set(node.required_capabilities)
     if not capabilities.intersection(_RETRIEVAL_CAPABILITIES):
         return {}
+    if capabilities.intersection(_TECHNICAL_DOCUMENTATION_CAPABILITIES):
+        query = " ".join(str(node.goal or "").split()) or "technical documentation research"
+        payloads = [
+            _profile_retrieval_payload(
+                query=query,
+                task_kind=_primary_technical_documentation_task_kind(capabilities),
+                authority="primary",
+                strategy="aggregate",
+                profile_id=_TECHNICAL_DOCUMENTATION_PROFILE_ID,
+                required=True,
+            )
+        ]
+        if "technical.api_documentation" in capabilities or "technical.documentation_research" in capabilities:
+            payloads.append(
+                _profile_retrieval_payload(
+                    query=f"{query} official API reference authentication endpoint parameters examples",
+                    task_kind="api_documentation",
+                    authority="primary",
+                    strategy="aggregate",
+                    profile_id=_TECHNICAL_DOCUMENTATION_PROFILE_ID,
+                    required=False,
+                )
+            )
+        return {"retrieval.run": payloads}
     if not capabilities.intersection(
         {
             "finance.fundamentals_research",
@@ -408,6 +443,16 @@ def _primary_finance_task_kind(capabilities: set[str]) -> str:
     return "finance_research"
 
 
+def _primary_technical_documentation_task_kind(capabilities: set[str]) -> str:
+    if "technical.api_documentation" in capabilities:
+        return "api_documentation"
+    if "technical.source_repository" in capabilities:
+        return "source_repository"
+    if "technical.developer_docs" in capabilities:
+        return "developer_docs"
+    return "technical_documentation"
+
+
 def _profile_for_finance_capabilities(capabilities: set[str]) -> str | None:
     if capabilities.intersection(
         {
@@ -420,6 +465,27 @@ def _profile_for_finance_capabilities(capabilities: set[str]) -> str | None:
     ):
         return _FINANCE_FUNDAMENTALS_PROFILE_ID
     return None
+
+
+def _profile_retrieval_payload(
+    *,
+    query: str,
+    task_kind: str,
+    authority: str,
+    strategy: str,
+    profile_id: str,
+    required: bool,
+) -> JsonObject:
+    return {
+        "query": query,
+        "metadata": {
+            "research_profile": profile_id,
+            "research_task_kind": task_kind,
+            "source_authority_requirement": authority,
+            "search_strategy": strategy,
+            "subgoal_required": required,
+        },
+    }
 
 
 def _finance_retrieval_payload(

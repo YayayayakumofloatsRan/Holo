@@ -7,7 +7,7 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
-from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
+from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, TECHNICAL_DOCUMENTATION_PROFILE_ID
 from kernel_v3.resident import ResidentQueue, ResidentRuntime
 
 
@@ -54,6 +54,49 @@ def test_phase87_chat_runtime_carries_research_profile_into_agent_tasks() -> Non
     action = journal.records(task_id=result.task_id, kind="action")[0].data
     assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     assert journal.records(task_id=result.task_id, kind="retrieval_source_assessment")
+
+
+def test_phase87_model_intake_technical_capability_selects_technical_profile() -> None:
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric({"semantic.intake": _technical_docs_intake()}, journal=journal)
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+    )
+
+    result = chat.receive("检索DeepSeek API鉴权和endpoint", thread_id="thread-technical-docs-profile")
+
+    action = journal.records(task_id=result.task_id, kind="action")[0].data
+    metadata = action["payload"]["metadata"]
+    assert metadata["research_profile"] == TECHNICAL_DOCUMENTATION_PROFILE_ID
+    assert metadata["research_task_kind"] == "api_documentation"
+    assert metadata["source_authority_requirement"] == "primary"
+    assert action["payload"]["max_queries"] == 32
+    assert action["payload"]["max_sources"] == 500
+    assert action["payload"]["max_fetches"] == 128
+    report = journal.records(task_id=result.task_id, kind="retrieval_report")[-1].data
+    assert report["diagnostics"]["research_profile"] == TECHNICAL_DOCUMENTATION_PROFILE_ID
+    providers = report["diagnostics"]["provider_capabilities"][0]["diagnostics"]["providers"]
+    assert any(item["provider_id"] == "research_source_directory_search" for item in providers)
+
+
+def test_phase87_model_intake_technical_intent_kind_selects_technical_profile() -> None:
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric({"semantic.intake": _technical_docs_intake_without_profile_capability()}, journal=journal)
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+    )
+
+    result = chat.receive("检索DeepSeek API鉴权和endpoint", thread_id="thread-technical-docs-intent-kind")
+
+    action = journal.records(task_id=result.task_id, kind="action")[0].data
+    metadata = action["payload"]["metadata"]
+    assert metadata["research_profile"] == TECHNICAL_DOCUMENTATION_PROFILE_ID
+    assert metadata["research_task_kind"] == "technical_documentation"
+    assert action["payload"]["max_queries"] == 32
 
 
 def test_phase87_resident_runtime_carries_research_profile_into_agent_tasks(tmp_path: Path) -> None:
@@ -119,6 +162,54 @@ def _retrieval_intake() -> dict[str, object]:
             {
                 "kind": "retrieval_research",
                 "text": "research AAPL revenue",
+                "sequence_index": 1,
+                "required_capabilities": ["retrieval.run"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": [],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
+    }
+
+
+def _technical_docs_intake() -> dict[str, object]:
+    return {
+        "primary_intent": "api_documentation",
+        "suggested_mode": "retrieval_answer",
+        "compound": False,
+        "requires_clarification": False,
+        "intents": [
+            {
+                "kind": "api_documentation",
+                "text": "检索DeepSeek API鉴权和endpoint",
+                "sequence_index": 1,
+                "required_capabilities": ["technical.api_documentation"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {},
+            }
+        ],
+        "blocked_capabilities": [],
+        "warnings": [],
+        "response_hint": None,
+        "clarification_question": None,
+    }
+
+
+def _technical_docs_intake_without_profile_capability() -> dict[str, object]:
+    return {
+        "primary_intent": "technical_documentation_research",
+        "suggested_mode": "retrieval_answer",
+        "compound": False,
+        "requires_clarification": False,
+        "intents": [
+            {
+                "kind": "technical_documentation_research",
+                "text": "检索DeepSeek API鉴权和endpoint",
                 "sequence_index": 1,
                 "required_capabilities": ["retrieval.run"],
                 "risk": "read",

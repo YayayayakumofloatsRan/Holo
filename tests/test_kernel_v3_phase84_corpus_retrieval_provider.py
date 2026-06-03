@@ -25,8 +25,8 @@ def test_phase84_corpus_backed_retrieval_reuses_indexed_page_without_network() -
     artifacts = ArtifactStore.in_memory()
     corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 404)
     uri = "https://www.sec.gov/Archives/edgar/data/320193/filing.htm"
-    body = "AAPL 2024 10-K revenue from annual report. " + ("x" * 240) + RAW_ONLY_SENTINEL
-    source = _source("src-sec", uri, "Apple Form 10-K", "AAPL 2024 10-K revenue.")
+    body = "AAPL 2024 10-K revenue from annual report was USD 391035 million. " + ("x" * 240) + RAW_ONLY_SENTINEL
+    source = _source("src-sec", uri, "Apple Form 10-K", "AAPL 2024 10-K revenue was USD 391035 million.")
     artifact = artifacts.write_blob(
         kind="retrieval_fetched_document",
         payload=body,

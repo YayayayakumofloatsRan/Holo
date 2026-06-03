@@ -35,6 +35,7 @@ from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner,
 from kernel_v3.research import (
     FINANCE_FUNDAMENTALS_PROFILE_ID,
     ResearchCorpusStore,
+    TECHNICAL_DOCUMENTATION_PROFILE_ID,
     research_depth_defaults,
     resolve_issuer_identity,
     source_directory_for_profile,
@@ -64,6 +65,19 @@ _FINANCE_RESEARCH_PROFILE_CAPABILITIES = {
     "finance.market_data",
     "finance.macro_data",
     "finance.competitive_landscape",
+}
+_TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES = {
+    "technical.documentation_research",
+    "technical.api_documentation",
+    "technical.developer_docs",
+    "technical.source_repository",
+}
+_TECHNICAL_DOCUMENTATION_INTENT_KINDS = {
+    "technical_documentation",
+    "technical_documentation_research",
+    "api_documentation",
+    "developer_docs",
+    "sdk_documentation",
 }
 
 DEFAULT_RETRIEVAL_MAX_STEPS = 2048
@@ -1739,6 +1753,7 @@ def _actions_from_plan_step(goal: str, recipe: TaskRecipe, step: JsonObject) -> 
             }
             payload = _merge_retrieval_payload(payload, args)
             payload = _apply_profile_capability_defaults(payload, step)
+            payload = _apply_recipe_profile_defaults(payload, recipe)
             payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
             payload = _apply_research_depth_defaults(payload)
             payload.setdefault("query", str(step.get("goal") or goal))
@@ -3330,9 +3345,17 @@ def _research_profile_id(recipe: TaskRecipe) -> str | None:
             return value
     if _semantic_has_any_capability(semantic, _FINANCE_RESEARCH_PROFILE_CAPABILITIES):
         return FINANCE_FUNDAMENTALS_PROFILE_ID
+    if _semantic_has_any_capability(semantic, _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES):
+        return TECHNICAL_DOCUMENTATION_PROFILE_ID
+    if _semantic_has_any_intent_kind(semantic, _TECHNICAL_DOCUMENTATION_INTENT_KINDS):
+        return TECHNICAL_DOCUMENTATION_PROFILE_ID
     plan = _task_execution_plan_metadata(recipe)
     if _plan_has_any_capability(plan, _FINANCE_RESEARCH_PROFILE_CAPABILITIES):
         return FINANCE_FUNDAMENTALS_PROFILE_ID
+    if _plan_has_any_capability(plan, _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES):
+        return TECHNICAL_DOCUMENTATION_PROFILE_ID
+    if _plan_has_any_step_kind(plan, _TECHNICAL_DOCUMENTATION_INTENT_KINDS):
+        return TECHNICAL_DOCUMENTATION_PROFILE_ID
     return None
 
 
@@ -3458,12 +3481,24 @@ def _default_retrieval_operator(
             fetch_provider=CorpusFetchProvider(artifact_store),
             corpus_store=corpus_store,
         )
-    if _research_profile_id(recipe) == FINANCE_FUNDAMENTALS_PROFILE_ID:
+    profile_id = _research_profile_id(recipe)
+    if profile_id == FINANCE_FUNDAMENTALS_PROFILE_ID:
         return RetrievalOperator(
             search_provider=FallbackSearchProvider(
                 [
                     DirectUrlSearchProvider(),
                     SecEdgarSearchProvider(),
+                    ResearchSourceQuerySearchProvider(),
+                    SourceDirectorySearchProvider(),
+                ]
+            ),
+            fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
+        )
+    if profile_id == TECHNICAL_DOCUMENTATION_PROFILE_ID:
+        return RetrievalOperator(
+            search_provider=FallbackSearchProvider(
+                [
+                    DirectUrlSearchProvider(),
                     ResearchSourceQuerySearchProvider(),
                     SourceDirectorySearchProvider(),
                 ]
@@ -3559,11 +3594,27 @@ def _explicit_retrieval_query_count(payload: JsonObject) -> int:
 
 
 def _apply_profile_capability_defaults(payload: JsonObject, step: JsonObject) -> JsonObject:
-    return _apply_finance_capability_defaults(payload, set(_step_capabilities(step)))
+    capabilities = set(_step_capabilities(step))
+    updated = _apply_finance_capability_defaults(payload, capabilities)
+    return _apply_technical_documentation_capability_defaults(updated, capabilities)
 
 
 def _apply_recipe_profile_defaults(payload: JsonObject, recipe: TaskRecipe) -> JsonObject:
-    return _apply_finance_capability_defaults(payload, _recipe_finance_capabilities(recipe))
+    capabilities = _recipe_research_profile_capabilities(recipe)
+    updated = _apply_finance_capability_defaults(payload, capabilities)
+    updated = _apply_technical_documentation_capability_defaults(updated, capabilities)
+    profile_id = _research_profile_id(recipe)
+    if profile_id == TECHNICAL_DOCUMENTATION_PROFILE_ID:
+        return _apply_technical_documentation_capability_defaults(
+            updated,
+            capabilities | {"technical.documentation_research"},
+        )
+    if profile_id == FINANCE_FUNDAMENTALS_PROFILE_ID:
+        return _apply_finance_capability_defaults(
+            updated,
+            capabilities | {"finance.fundamentals_research"},
+        )
+    return updated
 
 
 def _apply_finance_capability_defaults(payload: JsonObject, capabilities: set[str]) -> JsonObject:
@@ -3592,7 +3643,28 @@ def _apply_finance_capability_defaults(payload: JsonObject, capabilities: set[st
     return updated
 
 
-def _recipe_finance_capabilities(recipe: TaskRecipe) -> set[str]:
+def _apply_technical_documentation_capability_defaults(payload: JsonObject, capabilities: set[str]) -> JsonObject:
+    if not capabilities.intersection(_TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES):
+        return payload
+    updated = dict(payload)
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    metadata.setdefault("research_profile", TECHNICAL_DOCUMENTATION_PROFILE_ID)
+    metadata.setdefault("source_authority_requirement", "primary")
+    metadata.setdefault("search_strategy", "aggregate")
+    metadata.setdefault("preferred_source_families", ["official_documentation", "source_repository", "standards_body"])
+    if "technical.api_documentation" in capabilities:
+        metadata.setdefault("research_task_kind", "api_documentation")
+    elif "technical.source_repository" in capabilities:
+        metadata.setdefault("research_task_kind", "source_repository")
+    elif "technical.developer_docs" in capabilities:
+        metadata.setdefault("research_task_kind", "developer_docs")
+    else:
+        metadata.setdefault("research_task_kind", "technical_documentation")
+    updated["metadata"] = metadata
+    return updated
+
+
+def _recipe_research_profile_capabilities(recipe: TaskRecipe) -> set[str]:
     capabilities: set[str] = set()
     semantic = _semantic_intake_metadata(recipe)
     intents = semantic.get("intents")
@@ -3606,7 +3678,7 @@ def _recipe_finance_capabilities(recipe: TaskRecipe) -> set[str]:
         for step in steps:
             if isinstance(step, dict):
                 capabilities.update(_step_capabilities(step))
-    return capabilities.intersection(_FINANCE_RESEARCH_PROFILE_CAPABILITIES)
+    return capabilities.intersection(_FINANCE_RESEARCH_PROFILE_CAPABILITIES | _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES)
 
 
 def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
@@ -3618,7 +3690,11 @@ def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
     return _capability_args_from_plan(
         _task_execution_plan_metadata(recipe),
         "retrieval.run",
-        capability_markers={"retrieval.run", *_FINANCE_RESEARCH_PROFILE_CAPABILITIES},
+        capability_markers={
+            "retrieval.run",
+            *_FINANCE_RESEARCH_PROFILE_CAPABILITIES,
+            *_TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES,
+        },
     )
 
 
@@ -3808,6 +3884,20 @@ def _semantic_has_any_capability(semantic: JsonObject, capabilities: set[str]) -
     )
 
 
+def _semantic_has_any_intent_kind(semantic: JsonObject, kinds: set[str]) -> bool:
+    primary = str(semantic.get("primary_intent") or "").strip().lower()
+    if primary in kinds:
+        return True
+    intents = semantic.get("intents")
+    if not isinstance(intents, list):
+        return False
+    return any(
+        str(item.get("kind") or "").strip().lower() in kinds
+        for item in intents
+        if isinstance(item, dict)
+    )
+
+
 def _plan_has_capability(plan: JsonObject, capability: str) -> bool:
     return _plan_has_any_capability(plan, {capability})
 
@@ -3818,6 +3908,17 @@ def _plan_has_any_capability(plan: JsonObject, capabilities: set[str]) -> bool:
         return False
     return any(
         bool(capabilities.intersection(_step_capabilities(step)))
+        for step in steps
+        if isinstance(step, dict)
+    )
+
+
+def _plan_has_any_step_kind(plan: JsonObject, kinds: set[str]) -> bool:
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return False
+    return any(
+        str(step.get("kind") or "").strip().lower() in kinds
         for step in steps
         if isinstance(step, dict)
     )

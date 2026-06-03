@@ -7,13 +7,13 @@ import json
 import re
 from html.parser import HTMLParser
 
-from kernel_v3.retrieval.contracts import ExtractedSpan, FetchedDocument, SearchGoal
-from kernel_v3.retrieval.evaluate import (
-    FINANCE_FUNDAMENTAL_FACET_ALIASES,
+from kernel_v3.research.profile_policy import (
     QUERY_FACET_ALIASES,
-    finance_fundamental_facets,
+    profile_extraction_aliases,
     query_facets,
+    resolve_goal_research_profile,
 )
+from kernel_v3.retrieval.contracts import ExtractedSpan, FetchedDocument, SearchGoal
 
 READABLE_TEXT_LIMIT = 200_000
 SPAN_BEFORE_CHARS = 120
@@ -212,8 +212,14 @@ def _looks_like_csv(body: str, *, document: FetchedDocument, mime_type: str) -> 
     uri = document.uri.lower()
     if uri.endswith(".csv") or ".csv?" in uri:
         return True
-    first_line = body[:2048].splitlines()[0] if body[:2048].splitlines() else ""
-    return "," in first_line and len(first_line.split(",")) >= 2
+    lines = [line for line in body[:4096].splitlines() if line.strip()]
+    if len(lines) < 2:
+        return False
+    first_columns = [item.strip() for item in lines[0].split(",")]
+    second_columns = [item.strip() for item in lines[1].split(",")]
+    if len(first_columns) < 2 or len(second_columns) < 2:
+        return False
+    return abs(len(first_columns) - len(second_columns)) <= 1
 
 
 def _extract_json_readable_text(body: str) -> str:
@@ -613,9 +619,9 @@ def _terms(text: str, *, goal: SearchGoal | None = None) -> list[str]:
         for alias in QUERY_FACET_ALIASES.get(facet, ()):
             add(alias)
     if goal is not None:
-        for facet in finance_fundamental_facets(goal=goal):
-            for alias in FINANCE_FUNDAMENTAL_FACET_ALIASES.get(facet, ()):
-                add(alias)
+        profile = resolve_goal_research_profile(goal)
+        for alias in profile_extraction_aliases(goal=goal, research_profile=profile):
+            add(alias)
     return terms
 
 

@@ -163,6 +163,10 @@ def resident_doctor_event(
     }
     live_issues = list(live_retrieval_issues or [])
     if live_retrieval_status is not None or live_issues or live_retrieval_config is not None:
+        combined_issues = [*issues, *_doctor_issue_manifests(live_issues)]
+        event["issue_count"] = len(combined_issues)
+        event["issues"] = combined_issues[:COMMAND_MANIFEST_LIST_LIMIT]
+        event["issues_truncated"] = len(combined_issues) > COMMAND_MANIFEST_LIST_LIMIT
         event["live_retrieval"] = {
             "status": live_retrieval_status,
             "issue_count": len(live_issues),

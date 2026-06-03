@@ -1,13 +1,95 @@
 from __future__ import annotations
 
 from kernel_v3.research.contracts import ResearchSourceEntry
-from kernel_v3.research.profiles import FINANCE_FUNDAMENTALS_PROFILE_ID
+from kernel_v3.research.profiles import FINANCE_FUNDAMENTALS_PROFILE_ID, TECHNICAL_DOCUMENTATION_PROFILE_ID
 
 
 def source_directory_for_profile(profile_id: str | None) -> list[ResearchSourceEntry]:
     if profile_id == FINANCE_FUNDAMENTALS_PROFILE_ID:
         return finance_fundamentals_source_directory()
+    if profile_id == TECHNICAL_DOCUMENTATION_PROFILE_ID:
+        return technical_documentation_source_directory()
     return []
+
+
+def technical_documentation_source_directory() -> list[ResearchSourceEntry]:
+    profile = TECHNICAL_DOCUMENTATION_PROFILE_ID
+    return [
+        ResearchSourceEntry(
+            source_id="techdocs-deepseek-api-docs",
+            profile_id=profile,
+            title="DeepSeek API official documentation",
+            source_family="official_documentation",
+            authority_level="primary",
+            base_url="https://api-docs.deepseek.com/",
+            allowed_hosts=["api-docs.deepseek.com"],
+            use_cases=["DeepSeek API endpoint", "authentication", "models", "chat completion", "reasoner"],
+            required_identifiers=["API topic or feature"],
+            query_hints=[
+                "DeepSeek API docs endpoint authentication",
+                "DeepSeek chat completion API reference",
+                "DeepSeek API models pricing rate limits",
+            ],
+            crawl_notes=["Prefer official API docs pages over product landing pages or mirrors."],
+            metadata={"target_terms": ["deepseek", "深度求索"]},
+        ),
+        ResearchSourceEntry(
+            source_id="techdocs-openai-platform-docs",
+            profile_id=profile,
+            title="OpenAI platform documentation",
+            source_family="official_documentation",
+            authority_level="primary",
+            base_url="https://platform.openai.com/docs/",
+            allowed_hosts=["platform.openai.com"],
+            use_cases=["OpenAI API reference", "authentication", "models", "responses API", "tool calling"],
+            required_identifiers=["API topic or feature"],
+            query_hints=["OpenAI API docs authentication endpoint", "OpenAI Responses API reference"],
+            crawl_notes=["Use official platform docs for current API behavior."],
+            metadata={"target_terms": ["openai"]},
+        ),
+        ResearchSourceEntry(
+            source_id="techdocs-anthropic-docs",
+            profile_id=profile,
+            title="Anthropic API documentation",
+            source_family="official_documentation",
+            authority_level="primary",
+            base_url="https://docs.anthropic.com/",
+            allowed_hosts=["docs.anthropic.com"],
+            use_cases=["Anthropic API reference", "authentication", "models", "messages API"],
+            required_identifiers=["API topic or feature"],
+            query_hints=["Anthropic API docs authentication endpoint", "Anthropic messages API reference"],
+            crawl_notes=["Prefer docs.anthropic.com over blog or third-party tutorials."],
+            metadata={"target_terms": ["anthropic", "claude"]},
+        ),
+        ResearchSourceEntry(
+            source_id="techdocs-github-docs",
+            profile_id=profile,
+            title="GitHub REST and GraphQL API documentation",
+            source_family="official_documentation",
+            authority_level="primary",
+            base_url="https://docs.github.com/",
+            allowed_hosts=["docs.github.com"],
+            use_cases=["GitHub REST API", "GraphQL API", "authentication", "webhooks"],
+            required_identifiers=["API topic or feature"],
+            query_hints=["GitHub REST API docs authentication endpoint", "GitHub GraphQL API docs"],
+            crawl_notes=["Prefer docs.github.com for API contracts and permissions."],
+            metadata={"target_terms": ["github"]},
+        ),
+        ResearchSourceEntry(
+            source_id="techdocs-microsoft-learn",
+            profile_id=profile,
+            title="Microsoft Learn official documentation",
+            source_family="official_documentation",
+            authority_level="primary",
+            base_url="https://learn.microsoft.com/",
+            allowed_hosts=["learn.microsoft.com"],
+            use_cases=["Azure API documentation", "SDK docs", "authentication", "platform guides"],
+            required_identifiers=["product or API topic"],
+            query_hints=["Microsoft Learn API docs authentication endpoint", "Azure API reference"],
+            crawl_notes=["Use official Learn pages for Microsoft/Azure docs."],
+            metadata={"target_terms": ["microsoft", "azure"]},
+        ),
+    ]
 
 
 def finance_fundamentals_source_directory() -> list[ResearchSourceEntry]:

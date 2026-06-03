@@ -151,6 +151,13 @@ def _semantic_prompt(
                 "are the executable ABI the host validates."
             ),
             (
+                "For API documentation, developer docs, SDK docs, endpoint, "
+                "authentication, parameter, schema, rate-limit, or pricing "
+                "research, use technical.api_documentation or "
+                "technical.documentation_research so the host can select the "
+                "technical_documentation research profile."
+            ),
+            (
                 "Place structured tool arguments in intent.metadata.capability_args "
                 "keyed by capability name."
             ),

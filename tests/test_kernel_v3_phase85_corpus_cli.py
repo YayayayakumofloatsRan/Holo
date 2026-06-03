@@ -27,7 +27,7 @@ def test_phase85_cli_indexes_searches_and_reuses_corpus_without_network(tmp_path
         "--corpus-index",
         str(corpus_index),
     ]
-    body = "AAPL 2024 10-K revenue from annual report. " + ("x" * 320) + RAW_ONLY_SENTINEL
+    body = "AAPL 2024 10-K revenue from annual report was USD 391035 million. " + ("x" * 320) + RAW_ONLY_SENTINEL
 
     indexed = _run_cli(
         *base_args,

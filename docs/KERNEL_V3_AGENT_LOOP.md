@@ -1032,11 +1032,20 @@ Live retrieval and evidence/discovery hardening completed in this iteration:
   below `retrieval.run`, while the workloop still receives observations,
   progress/repetition/evidence signals, model evaluator feedback, and a
   host-owned termination decision.
+- added a generic research-profile evidence policy layer. A profile can now
+  define query templates, source families, discovery source kinds, evidence
+  facets, numeric fact requirements, extraction aliases, and compaction limits.
+  `finance_fundamentals` is one profile instance; `technical_documentation` is
+  a second instance using the same `retrieval.run` loop;
+- added profile-aware evidence compaction before citation synthesis. Retrieval
+  still searches/fetches broadly, but selected evidence is deduped, authority
+  ranked, facet-aware, and capped before final citations are journaled.
 
 Validation used:
 
 ```bash
 .venv/bin/pytest -q tests/test_kernel_v3_*.py
+.venv/bin/pytest -q tests/test_kernel_v3_phase108_generic_research_profile_policy.py
 HOLO_V3_LIVE_MODEL=1 ./holo-v3 chat --thread smoke-search11 \
   --once "你去查一下APPLE INC的财务信息，优先官方财报和SEC来源，给我简要结论" \
   --online --profile fast --planner model --evaluator model \
@@ -1046,11 +1055,11 @@ HOLO_V3_LIVE_MODEL=1 ./holo-v3 chat --thread smoke-search11 \
   --live-web-search-provider bing_html --live-search-strategy adaptive
 ```
 
-Residual issue for the next retrieval iteration: official structured evidence
-now works, but companyfacts can still produce too many candidate spans. The next
-quality improvement should compact finance evidence before synthesis, for
-example by selecting latest fiscal-year and latest-quarter rows per requested
-metric before the final model packet.
+Residual issue for the next retrieval iteration: profile-aware evidence
+compaction now exists, but finance facts can still be ranked more intelligently
+inside the compacted package. The next quality improvement should add
+metric-aware period selection, for example latest fiscal-year and latest-quarter
+rows per requested metric before final answer synthesis.
 
 ## Iteration 2026-06-02
 

@@ -94,6 +94,9 @@ class SourceDirectorySearchProvider:
             }
             if ranked_entry.matched_terms:
                 source_metadata["matched_query_terms"] = ranked_entry.matched_terms[:12]
+            target_terms = _metadata_string_list(entry.metadata, "target_terms")
+            if target_terms:
+                source_metadata["target_terms"] = target_terms[:12]
             sources.append(
                 SearchSource(
                     source_id=f"{self.provider_id}-{_hash(entry.source_id)[:12]}-{rank}",
@@ -647,6 +650,18 @@ def _research_profile_id(metadata: JsonObject) -> str | None:
     if isinstance(nested, dict):
         return _research_profile_id(nested)
     return None
+
+
+def _metadata_string_list(metadata: JsonObject, key: str) -> list[str]:
+    value = metadata.get(key)
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    if isinstance(value, list):
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    nested = metadata.get("metadata")
+    if isinstance(nested, dict):
+        return _metadata_string_list(nested, key)
+    return []
 
 
 def _validate_url(

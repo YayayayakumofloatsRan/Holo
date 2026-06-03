@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from kernel_v3.contracts import JsonObject
-from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, source_directory_for_profile
+from kernel_v3.research import RESEARCH_PROFILE_IDS, source_directory_for_profile
 from kernel_v3.retrieval.http_provider import (
     HttpFetchProvider,
     HttpTransport,
@@ -451,12 +451,13 @@ def _optional_positive_int(value: object) -> int | None:
 
 def _source_directory_allowed_hosts() -> list[str]:
     hosts: list[str] = []
-    for entry in source_directory_for_profile(FINANCE_FUNDAMENTALS_PROFILE_ID):
-        for host in entry.allowed_hosts:
-            text = str(host or "").strip().lower()
-            if not text or "*" in text or "example." in text:
-                continue
-            hosts.append(text)
+    for profile_id in RESEARCH_PROFILE_IDS:
+        for entry in source_directory_for_profile(profile_id):
+            for host in entry.allowed_hosts:
+                text = str(host or "").strip().lower()
+                if not text or "*" in text or "example." in text:
+                    continue
+                hosts.append(text)
     return _ordered_unique(hosts)
 
 

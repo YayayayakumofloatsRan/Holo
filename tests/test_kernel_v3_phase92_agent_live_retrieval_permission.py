@@ -39,6 +39,15 @@ def test_phase92_retrieval_recipe_grants_network_only_from_host_metadata() -> No
     assert live.metadata["allowed_permissions"] == ["network:fetch"]
 
 
+def test_phase92_cli_live_retrieval_allows_source_directory_hosts_without_explicit_profile() -> None:
+    config = cli._live_retrieval_config_from_args(
+        _runtime_args(live_retrieval=True, research_profile=None),
+        enable=True,
+    )
+
+    assert "api-docs.deepseek.com" in config.fetch.allowed_hosts
+
+
 def test_phase92_live_retrieval_operator_is_blocked_without_host_network_permission() -> None:
     journal = JournalStore.in_memory()
     search_transport = _Transport(
@@ -47,7 +56,7 @@ def test_phase92_live_retrieval_operator_is_blocked_without_host_network_permiss
             body=b'{"results": [{"url": "https://docs.example.com/aapl", "title": "AAPL filing"}]}',
         )
     )
-    fetch_transport = _Transport(HttpTransportResponse(status_code=200, body=b"AAPL revenue evidence."))
+    fetch_transport = _Transport(HttpTransportResponse(status_code=200, body=b"AAPL revenue was USD 391035 million."))
     runtime = AgentRuntime(
         journal=journal,
         artifact_store=ArtifactStore.in_memory(),
@@ -71,14 +80,14 @@ def test_phase92_live_retrieval_operator_runs_with_host_network_permission_and_b
             status_code=200,
             body=(
                 b'{"results": [{"url": "https://docs.example.com/aapl", '
-                b'"title": "AAPL filing", "snippet": "AAPL revenue evidence"}]}'
+                b'"title": "AAPL filing", "snippet": "AAPL revenue was USD 391035 million"}]}'
             ),
         )
     )
     fetch_transport = _Transport(
         HttpTransportResponse(
             status_code=200,
-            body=b"AAPL revenue evidence from a live-configured HTTP provider.",
+            body=b"AAPL revenue was USD 391035 million from a live-configured HTTP provider.",
         )
     )
     runtime = AgentRuntime(
@@ -193,7 +202,7 @@ def test_phase92_cli_agent_live_retrieval_allows_structured_search_without_endpo
     fetch_transport = _Transport(
         HttpTransportResponse(
             status_code=200,
-            body=b"AAPL SEC companyfacts revenue evidence from structured live fetch.",
+            body=b"AAPL SEC companyfacts revenue was USD 391035 million from structured live fetch.",
         )
     )
     monkeypatch.setattr(
@@ -269,7 +278,6 @@ def test_phase92_cli_agent_live_retrieval_blocks_without_allowed_hosts(tmp_path:
         for issue in payload["issues"]
     }
     assert ("live_provider_without_allowed_hosts", "live_json_http_search", "search") in issue_keys
-    assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
     assert JournalStore(journal_path, index_path=index_path).records() == []
 
 
@@ -436,14 +444,13 @@ def test_phase92_cli_resident_doctor_flags_live_retrieval_without_allowed_hosts(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "error"
-    provider_issues = payload["doctor"]["retrieval_provider_inspection"]["issues"]
+    provider_issues = payload["live_retrieval_issues"]
     issue_keys = {
         (issue["code"], issue["provider_id"], issue["provider_kind"])
         for issue in provider_issues
         if issue["code"] == "live_provider_without_allowed_hosts"
     }
     assert ("live_provider_without_allowed_hosts", "live_json_http_search", "search") in issue_keys
-    assert ("live_provider_without_allowed_hosts", "live_http_fetch", "fetch") in issue_keys
     event = _resident_doctor_record(journal_path, index_path)
     assert event["status"] == "error"
     assert event["retrieval_summary"]["network_access"] is True
@@ -469,14 +476,14 @@ def test_phase92_cli_agent_live_retrieval_uses_policy_gate_and_budget(
             status_code=200,
             body=(
                 b'{"results": [{"url": "https://docs.example.com/aapl", '
-                b'"title": "AAPL filing", "snippet": "AAPL revenue evidence"}]}'
+                b'"title": "AAPL filing", "snippet": "AAPL revenue was USD 391035 million"}]}'
             ),
         )
     )
     fetch_transport = _Transport(
         HttpTransportResponse(
             status_code=200,
-            body=b"AAPL revenue evidence from a live-configured HTTP provider.",
+            body=b"AAPL revenue was USD 391035 million from a live-configured HTTP provider.",
         )
     )
     monkeypatch.setattr(
@@ -889,14 +896,14 @@ def _live_success_transports() -> tuple[_Transport, _Transport]:
             status_code=200,
             body=(
                 b'{"results": [{"url": "https://docs.example.com/aapl", '
-                b'"title": "AAPL filing", "snippet": "AAPL revenue evidence"}]}'
+                b'"title": "AAPL filing", "snippet": "AAPL revenue was USD 391035 million"}]}'
             ),
         )
     )
     fetch_transport = _Transport(
         HttpTransportResponse(
             status_code=200,
-            body=b"AAPL revenue evidence from a live-configured HTTP provider.",
+            body=b"AAPL revenue was USD 391035 million from a live-configured HTTP provider.",
         )
     )
     return search_transport, fetch_transport

@@ -21,6 +21,14 @@
 - Replan hints now carry candidate/rejected evidence diagnostics, rejected
   reasons, fetch summaries, and missing query facets so the model planner can
   change strategy after a failed retrieval instead of repeating the same action.
+- Research-profile policy is now generic. A profile can define source families,
+  query templates, discovery source kinds, evidence facets, numeric-fact
+  requirements, extraction aliases, and evidence-compaction limits. Finance
+  fundamentals is no longer the only concrete profile; technical documentation
+  is available as a second profile using the same retrieval loop.
+- Evidence compaction now happens before citations are journaled. Retrieval can
+  gather many candidate spans, then select a deduped, authority-aware,
+  facet-aware evidence package for synthesis.
 
 ## Architecture Boundary
 
@@ -32,12 +40,13 @@ planner.propose -> PolicyGate -> ToolRegistry/RetrievalOperator
 -> continue/final_answer/ask_user/failure_report
 ```
 
-Finance is a research profile under `retrieval.run`, not a special branch in
-`LoopControllerV3`. The finance profile contributes source directories,
-structured SEC/FRED/FiscalData providers, authority policy, evidence
-qualification, and extraction aliases. Other deep-research domains should use
-the same pattern: add profile-specific source/evidence policies below the
-retrieval operator while preserving the generic workloop feedback path.
+Profiles live under `retrieval.run`, not as special branches in
+`LoopControllerV3`. A profile contributes source directories, structured
+providers when needed, authority policy, discovery policy, evidence
+qualification, extraction aliases, and evidence compaction. Other deep-research
+domains should use the same pattern: add profile-specific source/evidence
+policies below the retrieval operator while preserving the generic workloop
+feedback path.
 
 ## Live Validation
 
@@ -45,6 +54,7 @@ Default deterministic validation:
 
 ```bash
 .venv/bin/pytest -q tests/test_kernel_v3_*.py
+.venv/bin/pytest -q tests/test_kernel_v3_phase108_generic_research_profile_policy.py
 ```
 
 Latest full run result:
@@ -61,10 +71,9 @@ payload, extracted SEC metric rows, produced citations from
 
 ## Remaining Work
 
-- Compact structured evidence before synthesis. Companyfacts can still produce
-  too many candidate spans, causing very large synthesizer prompts.
-- Add metric-aware ranking for finance facts: latest fiscal year, latest
+- Add metric-aware ranking for finance facts inside the compacted evidence
+  package: latest fiscal year, latest
   quarter, requested metric names, and official form priority should be selected
   before final answer synthesis.
-- Generalize the same discovery-to-evidence pattern for other domains such as
-  legal, scientific literature, product docs, and broad market research.
+- Add more concrete profile instances for domains such as legal, scientific
+  literature, product research, and broad market research.

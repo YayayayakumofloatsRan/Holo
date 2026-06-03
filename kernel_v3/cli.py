@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import sys
+import urllib.parse
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
@@ -50,6 +51,7 @@ from kernel_v3.processors import (
 )
 from kernel_v3.research import (
     FINANCE_FUNDAMENTALS_PROFILE_ID,
+    RESEARCH_PROFILE_IDS,
     RESEARCH_DEPTHS,
     ResearchCorpusStore,
     research_depth_defaults,
@@ -275,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_context_budget_args(agent_parser, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
     _add_response_language_arg(agent_parser)
     agent_parser.add_argument("--citations-required", action="store_true")
-    agent_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    agent_parser.add_argument("--research-profile", choices=RESEARCH_PROFILE_IDS, default=None)
     agent_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
     _add_live_retrieval_args(agent_parser)
 
@@ -284,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_context_budget_args(answer_parser)
     _add_response_language_arg(answer_parser)
     answer_parser.add_argument("--citations-required", action="store_true")
-    answer_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    answer_parser.add_argument("--research-profile", choices=RESEARCH_PROFILE_IDS, default=None)
     answer_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
 
     chat_parser = sub.add_parser("chat")
@@ -319,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_agent_loop_args(chat_parser)
     _add_context_budget_args(chat_parser, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
     _add_response_language_arg(chat_parser)
-    chat_parser.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    chat_parser.add_argument("--research-profile", choices=RESEARCH_PROFILE_IDS, default=None)
     chat_parser.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
     _add_live_retrieval_args(chat_parser)
 
@@ -384,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_generation_args(resident_run_once)
     _add_context_budget_args(resident_run_once, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
     _add_response_language_arg(resident_run_once)
-    resident_run_once.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    resident_run_once.add_argument("--research-profile", choices=RESEARCH_PROFILE_IDS, default=None)
     resident_run_once.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
     _add_live_retrieval_args(resident_run_once)
     resident_run_once.add_argument("--tick-schedules", action="store_true")
@@ -415,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_generation_args(resident_run)
     _add_context_budget_args(resident_run, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
     _add_response_language_arg(resident_run)
-    resident_run.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    resident_run.add_argument("--research-profile", choices=RESEARCH_PROFILE_IDS, default=None)
     resident_run.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
     _add_live_retrieval_args(resident_run)
     resident_run.add_argument("--tick-schedules", action="store_true")
@@ -424,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_inspect.add_argument("--sample-limit", type=int, default=5)
     resident_doctor = resident_sub.add_parser("doctor")
     resident_doctor.add_argument("--sample-limit", type=int, default=5)
-    resident_doctor.add_argument("--research-profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    resident_doctor.add_argument("--research-profile", choices=RESEARCH_PROFILE_IDS, default=None)
     _add_live_retrieval_args(resident_doctor)
     resident_sub.add_parser("status")
     resident_sub.add_parser("inbox")
@@ -474,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
     retrieve_parser.add_argument("--body", default=None)
     retrieve_parser.add_argument("--uri", default="inline://holo-v3-cli")
     retrieve_parser.add_argument("--title", default="Holo v3 CLI inline evidence")
-    retrieve_parser.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    retrieve_parser.add_argument("--profile", choices=RESEARCH_PROFILE_IDS, default=None)
     retrieve_parser.add_argument("--max-sources", type=int, default=5)
     retrieve_parser.add_argument("--max-fetches", type=int, default=3)
     retrieve_parser.add_argument("--max-spans-per-document", type=int, default=1)
@@ -484,23 +486,23 @@ def main(argv: list[str] | None = None) -> int:
 
     retrieval_providers_parser = sub.add_parser("retrieval-providers")
     retrieval_providers_parser.add_argument("--mode", choices=["default", "corpus", "live-http"], default="default")
-    retrieval_providers_parser.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    retrieval_providers_parser.add_argument("--profile", choices=RESEARCH_PROFILE_IDS, default=None)
     _add_live_retrieval_args(retrieval_providers_parser)
 
     corpus_parser = sub.add_parser("corpus")
     corpus_sub = corpus_parser.add_subparsers(dest="corpus_command", required=True)
     corpus_list = corpus_sub.add_parser("list")
-    corpus_list.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    corpus_list.add_argument("--profile", choices=RESEARCH_PROFILE_IDS, default=None)
     corpus_list.add_argument("--limit", type=int, default=20)
     corpus_search = corpus_sub.add_parser("search")
     corpus_search.add_argument("query")
-    corpus_search.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    corpus_search.add_argument("--profile", choices=RESEARCH_PROFILE_IDS, default=None)
     corpus_search.add_argument("--limit", type=int, default=20)
     corpus_inspect = corpus_sub.add_parser("inspect")
     corpus_inspect.add_argument("document_id")
     corpus_inspect_store = corpus_sub.add_parser("inspect-store")
     corpus_inspect_store.add_argument("--sample-limit", type=int, default=5)
-    corpus_inspect_store.add_argument("--profile", choices=[FINANCE_FUNDAMENTALS_PROFILE_ID], default=None)
+    corpus_inspect_store.add_argument("--profile", choices=RESEARCH_PROFILE_IDS, default=None)
     corpus_sub.add_parser("status")
     corpus_audit = corpus_sub.add_parser("audit")
     corpus_audit.add_argument("--limit", type=int, default=20)
@@ -511,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
     sources_list = sources_sub.add_parser("list")
     sources_list.add_argument(
         "--profile",
-        choices=[FINANCE_FUNDAMENTALS_PROFILE_ID],
+        choices=RESEARCH_PROFILE_IDS,
         default=FINANCE_FUNDAMENTALS_PROFILE_ID,
     )
     sources_list.add_argument("--authority", choices=["primary", "secondary", "weak"], default=None)
@@ -521,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
     sources_seeds = sources_sub.add_parser("seeds")
     sources_seeds.add_argument(
         "--profile",
-        choices=[FINANCE_FUNDAMENTALS_PROFILE_ID],
+        choices=RESEARCH_PROFILE_IDS,
         default=FINANCE_FUNDAMENTALS_PROFILE_ID,
     )
     sources_seeds.add_argument("--authority", choices=["primary", "secondary", "weak"], default=None)
@@ -532,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
     sources_plan.add_argument("query")
     sources_plan.add_argument(
         "--profile",
-        choices=[FINANCE_FUNDAMENTALS_PROFILE_ID],
+        choices=RESEARCH_PROFILE_IDS,
         default=FINANCE_FUNDAMENTALS_PROFILE_ID,
     )
     sources_plan.add_argument("--authority", choices=["primary", "secondary", "weak"], default=None)
@@ -541,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
     sources_families = sources_sub.add_parser("families")
     sources_families.add_argument(
         "--profile",
-        choices=[FINANCE_FUNDAMENTALS_PROFILE_ID],
+        choices=RESEARCH_PROFILE_IDS,
         default=FINANCE_FUNDAMENTALS_PROFILE_ID,
     )
 
@@ -1301,7 +1303,7 @@ def _live_retrieval_config_from_args(args, *, enable: bool) -> LiveRetrievalConf
         env[LIVE_WEB_SEARCH_PROVIDERS_ENV] = DEFAULT_LIVE_WEB_SEARCH_PROVIDERS
         env.setdefault(LIVE_SEARCH_STRATEGY_ENV, DEFAULT_LIVE_SEARCH_STRATEGY)
         env.setdefault(LIVE_FETCH_DISCOVERED_SEARCH_HOSTS_ENV, "1")
-    if enable and getattr(args, "research_profile", None) == FINANCE_FUNDAMENTALS_PROFILE_ID:
+    if enable:
         env.setdefault(LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV, "1")
     if bool(getattr(args, "live_allow_all_hosts", False)):
         env[LIVE_ALLOW_ALL_HOSTS_ENV] = "1"
@@ -1456,7 +1458,14 @@ def _live_retrieval_doctor_status(issues: list[JsonObject]) -> str:
 
 def _live_retrieval_allowed_host_issues(config: LiveRetrievalConfig) -> list[JsonObject]:
     issues: list[JsonObject] = []
-    if config.search.configured and not config.search.allow_all_hosts and not config.search.allowed_hosts:
+    if (
+        config.search.configured
+        and not config.search.allow_all_hosts
+        and (
+            not config.search.allowed_hosts
+            or not _url_host_allowed(config.search.endpoint_url, config.search.allowed_hosts)
+        )
+    ):
         issues.append(
             {
                 "component": "retrieval",
@@ -1501,6 +1510,22 @@ def _live_retrieval_allowed_host_issues(config: LiveRetrievalConfig) -> list[Jso
             }
         )
     return issues
+
+
+def _url_host_allowed(url: str | None, allowed_hosts: list[str]) -> bool:
+    host = urllib.parse.urlparse(str(url or "")).hostname
+    if not host:
+        return False
+    return any(_host_matches(host.lower(), str(allowed).strip().lower()) for allowed in allowed_hosts)
+
+
+def _host_matches(host: str, allowed: str) -> bool:
+    if not allowed:
+        return False
+    if allowed.startswith("*."):
+        suffix = allowed[1:]
+        return host.endswith(suffix) and host != allowed[2:]
+    return host == allowed
 
 
 def _artifact_store(args, *, create_default: bool) -> ArtifactStore | None:

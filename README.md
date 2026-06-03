@@ -207,6 +207,15 @@ Kernel v3 currently contains the infrastructure for:
   Holo searches the local research corpus before live providers, fetches corpus
   hits from artifact blobs, and indexes newly fetched live pages back into the
   corpus for later agent loops;
+- generic research-profile policy: `research_profile` now defines source
+  authority, query templates, discovery source kinds, evidence facets, numeric
+  fact requirements, extraction aliases, and evidence compaction. Finance
+  fundamentals and technical documentation are profile instances under the same
+  `retrieval.run` loop rather than separate controller branches;
+- evidence compaction before citation synthesis: retrieval can search/fetch
+  broadly, then select a smaller source-authority/facet-aware evidence package
+  before journaling citations and calling the synthesizer. This keeps deep
+  research loops from dumping every candidate span into the final model packet;
 - finance fundamentals source directory entries for SEC/EDGAR, SEC structured
   data, SEC CIK/ticker mapping, SEC archives, SEC financial statement datasets,
   company IR, US/global official statistics, China/HK/UK/Canada/Australia/Japan/
@@ -764,6 +773,12 @@ Companies House, FRED, and World Bank query URLs without hard-coding agent
 branches. Multi-intent finance plans can therefore execute multiple retrieval
 loop actions before finalization while preserving host-owned source ranking,
 artifact storage, evidence sufficiency, and termination gates.
+The same profile layer now supports non-finance research. For example,
+`technical_documentation` defines official documentation/source repository/
+standards-body authority, endpoint/authentication/parameter/response/rate-limit
+facets, docs-specific query expansion, and evidence compaction. It still uses
+the same planner packet shape, PolicyGate validation, RetrievalOperator,
+EvidenceEvaluator, and synthesizer citation checks.
 When a prior SEC submissions/company metadata step exposes an accession number
 and `primaryDocument`, the next retrieval payload can carry those fields and
 the SEC provider will construct the direct `Archives/edgar/data/...` filing

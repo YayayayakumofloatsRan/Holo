@@ -18,11 +18,29 @@ from kernel_v3.research.identity import (
     resolve_issuer_identity,
 )
 from kernel_v3.research.profiles import (
+    FINANCE_DISCOVERY_SOURCE_KINDS,
+    FINANCE_FUNDAMENTAL_FACET_ALIASES,
+    FINANCE_FUNDAMENTAL_FACET_TRIGGERS,
+    FINANCE_FUNDAMENTAL_TASK_KINDS,
     FINANCE_FUNDAMENTALS_PROFILE_ID,
+    FINANCE_NUMERIC_FACT_FACETS,
+    RESEARCH_PROFILE_IDS,
     RESEARCH_DEPTHS,
+    TECHNICAL_DOCUMENTATION_PROFILE_ID,
     finance_fundamentals_profile,
     profile_by_id,
     research_depth_defaults,
+    technical_documentation_profile,
+)
+from kernel_v3.research.profile_policy import (
+    assess_profile_evidence_coverage,
+    evidence_compaction_policy,
+    profile_evidence_facets,
+    profile_evidence_policy,
+    profile_extraction_aliases,
+    profile_is_discovery_goal,
+    qualify_profile_evidence_candidate,
+    resolve_goal_research_profile,
 )
 from kernel_v3.research.source_policy import (
     assess_evidence_source,
@@ -30,7 +48,11 @@ from kernel_v3.research.source_policy import (
     classify_source_family,
     source_authority_summary,
 )
-from kernel_v3.research.sources import finance_fundamentals_source_directory, source_directory_for_profile
+from kernel_v3.research.sources import (
+    finance_fundamentals_source_directory,
+    source_directory_for_profile,
+    technical_documentation_source_directory,
+)
 from kernel_v3.research.site_index import (
     filter_site_index_entries,
     seed_urls_for_site_index_entry,
@@ -45,7 +67,14 @@ from kernel_v3.research.site_index import (
 
 __all__ = [
     "FINANCE_FUNDAMENTALS_PROFILE_ID",
+    "FINANCE_DISCOVERY_SOURCE_KINDS",
+    "FINANCE_FUNDAMENTAL_FACET_ALIASES",
+    "FINANCE_FUNDAMENTAL_FACET_TRIGGERS",
+    "FINANCE_FUNDAMENTAL_TASK_KINDS",
+    "FINANCE_NUMERIC_FACT_FACETS",
+    "RESEARCH_PROFILE_IDS",
     "RESEARCH_DEPTHS",
+    "TECHNICAL_DOCUMENTATION_PROFILE_ID",
     "CorpusDocument",
     "CorpusInspection",
     "CorpusSearchResult",
@@ -63,9 +92,19 @@ __all__ = [
     "finance_fundamentals_source_directory",
     "filter_site_index_entries",
     "identity_template_values",
+    "assess_profile_evidence_coverage",
+    "evidence_compaction_policy",
+    "profile_evidence_facets",
+    "profile_evidence_policy",
+    "profile_extraction_aliases",
+    "profile_is_discovery_goal",
+    "qualify_profile_evidence_candidate",
     "profile_by_id",
     "research_depth_defaults",
+    "technical_documentation_profile",
+    "technical_documentation_source_directory",
     "resolve_issuer_identity",
+    "resolve_goal_research_profile",
     "seed_urls_for_site_index_entry",
     "source_directory_for_profile",
     "source_authority_summary",

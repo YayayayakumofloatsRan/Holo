@@ -102,19 +102,19 @@ def test_phase82_finance_profile_multi_query_can_recover_primary_source() -> Non
                     )
                 ],
                 targeted_query: [
-                    _source(
-                        "src-sec",
-                        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
-                        "Apple Form 10-K",
-                        "AAPL revenue from annual report.",
-                    )
-                ],
-            }
+                _source(
+                    "src-sec",
+                    "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+                    "Apple Form 10-K",
+                    "AAPL revenue from annual report was USD 391035 million.",
+                )
+            ],
+        }
         ),
         fetch_provider=FakeFetchProvider(
             {
                 "https://example.com/aapl-revenue": "AAPL revenue third-party summary.",
-                "https://www.sec.gov/Archives/edgar/data/320193/filing.htm": "AAPL revenue from annual report.",
+                "https://www.sec.gov/Archives/edgar/data/320193/filing.htm": "AAPL revenue from annual report was USD 391035 million.",
             }
         ),
     )
