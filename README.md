@@ -92,6 +92,17 @@ Kernel v3 currently contains the infrastructure for:
   assessment. The model can suggest coverage and next strategy, but the host
   validates the decision and never lets mission assessment execute tools,
   bypass policy, or commit memory;
+- LLM-declared answer profiles for research work. `semantic.intake` may emit
+  `metadata.answer_profile_hint` with `format`, `detail_level`,
+  `target_sections`, and `quality_gate`; the host validates that packet,
+  exposes it to planner/synthesizer context, journals final-answer quality
+  checks, and blocks only strict-profile outputs that do not meet the declared
+  answer shape. This is a packet contract, not keyword matching;
+- research-result memory proposals. When a strict research answer passes the
+  quality gate and durable memory is configured, the host can create a pending
+  memory proposal from the final answer, citation refs, evidence refs, and
+  research mission metadata. The model still cannot commit durable memory
+  directly;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file
@@ -882,6 +893,7 @@ Targeted smoke commands:
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase98_sec_edgar_provider.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase99_source_query_provider.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase100_issuer_identity.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3_phase109_research_employee_core.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase110_active_memory_recall.py
 ```
 

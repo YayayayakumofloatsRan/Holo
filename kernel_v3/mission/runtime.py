@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Protocol
 
+from kernel_v3.agent.answer_profile import infer_answer_profile, research_mission_metadata
 from kernel_v3.agent.contracts import AgentRuntimeResult
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
@@ -61,10 +62,26 @@ class MissionRuntime:
         execution_metadata: JsonObject | None = None,
         response_language: str | None = None,
     ) -> AgentRuntimeResult:
+        answer_profile = infer_answer_profile(
+            goal,
+            execution_metadata=execution_metadata,
+            response_language=response_language,
+        )
+        research_mission = research_mission_metadata(goal, answer_profile=answer_profile)
         mission = self.supervisor.start(
             root_goal=goal,
             thread_id=thread_id,
-            metadata={"entrypoint": "run", "mode": mode},
+            metadata={
+                "entrypoint": "run",
+                "mode": mode,
+                "answer_profile": answer_profile.to_dict(),
+                "research_mission": research_mission,
+            },
+        )
+        execution_metadata = _with_mission_answer_metadata(
+            execution_metadata,
+            answer_profile=answer_profile.to_dict(),
+            research_mission=research_mission,
         )
         return self._drive(
             mission,
@@ -96,10 +113,27 @@ class MissionRuntime:
         execution_metadata: JsonObject | None = None,
         response_language: str | None = None,
     ) -> AgentRuntimeResult:
+        answer_profile = infer_answer_profile(
+            user_input,
+            execution_metadata=execution_metadata,
+            response_language=response_language,
+        )
+        research_mission = research_mission_metadata(user_input, answer_profile=answer_profile)
         mission = self.supervisor.start(
             root_goal=user_input,
             thread_id=thread_id,
-            metadata={"entrypoint": "resume", "mode": mode, "source_task_id": task_id},
+            metadata={
+                "entrypoint": "resume",
+                "mode": mode,
+                "source_task_id": task_id,
+                "answer_profile": answer_profile.to_dict(),
+                "research_mission": research_mission,
+            },
+        )
+        execution_metadata = _with_mission_answer_metadata(
+            execution_metadata,
+            answer_profile=answer_profile.to_dict(),
+            research_mission=research_mission,
         )
         return self._drive(
             mission,
@@ -292,3 +326,15 @@ def _directive_user_input(mission: MissionState, assessment: MissionAssessment) 
     if avoid_list:
         parts.append(f"Avoid repeating: {avoid_list}")
     return "\n".join(parts)
+
+
+def _with_mission_answer_metadata(
+    metadata: JsonObject | None,
+    *,
+    answer_profile: JsonObject,
+    research_mission: JsonObject,
+) -> JsonObject:
+    merged = dict(metadata or {})
+    merged.setdefault("answer_profile", dict(answer_profile))
+    merged.setdefault("research_mission", dict(research_mission))
+    return merged

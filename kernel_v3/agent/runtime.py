@@ -17,6 +17,12 @@ from kernel_v3.agent.contracts import (
     TaskGraphValidation,
     TaskRecipe,
 )
+from kernel_v3.agent.answer_profile import (
+    answer_profile_from_dict,
+    answer_quality_gaps,
+    infer_answer_profile,
+    research_mission_metadata,
+)
 from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
 from kernel_v3.agent.state_space import summarize_state_profiles
 from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from_semantic, validate_task_graph
@@ -236,6 +242,24 @@ class AgentRuntime:
             selected_mode = "clarify_first"
         if selected_mode == "workspace_write" and planner_mode != "model" and _workspace_write_target(goal, task_plan) is None:
             selected_mode = "clarify_first"
+        answer_profile = infer_answer_profile(
+            goal,
+            semantic_intake=intake,
+            task_plan=task_plan,
+            execution_metadata=execution_metadata,
+            response_language=effective_language,
+        )
+        research_mission = research_mission_metadata(
+            goal,
+            answer_profile=answer_profile,
+            semantic_intake=intake,
+            task_plan=task_plan,
+        )
+        execution_metadata = _with_answer_profile_metadata(
+            execution_metadata,
+            answer_profile=answer_profile,
+            research_mission=research_mission,
+        )
         recipe = task_recipe(
             selected_mode,
             citations_required=citations_required,
@@ -245,6 +269,9 @@ class AgentRuntime:
                 "task_graph_validation": task_graph_validation.to_dict(),
                 "task_execution_plan": task_plan.to_dict(),
                 "execution_metadata": dict(execution_metadata or {}),
+                "answer_profile": answer_profile.to_dict(),
+                "research_mission": research_mission,
+                "thread_id": thread_id,
             },
         )
         recipe = _with_active_memory_access(recipe, enabled=self.memory_store is not None)
@@ -626,7 +653,20 @@ class AgentRuntime:
                 missing_evidence=list(synthesized.limitations),
                 next_action="collect_more_evidence",
             )
-        return self._append_final(_agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))), None
+        final = _agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))
+        quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe)
+        self._append_final_quality_check(final, recipe=recipe, gaps=quality_gaps)
+        if quality_gaps:
+            return None, self._failure(
+                task_id,
+                run_id,
+                "final_answer_quality_insufficient",
+                missing_evidence=quality_gaps,
+                next_action="expand_final_answer_or_collect_more_evidence",
+            )
+        final = self._append_final(final)
+        self._maybe_propose_research_memory(final, recipe=recipe)
+        return final, None
 
     def _finalize_workspace(
         self,
@@ -674,7 +714,20 @@ class AgentRuntime:
         )
         if synthesized.status != "ok" or synthesized.answer is None:
             return None, self._failure(task_id, run_id, synthesized.error or "synthesis_failed", next_action="read_more_files")
-        return self._append_final(_agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))), None
+        final = _agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))
+        quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe)
+        self._append_final_quality_check(final, recipe=recipe, gaps=quality_gaps)
+        if quality_gaps:
+            return None, self._failure(
+                task_id,
+                run_id,
+                "final_answer_quality_insufficient",
+                missing_evidence=quality_gaps,
+                next_action="expand_final_answer_or_read_more_files",
+            )
+        final = self._append_final(final)
+        self._maybe_propose_research_memory(final, recipe=recipe)
+        return final, None
 
     def _finalize_workspace_write(
         self,
@@ -946,6 +999,67 @@ class AgentRuntime:
         )
         return replace(answer, trace_refs=[*answer.trace_refs, record.record_id])
 
+    def _final_answer_quality_gaps(self, answer: FinalAnswer, *, recipe: TaskRecipe) -> list[str]:
+        profile = answer_profile_from_dict(_answer_profile_metadata(recipe))
+        return answer_quality_gaps(
+            answer.answer,
+            profile=profile,
+            citation_refs=answer.citation_refs,
+            used_evidence=answer.used_evidence,
+        )
+
+    def _append_final_quality_check(self, answer: FinalAnswer, *, recipe: TaskRecipe, gaps: list[str]) -> None:
+        profile = _answer_profile_metadata(recipe)
+        if not profile:
+            return
+        self.journal.append(
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            step_id=None,
+            kind="final_answer_quality_check",
+            data=redact_journal_data(
+                {
+                    "answer_profile": profile,
+                    "passed": not gaps,
+                    "gaps": list(gaps),
+                    "answer_chars": len(answer.answer),
+                    "citation_refs": list(answer.citation_refs),
+                    "used_evidence": list(answer.used_evidence),
+                }
+            ),
+            state_delta={"final_answer_quality": "passed" if not gaps else "insufficient"},
+        )
+
+    def _maybe_propose_research_memory(self, answer: FinalAnswer, *, recipe: TaskRecipe) -> None:
+        if self.memory_pipeline is None:
+            return
+        profile = answer_profile_from_dict(_answer_profile_metadata(recipe))
+        if profile is None or profile.format not in {"detailed_report", "deep_report", "memo"}:
+            return
+        try:
+            self.memory_pipeline.propose_from_research_result(
+                answer_text=answer.answer,
+                task_id=answer.task_id,
+                run_id=answer.run_id,
+                thread_id=_thread_id_metadata(recipe),
+                source_record_ref=answer.trace_refs[-1] if answer.trace_refs else None,
+                metadata={
+                    "answer_profile": profile.to_dict(),
+                    "research_mission": _research_mission_metadata(recipe),
+                    "citation_refs": list(answer.citation_refs),
+                    "used_evidence": list(answer.used_evidence),
+                },
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime isolation
+            self.journal.append(
+                task_id=answer.task_id,
+                run_id=answer.run_id,
+                step_id=None,
+                kind="memory_pipeline_error",
+                data={"error_type": type(exc).__name__, "redaction": {"message": "omitted"}},
+                state_delta={"memory_pipeline": "failed"},
+            )
+
     def _failure(
         self,
         task_id: str,
@@ -1076,6 +1190,8 @@ class _AgentContextCompiler:
                 "mission_context": mission_context,
                 "thread_working_context": _thread_working_context_metadata(self.recipe),
                 "thread_rag_context": thread_rag_context,
+                "answer_profile": _answer_profile_metadata(self.recipe),
+                "research_mission": _research_mission_metadata(self.recipe),
                 "context_pack_hash": pack.payload_hash,
                 "sections": pack.sections,
                 "source_refs": pack.source_refs,
@@ -2055,6 +2171,8 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     preferences = _interaction_preferences_metadata(recipe)
     state_profile_summary = _state_profile_summary_metadata(recipe)
     active_memory = _active_memory_directive(recipe)
+    answer_profile = _answer_profile_metadata(recipe)
+    research_mission = _research_mission_metadata(recipe)
     if recipe.mode == "retrieval_answer":
         return {
             "mode": recipe.mode,
@@ -2092,6 +2210,9 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             ],
             "forbidden": ["web_search", "page_open", "network.fetch"],
             "interaction_preferences": preferences,
+            "answer_profile": answer_profile,
+            "research_mission": research_mission,
+            "final_answer_contract": _final_answer_contract(answer_profile),
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
@@ -2128,6 +2249,9 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["retrieval.run", "web_search", "page_open", "network.fetch", "workspace.write"],
             "interaction_preferences": preferences,
+            "answer_profile": answer_profile,
+            "research_mission": research_mission,
+            "final_answer_contract": _final_answer_contract(answer_profile),
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
@@ -2161,6 +2285,8 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["retrieval.run", "web_search", "page_open", "network.fetch", "shell.exec"],
             "interaction_preferences": preferences,
+            "answer_profile": answer_profile,
+            "research_mission": research_mission,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
@@ -2172,6 +2298,8 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["memory writes", "external side effects"],
             "interaction_preferences": preferences,
+            "answer_profile": answer_profile,
+            "research_mission": research_mission,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
@@ -2189,6 +2317,8 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "allowed_tools": [],
             "forbidden": ["all tool actions"],
             "interaction_preferences": preferences,
+            "answer_profile": answer_profile,
+            "research_mission": research_mission,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
@@ -2205,6 +2335,8 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "allowed_tools": list(recipe.allowed_tools),
             "forbidden": ["workspace.write", "network.fetch", "shell.exec", "live_transport:*"],
             "interaction_preferences": preferences,
+            "answer_profile": answer_profile,
+            "research_mission": research_mission,
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
@@ -2215,6 +2347,8 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         "allowed_tools": list(recipe.allowed_tools),
         "forbidden": ["memory writes", "external side effects"],
         "interaction_preferences": preferences,
+        "answer_profile": answer_profile,
+        "research_mission": research_mission,
         "semantic_intake": semantic,
         "semantic_state_profile_summary": state_profile_summary,
         "active_memory": active_memory,
@@ -3334,6 +3468,47 @@ def _mission_context_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _thread_id_metadata(recipe: TaskRecipe) -> str:
+    value = recipe.metadata.get("thread_id")
+    if isinstance(value, str) and value:
+        return value
+    value = _execution_metadata(recipe).get("thread_id")
+    if isinstance(value, str) and value:
+        return value
+    return "local:default"
+
+
+def _answer_profile_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = recipe.metadata.get("answer_profile")
+    if isinstance(value, dict):
+        return dict(value)
+    value = _execution_metadata(recipe).get("answer_profile")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _research_mission_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = recipe.metadata.get("research_mission")
+    if isinstance(value, dict):
+        return dict(value)
+    value = _execution_metadata(recipe).get("research_mission")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _final_answer_contract(answer_profile: JsonObject) -> JsonObject:
+    if not answer_profile:
+        return {"format": "answer", "detail_level": "normal"}
+    return {
+        "format": answer_profile.get("format"),
+        "detail_level": answer_profile.get("detail_level"),
+        "target_sections": list(answer_profile.get("target_sections") or []),
+        "minimum_coverage": list(answer_profile.get("minimum_coverage") or []),
+        "min_answer_chars": answer_profile.get("min_answer_chars"),
+        "min_section_count": answer_profile.get("min_section_count"),
+        "citation_density": answer_profile.get("citation_density"),
+        "host_rule": "Do not finalize detailed/deep research until this output contract is satisfied.",
+    }
+
+
 def _thread_rag_context_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("thread_rag_context")
     return dict(value) if isinstance(value, dict) else {}
@@ -3355,6 +3530,8 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
         "thread_working_context",
         "thread_rag_context",
         "mission_context",
+        "answer_profile",
+        "research_mission",
         "task_execution_step",
         "interaction_preferences",
         "agent_loop",
@@ -3363,6 +3540,22 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
         if isinstance(value, dict):
             context[key] = dict(value)
     return context
+
+
+def _with_answer_profile_metadata(
+    metadata: JsonObject | None,
+    *,
+    answer_profile,
+    research_mission: JsonObject,
+) -> JsonObject:
+    result = dict(metadata or {})
+    result["answer_profile"] = answer_profile.to_dict()
+    result["research_mission"] = dict(research_mission)
+    if answer_profile.format in {"detailed_report", "deep_report", "memo"}:
+        context_budget = dict(result.get("context_budget")) if isinstance(result.get("context_budget"), dict) else {}
+        context_budget.setdefault("profile", "large" if answer_profile.format != "deep_report" else "huge")
+        result["context_budget"] = context_budget
+    return result
 
 
 def _pending_answer_prefers_semantic_mode(
@@ -4629,6 +4822,13 @@ def _report_with_task_goal(report: RetrievalReport, recipe: TaskRecipe) -> Retri
     diagnostics = dict(report.diagnostics)
     if isinstance(task_goal, str) and task_goal.strip():
         diagnostics.setdefault("task_goal", task_goal.strip())
+    answer_profile = _answer_profile_metadata(recipe)
+    if answer_profile:
+        diagnostics.setdefault("answer_profile", answer_profile)
+        diagnostics.setdefault("answer_requirements", _final_answer_contract(answer_profile))
+    research_mission = _research_mission_metadata(recipe)
+    if research_mission:
+        diagnostics.setdefault("research_mission", research_mission)
     preferences = _interaction_preferences_metadata(recipe)
     if preferences:
         diagnostics.setdefault("interaction_preferences", preferences)

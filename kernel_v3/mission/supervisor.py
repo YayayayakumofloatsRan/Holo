@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import replace
 
+from kernel_v3.agent.answer_profile import answer_profile_from_dict, answer_quality_gaps
 from kernel_v3.agent.contracts import AgentRuntimeResult
 from kernel_v3.contracts import JsonObject
 from kernel_v3.journal import JournalStore
@@ -156,10 +157,10 @@ class MissionSupervisor:
         evidence_refs = _string_list(run_delta.get("evidence_refs"))
         citation_refs = _string_list(run_delta.get("citation_refs"))
         missing = _mission_missing_requirements(mission, result, run_delta=run_delta)
-        coverage_score = _coverage_score(result, evidence_refs=evidence_refs, citation_refs=citation_refs, missing=missing)
+        coverage_score = _coverage_score(result, mission=mission, evidence_refs=evidence_refs, citation_refs=citation_refs, missing=missing)
         no_progress_count = _no_progress_count(mission) + (0 if _has_material_progress(result, run_delta) else 1)
         hard_block = _hard_block_reason(result)
-        final_answer_covers_goal = _final_answer_covers_mission(result)
+        final_answer_covers_goal = _final_answer_covers_mission(result, mission=mission)
         can_continue = (
             (result.status != "completed" or (result.final_answer is not None and not final_answer_covers_goal))
             and hard_block is None
@@ -374,8 +375,8 @@ def _directive_for_gap(
 
 def _mission_missing_requirements(mission: MissionState, result: AgentRuntimeResult, *, run_delta: JsonObject) -> list[str]:
     missing: list[str] = []
-    if result.status == "completed" and result.final_answer is not None and not _final_answer_covers_mission(result):
-        missing.extend(_final_answer_missing_requirements(result))
+    if result.status == "completed" and result.final_answer is not None and not _final_answer_covers_mission(result, mission=mission):
+        missing.extend(_final_answer_missing_requirements(result, mission=mission))
     failure = result.failure_report if isinstance(result.failure_report, dict) else {}
     missing.extend(_string_list(failure.get("missing_evidence")))
     for feedback in run_delta.get("feedback", []) if isinstance(run_delta.get("feedback"), list) else []:
@@ -389,8 +390,15 @@ def _mission_missing_requirements(mission: MissionState, result: AgentRuntimeRes
     return _ordered_unique([item for item in missing if item and item != "remaining_plan_actions"])
 
 
-def _coverage_score(result: AgentRuntimeResult, *, evidence_refs: list[str], citation_refs: list[str], missing: list[str]) -> float:
-    if result.status == "completed" and result.final_answer is not None and _final_answer_covers_mission(result):
+def _coverage_score(
+    result: AgentRuntimeResult,
+    *,
+    mission: MissionState,
+    evidence_refs: list[str],
+    citation_refs: list[str],
+    missing: list[str],
+) -> float:
+    if result.status == "completed" and result.final_answer is not None and _final_answer_covers_mission(result, mission=mission):
         return 1.0
     score = 0.0
     if evidence_refs:
@@ -407,7 +415,7 @@ def _coverage_score(result: AgentRuntimeResult, *, evidence_refs: list[str], cit
 
 
 def _has_material_progress(result: AgentRuntimeResult, run_delta: JsonObject) -> bool:
-    if result.status == "completed" and result.final_answer is not None and _final_answer_covers_mission(result):
+    if result.status == "completed" and result.final_answer is not None and _final_answer_covers_mission(result, mission=None):
         return True
     if _string_list(run_delta.get("evidence_refs")) or _string_list(run_delta.get("citation_refs")):
         return True
@@ -420,7 +428,7 @@ def _has_material_progress(result: AgentRuntimeResult, run_delta: JsonObject) ->
     return False
 
 
-def _final_answer_covers_mission(result: AgentRuntimeResult) -> bool:
+def _final_answer_covers_mission(result: AgentRuntimeResult, *, mission: MissionState | None) -> bool:
     final_answer = result.final_answer if isinstance(result.final_answer, dict) else {}
     if not final_answer:
         return False
@@ -432,10 +440,12 @@ def _final_answer_covers_mission(result: AgentRuntimeResult) -> bool:
         used_evidence = _string_list(final_answer.get("used_evidence"))
         if not citation_refs and not used_evidence:
             return False
+    if _final_answer_quality_gaps(result, mission=mission):
+        return False
     return True
 
 
-def _final_answer_missing_requirements(result: AgentRuntimeResult) -> list[str]:
+def _final_answer_missing_requirements(result: AgentRuntimeResult, *, mission: MissionState | None) -> list[str]:
     final_answer = result.final_answer if isinstance(result.final_answer, dict) else {}
     missing: list[str] = []
     confidence = _float_between(final_answer.get("confidence"), default=0.0)
@@ -446,7 +456,24 @@ def _final_answer_missing_requirements(result: AgentRuntimeResult) -> list[str]:
             missing.append("citation_refs")
         if not _string_list(final_answer.get("used_evidence")):
             missing.append("used_evidence")
+    missing.extend(_final_answer_quality_gaps(result, mission=mission))
     return missing or ["mission_goal_uncovered_by_final_answer"]
+
+
+def _final_answer_quality_gaps(result: AgentRuntimeResult, *, mission: MissionState | None) -> list[str]:
+    final_answer = result.final_answer if isinstance(result.final_answer, dict) else {}
+    if not final_answer:
+        return []
+    profile_data = None
+    if mission is not None and isinstance(mission.metadata, dict):
+        profile_data = mission.metadata.get("answer_profile")
+    profile = answer_profile_from_dict(profile_data)
+    return answer_quality_gaps(
+        str(final_answer.get("answer") or ""),
+        profile=profile,
+        citation_refs=_string_list(final_answer.get("citation_refs")),
+        used_evidence=_string_list(final_answer.get("used_evidence")),
+    )
 
 
 def _hard_block_reason(result: AgentRuntimeResult) -> str | None:

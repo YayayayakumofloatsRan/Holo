@@ -121,6 +121,98 @@ class MemoryPipeline:
             rejected=rejected,
         )
 
+    def propose_from_research_result(
+        self,
+        *,
+        answer_text: str,
+        task_id: str,
+        run_id: str,
+        thread_id: str,
+        source_record_ref: str | None,
+        metadata: JsonObject | None = None,
+    ) -> MemoryPipelineResult:
+        text = " ".join(str(answer_text or "").split())
+        if not text:
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[])
+        if contains_secret_like_content(text):
+            rejection = self._reject_secret(
+                task_id=task_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                source_record_ref=source_record_ref,
+                text=text,
+            )
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[rejection])
+        topic = _normalized_topic(text)
+        candidate = ShadowCandidate(
+            candidate_id=stable_candidate_id(
+                {
+                    "source_kind": "research_final_answer",
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "source_record_ref": source_record_ref,
+                    "text_hash": _hash_text(text),
+                    "topic": topic,
+                }
+            ),
+            source_kind="research_final_answer",
+            candidate_text=text,
+            normalized_topic=topic,
+            required_capabilities=["durable_memory:write"],
+            blocked_capabilities=[],
+            status="open",
+            expires_at_ms=None,
+            created_at_ms=self._now_ms(),
+            metadata={
+                "source_record_ref": source_record_ref,
+                "task_id": task_id,
+                "run_id": run_id,
+                "thread_id": thread_id,
+                **dict(metadata or {}),
+            },
+        )
+        self.store.record_shadow_candidate(candidate)
+        self._journal_memory_record(
+            task_id=task_id,
+            run_id=run_id,
+            kind="memory_shadow_candidate",
+            data=shadow_candidate_event(candidate),
+            state_delta={"memory_candidate": candidate.status},
+        )
+        proposal_or_rejection = self._proposal_from_candidate(
+            candidate,
+            task_id=task_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            source_record_ref=source_record_ref,
+        )
+        if isinstance(proposal_or_rejection, MemoryProposal):
+            proposal = replace(
+                proposal_or_rejection,
+                rationale="research result may be useful as workspace/thread durable memory",
+                metadata={
+                    **dict(proposal_or_rejection.metadata),
+                    "source_kind": "research_final_answer",
+                    **dict(metadata or {}),
+                },
+            )
+            self.store.record_proposal(proposal)
+            self._journal_memory_record(
+                task_id=task_id,
+                run_id=run_id,
+                kind="memory_proposal",
+                data=memory_proposal_event(proposal),
+                state_delta={"memory_proposal": proposal.approval_status},
+            )
+            return MemoryPipelineResult(shadow_candidates=[candidate], proposals=[proposal], committed_items=[], rejected=[])
+        return MemoryPipelineResult(
+            shadow_candidates=[candidate],
+            proposals=[],
+            committed_items=[],
+            rejected=[proposal_or_rejection],
+        )
+
     def approve_proposal(
         self,
         proposal_id: str,
@@ -406,7 +498,7 @@ class MemoryPipeline:
             title=_memory_title(candidate.candidate_text),
             summary=summary,
             body=candidate.candidate_text,
-            structured={"source": "semantic_intake", "topic": candidate.normalized_topic},
+            structured={"source": candidate.source_kind, "topic": candidate.normalized_topic},
             scope=scope,
             privacy_class="project_internal",
             confidence=0.85,
@@ -421,7 +513,11 @@ class MemoryPipeline:
             created_at_ms=timestamp,
             updated_at_ms=timestamp,
             last_accessed_ms=None,
-            metadata={"source_task_id": task_id, "source_run_id": run_id},
+            metadata={
+                "source_task_id": task_id,
+                "source_run_id": run_id,
+                "source_kind": candidate.source_kind,
+            },
         )
 
     def _reject_secret(

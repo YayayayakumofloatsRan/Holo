@@ -1,5 +1,6 @@
 from kernel_v3.agent.contracts import (
     AgentRuntimeResult,
+    AnswerProfile,
     FailureReport,
     FinalAnswer,
     SemanticIntake,
@@ -31,6 +32,7 @@ __all__ = [
     "MissionRuntime",
     "MissionSupervisor",
     "AgentRuntimeResult",
+    "AnswerProfile",
     "analyze_goal",
     "analyze_goal_with_processor",
     "EvidenceSufficiency",

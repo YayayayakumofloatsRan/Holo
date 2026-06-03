@@ -34,6 +34,46 @@ class SourceAssessment(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class ResearchMission(Contract):
+    mission_id: str
+    root_goal: str
+    domain: str
+    target_entities: list[str]
+    requirements: list[JsonObject]
+    answer_profile: JsonObject
+    status: str
+    coverage_map: JsonObject = field(default_factory=dict)
+    open_gaps: list[str] = field(default_factory=list)
+    attempted_strategies: list[str] = field(default_factory=list)
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResearchPlan(Contract):
+    plan_id: str
+    mission_id: str
+    subgoals: list[JsonObject]
+    source_strategy: JsonObject
+    query_strategy: JsonObject
+    verification_strategy: JsonObject
+    write_targets: list[JsonObject] = field(default_factory=list)
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class CoverageAssessment(Contract):
+    assessment_id: str
+    mission_id: str
+    coverage_score: float
+    covered_requirements: list[str]
+    missing_requirements: list[str]
+    bad_sources: list[JsonObject]
+    unsupported_claims: list[str]
+    next_strategy: JsonObject | None
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class ResearchSourceEntry(Contract):
     source_id: str
     profile_id: str

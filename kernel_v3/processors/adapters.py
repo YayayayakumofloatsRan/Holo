@@ -225,6 +225,8 @@ def _synthesizer_prompt(
         "task_goal": _task_goal_from_report(report),
         "interaction_preferences": preferences,
         "response_language": preferences.get("response_language"),
+        "answer_profile": _json_object(report.diagnostics.get("answer_profile")) if isinstance(report.diagnostics, dict) else {},
+        "research_mission": _json_object(report.diagnostics.get("research_mission")) if isinstance(report.diagnostics, dict) else {},
         "required_citation_refs": [item.citation_id for item in citations],
         "required_evidence_refs": [item.evidence_id for item in evidence],
         "answer_requirements": [
@@ -233,6 +235,9 @@ def _synthesizer_prompt(
             "Use only provided citation_refs and evidence ids.",
             "If required_citation_refs is non-empty, citation_refs must include at least one provided citation id.",
             "Use the response_language preference as the default user-visible language unless the user explicitly requested another language.",
+            "If answer_profile.format is detailed_report, deep_report, or memo, write a sectioned report that covers answer_profile.target_sections and answer_profile.minimum_coverage.",
+            "If the evidence does not support a required section, include that section with a clear limitation instead of collapsing the whole answer into a short summary.",
+            "For finance research, distinguish facts, source-backed metrics, analysis, risks, and limitations; do not rely on generic product or encyclopedia pages as if they were financial statements.",
         ],
         "retrieval_report": report.to_dict(),
         "evidence": [_compact_evidence_for_provider(item, preview_chars=evidence_preview_chars) for item in evidence],
@@ -321,6 +326,10 @@ def _compact_prompt_value(value):
             compacted[key] = _compact_prompt_value(item)
         return compacted
     return value
+
+
+def _json_object(value: object) -> JsonObject:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _action_from_json(data: JsonObject) -> CandidateAction:

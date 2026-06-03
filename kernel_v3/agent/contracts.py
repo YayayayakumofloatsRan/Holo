@@ -164,6 +164,20 @@ class TaskRecipe(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class AnswerProfile(Contract):
+    profile_id: str
+    format: str
+    detail_level: str
+    target_sections: list[str]
+    citation_density: str
+    minimum_coverage: list[str]
+    language: str | None
+    min_answer_chars: int
+    min_section_count: int
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class FinalAnswer(Contract):
     answer: str
     citation_refs: list[str]

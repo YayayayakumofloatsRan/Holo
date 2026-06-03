@@ -197,7 +197,14 @@ def _compact_runtime_context(value: JsonObject | None) -> JsonObject:
     if not isinstance(value, dict):
         return {}
     allowed: JsonObject = {}
-    for key in ("thread_working_context", "task_execution_step", "interaction_preferences", "agent_loop"):
+    for key in (
+        "thread_working_context",
+        "task_execution_step",
+        "interaction_preferences",
+        "agent_loop",
+        "answer_profile",
+        "research_mission",
+    ):
         item = value.get(key)
         if isinstance(item, dict):
             allowed[key] = _compact_prompt_value(item)

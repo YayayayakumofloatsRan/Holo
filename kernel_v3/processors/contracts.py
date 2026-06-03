@@ -195,6 +195,13 @@ commitment_state, preference_state, memory_scope, planning_depth,
 operation_runtime, quality_bar, interruption_policy, authority, temporal, and
 identity_boundary. These coordinates describe the task for host audit and
 planning; they do not authorize tools.
+When the user asks for a detailed report, deep research, memo, comprehensive
+analysis, or a short/brief answer, preserve that output preference in
+metadata.answer_profile_hint with keys such as format, detail_level,
+target_sections, language, and quality_gate. Use quality_gate="strict" only
+when the user or task semantics require a materially complete answer shape;
+otherwise use quality_gate="advisory". This is an output contract hint, not
+permission.
 For host-state questions such as current time, environment facts, or runtime status, use
 suggested_mode=system_answer and required_capabilities such as ["system.time"]; put
 optional arguments under metadata.capability_args, for example {"system.time":{"timezone":"Asia/Shanghai"}}.
@@ -320,6 +327,14 @@ Only cite provided citation ids. Do not invent sources.
 If the prompt contains required_citation_refs and that array is non-empty, citation_refs must include at least one of those exact ids.
 Answer every explicit question or subtask in the provided task_goal when evidence supports it.
 If evidence does not support part of the task_goal, state that limit in limitations instead of omitting the part.
+If the prompt contains answer_profile, treat it as the output contract. For detailed_report,
+deep_report, or memo formats, write a sectioned answer covering target_sections and
+minimum_coverage. Do not collapse a requested detailed report into a short bullet
+summary. If evidence is thin, keep the section and state the limitation.
+For finance or policy research, distinguish source-backed facts, analysis,
+risks, and limitations. Do not present generic web/product/encyclopedia pages
+as enough for financial statements or policy authority unless the provided
+evidence actually supports that claim.
 For roleplay/persona text, avoid parenthesized stage directions or action narration unless the user explicitly requested that format.
 Match the user's language when it is clear from the context.
 If a response_language preference is present in the prompt payload, use it as the default when the user's requested language is unclear or mixed."""
