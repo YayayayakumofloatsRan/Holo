@@ -666,6 +666,37 @@ def test_phase4_network_budget_ignores_model_supplied_network_fetch_count_when_m
     assert not journal.records(task_id=result.task_id, kind="guard")
 
 
+def test_phase4_retrieval_limits_promoted_evidence_items_but_journals_rejections():
+    journal = JournalStore.in_memory()
+    repeated = " ".join(
+        f"Kernel v3 retrieval evidence paragraph {index}. {'x' * 160}"
+        for index in range(8)
+    )
+
+    report = _operator(body=repeated).run(
+        SearchGoal(
+            goal_id="goal-evidence-cap",
+            query="Kernel v3 retrieval",
+            max_spans_per_document=8,
+            metadata={"max_evidence_items": 2},
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-evidence-cap",
+        run_id="run-1",
+    )
+
+    evidence = journal.records(task_id="task-evidence-cap", kind="retrieval_evidence")
+    citations = journal.records(task_id="task-evidence-cap", kind="retrieval_citation")
+    rejections = journal.records(task_id="task-evidence-cap", kind="retrieval_evidence_rejections")
+    assert report.status == "sufficient"
+    assert len(evidence) == 2
+    assert len(citations) == 2
+    assert report.diagnostics["evidence_item_limit"] == 2
+    assert report.diagnostics["rejected_evidence_reasons"]["evidence_item_limit_reached"] >= 1
+    assert rejections
+
+
 def _operator(*, body: str) -> RetrievalOperator:
     return RetrievalOperator(
         search_provider=FakeSearchProvider(

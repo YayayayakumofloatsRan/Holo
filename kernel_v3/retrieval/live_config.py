@@ -54,6 +54,7 @@ LIVE_SEARCH_STRATEGY_ENV = "HOLO_V3_LIVE_SEARCH_STRATEGY"
 LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER_ENV = "HOLO_V3_LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER"
 LIVE_TIMEOUT_SECONDS_ENV = "HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS"
 LIVE_MAX_BYTES_ENV = "HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES"
+DEFAULT_LIVE_MAX_BYTES = 16_000_000
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -69,7 +70,7 @@ class LiveJsonHttpSearchConfig:
     api_key_header: str | None = None
     api_key_prefix: str = ""
     timeout_seconds: int = 20
-    max_bytes: int = 1_000_000
+    max_bytes: int = DEFAULT_LIVE_MAX_BYTES
     user_agent: str = "holo-kernel-v3/1.0"
 
     @property
@@ -122,7 +123,7 @@ class LiveWebSearchConfig:
     allow_all_hosts: bool = False
     allowed_schemes: list[str] = field(default_factory=lambda: ["https"])
     timeout_seconds: int = 20
-    max_bytes: int = 1_000_000
+    max_bytes: int = DEFAULT_LIVE_MAX_BYTES
     max_results_per_engine: int = 10
     user_agent: str = "Mozilla/5.0"
 
@@ -167,7 +168,7 @@ class LiveHttpFetchConfig:
     allow_discovered_search_hosts: bool = False
     allowed_schemes: list[str] = field(default_factory=lambda: ["https"])
     timeout_seconds: int = 20
-    max_bytes: int = 1_000_000
+    max_bytes: int = DEFAULT_LIVE_MAX_BYTES
     user_agent: str = "holo-kernel-v3/1.0"
 
     def build_provider(self, *, transport: HttpTransport | None = None) -> HttpFetchProvider:
@@ -203,7 +204,7 @@ class LiveCrawlSearchConfig:
     allow_all_hosts: bool = False
     allowed_schemes: list[str] = field(default_factory=lambda: ["https"])
     timeout_seconds: int = 20
-    max_bytes: int = 1_000_000
+    max_bytes: int = DEFAULT_LIVE_MAX_BYTES
     max_pages: int = 3
     max_links_per_page: int = 20
     include_sitemaps: bool = True
@@ -271,7 +272,7 @@ class LiveRetrievalConfig:
         allow_all_hosts = _truthy(values.get(LIVE_ALLOW_ALL_HOSTS_ENV))
         allowed_schemes = _csv(values.get(LIVE_ALLOWED_SCHEMES_ENV)) or ["https"]
         timeout_seconds = _positive_int(values.get(LIVE_TIMEOUT_SECONDS_ENV), default=20)
-        max_bytes = _positive_int(values.get(LIVE_MAX_BYTES_ENV), default=1_000_000)
+        max_bytes = _positive_int(values.get(LIVE_MAX_BYTES_ENV), default=DEFAULT_LIVE_MAX_BYTES)
         source_directory_allowlist = _truthy(values.get(LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV))
         source_directory_hosts = _source_directory_allowed_hosts() if source_directory_allowlist else []
         web_search_providers = _csv(values.get(LIVE_WEB_SEARCH_PROVIDERS_ENV))

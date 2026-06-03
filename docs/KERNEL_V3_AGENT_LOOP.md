@@ -521,10 +521,21 @@ do not expose readable text simply produce insufficient evidence and must be
 handled by later OCR/readability tooling rather than guessed answers.
 
 Structured JSON and CSV fetches also receive readable projections before span
-ranking. SEC companyfacts-style JSON is flattened into path/value lines, while
-CSV rows become header/keyed row text. Raw structured payloads remain artifacts;
+ranking. SEC companyfacts-style JSON is parsed into compact financial metric
+rows with concept, unit, value, fiscal period, form, filing date, and accession
+number, while generic JSON uses bounded path/value projections and CSV rows
+become header/keyed row text. Raw structured payloads remain artifacts;
 planner/evaluator/synthesizer packets see only extracted spans and diagnostics
-such as `json_readable_text` or `csv_readable_text`.
+such as `sec_companyfacts_readable_text`, `json_readable_text`, or
+`csv_readable_text`.
+
+Discovery pages are allowed to move the loop forward without becoming final
+evidence. SEC ticker directories, submissions JSON, EDGAR search/browse pages,
+and filing directories can complete a discovery subgoal and produce host-owned
+continuation hints. They are rejected as finance final evidence unless the
+request is explicitly about discovery metadata. Final finance answers must cite
+qualified filing text, companyfacts metrics, official statistics, or similarly
+authoritative financial evidence.
 
 Bounded crawl can now be seeded from the curated finance source directory when
 the host explicitly sets `HOLO_V3_LIVE_CRAWL_SOURCE_DIRECTORY=1`. With
@@ -992,6 +1003,54 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m compileall -q kernel_v3
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_public_release_hygiene.py -q -p no:cacheprovider
 git diff --check
 ```
+
+## Iteration 2026-06-03
+
+Live retrieval and evidence/discovery hardening completed in this iteration:
+
+- separated discovery artifacts from final evidence. SEC ticker directories,
+  submissions JSON, EDGAR search/browse pages, and filing directories can
+  satisfy discovery subgoals and generate continuation hints, but they are
+  rejected as final finance citations unless the user asked for discovery
+  metadata itself;
+- parsed SEC companyfacts JSON into compact financial metric rows with concept,
+  unit, value, fiscal period, form, filing date, and accession number. Raw JSON
+  bodies stay in ArtifactStore, while planner/evaluator/synthesizer packets see
+  extracted metric spans and diagnostics;
+- raised the default live fetched-body cap to `16 MB`, so large official
+  structured payloads such as SEC companyfacts do not fail merely because the
+  response exceeds a demo-sized byte limit;
+- filtered SEC filing continuation hints to financial report forms such as
+  `10-K`, `10-Q`, `20-F`, and `40-F`, preventing ownership/registration forms
+  from becoming the next fundamentals target;
+- tightened finance evidence qualification so weak product pages, search pages,
+  and SEC discovery metadata do not make a fundamentals task look complete;
+- expanded finance extraction aliases so official metric names such as
+  `NetIncomeLoss`, `NetSales`, and `Revenues` can be found from companyfacts
+  even when the user asks in broad language;
+- preserved the generic agent-loop shape: finance source policy changes live
+  below `retrieval.run`, while the workloop still receives observations,
+  progress/repetition/evidence signals, model evaluator feedback, and a
+  host-owned termination decision.
+
+Validation used:
+
+```bash
+.venv/bin/pytest -q tests/test_kernel_v3_*.py
+HOLO_V3_LIVE_MODEL=1 ./holo-v3 chat --thread smoke-search11 \
+  --once "你去查一下APPLE INC的财务信息，优先官方财报和SEC来源，给我简要结论" \
+  --online --profile fast --planner model --evaluator model \
+  --synthesizer model --semantic-intake model --turn-router model \
+  --research-profile finance_fundamentals --research-depth deep \
+  --live-retrieval --live-web-search-provider duckduckgo_html \
+  --live-web-search-provider bing_html --live-search-strategy adaptive
+```
+
+Residual issue for the next retrieval iteration: official structured evidence
+now works, but companyfacts can still produce too many candidate spans. The next
+quality improvement should compact finance evidence before synthesis, for
+example by selecting latest fiscal-year and latest-quarter rows per requested
+metric before the final model packet.
 
 ## Iteration 2026-06-02
 

@@ -473,11 +473,11 @@ def test_phase95_agent_can_crawl_from_finance_source_directory_seed() -> None:
     )
     fetch_transport = _Transport(
         {
-            "https://www.sec.gov/Archives/edgar/data/320193/aapl-10k-revenue.htm": HttpTransportResponse(
-                status_code=200,
-                body=b"Apple AAPL 10-K revenue filing evidence from SEC archive.",
-                mime_type="text/plain",
-            )
+                "https://www.sec.gov/Archives/edgar/data/320193/aapl-10k-revenue.htm": HttpTransportResponse(
+                    status_code=200,
+                    body=b"Apple AAPL 10-K revenue was $391.0 billion in the SEC archive.",
+                    mime_type="text/plain",
+                )
         }
     )
     fabric = ProcessorFabric(

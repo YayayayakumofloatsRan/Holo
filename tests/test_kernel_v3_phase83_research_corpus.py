@@ -592,7 +592,7 @@ def test_phase83_retrieval_indexes_fetched_documents_when_corpus_store_is_config
     artifacts = ArtifactStore.in_memory()
     corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 303)
     uri = "https://www.sec.gov/Archives/edgar/data/320193/filing.htm"
-    body = "AAPL 2024 10-K revenue from annual report. " + ("x" * 240) + RAW_ONLY_SENTINEL
+    body = "AAPL 2024 10-K revenue was $391.0 billion in the annual report. " + ("x" * 240) + RAW_ONLY_SENTINEL
     operator = RetrievalOperator(
         search_provider=FakeSearchProvider(
             {

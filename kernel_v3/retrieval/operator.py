@@ -12,6 +12,7 @@ from kernel_v3.research.profiles import profile_by_id
 from kernel_v3.research.source_policy import assess_search_source, source_authority_summary
 from kernel_v3.retrieval.citations import citation_from_evidence
 from kernel_v3.retrieval.contracts import (
+    EvidenceEvaluationDecision,
     EvidenceItem,
     FetchedDocument,
     FetchAttempt,
@@ -23,7 +24,7 @@ from kernel_v3.retrieval.contracts import (
     SearchGoal,
     SearchSource,
 )
-from kernel_v3.retrieval.evaluate import EvidenceEvaluator
+from kernel_v3.retrieval.evaluate import EvidenceEvaluator, is_discovery_goal, qualify_evidence_candidate
 from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
 from kernel_v3.retrieval.rank import plan_queries, rank_sources
@@ -36,6 +37,8 @@ RETRIEVAL_BUDGET_CAPS = {
     "max_fetches": 4_096,
     "max_spans_per_document": 128,
 }
+DEFAULT_EVIDENCE_ITEM_LIMIT = 64
+EVIDENCE_ITEM_LIMIT_CAP = 512
 
 
 class CorpusStore(Protocol):
@@ -302,6 +305,8 @@ class RetrievalOperator:
         spans = []
         evidence: list[EvidenceItem] = []
         citations = []
+        rejected_evidence: list[JsonObject] = []
+        evidence_item_limit = _evidence_item_limit(goal)
         for index, (document, body) in enumerate(documents, start=1):
             document_spans = extract_spans(goal=goal, document=document, body=body)
             spans.extend(document_spans)
@@ -352,6 +357,48 @@ class RetrievalOperator:
                         ),
                     },
                 )
+                qualification = qualify_evidence_candidate(goal=goal, evidence=item, research_profile=research_profile)
+                item = EvidenceItem(
+                    evidence_id=item.evidence_id,
+                    goal_id=item.goal_id,
+                    span_id=item.span_id,
+                    document_id=item.document_id,
+                    source_id=item.source_id,
+                    artifact_id=item.artifact_id,
+                    uri=item.uri,
+                    title=item.title,
+                    text=item.text,
+                    score=item.score,
+                    payload_hash=item.payload_hash,
+                    diagnostics={**item.diagnostics, "qualification": qualification},
+                )
+                if not bool(qualification.get("accepted")):
+                    rejected_evidence.append(
+                        {
+                            "evidence_id": item.evidence_id,
+                            "source_id": item.source_id,
+                            "document_id": item.document_id,
+                            "uri": item.uri,
+                            "title": item.title,
+                            "reason": qualification.get("reason"),
+                            "missing_finance_facets": qualification.get("missing_finance_facets", []),
+                            "preview": _preview(item.text, self.preview_chars),
+                        }
+                    )
+                    continue
+                if len(evidence) >= evidence_item_limit:
+                    rejected_evidence.append(
+                        {
+                            "evidence_id": item.evidence_id,
+                            "source_id": item.source_id,
+                            "document_id": item.document_id,
+                            "uri": item.uri,
+                            "title": item.title,
+                            "reason": "evidence_item_limit_reached",
+                            "preview": _preview(item.text, self.preview_chars),
+                        }
+                    )
+                    continue
                 evidence.append(item)
                 _append(
                     journal,
@@ -376,12 +423,52 @@ class RetrievalOperator:
                     artifact_refs=[document.artifact_id],
                 )
 
+        if rejected_evidence:
+            _append(
+                journal,
+                task_id,
+                run_id,
+                f"{step_id_prefix}-evidence-rejections",
+                "retrieval_evidence_rejections",
+                {
+                    "goal_id": goal.goal_id,
+                    "rejected_count": len(rejected_evidence),
+                    "items": rejected_evidence[:50],
+                    "diagnostics": {
+                        "truncated": len(rejected_evidence) > 50,
+                        "reasons": _count_by_key(rejected_evidence, "reason"),
+                    },
+                },
+                action_ref=action_ref,
+            )
+
         decision = self.evaluator.evaluate(
             goal=goal,
             evidence=evidence,
             citations=citations,
             research_profile=research_profile,
         )
+        if (
+            not decision.sufficient
+            and not evidence
+            and documents
+            and is_discovery_goal(goal=goal, research_profile=research_profile)
+        ):
+            decision = EvidenceEvaluationDecision(
+                decision_id=decision.decision_id,
+                goal_id=decision.goal_id,
+                status="sufficient",
+                sufficient=True,
+                reason="discovery_artifact_available",
+                evidence_count=0,
+                citation_count=0,
+                diagnostics={
+                    **decision.diagnostics,
+                    "discovery_goal": True,
+                    "discovery_artifact_count": len(documents),
+                    "original_reason": decision.reason,
+                },
+            )
         _append(
             journal,
             task_id,
@@ -417,6 +504,10 @@ class RetrievalOperator:
                 "provider_capabilities": self.provider_capabilities(),
                 "search_attempt_count": len(search_attempt_ids),
                 "fetch_attempt_count": len(fetch_attempt_ids),
+                "candidate_span_count": len(spans),
+                "evidence_item_limit": evidence_item_limit,
+                "rejected_evidence_count": len(rejected_evidence),
+                "rejected_evidence_reasons": _count_by_key(rejected_evidence, "reason"),
                 "evidence_count": len(evidence),
                 "citation_count": len(citations),
                 **(
@@ -775,6 +866,25 @@ def _ordered_unique(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _count_by_key(items: list[JsonObject], key: str) -> JsonObject:
+    counts: JsonObject = {}
+    for item in items:
+        value = item.get(key)
+        label = str(value or "unknown")
+        counts[label] = int(counts.get(label, 0)) + 1
+    return counts
+
+
+def _evidence_item_limit(goal: SearchGoal) -> int:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    value = metadata.get("max_evidence_items")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_EVIDENCE_ITEM_LIMIT
+    return max(1, min(parsed, EVIDENCE_ITEM_LIMIT_CAP))
 
 
 def _preview(text: str, limit: int) -> str:

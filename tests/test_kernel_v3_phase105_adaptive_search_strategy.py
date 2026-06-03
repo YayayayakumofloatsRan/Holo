@@ -163,7 +163,7 @@ def test_phase105_model_planner_replans_from_corpus_only_to_aggregate_primary_so
         fetch_provider=FakeFetchProvider(
             {
                 weak_url: "Cached third-party AAPL revenue summary from a generic web page.",
-                sec_url: "Apple 2024 Form 10-K revenue evidence from the official SEC filing.",
+                sec_url: "Apple 2024 Form 10-K revenue was $391.0 billion in the official SEC filing.",
             }
         ),
     )

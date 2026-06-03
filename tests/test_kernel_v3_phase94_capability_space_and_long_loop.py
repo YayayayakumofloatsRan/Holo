@@ -1489,10 +1489,10 @@ def test_phase94_finance_profile_can_drive_multiple_retrieval_loop_actions():
         fetch_provider=FakeFetchProvider(
             {
                 "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm": (
-                    "Apple 2024 Form 10-K revenue was reported in the official SEC filing."
+                    "Apple 2024 Form 10-K revenue was $391.0 billion in the official SEC filing."
                 ),
                 "https://www.apple.com/investor-relations/earnings-releases/": (
-                    "Apple investor relations earnings release discussed gross margin and results."
+                    "Apple investor relations earnings release reported gross margin of 46.2%."
                 ),
             }
         ),
@@ -1602,8 +1602,8 @@ def test_phase94_single_semantic_research_intent_expands_multiple_retrieval_payl
         ),
         fetch_provider=FakeFetchProvider(
             {
-                urls[payloads[0]["query"]]: "Apple 2024 Form 10-K official SEC filing revenue evidence.",
-                urls[payloads[1]["query"]]: "Apple investor relations official margin and earnings release evidence.",
+                urls[payloads[0]["query"]]: "Apple 2024 Form 10-K official SEC filing revenue was $391.0 billion.",
+                urls[payloads[1]["query"]]: "Apple investor relations official gross margin was 46.2% in the earnings release.",
                 urls[payloads[2]["query"]]: "Reuters reported Apple services competitive landscape context.",
             }
         ),
@@ -1709,7 +1709,7 @@ def test_phase94_single_retrieval_payload_runs_all_explicit_queries_without_max_
         fetch_provider=FakeFetchProvider(
             {
                 "https://example.com/aapl-revenue-summary": "A third-party Apple revenue summary.",
-                sec_url: "Apple 2024 Form 10-K official SEC filing revenue evidence.",
+                sec_url: "Apple 2024 Form 10-K official SEC filing revenue was $391.0 billion.",
             }
         ),
     )
@@ -1812,7 +1812,7 @@ def test_phase94_multi_payload_retrieval_requires_every_planned_subgoal_to_succe
         fetch_provider=FakeFetchProvider(
             {
                 "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm": (
-                    "Apple 2024 Form 10-K official SEC filing revenue evidence."
+                    "Apple 2024 Form 10-K official SEC filing revenue was $391.0 billion."
                 ),
                 "https://www.apple.com/investor-relations/earnings-releases/": (
                     "Apple investor relations official services context evidence."

@@ -6,9 +6,11 @@ from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import (
     DirectUrlSearchProvider,
     FakeFetchProvider,
+    FakeSearchProvider,
     FallbackSearchProvider,
     RetrievalOperator,
     SecEdgarSearchProvider,
+    SearchSource,
 )
 
 
@@ -36,7 +38,7 @@ def test_phase103_model_retrieval_action_inherits_finance_profile_defaults_from_
         search_provider=DirectUrlSearchProvider(),
         fetch_provider=FakeFetchProvider(
             {
-                sec_url: "Apple 2024 Form 10-K revenue evidence from the official SEC filing.",
+                sec_url: "Apple 2024 Form 10-K revenue was $391.0 billion in the official SEC filing.",
             }
         ),
     )
@@ -99,7 +101,7 @@ def test_phase103_source_authority_gap_feedback_drives_model_retrieval_replan() 
         fetch_provider=FakeFetchProvider(
             {
                 weak_url: "A third-party web page repeats Apple revenue from a filing.",
-                sec_url: "Apple 2024 Form 10-K revenue evidence from the official SEC filing.",
+                sec_url: "Apple 2024 Form 10-K revenue was $391.0 billion in the official SEC filing.",
             }
         ),
     )
@@ -159,6 +161,101 @@ def test_phase103_source_authority_gap_feedback_drives_model_retrieval_replan() 
     assert reports[0].data["status"] == "insufficient_evidence"
     assert reports[-1].data["status"] == "sufficient"
     assert result.final_answer["citation_refs"]
+
+
+def test_phase103_generic_query_facet_feedback_drives_model_retrieval_replan() -> None:
+    query = "DeepSeek API 模型 鉴权方式"
+    pricing_url = "https://api-docs.deepseek.com/quick_start/pricing"
+    auth_url = "https://api-docs.deepseek.com/quick_start/auth"
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "retrieval_research",
+                "suggested_mode": "retrieval_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "retrieval_research",
+                        "text": query,
+                        "sequence_index": 1,
+                        "required_capabilities": ["retrieval.run"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "goal_id": "goal-plan-1-1",
+                                    "query": query,
+                                }
+                            }
+                        },
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            },
+            "planner.propose": [
+                {
+                    "action_id": "act-model-doc-pricing",
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "retrieve a docs page",
+                    "payload": {"goal_id": "goal-plan-1-1", "query": query, "source_url": pricing_url},
+                    "score": 0.8,
+                    "reasons": ["need API docs evidence"],
+                    "side_effect_class": "read",
+                },
+                {
+                    "action_id": "act-model-doc-auth",
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "retry with authentication docs after facet feedback",
+                    "payload": {"goal_id": "goal-plan-1-1", "query": query, "source_url": auth_url},
+                    "score": 0.92,
+                    "reasons": ["host feedback requested authentication facet"],
+                    "side_effect_class": "read",
+                },
+            ],
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=DirectUrlSearchProvider(),
+        fetch_provider=FakeFetchProvider(
+            {
+                pricing_url: (
+                    "DeepSeek API model details include deepseek-chat and deepseek-reasoner. "
+                    "Pricing is listed for each model."
+                ),
+                auth_url: (
+                    "DeepSeek API model details include deepseek-chat and deepseek-reasoner. "
+                    "Authentication uses Authorization: Bearer API key."
+                ),
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(query, mode="auto", semantic_mode="model", planner_mode="model")
+
+    assert result.status == "completed"
+    contexts = journal.records(task_id=result.task_id, kind="context")
+    retrieval_replan = contexts[1].data["state"]["agent_replan_hints"]["retrieval"]
+    assert "query_facet:authentication" in retrieval_replan["missing"]
+    assert "retrieval_subgoal:goal-plan-1-1" in retrieval_replan["missing"]
+    assert retrieval_replan["missing_query_facets"] == ["authentication"]
+    assert "authentication API key bearer token" in " ".join(retrieval_replan["suggested_query_hints"])
+    assert "fresh_live" in retrieval_replan["suggested_search_strategies"]
+    actions = journal.records(task_id=result.task_id, kind="action")
+    assert [record.data["payload"]["source_url"] for record in actions] == [pricing_url, auth_url]
 
 
 def test_phase103_planned_subgoal_coverage_feedback_drives_model_retry() -> None:
@@ -246,10 +343,10 @@ def test_phase103_planned_subgoal_coverage_feedback_drives_model_retry() -> None
         search_provider=DirectUrlSearchProvider(),
         fetch_provider=FakeFetchProvider(
             {
-                revenue_url: "Apple 2024 Form 10-K official SEC filing revenue evidence.",
+                revenue_url: "Apple 2024 Form 10-K official SEC filing revenue was $391.0 billion.",
                 weak_margin_url: "A third-party page discusses Apple margin without primary authority.",
                 services_url: "Apple investor relations official services and results context.",
-                margin_retry_url: "Apple 2024 SEC filing official gross margin evidence.",
+                margin_retry_url: "Apple 2024 SEC filing official gross margin was 46.2%.",
             }
         ),
     )
@@ -393,11 +490,13 @@ def test_phase103_model_planner_uses_sec_filing_continuation_hint_for_next_loop(
         fetch_provider=FakeFetchProvider(
             {
                 "https://data.sec.gov/submissions/CIK0000320193.json": (
-                    '{"filings":{"recent":{"form":["10-K"],"accessionNumber":["0000320193-24-000123"],'
-                    '"primaryDocument":["aapl-20240928.htm"],"reportDate":["2024-09-28"]}}}'
+                    '{"filings":{"recent":{"form":["144","10-K"],'
+                    '"accessionNumber":["0001950047-26-004044","0000320193-24-000123"],'
+                    '"primaryDocument":["xslF345X05/primary_doc.xml","aapl-20240928.htm"],'
+                    '"reportDate":["2026-05-05","2024-09-28"]}}}'
                 ),
                 primary_url: (
-                    "Apple 2024 Form 10-K primary filing document reports net sales in the SEC filing."
+                    "Apple 2024 Form 10-K primary filing document reports net sales of $391.0 billion in the SEC filing."
                 ),
             }
         ),
@@ -516,7 +615,7 @@ def test_phase103_model_planner_gets_sec_structured_hint_from_ticker_directory()
                     "NVIDIA SEC submissions metadata includes 10-K and 10-Q reports."
                 ),
                 "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json": (
-                    "NVIDIA SEC companyfacts fundamentals revenue evidence with filing provenance."
+                    "NVIDIA SEC companyfacts fundamentals revenue was $60.9 billion with filing provenance."
                 ),
             }
         ),
@@ -550,6 +649,119 @@ def test_phase103_model_planner_gets_sec_structured_hint_from_ticker_directory()
     ]
     assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json" in fetch_uris
     assert result.final_answer["citation_refs"]
+
+
+def test_phase103_sec_directory_hint_matches_company_name_when_query_ticker_is_wrong() -> None:
+    query = "APPLE INC latest 10-K annual report SEC filing revenue net income"
+    structured_query = "AAPL SEC CIK 0000320193 companyfacts submissions fundamentals"
+    journal = JournalStore.in_memory()
+    semantic = _finance_semantic_intake(query)
+    semantic["intents"][0]["metadata"] = {
+        "capability_args": {
+            "retrieval.run": [
+                {
+                    "goal_id": "goal-plan-1-1",
+                    "query": query,
+                    "metadata": {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+                }
+            ]
+        }
+    }
+    hinted_payload = {
+        "goal_id": "goal-plan-1-1",
+        "query": structured_query,
+        "metadata": {
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "ticker": "AAPL",
+            "sec_cik": "0000320193",
+            "source_authority_requirement": "primary",
+            "search_strategy": "structured",
+        },
+    }
+    fabric = fake_fabric(
+        {
+            "semantic.intake": semantic,
+            "planner.propose": [
+                {
+                    "action_id": "act-model-sec-directory-apple",
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "retrieve SEC ticker directory first",
+                    "payload": {
+                        "goal_id": "goal-plan-1-1",
+                        "query": query,
+                        "max_fetches": 1,
+                        "metadata": {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+                    },
+                    "score": 0.9,
+                    "reasons": ["need CIK before companyfacts"],
+                    "side_effect_class": "read",
+                },
+                {
+                    "action_id": "act-model-sec-structured-apple",
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "use host SEC structured source hint",
+                    "payload": hinted_payload,
+                    "score": 0.94,
+                    "reasons": ["context exposed suggested_sec_structured_sources"],
+                    "side_effect_class": "read",
+                },
+            ],
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                query: [
+                    SearchSource(
+                        source_id="sec-directory",
+                        uri="https://www.sec.gov/files/company_tickers_exchange.json",
+                        title="SEC company ticker and CIK directory",
+                        snippet="Official SEC ticker and CIK mapping lookup for APPLE.",
+                        provider="fake",
+                        metadata={"source_family": "structured_regulatory_data"},
+                    )
+                ],
+                structured_query: [
+                    SearchSource(
+                        source_id="sec-companyfacts",
+                        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+                        title="SEC companyfacts JSON for CIK 0000320193",
+                        snippet="Official SEC XBRL companyfacts JSON for reported fundamentals.",
+                        provider="fake",
+                        metadata={"source_family": "structured_regulatory_data", "source_kind": "sec_companyfacts_json"},
+                    )
+                ],
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.sec.gov/files/company_tickers_exchange.json": (
+                    'csv_header: {"fields":["cik" name ticker exchange] '
+                    "data:[[1045810 NVIDIA_CORP NVDA Nasdaq] [320193 Apple_Inc. AAPL Nasdaq]]}"
+                ),
+                "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json": (
+                    "Apple companyfacts Revenues unit USD val 391035000000 and NetIncomeLoss unit USD val 93736000000."
+                ),
+            }
+        ),
+    )
+
+    result = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=operator,
+    ).run(query, mode="auto", semantic_mode="model", planner_mode="model")
+
+    contexts = journal.records(task_id=result.task_id, kind="context")
+    structured_hints = contexts[1].data["state"]["agent_replan_hints"]["retrieval"]["suggested_sec_structured_sources"]
+    assert structured_hints[0]["ticker"] == "AAPL"
+    assert structured_hints[0]["sec_cik"] == "0000320193"
+    assert structured_hints[0]["suggested_payload"]["metadata"] == hinted_payload["metadata"]
+    assert result.status == "completed"
 
 
 def _finance_semantic_intake(query: str) -> dict:

@@ -51,6 +51,41 @@ def test_phase82_finance_profile_expands_queries_toward_primary_sources() -> Non
     assert any("SEC EDGAR" in query or "investor relations" in query for query in queries[1:])
 
 
+def test_phase82_finance_profile_ranks_structured_financial_sources_before_lookup_pages() -> None:
+    profile = finance_fundamentals_profile()
+    goal = SearchGoal(
+        goal_id="goal-sec-ranking",
+        query="AAPL revenue net income SEC companyfacts",
+        metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+    )
+    directory = _source(
+        "sec-directory",
+        "https://www.sec.gov/files/company_tickers_exchange.json",
+        "SEC company ticker and CIK directory",
+        "Official SEC ticker and CIK mapping lookup for AAPL.",
+        metadata={"source_family": "structured_regulatory_data", "source_kind": "sec_ticker_cik_directory"},
+    )
+    companyfacts = _source(
+        "sec-companyfacts",
+        "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+        "SEC companyfacts JSON for CIK 0000320193",
+        "Official SEC XBRL companyfacts JSON for reported fundamentals.",
+        metadata={"source_family": "structured_regulatory_data", "source_kind": "sec_companyfacts_json"},
+    )
+    search_page = _source(
+        "sec-search",
+        "https://www.sec.gov/edgar/search/#/q=AAPL",
+        "SEC EDGAR search for AAPL",
+        "Official SEC filing search page for AAPL.",
+        metadata={"source_family": "regulatory_filing", "source_kind": "sec_edgar_search"},
+    )
+
+    ranked = rank_sources(goal, [directory, search_page, companyfacts], research_profile=profile)
+
+    assert ranked[0].source_id == "sec-companyfacts"
+    assert ranked[-1].source_id in {"sec-directory", "sec-search"}
+
+
 def test_phase82_finance_profile_multi_query_can_recover_primary_source() -> None:
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()
@@ -139,7 +174,10 @@ def test_phase82_finance_retrieval_rejects_generic_web_as_final_primary_evidence
     )
 
     assert report.status == "insufficient_evidence"
-    assert report.diagnostics["reason"] == "no_primary_source_for_research_profile"
+    assert report.diagnostics["reason"] == "insufficient_evidence"
+    assert report.diagnostics["rejected_evidence_count"] == 1
+    assert not journal.records(task_id="task-finance-weak", kind="retrieval_evidence")
+    assert not journal.records(task_id="task-finance-weak", kind="retrieval_citation")
     assert report.diagnostics["source_authority"]["primary_source_count"] == 0
     assessment = journal.records(task_id="task-finance-weak", kind="retrieval_source_assessment")[0].data
     assert assessment["assessments"][0]["authority_level"] == "weak"
@@ -185,7 +223,11 @@ def test_phase82_finance_retrieval_accepts_primary_filing_evidence_and_journals_
             }
         ),
         fetch_provider=FakeFetchProvider(
-            {"https://www.sec.gov/Archives/edgar/data/320193/filing.htm": "AAPL 2024 10-K revenue from annual report."}
+            {
+                "https://www.sec.gov/Archives/edgar/data/320193/filing.htm": (
+                    "AAPL 2024 Form 10-K revenue was $391.0 billion in the annual report."
+                )
+            }
         ),
     )
 
@@ -215,6 +257,209 @@ def test_phase82_finance_retrieval_accepts_primary_filing_evidence_and_journals_
     kinds = [record.kind for record in journal.records(task_id="task-finance-sec")]
     assert "retrieval_source_assessment" in kinds
     assert kinds.index("retrieval_source_assessment") < kinds.index("retrieval_rank_sources")
+
+
+def test_phase82_finance_retrieval_accepts_primary_filing_net_sales_metric() -> None:
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                "AAPL 2024 Form 10-K primary filing document": [
+                    _source(
+                        "src-sec-primary-filing",
+                        "https://www.sec.gov/Archives/edgar/data/320193/filing.htm",
+                        "Apple 2024 Form 10-K",
+                        "Primary SEC filing document.",
+                    )
+                ]
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.sec.gov/Archives/edgar/data/320193/filing.htm": (
+                    "Apple 2024 Form 10-K primary filing document reports net sales of $391.0 billion in the SEC filing."
+                )
+            }
+        ),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-finance-net-sales",
+            query="AAPL 2024 Form 10-K primary filing document",
+            max_spans_per_document=1,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-finance-net-sales",
+        run_id="run-1",
+    )
+
+    assert report.status == "sufficient"
+    assert report.diagnostics["rejected_evidence_count"] == 0
+    evidence = journal.records(task_id="task-finance-net-sales", kind="retrieval_evidence")[0].data
+    qualification = evidence["diagnostics"]["qualification"]
+    assert qualification["finance_numeric_fact_present"] is True
+    assert "financial_metric" in qualification["covered_finance_facets"]
+
+
+def test_phase82_finance_retrieval_rejects_primary_domain_without_financial_facets() -> None:
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                "Apple Inc financial statements revenue net income": [
+                    _source(
+                        "src-sec-product-noise",
+                        "https://www.sec.gov/Archives/edgar/data/320193/product-noise.htm",
+                        "Apple product overview",
+                        "Apple device and iCloud product page with no financial metrics.",
+                    )
+                ]
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.sec.gov/Archives/edgar/data/320193/product-noise.htm": (
+                    "Apple iPhone, iCloud, and device services overview. "
+                    "This text contains product marketing details, not company financial metrics."
+                )
+            }
+        ),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-finance-product-noise",
+            query="Apple Inc financial statements revenue net income",
+            max_spans_per_document=2,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_task_kind": "fundamentals",
+            },
+        ),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-finance-product-noise",
+        run_id="run-1",
+    )
+
+    evaluation = journal.records(task_id="task-finance-product-noise", kind="retrieval_evaluation_decision")[-1].data
+    diagnostics = evaluation["diagnostics"]
+    assert report.status == "insufficient_evidence"
+    assert evaluation["reason"] == "insufficient_evidence"
+    assert report.diagnostics["rejected_evidence_count"] == 1
+    assert not journal.records(task_id="task-finance-product-noise", kind="retrieval_evidence")
+    assert not journal.records(task_id="task-finance-product-noise", kind="retrieval_citation")
+    assert "revenue" in diagnostics["missing_finance_facets"]
+    assert "net_income" in diagnostics["missing_finance_facets"]
+    assert "numeric_financial_fact" in diagnostics["missing_finance_facets"]
+    source_assessment = journal.records(task_id="task-finance-product-noise", kind="retrieval_source_assessment")[0].data
+    assert source_assessment["diagnostics"]["primary_source_count"] == 1
+
+
+def test_phase82_finance_retrieval_rejects_sec_identity_directory_as_financial_fact() -> None:
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                "Apple Inc 10-K revenue SEC CIK": [
+                    _source(
+                        "src-sec-directory",
+                        "https://www.sec.gov/files/company_tickers_exchange.json",
+                        "SEC ticker, exchange, company, and CIK directory",
+                        "Apple Inc ticker AAPL CIK 0000320193 Nasdaq.",
+                        metadata={"source_family": "structured_regulatory_data"},
+                    )
+                ]
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.sec.gov/files/company_tickers_exchange.json": (
+                    "Apple Inc AAPL Nasdaq CIK 0000320193. "
+                    "The directory maps ticker symbols, exchanges, company names, and CIK identifiers. "
+                    "It does not report revenue, net income, cash flow, margins, or balance sheet values."
+                )
+            }
+        ),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-finance-sec-directory",
+            query="Apple Inc 10-K revenue SEC CIK",
+            max_spans_per_document=2,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_task_kind": "fundamentals",
+            },
+        ),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-finance-sec-directory",
+        run_id="run-1",
+    )
+
+    evaluation = journal.records(task_id="task-finance-sec-directory", kind="retrieval_evaluation_decision")[-1].data
+    diagnostics = evaluation["diagnostics"]
+    assert report.status == "insufficient_evidence"
+    assert evaluation["reason"] == "insufficient_evidence"
+    assert report.diagnostics["rejected_evidence_count"] == 1
+    assert not journal.records(task_id="task-finance-sec-directory", kind="retrieval_evidence")
+    assert not journal.records(task_id="task-finance-sec-directory", kind="retrieval_citation")
+    assert "numeric_financial_fact" in diagnostics["missing_finance_facets"]
+    assert diagnostics["finance_numeric_fact_present"] is False
+
+
+def test_phase82_finance_retrieval_rejects_sec_search_page_for_financial_results_without_numeric_fact() -> None:
+    journal = JournalStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                "APPLE INC latest 10-K annual report SEC filing financial results": [
+                    _source(
+                        "src-sec-search",
+                        "https://www.sec.gov/edgar/search/#/q=APPLE",
+                        "SEC EDGAR search for APPLE",
+                        "Official SEC filing search page for APPLE.",
+                        metadata={"source_family": "regulatory_filing", "source_kind": "sec_edgar_search"},
+                    )
+                ]
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.sec.gov/edgar/search/#/q=APPLE": (
+                    "SEC EDGAR search page for APPLE INC latest 10-K annual report financial results. "
+                    "This page lists matching filings but does not quote any revenue, net income, or other reported values."
+                )
+            }
+        ),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-finance-sec-search-no-values",
+            query="APPLE INC latest 10-K annual report SEC filing financial results",
+            max_spans_per_document=4,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-finance-sec-search-no-values",
+        run_id="run-1",
+    )
+
+    evaluation = journal.records(task_id="task-finance-sec-search-no-values", kind="retrieval_evaluation_decision")[-1].data
+    assert report.status == "insufficient_evidence"
+    assert report.diagnostics["rejected_evidence_count"] >= 1
+    assert not journal.records(task_id="task-finance-sec-search-no-values", kind="retrieval_citation")
+    assert "numeric_financial_fact" in evaluation["diagnostics"]["missing_finance_facets"]
 
 
 def test_phase82_source_family_can_be_declared_by_provider_metadata() -> None:
@@ -454,7 +699,8 @@ def test_phase82_model_taskgraph_capability_args_reach_retrieval_without_agent_d
     assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     report = journal.records(task_id=result.task_id, kind="retrieval_report")[0].data
     assert report["status"] == "insufficient_evidence"
-    assert report["diagnostics"]["reason"] == "no_primary_source_for_research_profile"
+    assert report["diagnostics"]["reason"] == "insufficient_evidence"
+    assert report["diagnostics"]["rejected_evidence_count"] == 1
 
 
 def _source(

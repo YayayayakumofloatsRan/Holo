@@ -166,7 +166,10 @@ Kernel v3 currently contains the infrastructure for:
   evidence until a future OCR tool is configured;
 - structured JSON/CSV retrieval extraction for financial databases such as SEC
   companyfacts, FRED, and Treasury/FiscalData-style responses: raw payloads
-  remain artifacts, while flattened rows/fields become readable evidence spans;
+  remain artifacts. SEC companyfacts JSON is projected into compact metric
+  rows such as concept, unit, value, fiscal period, form, filing date, and
+  accession number before evidence ranking; generic JSON/CSV still uses
+  bounded readable projections;
 - durable-memory proposals, approval/rejection, recall, deletion, export, and
   context injection;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;
@@ -218,11 +221,18 @@ Kernel v3 currently contains the infrastructure for:
   `suggested_sec_structured_sources` payload for SEC submissions/companyfacts
   retrieval. Raw fetched bodies stay in artifacts; the hint is derived from
   extracted spans and still requires a normal `retrieval.run` proposal.
+- SEC discovery artifacts are not final finance evidence. SEC ticker-directory,
+  submissions, EDGAR search, browse, and filing-directory pages can complete
+  discovery subgoals and provide continuation hints, but finance final answers
+  require primary filing bodies, companyfacts metrics, official statistics, or
+  other qualified financial evidence with citation refs.
 - SEC Archives filing-document candidate generation. When a host/model
   retrieval payload carries CIK plus accession number and optional
   `primaryDocument`, Holo derives the official primary filing document,
   complete submission text, and filing directory URLs before generic SEC
-  browse/search candidates, while rejecting unsafe document names.
+  browse/search candidates, while rejecting unsafe document names. Filing
+  continuation hints are filtered to financial report forms such as `10-K`,
+  `10-Q`, `20-F`, and `40-F`.
 - FRED structured source generation for official macro data. When a retrieval
   payload carries `fred_series_id` / `series_id`, Holo derives the official
   FRED series page and CSV observations URL without doing web search itself.
@@ -483,6 +493,13 @@ safety caps. These are ceilings, not mandatory spend; the loop now accounts
 for actual fetch attempts when a retrieval report is available. Planner
 decisions, provider output, ranking, evidence sufficiency, repetition, and
 loop guards still decide when to stop.
+
+Live fetched-body size defaults to `16 MB` per response
+(`HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES` / `--live-max-bytes`). This is large enough
+for common official structured payloads such as SEC companyfacts JSON while
+still keeping raw bodies in ArtifactStore and out of planner/evaluator context.
+Operators can tighten this for constrained environments or raise it for
+specialized deployments.
 
 Fetch is parallelized inside `RetrievalOperator` with bounded
 `fetch_concurrency` while ArtifactStore writes and journal records remain in

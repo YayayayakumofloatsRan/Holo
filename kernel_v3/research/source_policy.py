@@ -177,7 +177,7 @@ def assess_search_source(source: "SearchSource", *, profile: ResearchProfile) ->
         family=family,
         classification_reason=classification_reason,
         profile=profile,
-        metadata={"provider": source.provider},
+        metadata={**_assessment_source_metadata(source.metadata), "provider": source.provider},
     )
 
 
@@ -305,3 +305,29 @@ def _looks_like_company_ir(host: str, path: str) -> bool:
 def _hash(payload: JsonObject) -> str:
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _assessment_source_metadata(metadata: JsonObject | None) -> JsonObject:
+    if not isinstance(metadata, dict):
+        return {}
+    allowed = {
+        "authority_level",
+        "cik",
+        "corpus_source_id",
+        "exchange",
+        "query_template_id",
+        "report_date",
+        "sec_accession_number",
+        "sec_cik",
+        "sec_form",
+        "sec_primary_document",
+        "source_family",
+        "source_id",
+        "source_kind",
+        "ticker",
+    }
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key in allowed and isinstance(value, (str, int, float, bool)) and str(value)
+    }

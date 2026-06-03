@@ -2236,14 +2236,19 @@ def _retrieval_replan_hints(
     evidence_diagnostics = _json_object(evidence_data.get("diagnostics"))
     planned_coverage = _json_object(evidence_diagnostics.get("planned_retrieval_coverage"))
     incomplete_planned_goal_ids = _string_list(planned_coverage.get("incomplete_goal_ids"))
+    rejected_evidence_count = _int_or_none(diagnostics.get("rejected_evidence_count")) or 0
     missing = _ordered_unique(
         [
             *_string_list(evidence_data.get("missing")),
-            *_string_list(evaluation.get("missing_query_facets")),
+            *[f"query_facet:{facet}" for facet in _string_list(evaluation.get("missing_query_facets"))],
+            *[f"finance_facet:{facet}" for facet in _string_list(evaluation.get("missing_finance_facets"))],
+            *[f"finance_facet:{facet}" for facet in _string_list(evidence_diagnostics.get("missing_finance_facets"))],
             *_string_list(evidence_diagnostics.get("missing_source_authority")),
+            *(["candidate_evidence_rejected"] if rejected_evidence_count > 0 else []),
         ]
     )
     attempts = _retrieval_attempt_hints(journal, task_id=task_id, run_id=run_id)
+    fetches = _retrieval_fetch_hints(journal, task_id=task_id, run_id=run_id)
     source_authority = _json_object(evaluation.get("source_authority") or evidence_diagnostics.get("source_authority"))
     requirement = _string_value(
         evaluation.get("source_authority_requirement")
@@ -2299,10 +2304,15 @@ def _retrieval_replan_hints(
         "needs_replan": needs_replan,
         "latest_report_status": report_status,
         "latest_report_reason": report_reason,
+        "candidate_span_count": _int_or_none(diagnostics.get("candidate_span_count")),
+        "rejected_evidence_count": rejected_evidence_count,
+        "rejected_evidence_reasons": _json_object(diagnostics.get("rejected_evidence_reasons")),
         "missing": missing,
         "planned_retrieval_coverage": planned_coverage,
         "incomplete_planned_goal_ids": incomplete_planned_goal_ids,
         "missing_query_facets": _string_list(evaluation.get("missing_query_facets")),
+        "missing_finance_facets": _string_list(evaluation.get("missing_finance_facets")),
+        "covered_finance_facets": _string_list(evaluation.get("covered_finance_facets")),
         "covered_query_facets": _string_list(evaluation.get("covered_query_facets")),
         "source_authority_requirement": requirement,
         "source_authority": source_authority,
@@ -2326,6 +2336,8 @@ def _retrieval_replan_hints(
             ]
         ),
         "attempts": attempts[-6:],
+        "fetch_summary": _retrieval_fetch_summary(fetches),
+        "recent_fetches": fetches[-8:],
         "do_not_finalize_until": _do_not_finalize_until(missing=missing, requirement=requirement),
     }
 
@@ -2340,20 +2352,17 @@ def _suggested_sec_structured_sources(
 ) -> list[JsonObject]:
     if _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID:
         return []
-    identity = resolve_issuer_identity(
-        " ".join(
-            item
-            for item in [
-                _string_value(report_data.get("preview")),
-                _string_value(_json_object(report_data.get("diagnostics")).get("goal_query")),
-                *_action_retrieval_queries(journal, task_id=task_id, run_id=run_id),
-            ]
-            if item
-        )
+    identity_text = " ".join(
+        item
+        for item in [
+            _string_value(report_data.get("preview")),
+            _string_value(_json_object(report_data.get("diagnostics")).get("goal_query")),
+            *_action_retrieval_queries(journal, task_id=task_id, run_id=run_id),
+        ]
+        if item
     )
+    identity = resolve_issuer_identity(identity_text)
     target_ticker = identity.ticker
-    if not target_ticker:
-        return []
     candidates: list[JsonObject] = []
     seen: set[str] = set()
     for record in journal.records(task_id=task_id, kind="retrieval_extraction"):
@@ -2369,8 +2378,12 @@ def _suggested_sec_structured_sources(
             for span in (spans if isinstance(spans, list) else [])
             if isinstance(span, dict)
         )
-        for ticker, cik in _sec_ticker_cik_pairs_from_text(span_text):
-            if ticker.upper() != target_ticker.upper():
+        for row in _sec_ticker_cik_rows_from_text(span_text):
+            ticker = str(row.get("ticker") or "").upper()
+            cik = _pad_sec_cik(row.get("cik"))
+            if not ticker or not cik:
+                continue
+            if not _sec_identity_row_matches(row, target_ticker=target_ticker, identity_text=identity_text):
                 continue
             key = f"{ticker.upper()}:{cik}"
             if key in seen:
@@ -2420,22 +2433,69 @@ def _action_retrieval_queries(journal: JournalStore, *, task_id: str, run_id: st
 
 
 def _sec_ticker_cik_pairs_from_text(text: str) -> list[tuple[str, str]]:
+    return [
+        (str(row["ticker"]), str(row["cik"]))
+        for row in _sec_ticker_cik_rows_from_text(text)
+        if isinstance(row.get("ticker"), str) and isinstance(row.get("cik"), str)
+    ]
+
+
+def _sec_ticker_cik_rows_from_text(text: str) -> list[JsonObject]:
     if not text:
         return []
-    pairs: list[tuple[str, str]] = []
+    rows: list[JsonObject] = []
     patterns = [
         re.compile(r"cik_str=(?P<cik>\d{1,10})\b.{0,160}?\bticker=(?P<ticker>[A-Z0-9.]{1,8})\b", re.IGNORECASE),
         re.compile(r"\bticker=(?P<ticker>[A-Z0-9.]{1,8})\b.{0,160}?\bcik_str=(?P<cik>\d{1,10})\b", re.IGNORECASE),
         re.compile(r"\bcik=(?P<cik>\d{1,10})\b.{0,160}?\bticker=(?P<ticker>[A-Z0-9.]{1,8})\b", re.IGNORECASE),
         re.compile(r"\bticker=(?P<ticker>[A-Z0-9.]{1,8})\b.{0,160}?\bcik=(?P<cik>\d{1,10})\b", re.IGNORECASE),
+        re.compile(
+            r"\[(?P<cik>\d{1,10})\s+(?P<company>[A-Z][A-Z0-9_.,& -]{1,120}?)\s+(?P<ticker>[A-Z][A-Z0-9.]{0,7})\s+(?P<exchange>Nasdaq|NYSE|AMEX|OTC|Cboe)\]",
+            re.IGNORECASE,
+        ),
     ]
     for pattern in patterns:
         for match in pattern.finditer(text):
             ticker = match.group("ticker").strip().upper()
             cik = _pad_sec_cik(match.group("cik"))
             if ticker and cik:
-                pairs.append((ticker, cik))
-    return _ordered_unique_pairs(pairs)
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "cik": cik,
+                        "company": _sec_directory_company_name(match.groupdict().get("company")),
+                    }
+                )
+    return _ordered_unique_sec_rows(rows)
+
+
+def _sec_identity_row_matches(row: JsonObject, *, target_ticker: str | None, identity_text: str) -> bool:
+    ticker = str(row.get("ticker") or "").upper()
+    if target_ticker and ticker == target_ticker.upper():
+        return True
+    company = str(row.get("company") or "")
+    if not company:
+        return False
+    identity_normalized = _normalized_issuer_text(identity_text)
+    company_tokens = _issuer_significant_tokens(company)
+    return bool(company_tokens) and all(token in identity_normalized for token in company_tokens)
+
+
+def _sec_directory_company_name(value: object) -> str:
+    return " ".join(str(value or "").replace("_", " ").replace(",", " ").split())
+
+
+def _normalized_issuer_text(value: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", value.lower()).split())
+
+
+def _issuer_significant_tokens(value: str) -> list[str]:
+    ignored = {"inc", "corp", "corporation", "company", "co", "ltd", "plc", "class", "com", "the"}
+    return [
+        token
+        for token in _normalized_issuer_text(value).split()
+        if len(token) >= 3 and token not in ignored
+    ][:4]
 
 
 def _pad_sec_cik(value: object) -> str | None:
@@ -2452,6 +2512,18 @@ def _ordered_unique_pairs(values: list[tuple[str, str]]) -> list[tuple[str, str]
         if value in seen:
             continue
         seen.add(value)
+        result.append(value)
+    return result
+
+
+def _ordered_unique_sec_rows(values: list[JsonObject]) -> list[JsonObject]:
+    seen: set[tuple[str, str]] = set()
+    result: list[JsonObject] = []
+    for value in values:
+        key = (str(value.get("ticker") or "").upper(), str(value.get("cik") or ""))
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
         result.append(value)
     return result
 
@@ -2490,11 +2562,13 @@ def _suggested_sec_filing_documents(
             primary_document = _string_value(filing.get("sec_primary_document"))
             if not accession:
                 continue
+            form = _string_value(filing.get("sec_form"))
+            if not _is_sec_financial_report_form(form):
+                continue
             key = f"{cik}:{accession}:{primary_document}"
             if key in seen:
                 continue
             seen.add(key)
-            form = _string_value(filing.get("sec_form"))
             report_date = _string_value(filing.get("report_date"))
             query = _sec_filing_document_query(cik=cik, form=form, report_date=report_date, accession=accession)
             payload_metadata = {
@@ -2553,6 +2627,11 @@ def _sec_filings_from_extracted_text(text: str) -> list[JsonObject]:
         if item.get("sec_accession_number"):
             filings.append(item)
     return filings
+
+
+def _is_sec_financial_report_form(form: str | None) -> bool:
+    normalized = str(form or "").strip().upper().replace(" ", "")
+    return normalized in {"10-K", "10-Q", "20-F", "40-F"}
 
 
 def _indexed_sec_field_pattern(field_name: str) -> re.Pattern[str]:
@@ -2857,6 +2936,46 @@ def _retrieval_attempt_hints(journal: JournalStore, *, task_id: str, run_id: str
     return attempts
 
 
+def _retrieval_fetch_hints(journal: JournalStore, *, task_id: str, run_id: str) -> list[JsonObject]:
+    fetches: list[JsonObject] = []
+    for record in journal.records(task_id=task_id, kind="retrieval_fetch_attempt"):
+        if record.run_id != run_id:
+            continue
+        fetches.append(
+            {
+                "uri": _preview_text(_string_value(record.data.get("uri")), 180),
+                "status": _string_value(record.data.get("status")),
+                "size_bytes": record.data.get("size_bytes") if isinstance(record.data.get("size_bytes"), int) else 0,
+                "source_id": _string_value(record.data.get("source_id")),
+                "diagnostics": _json_object(record.data.get("diagnostics")),
+            }
+        )
+    return fetches
+
+
+def _retrieval_fetch_summary(fetches: list[JsonObject]) -> JsonObject:
+    total = len(fetches)
+    ok = len([item for item in fetches if item.get("status") == "ok"])
+    failed = len([item for item in fetches if item.get("status") not in {"ok", ""}])
+    empty_success = len(
+        [
+            item for item in fetches
+            if item.get("status") == "ok" and int(item.get("size_bytes") or 0) == 0
+        ]
+    )
+    return {
+        "total": total,
+        "ok": ok,
+        "failed": failed,
+        "empty_success": empty_success,
+        "recent_failed_uris": [
+            str(item.get("uri"))
+            for item in fetches
+            if item.get("status") not in {"ok", ""}
+        ][-6:],
+    }
+
+
 def _suggested_retrieval_strategies(
     *,
     missing: list[str],
@@ -2874,6 +2993,10 @@ def _suggested_retrieval_strategies(
         suggestions.extend(["structured", "aggregate", "fresh_live", "crawl"])
     if any(item.startswith("query_facet:") for item in missing):
         suggestions.extend(["aggregate", "fresh_live", "crawl"])
+    if "candidate_evidence_rejected" in missing:
+        suggestions.extend(["aggregate", "fresh_live", "structured", "crawl"])
+    if any(item.startswith("finance_facet:") for item in missing):
+        suggestions.extend(["structured", "aggregate", "fresh_live", "crawl"])
     if "retrieval_evidence" in missing or "sufficient_retrieval_evidence" in missing:
         suggestions.extend(["aggregate", "structured", "crawl", "fresh_live"])
     if report_reason in {"no_primary_source_for_research_profile", "no_required_authority_source_for_research_profile"}:
@@ -2887,12 +3010,21 @@ def _suggested_query_hints(*, base_query: str, missing: list[str], requirement: 
     if "primary_source" in missing or "source_authority:primary" in missing or requirement == "primary":
         additions.extend(["official filing", "annual report", "10-K 10-Q", "issuer investor relations", "exchange disclosure"])
     facet_terms = {
+        "candidate_evidence_rejected": "different primary source quoted facts relevant passages",
         "query_facet:model": "models",
         "query_facet:authentication": "authentication API key bearer token",
         "query_facet:pricing": "pricing billing",
         "query_facet:token": "token context length",
         "query_facet:rate_limit": "rate limit quota",
         "query_facet:endpoint": "endpoint base URL",
+        "finance_facet:official_financial_statement": "official annual report 10-K 10-Q SEC EDGAR investor relations financial statements",
+        "finance_facet:financial_metric": "revenue net income cash flow balance sheet key financial metrics",
+        "finance_facet:revenue": "revenue net sales annual report",
+        "finance_facet:net_income": "net income net earnings annual report",
+        "finance_facet:cash_flow": "cash flow operating cash flow free cash flow annual report",
+        "finance_facet:balance_sheet": "balance sheet assets liabilities equity annual report",
+        "finance_facet:valuation": "stock price PE ratio market cap valuation",
+        "finance_facet:numeric_financial_fact": "reported figures amounts percentages revenue net income cash flow annual report",
     }
     additions.extend(term for marker, term in facet_terms.items() if marker in missing)
     if not additions:
@@ -2923,7 +3055,12 @@ def _suggested_source_targets(
         "missing": missing,
         "suggested_search_strategies": strategy_hints,
     }
-    if "primary_source" in missing or "source_authority:primary" in missing or requirement == "primary":
+    if (
+        "primary_source" in missing
+        or "source_authority:primary" in missing
+        or requirement == "primary"
+        or any(item.startswith("finance_facet:") for item in missing)
+    ):
         ranking_metadata["preferred_source_families"] = [
             "regulatory_filing",
             "structured_regulatory_data",
@@ -2987,6 +3124,8 @@ def _do_not_finalize_until(*, missing: list[str], requirement: str) -> list[str]
         rules.append("primary source authority requirement is satisfied")
     for item in missing:
         if item.startswith("query_facet:"):
+            rules.append(f"{item} covered")
+        if item.startswith("finance_facet:"):
             rules.append(f"{item} covered")
         if item.startswith("retrieval_subgoal:"):
             rules.append(f"{item} sufficient")
@@ -3367,19 +3506,43 @@ def _apply_research_depth_defaults(payload: JsonObject) -> JsonObject:
     if not isinstance(profile_id, str) or not profile_id:
         return payload
     depth = payload.get("research_depth", metadata.get("research_depth"))
+    explicit_depth = isinstance(depth, str) and bool(depth)
     defaults = research_depth_defaults(profile_id, depth if isinstance(depth, str) else None)
     if not defaults:
         return payload
     merged = dict(payload)
+    floor_budget = not (explicit_depth and str(depth).strip().lower() == "light")
     for key in ("max_queries", "max_sources", "max_fetches", "max_spans_per_document"):
         if key not in merged and key in defaults:
             if key == "max_queries":
                 merged[key] = max(int(defaults[key]), _explicit_retrieval_query_count(merged))
             else:
                 merged[key] = defaults[key]
+        elif floor_budget and key in defaults and _should_floor_research_budget(merged, key):
+            current = _positive_metadata_int(merged.get(key), default=0)
+            if current > 0:
+                floor = int(defaults[key])
+                if key == "max_queries":
+                    floor = max(floor, _explicit_retrieval_query_count(merged))
+                merged[key] = max(current, floor)
     if "research_depth" not in merged and isinstance(depth, str) and depth:
         merged["research_depth"] = depth
     return merged
+
+
+def _should_floor_research_budget(payload: JsonObject, key: str) -> bool:
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if bool(metadata.get("respect_explicit_budget") or payload.get("respect_explicit_budget")):
+        return False
+    task_kind = str(metadata.get("research_task_kind") or metadata.get("task_kind") or "").strip().lower()
+    if task_kind in {"market_data", "market_news", "macro_data", "competitive_landscape"}:
+        return False
+    if key == "max_queries" and str(metadata.get("search_strategy") or "").strip().lower() in {"corpus_only", "crawl"}:
+        return False
+    if key == "max_fetches":
+        return False
+    return key in {"max_queries", "max_sources", "max_fetches", "max_spans_per_document"}
 
 
 def _explicit_retrieval_query_count(payload: JsonObject) -> int:
@@ -3691,6 +3854,14 @@ def _string_list(value: object) -> list[str]:
 
 def _json_object(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
 
 
 def _capability_payloads_from_step(raw_step: JsonObject, tool_name: str) -> list[JsonObject]:

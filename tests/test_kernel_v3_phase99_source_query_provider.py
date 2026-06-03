@@ -467,9 +467,18 @@ def test_phase99_agent_can_use_exchange_query_provider_for_multi_step_finance_re
         search_provider=ResearchSourceQuerySearchProvider(),
         fetch_provider=FakeFetchProvider(
             {
-                asx_url: "ASX BHP annual report announcement includes primary exchange filing evidence.",
-                hkex_url: "HKEX 00700 annual report announcement includes primary exchange filing evidence.",
-                sgx_url: "SGX D05 financial results announcement includes primary exchange filing evidence.",
+                asx_url: (
+                    "ASX BHP annual report announcement includes primary exchange filing evidence. "
+                    "The annual report states revenue was $55.7 billion."
+                ),
+                hkex_url: (
+                    "HKEX 00700 annual report announcement includes primary exchange filing evidence. "
+                    "The annual report states revenue was RMB 609.0 billion."
+                ),
+                sgx_url: (
+                    "SGX D05 financial results announcement includes primary exchange filing evidence. "
+                    "The financial results announcement states net income was SGD 10.3 billion."
+                ),
             }
         ),
     )

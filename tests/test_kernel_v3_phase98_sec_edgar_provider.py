@@ -208,7 +208,8 @@ def test_phase98_agent_uses_sec_provider_in_multi_step_finance_loop():
                     "SEC submissions JSON shows Apple filed Form 10-K and 10-Q reports."
                 ),
                 "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json": (
-                    "SEC companyfacts JSON includes Apple revenue facts with filing provenance."
+                    "SEC companyfacts JSON includes Apple revenue facts with filing provenance. "
+                    "Apple revenue was $391.0 billion and net income was $93.7 billion."
                 ),
             }
         ),
@@ -236,9 +237,13 @@ def test_phase98_agent_uses_sec_provider_in_multi_step_finance_loop():
     decisions = journal.records(task_id=result.task_id, kind="termination_decision")
     assert [record.data["decision"] for record in decisions] == ["continue", "final_answer"]
     citation_refs = result.final_answer["citation_refs"]
-    assert len(citation_refs) >= 2
-    assert any("goal-plan-1" in ref for ref in citation_refs)
-    assert any("goal-plan-2" in ref for ref in citation_refs)
+    assert len(citation_refs) >= 1
+    evidence_kinds = [
+        record.data["diagnostics"]["source_assessment"]["metadata"]["source_kind"]
+        for record in journal.records(task_id=result.task_id, kind="retrieval_evidence")
+    ]
+    assert "sec_submissions_json" not in evidence_kinds
+    assert "sec_companyfacts_json" in evidence_kinds
 
 
 def test_phase98_agent_continues_from_sec_submissions_to_primary_filing_document():
@@ -311,11 +316,14 @@ def test_phase98_agent_continues_from_sec_submissions_to_primary_filing_document
         fetch_provider=FakeFetchProvider(
             {
                 "https://data.sec.gov/submissions/CIK0000320193.json": (
-                    '{"filings":{"recent":{"form":["10-K"],"accessionNumber":["0000320193-24-000123"],'
-                    '"primaryDocument":["aapl-20240928.htm"],"reportDate":["2024-09-28"]}}}'
+                    '{"filings":{"recent":{"form":["144","10-K"],'
+                    '"accessionNumber":["0001950047-26-004044","0000320193-24-000123"],'
+                    '"primaryDocument":["xslF345X05/primary_doc.xml","aapl-20240928.htm"],'
+                    '"reportDate":["2026-05-05","2024-09-28"]}}}'
                 ),
                 primary_url: (
-                    "Apple 2024 Form 10-K official SEC filing. Net sales were reported in the primary filing document."
+                    "Apple 2024 Form 10-K official SEC filing. "
+                    "Net sales were $391.0 billion in the primary filing document."
                 ),
             }
         ),
@@ -357,11 +365,14 @@ def test_phase98_agent_continues_from_sec_submissions_to_primary_filing_document
         for attempt in journal.records(task_id=result.task_id, kind="retrieval_fetch_attempt")
     ]
     assert primary_url in fetch_uris
+    reports = journal.records(task_id=result.task_id, kind="retrieval_report")
+    assert reports[0].data["diagnostics"]["reason"] == "discovery_artifact_available"
+    assert reports[0].data["diagnostics"]["citation_count"] == 0
     decisions = journal.records(task_id=result.task_id, kind="termination_decision")
     assert [record.data["decision"] for record in decisions] == ["continue", "final_answer"]
     citation_refs = result.final_answer["citation_refs"]
-    assert len(citation_refs) >= 2
-    assert any("goal-plan-1" in ref for ref in citation_refs)
+    assert len(citation_refs) >= 1
+    assert not any("goal-plan-1" in ref for ref in citation_refs)
     assert any("goal-plan-2" in ref for ref in citation_refs)
 
 

@@ -103,6 +103,18 @@ def _source_haystack(source: SearchSource) -> str:
 
 def _source_kind_score_adjustment(metadata: dict[str, object]) -> float:
     source_kind = metadata.get("source_kind")
+    if source_kind == "sec_primary_filing_document":
+        return 0.55
+    if source_kind == "sec_complete_submission_text":
+        return 0.52
+    if source_kind == "sec_submissions_json":
+        return 0.48
+    if source_kind == "sec_companyfacts_json":
+        return 0.46
+    if source_kind in {"sec_ticker_cik_directory", "sec_edgar_search", "sec_filing_directory"}:
+        return -0.32
+    if source_kind == "sec_edgar_browse":
+        return -0.12
     if source_kind == "crawl_seed":
         return -0.08
     if source_kind in {"crawl_discovered", "crawl_sitemap", "direct_url"}:

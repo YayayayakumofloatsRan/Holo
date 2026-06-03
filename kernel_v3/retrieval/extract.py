@@ -8,7 +8,12 @@ import re
 from html.parser import HTMLParser
 
 from kernel_v3.retrieval.contracts import ExtractedSpan, FetchedDocument, SearchGoal
-from kernel_v3.retrieval.evaluate import QUERY_FACET_ALIASES, query_facets
+from kernel_v3.retrieval.evaluate import (
+    FINANCE_FUNDAMENTAL_FACET_ALIASES,
+    QUERY_FACET_ALIASES,
+    finance_fundamental_facets,
+    query_facets,
+)
 
 READABLE_TEXT_LIMIT = 200_000
 SPAN_BEFORE_CHARS = 120
@@ -19,6 +24,22 @@ JSON_MIME_MARKERS = ("json", "application/json")
 CSV_MIME_MARKERS = ("csv", "comma-separated-values")
 STRUCTURED_LINE_LIMIT = 2_000
 STRUCTURED_VALUE_LIMIT = 240
+SEC_COMPANYFACTS_CONCEPTS = (
+    ("Revenues", "revenue"),
+    ("RevenueFromContractWithCustomerExcludingAssessedTax", "revenue"),
+    ("SalesRevenueNet", "net sales"),
+    ("NetIncomeLoss", "net income"),
+    ("ProfitLoss", "net income"),
+    ("OperatingIncomeLoss", "operating income"),
+    ("GrossProfit", "gross profit"),
+    ("NetCashProvidedByUsedInOperatingActivities", "operating cash flow"),
+    ("CashAndCashEquivalentsAtCarryingValue", "cash and cash equivalents"),
+    ("Assets", "assets"),
+    ("Liabilities", "liabilities"),
+    ("StockholdersEquity", "shareholders equity"),
+    ("EarningsPerShareDiluted", "diluted earnings per share"),
+)
+SEC_COMPANYFACTS_FORMS = {"10-K", "10-Q", "20-F", "40-F"}
 HTML_BLOCK_TAGS = {
     "article",
     "aside",
@@ -73,7 +94,7 @@ def extract_spans(
 ) -> list[ExtractedSpan]:
     if not body:
         return []
-    terms = _terms(goal.query)
+    terms = _terms(goal.query, goal=goal)
     if not terms:
         return []
     text, text_mode = readable_document_text(body, document=document)
@@ -106,6 +127,10 @@ def readable_document_text(body: str, *, document: FetchedDocument) -> tuple[str
     mime_type = str(document.metadata.get("mime_type") or "").lower()
     if _looks_like_pdf(body, mime_type=mime_type):
         return _extract_pdf_text(body), "pdf_text_literals"
+    if _looks_like_sec_companyfacts(body, document=document):
+        text = _extract_sec_companyfacts_readable_text(body)
+        if text:
+            return text, "sec_companyfacts_readable_text"
     if _looks_like_json(body, mime_type=mime_type):
         text = _extract_json_readable_text(body)
         if text:
@@ -199,6 +224,114 @@ def _extract_json_readable_text(body: str) -> str:
     lines: list[str] = []
     _flatten_json(payload, path="", lines=lines, depth=0)
     return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
+
+
+def _looks_like_sec_companyfacts(body: str, *, document: FetchedDocument) -> bool:
+    uri = document.uri.lower()
+    title = document.title.lower()
+    if "data.sec.gov/api/xbrl/companyfacts/" in uri or "sec companyfacts" in title:
+        return True
+    prefix = body[:4096]
+    return '"facts"' in prefix and '"entityName"' in prefix and "us-gaap" in prefix
+
+
+def _extract_sec_companyfacts_readable_text(body: str) -> str:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    facts = payload.get("facts")
+    if not isinstance(facts, dict):
+        return ""
+    entity_name = _structured_value(payload.get("entityName") or "")
+    cik = _structured_value(payload.get("cik") or "")
+    lines = [
+        _normalize_span(
+            f"SEC companyfacts official financial statements entityName={entity_name} cik={cik} source=SEC_XBRL_companyfacts"
+        )
+    ]
+    for taxonomy_name in ("us-gaap", "ifrs-full", "dei"):
+        taxonomy = facts.get(taxonomy_name)
+        if not isinstance(taxonomy, dict):
+            continue
+        for concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+            item = taxonomy.get(concept)
+            if not isinstance(item, dict):
+                continue
+            label = _structured_value(item.get("label") or concept)
+            units = item.get("units")
+            if not isinstance(units, dict):
+                continue
+            for unit, records in units.items():
+                if not isinstance(records, list):
+                    continue
+                for record in _recent_companyfacts_records(records)[:6]:
+                    if not isinstance(record, dict):
+                        continue
+                    lines.append(
+                        _companyfacts_record_line(
+                            entity_name=entity_name,
+                            cik=cik,
+                            taxonomy=taxonomy_name,
+                            concept=concept,
+                            metric=metric,
+                            label=label,
+                            unit=_structured_value(unit),
+                            record=record,
+                        )
+                    )
+                    if len(lines) >= STRUCTURED_LINE_LIMIT:
+                        return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
+    return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
+
+
+def _recent_companyfacts_records(records: list[object]) -> list[object]:
+    filtered = [
+        record
+        for record in records
+        if isinstance(record, dict) and str(record.get("form") or "").upper().replace(" ", "") in SEC_COMPANYFACTS_FORMS
+    ]
+    if not filtered:
+        filtered = [record for record in records if isinstance(record, dict)]
+    return sorted(
+        filtered,
+        key=lambda record: (
+            str(record.get("filed") or ""),
+            str(record.get("end") or ""),
+            int(record.get("fy") or 0) if isinstance(record.get("fy"), int) else 0,
+        ),
+        reverse=True,
+    )
+
+
+def _companyfacts_record_line(
+    *,
+    entity_name: str,
+    cik: str,
+    taxonomy: str,
+    concept: str,
+    metric: str,
+    label: str,
+    unit: str,
+    record: dict,
+) -> str:
+    parts = [
+        f"SEC companyfacts official financial statement entityName={entity_name}",
+        f"cik={cik}",
+        f"taxonomy={taxonomy}",
+        f"concept={concept}",
+        f"metric={metric}",
+        f"label={label}",
+        f"unit={unit}",
+    ]
+    for key in ("val", "fy", "fp", "form", "filed", "end", "start", "frame", "accn"):
+        value = record.get(key)
+        if value is None or value == "":
+            continue
+        parts.append(f"{key}={_structured_value(value)}")
+    return _truncate_structured_line(" ".join(parts))
 
 
 def _flatten_json(value: object, *, path: str, lines: list[str], depth: int) -> None:
@@ -464,20 +597,25 @@ class _ReadableHtmlParser(HTMLParser):
         return "".join(self._parts)
 
 
-def _terms(text: str) -> list[str]:
+def _terms(text: str, *, goal: SearchGoal | None = None) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
+    def add(term: str) -> None:
+        normalized = term.lower().replace("-", " ").strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        terms.append(normalized)
+
     for term in text.lower().replace("-", " ").split():
-        if not term or term in seen:
-            continue
-        seen.add(term)
-        terms.append(term)
+        add(term)
     for facet in query_facets(text):
         for alias in QUERY_FACET_ALIASES.get(facet, ()):
-            normalized = alias.lower()
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                terms.append(normalized)
+            add(alias)
+    if goal is not None:
+        for facet in finance_fundamental_facets(goal=goal):
+            for alias in FINANCE_FUNDAMENTAL_FACET_ALIASES.get(facet, ()):
+                add(alias)
     return terms
 
 

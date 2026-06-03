@@ -242,6 +242,11 @@ retrieval path, or respond with the precise missing capability/configuration.
 If provider_capabilities expose SEC/source-directory/profile-aware providers,
 prefer their structured payload hints for finance fundamentals before generic
 web queries.
+For finance fundamentals, treat product pages, store pages, generic homepages,
+driver/download pages, and marketing pages as insufficient unless they contain
+the requested financial statement facts. Replan toward official filings,
+investor-relations reports, exchange disclosures, structured SEC/EDGAR data,
+or reputable market-data sources for valuation metrics.
 For retrieval.run, payload.metadata.search_strategy may propose one of fallback, aggregate, corpus_only, fresh_live, structured, or crawl when the context exposes an adaptive search provider. This only selects among host-configured providers; it does not grant network or tool permission.
 For long tasks, continue one bounded action at a time; the host owns loop budgets, progress detection, repetition detection, and final termination.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.

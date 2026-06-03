@@ -15,7 +15,7 @@ def test_phase104_live_retrieval_operator_searches_corpus_before_live_fetch() ->
     artifacts = ArtifactStore.in_memory()
     corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 1010)
     source = _source("https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm")
-    body = "AAPL 2024 Form 10-K revenue evidence from the official SEC filing."
+    body = "AAPL 2024 Form 10-K revenue was $391.0 billion in the official SEC filing."
     artifact = artifacts.write_blob(
         kind="retrieval_fetched_document",
         payload=body,
@@ -74,7 +74,7 @@ def test_phase104_agent_live_fetch_indexes_corpus_then_reuses_it_without_network
     corpus = ResearchCorpusStore.in_memory(clock_ms=lambda: 2020)
     first_transport = _Transport(
         {
-            sec_url: "AAPL 2024 Form 10-K revenue evidence from the official SEC filing.",
+            sec_url: "AAPL 2024 Form 10-K revenue was $391.0 billion in the official SEC filing.",
         }
     )
     first_runtime = AgentRuntime(
@@ -187,7 +187,7 @@ def _source(uri: str) -> SearchSource:
         source_id="src-sec-aapl-10k",
         uri=uri,
         title="Apple 2024 Form 10-K",
-        snippet="AAPL 2024 Form 10-K revenue from the official SEC filing.",
+        snippet="AAPL 2024 Form 10-K revenue was $391.0 billion in the official SEC filing.",
         provider="direct_url_search",
     )
 

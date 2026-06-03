@@ -133,7 +133,7 @@ def test_phase102_agent_retrieval_uses_aggregate_sources_to_avoid_low_authority_
         fetch_provider=FakeFetchProvider(
             {
                 sec_url: (
-                    "Apple 2024 Form 10-K revenue evidence from the official SEC filing."
+                    "Apple 2024 Form 10-K revenue was $391.0 billion in the official SEC filing."
                 )
             }
         ),

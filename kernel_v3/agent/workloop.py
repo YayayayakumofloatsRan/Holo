@@ -104,6 +104,7 @@ class TerminationDecision(Contract):
 class WorkloopConfig:
     repeated_action_limit: int = 16
     repeated_missing_evidence_limit: int = 32
+    repeated_failed_fetch_limit: int = 2
     no_progress_step_limit: int = 16
 
 
@@ -303,10 +304,20 @@ def detect_repetition(
     latest_missing_evidence: list[str],
 ) -> RepetitionSignal:
     checks = [
+        _repeat_for_values(
+            _failed_fetch_targets(journal, task_id=task_id, run_id=run_id),
+            threshold=config.repeated_failed_fetch_limit,
+            repeat_type="same_failed_fetch_target",
+        ),
         _repeat_for_values(_retrieval_queries(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_retrieval_query"),
         _repeat_for_values(_action_fingerprints(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_action_payload"),
         _repeat_for_values(_file_paths(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_file_path"),
         _repeat_for_values(_observation_hashes(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_observation_hash"),
+        _repeat_for_any_value(
+            _missing_evidence_item_values(journal, task_id=task_id, run_id=run_id, latest=latest_missing_evidence),
+            threshold=max(3, min(config.repeated_missing_evidence_limit, 4)),
+            repeat_type="same_missing_evidence_item",
+        ),
         _repeat_for_values(_missing_evidence_values(journal, task_id=task_id, run_id=run_id, latest=latest_missing_evidence), threshold=config.repeated_missing_evidence_limit, repeat_type="same_missing_evidence"),
         _repeat_for_values(_failure_reason_values(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_missing_evidence_limit, repeat_type="same_failure_reason"),
     ]
@@ -400,6 +411,7 @@ def assess_evidence_sufficiency(
     report_diagnostics = _dict_or_empty(latest_retrieval_report.data.get("diagnostics")) if latest_retrieval_report else {}
     evaluation_diagnostics = _dict_or_empty(report_diagnostics.get("evaluation_diagnostics"))
     missing_query_facets = _string_list(evaluation_diagnostics.get("missing_query_facets"))
+    missing_finance_facets = _string_list(evaluation_diagnostics.get("missing_finance_facets"))
     source_authority = _dict_or_empty(evaluation_diagnostics.get("source_authority"))
     source_authority_requirement = _string_or_empty(evaluation_diagnostics.get("source_authority_requirement"))
     missing_source_authority = _missing_source_authority(
@@ -475,6 +487,7 @@ def assess_evidence_sufficiency(
         sufficient = False
         missing.append("sufficient_retrieval_evidence")
         missing.extend(f"query_facet:{facet}" for facet in missing_query_facets)
+        missing.extend(f"finance_facet:{facet}" for facet in missing_finance_facets)
         missing.extend(missing_source_authority)
         reason = latest_report_reason or f"retrieval_{latest_report_status}"
     if recipe.mode == "retrieval_answer" and planned_retrieval_coverage.get("required") is True:
@@ -518,6 +531,7 @@ def assess_evidence_sufficiency(
             "latest_retrieval_report_status": latest_report_status,
             "latest_retrieval_report_reason": latest_report_reason,
             "missing_query_facets": missing_query_facets,
+            "missing_finance_facets": missing_finance_facets,
             "source_authority_requirement": source_authority_requirement,
             "source_authority": source_authority,
             "missing_source_authority": missing_source_authority,
@@ -624,11 +638,12 @@ def decide_termination(
         override = True
     if (
         repetition.repeated
+        and not evidence.sufficient
         and not _allows_repeated_signal_to_continue(feedback=feedback, repetition=repetition)
         and not _network_budget_guard_with_evidence(observation=observation, evidence=evidence)
     ):
         decision = "failure_report"
-        reason = "repeated_missing_evidence" if repetition.repeat_type == "same_missing_evidence" else "repeated_no_progress"
+        reason = "repeated_missing_evidence" if str(repetition.repeat_type or "").startswith("same_missing") else "repeated_no_progress"
         override = True
     if (
         not progress.made_progress
@@ -662,7 +677,7 @@ def decide_termination(
 
 
 def _allows_repeated_signal_to_continue(*, feedback: Feedback, repetition: RepetitionSignal) -> bool:
-    if repetition.repeat_type != "same_missing_evidence":
+    if not str(repetition.repeat_type or "").startswith("same_missing"):
         return False
     return "remaining_plan_actions" in feedback.missing_evidence
 
@@ -1001,6 +1016,21 @@ def _retrieval_queries(journal: JournalStore, *, task_id: str, run_id: str) -> l
     return values
 
 
+def _failed_fetch_targets(journal: JournalStore, *, task_id: str, run_id: str) -> list[tuple[str, str]]:
+    values = []
+    for record in journal.records(task_id=task_id, kind="retrieval_fetch_attempt"):
+        if record.run_id != run_id:
+            continue
+        if str(record.data.get("status") or "") != "failed":
+            continue
+        uri = record.data.get("uri")
+        source_id = record.data.get("source_id")
+        target = uri if isinstance(uri, str) and uri.strip() else source_id
+        if isinstance(target, str) and target.strip():
+            values.append((target.strip().lower(), record.record_id))
+    return values
+
+
 def _file_paths(journal: JournalStore, *, task_id: str, run_id: str) -> list[tuple[str, str]]:
     values = []
     for record in journal.records(task_id=task_id, kind="observation"):
@@ -1031,6 +1061,22 @@ def _missing_evidence_values(journal: JournalStore, *, task_id: str, run_id: str
         if isinstance(missing, list) and missing:
             values.append((_hash([str(item) for item in missing]), record.record_id))
     values.append((_hash([str(item) for item in latest]), "latest-feedback"))
+    return values
+
+
+def _missing_evidence_item_values(journal: JournalStore, *, task_id: str, run_id: str, latest: list[str]) -> list[tuple[str, str]]:
+    values: list[tuple[str, str]] = []
+    for record in journal.records(task_id=task_id, kind="feedback"):
+        if record.run_id != run_id:
+            continue
+        missing = record.data.get("missing_evidence")
+        if isinstance(missing, list):
+            for item in missing:
+                if isinstance(item, str) and item:
+                    values.append((item, record.record_id))
+    for item in latest:
+        if item:
+            values.append((str(item), "latest-feedback"))
     return values
 
 
@@ -1086,6 +1132,25 @@ def _repeat_for_values(
     refs = [ref for value, ref in values if value == latest_value]
     if len(refs) >= threshold:
         return repeat_type, len(refs), threshold, refs
+    return None
+
+
+def _repeat_for_any_value(
+    values: list[tuple[str, str]],
+    *,
+    threshold: int,
+    repeat_type: str,
+) -> tuple[str, int, int, list[str]] | None:
+    if threshold <= 1 or not values:
+        return None
+    seen: set[str] = set()
+    for latest_value, _ in reversed(values):
+        if latest_value in seen:
+            continue
+        seen.add(latest_value)
+        refs = [ref for value, ref in values if value == latest_value]
+        if len(refs) >= threshold:
+            return repeat_type, len(refs), threshold, refs
     return None
 
 

@@ -1,5 +1,6 @@
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
+from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.retrieval.contracts import FetchedDocument
 from kernel_v3.retrieval.extract import extract_spans, readable_document_text
@@ -184,14 +185,46 @@ def test_phase96_json_extraction_flattens_sec_companyfacts_for_evidence() -> Non
         body=body,
     )
 
-    assert mode == "json_readable_text"
+    assert mode == "sec_companyfacts_readable_text"
     assert "entityName=Apple Inc." in text
-    assert "Revenues.units.USD[0]:" in text
+    assert "concept=Revenues" in text
+    assert "metric=revenue" in text
     assert "val=391035000000" in text
     assert "form=10-K" in text
     assert spans
-    assert spans[0].metadata["text_mode"] == "json_readable_text"
+    assert spans[0].metadata["text_mode"] == "sec_companyfacts_readable_text"
     assert "companyfacts" in spans[0].text.lower() or "Revenues" in spans[0].text
+
+
+def test_phase96_finance_profile_expands_companyfacts_extraction_terms() -> None:
+    document = FetchedDocument(
+        document_id="doc-json-finance",
+        goal_id="goal-json-finance",
+        source_id="src-json-finance",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+        title="SEC companyfacts JSON",
+        artifact_id="artifact-json-finance",
+        payload_hash="hash-json-finance",
+        preview="",
+        size_bytes=0,
+        metadata={"mime_type": "application/json"},
+    )
+
+    spans = extract_spans(
+        goal=SearchGoal(
+            goal_id="goal-json-finance",
+            query="AAPL SEC CIK 0000320193 companyfacts submissions fundamentals",
+            max_spans_per_document=4,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        document=document,
+        body=_sec_companyfacts_json(),
+    )
+
+    assert spans
+    joined = " ".join(span.text for span in spans)
+    assert "Revenues" in joined
+    assert "val=391035000000" in joined
 
 
 def test_phase96_csv_extraction_flattens_finance_rows_for_evidence() -> None:
@@ -266,7 +299,7 @@ def test_phase96_retrieval_journals_structured_json_evidence_but_artifacts_keep_
     assert isinstance(artifact_payload, str)
     assert '"entityName": "Apple Inc."' in artifact_payload
     assert evidence["text"].find("Revenues") >= 0
-    assert extraction["diagnostics"]["text_modes"] == ["json_readable_text"]
+    assert extraction["diagnostics"]["text_modes"] == ["sec_companyfacts_readable_text"]
 
 
 def _docusaurus_like_html() -> str:

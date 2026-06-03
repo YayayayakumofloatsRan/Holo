@@ -12,6 +12,7 @@ from kernel_v3.agent.workloop import (
     WorkloopConfig,
     assess_progress,
     decide_termination,
+    detect_repetition,
     workloop_state,
 )
 from kernel_v3.context import ArtifactStore
@@ -153,6 +154,65 @@ def test_phase61_repeated_same_retrieval_query_sets_repetition_signal():
     assert latest["repeated"] is True
     assert latest["repeat_type"] == "same_retrieval_query"
     assert latest["repeat_count"] == 2
+
+
+def test_phase61_repeated_failed_fetch_target_sets_repetition_signal():
+    journal = JournalStore.in_memory()
+    for index in range(2):
+        journal.append(
+            task_id="task-fetch-repeat",
+            run_id="run-1",
+            step_id=f"step-{index + 1}",
+            kind="retrieval_fetch_attempt",
+            data={
+                "fetch_id": f"fetch-{index + 1}",
+                "source_id": "direct-url-aapl-companyfacts",
+                "uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+                "status": "failed",
+            },
+        )
+
+    signal = detect_repetition(
+        journal,
+        task_id="task-fetch-repeat",
+        run_id="run-1",
+        step_id="step-2",
+        config=WorkloopConfig(repeated_failed_fetch_limit=2),
+        latest_missing_evidence=[],
+    )
+
+    assert signal.repeated is True
+    assert signal.repeat_type == "same_failed_fetch_target"
+    assert signal.repeat_count == 2
+
+
+def test_phase61_repeated_missing_evidence_item_sets_repetition_signal():
+    journal = JournalStore.in_memory()
+    for index in range(3):
+        journal.append(
+            task_id="task-missing-item-repeat",
+            run_id="run-1",
+            step_id=f"step-{index + 1}",
+            kind="feedback",
+            data={
+                "feedback_id": f"fb-{index + 1}",
+                "status": "continue",
+                "missing_evidence": ["sufficient_retrieval_evidence", f"unique-gap-{index + 1}"],
+            },
+        )
+
+    signal = detect_repetition(
+        journal,
+        task_id="task-missing-item-repeat",
+        run_id="run-1",
+        step_id="step-3",
+        config=WorkloopConfig(repeated_missing_evidence_limit=3),
+        latest_missing_evidence=[],
+    )
+
+    assert signal.repeated is True
+    assert signal.repeat_type == "same_missing_evidence_item"
+    assert signal.repeat_count == 3
 
 
 def test_phase61_missing_file_path_asks_user_as_journaled_workloop_outcome():
