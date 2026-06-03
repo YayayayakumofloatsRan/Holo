@@ -9,16 +9,27 @@ URL_RE = re.compile(r"https?://[^\s<>'\")\]]+", re.IGNORECASE)
 
 GENERIC_QUERY_TERMS = {
     "about",
+    "api",
     "annual",
+    "auth",
+    "authentication",
+    "authorization",
     "balance",
     "business",
     "cash",
+    "cik",
     "company",
     "companies",
+    "crunchbase",
     "current",
     "data",
+    "docs",
+    "documentation",
     "employees",
     "employee",
+    "endpoint",
+    "endpoints",
+    "edgar",
     "financial",
     "financials",
     "find",
@@ -31,6 +42,7 @@ GENERIC_QUERY_TERMS = {
     "info",
     "key",
     "latest",
+    "linkedin",
     "market",
     "metrics",
     "model",
@@ -38,6 +50,8 @@ GENERIC_QUERY_TERMS = {
     "operation",
     "operations",
     "quarterly",
+    "price",
+    "pricing",
     "report",
     "reports",
     "research",
@@ -45,12 +59,15 @@ GENERIC_QUERY_TERMS = {
     "revenues",
     "scale",
     "search",
+    "sec",
     "size",
     "source",
     "sources",
     "statement",
     "statements",
     "stock",
+    "token",
+    "tokens",
     "valuation",
     "work",
     "works",
@@ -166,7 +183,12 @@ def _phrase_matches(phrase: str, normalized_haystack: str) -> bool:
     normalized_phrase = _normalized_text(phrase)
     if not normalized_phrase:
         return False
-    return f" {normalized_phrase} " in f" {normalized_haystack} "
+    if f" {normalized_phrase} " in f" {normalized_haystack} ":
+        return True
+    compact_phrase = normalized_phrase.replace(" ", "")
+    if len(compact_phrase) < 6:
+        return False
+    return f" {compact_phrase} " in f" {normalized_haystack} "
 
 
 def _normalized_text(text: str) -> str:

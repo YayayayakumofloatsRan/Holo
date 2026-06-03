@@ -18,6 +18,56 @@ def test_phase97_target_entity_detection_ignores_direct_url_tokens():
     assert target_entity_phrases(query) == []
 
 
+def test_phase97_target_entity_detection_ignores_technical_facet_terms():
+    assert target_entity_phrases("DeepSeek API docs authentication pricing") == []
+
+
+def test_phase97_target_entity_detection_ignores_source_platform_hints():
+    query = '"Citadel Security" cybersecurity company size employees revenue business model Crunchbase LinkedIn SEC EDGAR'
+
+    assert target_entity_phrases(query) == ["Citadel Security"]
+
+
+def test_phase97_target_entity_detection_accepts_compact_domain_match():
+    query = "Citadel Security company size employees revenue"
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                query: [
+                    _source(
+                        "citadel-security",
+                        "https://www.citadelsecurity.example/company",
+                        "Company profile",
+                        "Scale, employees, revenue, and operations.",
+                    )
+                ]
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://www.citadelsecurity.example/company": (
+                    "Citadel Security is a private security company with scale, employees, "
+                    "revenue, and operations described in this profile."
+                )
+            }
+        ),
+        evaluator=EvidenceEvaluator(),
+    )
+    journal = JournalStore.in_memory()
+
+    report = operator.run(
+        SearchGoal(goal_id="goal-compact-domain", query=query, max_spans_per_document=2),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-compact-domain",
+        run_id="run-1",
+    )
+
+    assert report.status == "sufficient"
+    assert journal.records(task_id="task-compact-domain", kind="retrieval_fetch_attempt")
+    assert not journal.records(task_id="task-compact-domain", kind="retrieval_source_rejections")
+
+
 def test_phase97_evidence_evaluator_requires_requested_query_facets():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()
@@ -103,7 +153,7 @@ def test_phase97_evidence_evaluator_accepts_covered_query_facets():
     assert set(evaluation["diagnostics"]["covered_query_facets"]) == {"model", "authentication"}
 
 
-def test_phase97_retrieval_rejects_partial_name_wrong_entity_evidence():
+def test_phase97_retrieval_rejects_partial_name_wrong_entity_sources_before_fetch():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()
     query = "Citadel Security company size employees revenue"
@@ -157,13 +207,57 @@ def test_phase97_retrieval_rejects_partial_name_wrong_entity_evidence():
         run_id="run-1",
     )
 
-    rejections = journal.records(task_id="task-citadel-wrong", kind="retrieval_evidence_rejections")[-1].data
+    source_rejections = journal.records(task_id="task-citadel-wrong", kind="retrieval_source_rejections")[-1].data
     evaluation = journal.records(task_id="task-citadel-wrong", kind="retrieval_evaluation_decision")[-1].data
     assert report.status == "insufficient_evidence"
     assert report.citation_ids == []
-    assert rejections["diagnostics"]["reasons"]["target_entity_mismatch"] >= 1
-    assert rejections["items"][0]["required_target_phrases"] == ["Citadel Security"]
+    assert report.fetch_attempt_ids == []
+    assert source_rejections["diagnostics"]["reasons"]["source_target_entity_mismatch"] == 3
+    assert source_rejections["items"][0]["required_target_phrases"] == ["Citadel Security"]
     assert "Citadel Security" in evaluation["diagnostics"]["missing_target_phrases"]
+    assert report.diagnostics["source_rejection_count"] == 3
+
+
+def test_phase97_retrieval_rejects_template_placeholder_spans_as_evidence():
+    journal = JournalStore.in_memory()
+    query = "Citadel Security company size employees revenue"
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {
+                query: [
+                    _source(
+                        "template-search",
+                        "https://example.test/citadelsecurity/search",
+                        "Citadel Security official search page",
+                        "Citadel Security company size employees revenue search results.",
+                    )
+                ]
+            }
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                "https://example.test/citadelsecurity/search": (
+                    "Citadel Security search results show {{companyName}} {{employeeCount}} "
+                    "{{revenue}} {{KW}} template rows and {{emptyResult}} placeholders."
+                )
+            }
+        ),
+        evaluator=EvidenceEvaluator(),
+    )
+
+    report = operator.run(
+        SearchGoal(goal_id="goal-template-shell", query=query, max_spans_per_document=3),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-template-shell",
+        run_id="run-1",
+    )
+
+    rejections = journal.records(task_id="task-template-shell", kind="retrieval_evidence_rejections")[-1].data
+    assert report.status == "insufficient_evidence"
+    assert report.citation_ids == []
+    assert rejections["diagnostics"]["reasons"]["template_placeholder_evidence"] >= 1
+    assert rejections["items"][0]["reason"] == "template_placeholder_evidence"
 
 
 def test_phase97_retrieval_accepts_matching_target_entity_evidence():

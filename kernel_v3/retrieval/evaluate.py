@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from kernel_v3.research.contracts import ResearchProfile
 from kernel_v3.research.profile_policy import (
     QUERY_FACET_ALIASES,
@@ -31,6 +33,9 @@ from kernel_v3.retrieval.contracts import (
 from kernel_v3.retrieval.targeting import assess_target_entity_coverage, target_entity_diagnostics
 
 
+TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{[^{}]{1,120}\}\}|\$\{[^{}]{1,120}\}|<%[^%]{1,120}%>")
+
+
 def qualify_evidence_candidate(
     *,
     goal: SearchGoal,
@@ -55,6 +60,11 @@ def qualify_evidence_candidate(
             result["reason"] = "target_entity_mismatch"
     if _is_finance_profile(goal=goal, research_profile=research_profile):
         _add_finance_compatibility_fields(result)
+    placeholder_diagnostics = _template_placeholder_diagnostics(evidence.text)
+    if bool(placeholder_diagnostics.get("template_placeholder_evidence")):
+        result["accepted"] = False
+        result["reason"] = "template_placeholder_evidence"
+        result["template_placeholder"] = placeholder_diagnostics
     return result
 
 
@@ -242,6 +252,29 @@ def _source_authority_requirement(goal: SearchGoal) -> str:
     if normalized in {"any", "any_citable"}:
         return "any_citable"
     return "primary"
+
+
+def _template_placeholder_diagnostics(text: str) -> dict[str, object]:
+    matches = [match.group(0) for match in TEMPLATE_PLACEHOLDER_RE.finditer(text)]
+    if not matches:
+        return {"template_placeholder_evidence": False, "placeholder_count": 0}
+    unique = []
+    seen = set()
+    for match in matches:
+        key = match.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(match[:80])
+    normalized = " ".join(text.split())
+    density = len(matches) / max(1, len(normalized.split()))
+    template_like = len(matches) >= 2 or density >= 0.08
+    return {
+        "template_placeholder_evidence": template_like,
+        "placeholder_count": len(matches),
+        "placeholder_density": round(density, 4),
+        "sample_placeholders": unique[:6],
+    }
 
 
 def _authority_satisfies(assessments: object, requirement: str) -> bool:

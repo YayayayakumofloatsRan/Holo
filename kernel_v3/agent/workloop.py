@@ -249,7 +249,7 @@ def assess_progress(
             signals.append(ProgressSignal(signal_type="new_evidence", ref=str(record.data.get("evidence_id", record.record_id)), weight=0.35))
         elif record.kind == "retrieval_citation":
             signals.append(ProgressSignal(signal_type="new_citation", ref=str(record.data.get("citation_id", record.record_id)), weight=0.4))
-        elif record.kind == "retrieval_evidence_rejections":
+        elif record.kind in {"retrieval_evidence_rejections", "retrieval_source_rejections"}:
             diagnostics = record.data.get("diagnostics") if isinstance(record.data.get("diagnostics"), dict) else {}
             signals.append(
                 ProgressSignal(

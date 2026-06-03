@@ -271,11 +271,16 @@ Kernel v3 currently contains the infrastructure for:
   research loops from dumping every candidate span into the final model packet;
 - generic target-entity consistency for deep retrieval: when a query contains a
   clear multi-token target such as a named organization, retrieval ranks
-  sources by target match and rejects spans whose page only matches a partial or
-  different entity. Rejected spans are journaled with
-  `target_entity_mismatch`, required/missing target phrases, and previews, so
-  the next planner packet can change the disambiguation strategy instead of
-  treating noisy pages as citations;
+  sources by target match, rejects obvious source candidates before fetch when
+  their title/snippet/URI do not cover the requested entity, and rejects spans
+  whose page only matches a partial or different entity. Rejected sources and
+  spans are journaled with target diagnostics, required/missing target phrases,
+  and previews, so the next planner packet can change the disambiguation
+  strategy instead of treating noisy pages as citations;
+- template/shell-page evidence rejection: extracted spans dominated by
+  templating placeholders such as `{{field}}`, `${field}`, or `<% field %>` are
+  not accepted as evidence. Search pages and app shells can still be useful
+  diagnostics, but they do not satisfy evidence/citation gates;
 - retrieval rejection diagnostics now count as workloop progress. Wrong-entity
   pages, failed source families, and other rejected evidence do not satisfy the
   task, but they are useful feedback for the next loop iteration and mission

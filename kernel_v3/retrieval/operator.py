@@ -40,6 +40,16 @@ RETRIEVAL_BUDGET_CAPS = {
 }
 DEFAULT_EVIDENCE_ITEM_LIMIT = 64
 EVIDENCE_ITEM_LIMIT_CAP = 512
+TARGET_ENTITY_EXEMPT_SOURCE_KINDS = {
+    "direct_url",
+    "sec_companyfacts_json",
+    "sec_submissions_json",
+    "sec_primary_filing_document",
+    "sec_complete_submission_text",
+    "fred_series_page",
+    "fred_observations_csv",
+    "fiscaldata_api_json",
+}
 
 
 class CorpusStore(Protocol):
@@ -207,12 +217,32 @@ class RetrievalOperator:
             action_ref=action_ref,
         )
 
+        fetchable_ranked, source_rejections = _fetchable_ranked_sources(goal, ranked)
+        if source_rejections:
+            _append(
+                journal,
+                task_id,
+                run_id,
+                f"{step_id_prefix}-source-rejections",
+                "retrieval_source_rejections",
+                {
+                    "goal_id": goal.goal_id,
+                    "rejected_count": len(source_rejections),
+                    "items": source_rejections[:50],
+                    "diagnostics": {
+                        "truncated": len(source_rejections) > 50,
+                        "reasons": _count_by_key(source_rejections, "reason"),
+                    },
+                },
+                action_ref=action_ref,
+            )
+
         documents: list[tuple[FetchedDocument, str]] = []
         fetch_attempt_ids: list[str] = []
         source_by_id = {source.source_id: source for source in _dedupe_sources(sources)}
         fetch_jobs = [
             (index, ranked_source, source_by_id[ranked_source.source_id])
-            for index, ranked_source in enumerate(ranked[: goal.max_fetches], start=1)
+            for index, ranked_source in enumerate(fetchable_ranked[: goal.max_fetches], start=1)
             if ranked_source.source_id in source_by_id
         ]
         for index, ranked_source, source, response, fetch_error in self._fetch_ranked_sources(fetch_jobs):
@@ -508,6 +538,8 @@ class RetrievalOperator:
                 "provider_capabilities": self.provider_capabilities(),
                 "search_attempt_count": len(search_attempt_ids),
                 "fetch_attempt_count": len(fetch_attempt_ids),
+                "source_rejection_count": len(source_rejections),
+                "source_rejection_reasons": _count_by_key(source_rejections, "reason"),
                 "candidate_span_count": len(spans),
                 "evidence_candidate_count": len(evidence_candidates),
                 "evidence_compaction": compaction_diagnostics,
@@ -863,6 +895,62 @@ def _dedupe_sources(sources: list[SearchSource]) -> list[SearchSource]:
     return result
 
 
+def _fetchable_ranked_sources(goal: SearchGoal, ranked: list[RankedSource]) -> tuple[list[RankedSource], list[JsonObject]]:
+    fetchable: list[RankedSource] = []
+    rejections: list[JsonObject] = []
+    for source in ranked:
+        reason = _ranked_source_fetch_rejection_reason(source)
+        if reason is None:
+            fetchable.append(source)
+            continue
+        target = _dict_or_empty(source.metadata.get("target_entity"))
+        rejections.append(
+            {
+                "source_id": source.source_id,
+                "uri": source.uri,
+                "title": _preview(source.title, 160),
+                "provider": source.provider,
+                "rank": source.rank,
+                "score": source.score,
+                "reason": reason,
+                "required_target_phrases": _string_list(target.get("required_target_phrases")),
+                "matched_target_phrases": _string_list(target.get("matched_target_phrases")),
+                "missing_target_phrases": _string_list(target.get("missing_target_phrases")),
+                "metadata": _safe_json(
+                    {
+                        "goal_id": goal.goal_id,
+                        "source_kind": source.metadata.get("source_kind"),
+                        "source_family": source.metadata.get("source_family"),
+                    }
+                ),
+            }
+        )
+    return fetchable, rejections
+
+
+def _ranked_source_fetch_rejection_reason(source: RankedSource) -> str | None:
+    target = _dict_or_empty(source.metadata.get("target_entity"))
+    if not bool(target.get("target_entity_required")):
+        return None
+    if bool(target.get("target_entity_satisfied")):
+        return None
+    if _ranked_source_target_exempt(source):
+        return None
+    return "source_target_entity_mismatch"
+
+
+def _ranked_source_target_exempt(source: RankedSource) -> bool:
+    metadata = source.metadata if isinstance(source.metadata, dict) else {}
+    source_kind = metadata.get("source_kind")
+    if isinstance(source_kind, str) and source_kind in TARGET_ENTITY_EXEMPT_SOURCE_KINDS:
+        return True
+    assessment = _dict_or_empty(metadata.get("source_assessment"))
+    if assessment.get("usable_as_primary") is True:
+        return True
+    authority = assessment.get("authority_level")
+    return isinstance(authority, str) and authority == "primary"
+
+
 def _ordered_unique(values: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -951,6 +1039,12 @@ def _secret_like_key(key: str) -> bool:
 
 def _dict_or_empty(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in (str(raw).strip() for raw in value if isinstance(raw, str)) if item]
 
 
 def _safe_list_item(value):

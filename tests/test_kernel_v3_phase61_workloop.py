@@ -228,6 +228,44 @@ def test_phase61_retrieval_rejection_diagnostic_counts_as_progress():
     assert progress.signals[0]["diagnostics"]["reasons"] == {"target_entity_mismatch": 8}
 
 
+def test_phase61_retrieval_source_rejection_diagnostic_counts_as_progress():
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-source-rejection-progress",
+        run_id="run-1",
+        step_id="step-1",
+        kind="retrieval_source_rejections",
+        data={
+            "goal_id": "goal-1",
+            "rejected_count": 3,
+            "items": [],
+            "diagnostics": {"reasons": {"source_target_entity_mismatch": 3}},
+        },
+    )
+
+    progress = assess_progress(
+        journal,
+        task_id="task-source-rejection-progress",
+        run_id="run-1",
+        step_id="step-1",
+        observation=Observation(
+            observation_id="obs-source-rejection-progress",
+            run_id="run-1",
+            kind="tool_result",
+            status="ok",
+            source="tool:retrieval.run",
+            content={"report": {"status": "insufficient_evidence", "evidence_ids": [], "citation_ids": []}},
+            observed_at_ms=1,
+            action_id="act-source-rejection-progress",
+            tool_call_id=None,
+        ),
+    )
+
+    assert progress.made_progress is True
+    assert progress.progress_type == "new_retrieval_rejection_diagnostic"
+    assert progress.signals[0]["diagnostics"]["reasons"] == {"source_target_entity_mismatch": 3}
+
+
 def test_phase61_repeated_missing_evidence_item_sets_repetition_signal():
     journal = JournalStore.in_memory()
     for index in range(3):

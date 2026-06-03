@@ -2575,6 +2575,7 @@ def _retrieval_replan_hints(
     planned_coverage = _json_object(evidence_diagnostics.get("planned_retrieval_coverage"))
     incomplete_planned_goal_ids = _string_list(planned_coverage.get("incomplete_goal_ids"))
     rejected_evidence_count = _int_or_none(diagnostics.get("rejected_evidence_count")) or 0
+    source_rejection_count = _int_or_none(diagnostics.get("source_rejection_count")) or 0
     missing = _ordered_unique(
         [
             *_string_list(evidence_data.get("missing")),
@@ -2583,6 +2584,7 @@ def _retrieval_replan_hints(
             *[f"finance_facet:{facet}" for facet in _string_list(evidence_diagnostics.get("missing_finance_facets"))],
             *_string_list(evidence_diagnostics.get("missing_source_authority")),
             *(["candidate_evidence_rejected"] if rejected_evidence_count > 0 else []),
+            *(["candidate_source_rejected"] if source_rejection_count > 0 else []),
         ]
     )
     attempts = _retrieval_attempt_hints(journal, task_id=task_id, run_id=run_id)
@@ -2643,6 +2645,8 @@ def _retrieval_replan_hints(
         "latest_report_status": report_status,
         "latest_report_reason": report_reason,
         "candidate_span_count": _int_or_none(diagnostics.get("candidate_span_count")),
+        "source_rejection_count": source_rejection_count,
+        "source_rejection_reasons": _json_object(diagnostics.get("source_rejection_reasons")),
         "rejected_evidence_count": rejected_evidence_count,
         "rejected_evidence_reasons": _json_object(diagnostics.get("rejected_evidence_reasons")),
         "missing": missing,
@@ -3331,7 +3335,7 @@ def _suggested_retrieval_strategies(
         suggestions.extend(["structured", "aggregate", "fresh_live", "crawl"])
     if any(item.startswith("query_facet:") for item in missing):
         suggestions.extend(["aggregate", "fresh_live", "crawl"])
-    if "candidate_evidence_rejected" in missing:
+    if "candidate_evidence_rejected" in missing or "candidate_source_rejected" in missing:
         suggestions.extend(["aggregate", "fresh_live", "structured", "crawl"])
     if any(item.startswith("finance_facet:") for item in missing):
         suggestions.extend(["structured", "aggregate", "fresh_live", "crawl"])
