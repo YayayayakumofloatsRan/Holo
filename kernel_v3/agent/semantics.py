@@ -158,6 +158,14 @@ def _semantic_prompt(
                 "technical_documentation research profile."
             ),
             (
+                "For scholarly, academic, mathematical, scientific, frontier, "
+                "paper, preprint, survey, literature-review, or open-problem "
+                "research, use academic.research, academic.frontier_research, "
+                "academic.literature_review, or academic.paper_search so the "
+                "host can select the academic_research profile. Do not reduce "
+                "academic frontier research to dictionary lookup."
+            ),
+            (
                 "Place structured tool arguments in intent.metadata.capability_args "
                 "keyed by capability name."
             ),

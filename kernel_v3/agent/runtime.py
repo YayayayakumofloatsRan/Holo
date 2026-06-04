@@ -40,6 +40,7 @@ from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner, ProcessorFabric, ProcessorRouter, Synthesizer
 from kernel_v3.research import (
+    ACADEMIC_RESEARCH_PROFILE_ID,
     FINANCE_FUNDAMENTALS_PROFILE_ID,
     ResearchCorpusStore,
     TECHNICAL_DOCUMENTATION_PROFILE_ID,
@@ -87,6 +88,31 @@ _FINANCE_DOMAINS = {
     "financial_research",
     "fundamentals_research",
     "market_research",
+}
+_ACADEMIC_RESEARCH_PROFILE_CAPABILITIES = {
+    "academic.research",
+    "academic.frontier_research",
+    "academic.literature_review",
+    "academic.paper_search",
+    "academic.scholarly_sources",
+}
+_ACADEMIC_INTENT_KINDS = {
+    "academic_research",
+    "academic_frontier_research",
+    "frontier_research",
+    "literature_review",
+    "paper_search",
+    "scholarly_research",
+    "scholarly_literature_review",
+}
+_ACADEMIC_DOMAINS = {
+    "academic",
+    "academic_research",
+    "scholarly_literature",
+    "scholarly_research",
+    "mathematics_research",
+    "physics_research",
+    "science_research",
 }
 _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES = {
     "technical.documentation_research",
@@ -4104,6 +4130,12 @@ def _research_profile_id(recipe: TaskRecipe) -> str | None:
         return FINANCE_FUNDAMENTALS_PROFILE_ID
     if _semantic_has_any_domain(semantic, _FINANCE_DOMAINS):
         return FINANCE_FUNDAMENTALS_PROFILE_ID
+    if _semantic_has_any_capability(semantic, _ACADEMIC_RESEARCH_PROFILE_CAPABILITIES):
+        return ACADEMIC_RESEARCH_PROFILE_ID
+    if _semantic_has_any_intent_kind(semantic, _ACADEMIC_INTENT_KINDS):
+        return ACADEMIC_RESEARCH_PROFILE_ID
+    if _semantic_has_any_domain(semantic, _ACADEMIC_DOMAINS):
+        return ACADEMIC_RESEARCH_PROFILE_ID
     if _semantic_has_any_capability(semantic, _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES):
         return TECHNICAL_DOCUMENTATION_PROFILE_ID
     if _semantic_has_any_intent_kind(semantic, _TECHNICAL_DOCUMENTATION_INTENT_KINDS):
@@ -4117,6 +4149,12 @@ def _research_profile_id(recipe: TaskRecipe) -> str | None:
         return FINANCE_FUNDAMENTALS_PROFILE_ID
     if _plan_has_any_domain(plan, _FINANCE_DOMAINS):
         return FINANCE_FUNDAMENTALS_PROFILE_ID
+    if _plan_has_any_capability(plan, _ACADEMIC_RESEARCH_PROFILE_CAPABILITIES):
+        return ACADEMIC_RESEARCH_PROFILE_ID
+    if _plan_has_any_step_kind(plan, _ACADEMIC_INTENT_KINDS):
+        return ACADEMIC_RESEARCH_PROFILE_ID
+    if _plan_has_any_domain(plan, _ACADEMIC_DOMAINS):
+        return ACADEMIC_RESEARCH_PROFILE_ID
     if _plan_has_any_capability(plan, _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES):
         return TECHNICAL_DOCUMENTATION_PROFILE_ID
     if _plan_has_any_step_kind(plan, _TECHNICAL_DOCUMENTATION_INTENT_KINDS):
@@ -4272,6 +4310,17 @@ def _default_retrieval_operator(
             ),
             fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
         )
+    if profile_id == ACADEMIC_RESEARCH_PROFILE_ID:
+        return RetrievalOperator(
+            search_provider=FallbackSearchProvider(
+                [
+                    DirectUrlSearchProvider(),
+                    ResearchSourceQuerySearchProvider(),
+                    SourceDirectorySearchProvider(),
+                ]
+            ),
+            fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
+        )
     return RetrievalOperator(
         search_provider=UnconfiguredSearchProvider(reason="retrieval_source_not_configured"),
         fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
@@ -4363,12 +4412,14 @@ def _explicit_retrieval_query_count(payload: JsonObject) -> int:
 def _apply_profile_capability_defaults(payload: JsonObject, step: JsonObject) -> JsonObject:
     capabilities = set(_step_capabilities(step))
     updated = _apply_finance_capability_defaults(payload, capabilities)
+    updated = _apply_academic_research_capability_defaults(updated, capabilities)
     return _apply_technical_documentation_capability_defaults(updated, capabilities)
 
 
 def _apply_recipe_profile_defaults(payload: JsonObject, recipe: TaskRecipe) -> JsonObject:
     capabilities = _recipe_research_profile_capabilities(recipe)
     updated = _apply_finance_capability_defaults(payload, capabilities)
+    updated = _apply_academic_research_capability_defaults(updated, capabilities)
     updated = _apply_technical_documentation_capability_defaults(updated, capabilities)
     profile_id = _research_profile_id(recipe)
     if profile_id == TECHNICAL_DOCUMENTATION_PROFILE_ID:
@@ -4380,6 +4431,11 @@ def _apply_recipe_profile_defaults(payload: JsonObject, recipe: TaskRecipe) -> J
         return _apply_finance_capability_defaults(
             updated,
             capabilities | {"finance.fundamentals_research"},
+        )
+    if profile_id == ACADEMIC_RESEARCH_PROFILE_ID:
+        return _apply_academic_research_capability_defaults(
+            updated,
+            capabilities | {"academic.research"},
         )
     return updated
 
@@ -4431,6 +4487,30 @@ def _apply_technical_documentation_capability_defaults(payload: JsonObject, capa
     return updated
 
 
+def _apply_academic_research_capability_defaults(payload: JsonObject, capabilities: set[str]) -> JsonObject:
+    if not capabilities.intersection(_ACADEMIC_RESEARCH_PROFILE_CAPABILITIES):
+        return payload
+    updated = dict(payload)
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    metadata.setdefault("research_profile", ACADEMIC_RESEARCH_PROFILE_ID)
+    metadata.setdefault("source_authority_requirement", "secondary_or_better")
+    metadata.setdefault("search_strategy", "aggregate")
+    metadata.setdefault(
+        "preferred_source_families",
+        ["scholarly_preprint", "scholarly_publisher", "academic_repository", "scholarly_index"],
+    )
+    if "academic.frontier_research" in capabilities:
+        metadata.setdefault("research_task_kind", "frontier_research")
+    elif "academic.literature_review" in capabilities:
+        metadata.setdefault("research_task_kind", "literature_review")
+    elif "academic.paper_search" in capabilities:
+        metadata.setdefault("research_task_kind", "paper_search")
+    else:
+        metadata.setdefault("research_task_kind", "academic_research")
+    updated["metadata"] = metadata
+    return updated
+
+
 def _recipe_research_profile_capabilities(recipe: TaskRecipe) -> set[str]:
     capabilities: set[str] = set()
     semantic = _semantic_intake_metadata(recipe)
@@ -4445,7 +4525,11 @@ def _recipe_research_profile_capabilities(recipe: TaskRecipe) -> set[str]:
         for step in steps:
             if isinstance(step, dict):
                 capabilities.update(_step_capabilities(step))
-    return capabilities.intersection(_FINANCE_RESEARCH_PROFILE_CAPABILITIES | _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES)
+    return capabilities.intersection(
+        _FINANCE_RESEARCH_PROFILE_CAPABILITIES
+        | _ACADEMIC_RESEARCH_PROFILE_CAPABILITIES
+        | _TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES
+    )
 
 
 def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
@@ -4460,6 +4544,7 @@ def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
         capability_markers={
             "retrieval.run",
             *_FINANCE_RESEARCH_PROFILE_CAPABILITIES,
+            *_ACADEMIC_RESEARCH_PROFILE_CAPABILITIES,
             *_TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES,
         },
     )

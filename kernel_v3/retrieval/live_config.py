@@ -21,6 +21,7 @@ from kernel_v3.retrieval.crawl_provider import (
     DirectUrlSearchProvider,
     SourceDirectorySearchProvider,
 )
+from kernel_v3.retrieval.arxiv_provider import ArxivApiSearchProvider
 from kernel_v3.retrieval.fiscaldata_provider import FiscalDataSearchProvider
 from kernel_v3.retrieval.fred_provider import FredSearchProvider
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
@@ -356,6 +357,14 @@ class LiveRetrievalConfig:
         search_providers.append(FiscalDataSearchProvider())
         search_providers.append(SecEdgarSearchProvider())
         search_providers.append(ResearchSourceQuerySearchProvider())
+        if self.fetch.enabled:
+            search_providers.append(
+                ArxivApiSearchProvider(
+                    transport=search_transport,
+                    timeout_seconds=self.fetch.timeout_seconds,
+                    max_bytes=min(self.fetch.max_bytes, 1_000_000),
+                )
+            )
         if self.search.configured:
             search_providers.append(self.search.build_provider(transport=search_transport))
         if self.web_search.configured:

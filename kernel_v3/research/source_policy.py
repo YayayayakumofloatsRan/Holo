@@ -26,6 +26,10 @@ _FAMILY_SCORES = {
     "official_documentation": 0.88,
     "official_guidance": 0.86,
     "source_repository": 0.82,
+    "scholarly_preprint": 0.88,
+    "scholarly_publisher": 0.86,
+    "academic_repository": 0.8,
+    "scholarly_index": 0.72,
     "market_data_provider": 0.72,
     "portfolio_risk_data_provider": 0.7,
     "credit_rating_agency": 0.66,
@@ -35,6 +39,8 @@ _FAMILY_SCORES = {
     "blog": 0.24,
     "forum": 0.18,
     "social": 0.15,
+    "encyclopedia": 0.22,
+    "reference_dictionary": 0.12,
     "generic_web": 0.3,
     "unknown": 0.2,
 }
@@ -187,6 +193,87 @@ _SOURCE_REPOSITORY_DOMAINS = {
     "bitbucket.org",
     "www.bitbucket.org",
 }
+_SCHOLARLY_PREPRINT_DOMAINS = {
+    "arxiv.org",
+    "export.arxiv.org",
+    "biorxiv.org",
+    "www.biorxiv.org",
+    "medrxiv.org",
+    "www.medrxiv.org",
+    "ssrn.com",
+    "www.ssrn.com",
+}
+_ACADEMIC_REPOSITORY_DOMAINS = {
+    "hal.science",
+    "zenodo.org",
+    "figshare.com",
+    "osf.io",
+    "repository.ias.ac.in",
+}
+_SCHOLARLY_INDEX_DOMAINS = {
+    "api.semanticscholar.org",
+    "semanticscholar.org",
+    "www.semanticscholar.org",
+    "openalex.org",
+    "api.openalex.org",
+    "crossref.org",
+    "www.crossref.org",
+    "search.crossref.org",
+    "dblp.org",
+    "www.dblp.org",
+    "doi.org",
+    "pubmed.ncbi.nlm.nih.gov",
+    "ncbi.nlm.nih.gov",
+    "zbmath.org",
+    "mathscinet.ams.org",
+}
+_SCHOLARLY_PUBLISHER_DOMAINS = {
+    "acm.org",
+    "dl.acm.org",
+    "ams.org",
+    "www.ams.org",
+    "annals.math.princeton.edu",
+    "cambridge.org",
+    "www.cambridge.org",
+    "ems.press",
+    "epubs.siam.org",
+    "ieee.org",
+    "ieeexplore.ieee.org",
+    "jmlr.org",
+    "www.jmlr.org",
+    "link.springer.com",
+    "nature.com",
+    "www.nature.com",
+    "pnas.org",
+    "www.pnas.org",
+    "projecteuclid.org",
+    "www.projecteuclid.org",
+    "sciencedirect.com",
+    "www.sciencedirect.com",
+    "springer.com",
+    "www.springer.com",
+    "tandfonline.com",
+    "www.tandfonline.com",
+    "wiley.com",
+    "onlinelibrary.wiley.com",
+}
+_REFERENCE_DICTIONARY_DOMAINS = {
+    "dictionary.cambridge.org",
+    "merriam-webster.com",
+    "www.merriam-webster.com",
+    "dictionary.com",
+    "www.dictionary.com",
+    "collinsdictionary.com",
+    "www.collinsdictionary.com",
+}
+_ENCYCLOPEDIA_DOMAINS = {
+    "britannica.com",
+    "www.britannica.com",
+    "wikipedia.org",
+    "en.wikipedia.org",
+    "zh.wikipedia.org",
+    "www.wikipedia.org",
+}
 
 
 def assess_search_source(source: "SearchSource", *, profile: ResearchProfile) -> SourceAssessment:
@@ -271,6 +358,10 @@ def classify_source_family(*, uri: str, title: str, metadata: JsonObject | None 
     path = parsed.path.lower()
     title_l = title.lower()
 
+    if _host_matches(host, _REFERENCE_DICTIONARY_DOMAINS):
+        return "reference_dictionary", "recognized_reference_dictionary_domain"
+    if _host_matches(host, _ENCYCLOPEDIA_DOMAINS):
+        return "encyclopedia", "recognized_encyclopedia_domain"
     if _host_matches(host, _STRUCTURED_REGULATORY_DOMAINS):
         return "structured_regulatory_data", "recognized_structured_regulatory_domain"
     if _host_matches(host, _REGULATORY_DOMAINS):
@@ -289,6 +380,14 @@ def classify_source_family(*, uri: str, title: str, metadata: JsonObject | None 
         return "standards_body", "recognized_standards_body_domain"
     if _host_matches(host, _SOURCE_REPOSITORY_DOMAINS):
         return "source_repository", "recognized_source_repository_domain"
+    if _host_matches(host, _SCHOLARLY_PREPRINT_DOMAINS):
+        return "scholarly_preprint", "recognized_scholarly_preprint_domain"
+    if _host_matches(host, _ACADEMIC_REPOSITORY_DOMAINS):
+        return "academic_repository", "recognized_academic_repository_domain"
+    if _host_matches(host, _SCHOLARLY_INDEX_DOMAINS):
+        return "scholarly_index", "recognized_scholarly_index_domain"
+    if _host_matches(host, _SCHOLARLY_PUBLISHER_DOMAINS):
+        return "scholarly_publisher", "recognized_scholarly_publisher_domain"
     if _host_matches(host, _MARKET_DATA_DOMAINS):
         return "market_data_provider", "recognized_market_data_domain"
     if _host_matches(host, _CREDIT_RATING_DOMAINS):
@@ -301,6 +400,8 @@ def classify_source_family(*, uri: str, title: str, metadata: JsonObject | None 
         return "company_ir", "recognized_company_ir_pattern"
     if _looks_like_official_documentation(host=host, path=path, title=title_l):
         return "official_documentation", "recognized_official_documentation_surface"
+    if _looks_like_scholarly_surface(host=host, path=path, title=title_l):
+        return "scholarly_publisher", "recognized_scholarly_surface"
     if "10-k" in title_l or "10 k" in title_l or "annual report" in title_l:
         return "generic_web", "untrusted_domain_mentions_primary_document"
     if "earnings release" in title_l or "quarterly results" in title_l:
@@ -338,6 +439,23 @@ def _looks_like_official_documentation(*, host: str, path: str, title: str) -> b
     if any(part in path for part in ("/docs", "/documentation", "/api-reference", "/reference", "/developers")):
         return True
     return any(marker in title for marker in ("documentation", "docs", "api reference", "developer docs"))
+
+
+def _looks_like_scholarly_surface(*, host: str, path: str, title: str) -> bool:
+    if any(part in path for part in ("/abs/", "/paper/", "/papers/", "/article/", "/articles/", "/journal/", "/doi/")):
+        return True
+    scholarly_title_markers = (
+        "journal",
+        "proceedings",
+        "conference",
+        "arxiv",
+        "doi",
+        "preprint",
+        "paper",
+        "article",
+        "transactions on",
+    )
+    return any(marker in title for marker in scholarly_title_markers)
 
 
 def _hash(payload: JsonObject) -> str:

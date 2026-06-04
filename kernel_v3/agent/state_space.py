@@ -38,6 +38,7 @@ _FAMILY_BY_MARKER = {
     ),
     "retrieval": ("retrieval", "web", "browser.page", "news", "research"),
     "finance": ("finance", "market", "filing", "fundamental", "competitive", "macro", "economic_indicator"),
+    "academic": ("academic", "scholarly", "paper", "literature", "frontier", "preprint", "citation", "science"),
     "legal": ("legal", "contract", "regulation", "compliance"),
     "medical": ("medical", "health", "clinical", "diagnosis"),
     "education": ("education", "tutor", "teach", "learning"),
@@ -71,6 +72,7 @@ _SURFACE_BY_FAMILY = {
     "conversation": "conversation",
     "retrieval": "retrieval",
     "finance": "retrieval",
+    "academic": "retrieval",
     "legal": "retrieval",
     "medical": "conversation",
     "education": "conversation",
@@ -104,6 +106,7 @@ _RESOURCE_BY_FAMILY = {
     "conversation": "conversation_turn",
     "retrieval": "web_page",
     "finance": "official_filing",
+    "academic": "scholarly_source",
     "legal": "legal_source",
     "medical": "medical_source",
     "education": "learning_prompt",
@@ -442,6 +445,8 @@ def _domain(intent_kind: str, families: list[str]) -> str:
     if families:
         if "finance" in families:
             return "finance"
+        if "academic" in families:
+            return "academic"
         if "retrieval" in families:
             return "retrieval"
         return families[0]

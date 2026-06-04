@@ -28,8 +28,7 @@ def infer_answer_profile(
     text = _normalized_text(goal)
     capabilities = _capabilities(semantic_intake=semantic_intake, task_plan=task_plan)
     domain = _domain(text, capabilities)
-    detail_level = "normal"
-    format_name = "answer"
+    format_name, detail_level = _default_shape(domain=domain, capabilities=capabilities)
     sections = _target_sections(format_name=format_name, domain=domain)
     min_chars, min_sections = _minimum_shape(detail_level, format_name=format_name)
     profile_id = "answer-profile-" + _short_hash(
@@ -180,11 +179,24 @@ def _profile_from_semantic_hint(semantic_intake: SemanticIntake | None, *, respo
 def _domain(text: str, capabilities: set[str]) -> str:
     if any(item.startswith("finance.") for item in capabilities) or _contains_any(text, _FINANCE_MARKERS):
         return "finance"
+    if any(item.startswith("academic.") for item in capabilities):
+        return "academic"
     if _contains_any(text, _POLICY_MARKERS):
         return "policy"
     if any(item.startswith("technical.") for item in capabilities):
         return "technical"
     return "general_research" if _contains_any(text, ("调研", "调查", "研究", "research", "investigate")) else "general"
+
+
+def _default_shape(*, domain: str, capabilities: set[str]) -> tuple[str, str]:
+    if domain == "academic" and any(
+        capability in capabilities
+        for capability in {"academic.frontier_research", "academic.literature_review", "academic.research"}
+    ):
+        return "detailed_report", "detailed"
+    if domain == "finance" and "finance.fundamentals_research" in capabilities:
+        return "detailed_report", "detailed"
+    return "answer", "normal"
 
 
 def _target_sections(*, format_name: str, domain: str) -> list[str]:
@@ -204,6 +216,8 @@ def _target_sections(*, format_name: str, domain: str) -> list[str]:
         return ["结论摘要", "政策原文与发布主体", "时间线", "适用对象", "影响路径", "风险与不确定性", "证据质量与局限"]
     if domain == "technical":
         return ["结论摘要", "官方事实", "关键接口或机制", "使用约束", "示例或操作建议", "证据质量与局限"]
+    if domain == "academic":
+        return ["结论摘要", "研究问题与范围", "关键文献与来源", "前沿方向", "方法与结果", "争议与开放问题", "证据质量与局限"]
     if format_name in {"detailed_report", "deep_report", "memo"}:
         return ["结论摘要", "背景", "关键发现", "证据", "分析", "风险与局限", "下一步"]
     return ["answer", "limitations"]
@@ -214,6 +228,8 @@ def _minimum_coverage(*, domain: str, format_name: str) -> list[str]:
         return ["business_overview", "financial_performance", "cash_flow_or_balance_sheet", "valuation_or_market_data", "risks_or_limitations"]
     if domain == "policy":
         return ["policy_source", "issuing_body", "timeline", "impact_path", "uncertainty"]
+    if domain == "academic":
+        return ["scholarly_sources", "research_scope", "key_findings", "frontier_or_open_questions", "limitations"]
     if format_name in {"detailed_report", "deep_report", "memo"}:
         return ["summary", "evidence", "analysis", "limitations"]
     return ["answer"]
@@ -258,6 +274,14 @@ def _coverage_gaps(answer: str, *, profile: AnswerProfile) -> list[str]:
             "timeline": ("时间", "日期", "生效", "timeline", "date", "effective"),
             "impact_path": ("影响", "路径", "impact", "mechanism"),
             "uncertainty": ("风险", "不确定", "局限", "uncertain", "limitation"),
+        }
+    elif domain == "academic":
+        checks = {
+            "scholarly_sources": ("论文", "文献", "期刊", "预印本", "paper", "article", "journal", "preprint", "arxiv", "doi"),
+            "research_scope": ("范围", "问题", "背景", "scope", "question", "background"),
+            "key_findings": ("发现", "结果", "方法", "定理", "findings", "result", "method", "theorem"),
+            "frontier_or_open_questions": ("前沿", "开放问题", "争议", "frontier", "open problem", "debate"),
+            "limitations": ("局限", "不确定", "limitations", "uncertain"),
         }
     else:
         checks = {

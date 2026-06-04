@@ -138,6 +138,8 @@ def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "
         return -0.32
     if source_kind == "sec_edgar_browse":
         return -0.12
+    if source_kind in {"academic_source_directory", "scholarly_search", "scholarly_index_search"}:
+        return -0.48
     if source_kind == "crawl_seed":
         return -0.08
     if source_kind in {"crawl_discovered", "crawl_sitemap", "direct_url"}:

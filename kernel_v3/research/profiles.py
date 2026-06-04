@@ -6,7 +6,12 @@ from kernel_v3.research.contracts import ResearchProfile
 
 FINANCE_FUNDAMENTALS_PROFILE_ID = "finance_fundamentals"
 TECHNICAL_DOCUMENTATION_PROFILE_ID = "technical_documentation"
-RESEARCH_PROFILE_IDS = (FINANCE_FUNDAMENTALS_PROFILE_ID, TECHNICAL_DOCUMENTATION_PROFILE_ID)
+ACADEMIC_RESEARCH_PROFILE_ID = "academic_research"
+RESEARCH_PROFILE_IDS = (
+    FINANCE_FUNDAMENTALS_PROFILE_ID,
+    TECHNICAL_DOCUMENTATION_PROFILE_ID,
+    ACADEMIC_RESEARCH_PROFILE_ID,
+)
 RESEARCH_DEPTHS = ("light", "balanced", "deep")
 
 FINANCE_FUNDAMENTAL_FACET_ALIASES: dict[str, list[str]] = {
@@ -239,6 +244,167 @@ _TECHNICAL_DOC_DEPTH_DEFAULTS: dict[str, JsonObject] = {
     },
 }
 
+ACADEMIC_RESEARCH_FACET_ALIASES: dict[str, list[str]] = {
+    "scholarly_work": [
+        "paper",
+        "preprint",
+        "article",
+        "journal",
+        "conference",
+        "proceedings",
+        "arxiv",
+        "doi",
+        "论文",
+        "预印本",
+        "期刊",
+        "会议",
+        "学术",
+    ],
+    "frontier_or_recent": [
+        "recent",
+        "latest",
+        "frontier",
+        "state of the art",
+        "open problem",
+        "survey",
+        "review",
+        "综述",
+        "前沿",
+        "最新",
+        "开放问题",
+        "研究进展",
+    ],
+    "method_or_result": [
+        "theorem",
+        "proof",
+        "method",
+        "result",
+        "experiment",
+        "algorithm",
+        "model",
+        "定理",
+        "证明",
+        "方法",
+        "结果",
+        "实验",
+        "算法",
+        "模型",
+    ],
+    "bibliographic_metadata": [
+        "author",
+        "authors",
+        "abstract",
+        "citation",
+        "cited by",
+        "venue",
+        "year",
+        "doi",
+        "arxiv",
+        "作者",
+        "摘要",
+        "引用",
+        "发表",
+        "年份",
+    ],
+}
+
+ACADEMIC_RESEARCH_FACET_TRIGGERS: dict[str, list[str]] = {
+    "scholarly_work": [
+        "paper",
+        "papers",
+        "literature",
+        "research",
+        "academic",
+        "scholarly",
+        "论文",
+        "文献",
+        "研究",
+        "学术",
+    ],
+    "frontier_or_recent": [
+        "frontier",
+        "frontiers",
+        "latest",
+        "recent",
+        "state of the art",
+        "open problem",
+        "前沿",
+        "最新",
+        "进展",
+        "开放问题",
+    ],
+    "method_or_result": [
+        "method",
+        "methods",
+        "theorem",
+        "proof",
+        "result",
+        "experiment",
+        "方法",
+        "定理",
+        "证明",
+        "结果",
+        "实验",
+    ],
+    "bibliographic_metadata": [
+        "citation",
+        "doi",
+        "arxiv",
+        "author",
+        "venue",
+        "引用",
+        "作者",
+        "期刊",
+        "会议",
+    ],
+}
+
+ACADEMIC_RESEARCH_TASK_KINDS = [
+    "academic_research",
+    "frontier_research",
+    "literature_review",
+    "paper_search",
+    "scholarly_research",
+]
+
+ACADEMIC_DISCOVERY_SOURCE_KINDS = [
+    "scholarly_search",
+    "scholarly_index_search",
+    "academic_source_directory",
+]
+
+_ACADEMIC_QUERY_TEMPLATES = [
+    "{query}",
+    "{query} arXiv recent papers survey",
+    "{query} state of the art survey review open problems",
+    "{query} academic paper literature review",
+    "{query} site:arxiv.org/abs",
+    "{query} Semantic Scholar papers",
+    "{query} OpenAlex works",
+    "{query} DOI journal article",
+]
+
+_ACADEMIC_DEPTH_DEFAULTS: dict[str, JsonObject] = {
+    "light": {
+        "max_queries": 4,
+        "max_sources": 30,
+        "max_fetches": 12,
+        "max_spans_per_document": 4,
+    },
+    "balanced": {
+        "max_queries": 8,
+        "max_sources": 80,
+        "max_fetches": 24,
+        "max_spans_per_document": 8,
+    },
+    "deep": {
+        "max_queries": 24,
+        "max_sources": 240,
+        "max_fetches": 72,
+        "max_spans_per_document": 16,
+    },
+}
+
 TECHNICAL_DOC_FACET_ALIASES: dict[str, list[str]] = {
     "endpoint": ["endpoint", "base url", "base_url", "api base", "host", "接口地址", "端点", "基础地址"],
     "authentication": [
@@ -442,11 +608,88 @@ def technical_documentation_profile() -> ResearchProfile:
     )
 
 
+def academic_research_profile() -> ResearchProfile:
+    return ResearchProfile(
+        profile_id=ACADEMIC_RESEARCH_PROFILE_ID,
+        domain="academic_research",
+        description="Scholarly research with paper, preprint, publisher, and academic-index source preference.",
+        primary_source_families=[
+            "scholarly_preprint",
+            "scholarly_publisher",
+            "academic_repository",
+            "standards_body",
+        ],
+        secondary_source_families=[
+            "scholarly_index",
+            "reputable_news",
+        ],
+        weak_source_families=[
+            "reference_dictionary",
+            "encyclopedia",
+            "generic_web",
+            "blog",
+            "forum",
+            "social",
+            "unknown",
+        ],
+        minimum_primary_authority_score=0.78,
+        citations_required=True,
+        metadata={
+            "default_output_boundary": "scholarly_facts_methods_open_questions_limitations",
+            "default_research_depth": "balanced",
+            "query_strategy": {
+                "strategy_id": "academic_scholarly_expansion",
+                "templates": list(_ACADEMIC_QUERY_TEMPLATES),
+                "preferred_source_families": [
+                    "scholarly_preprint",
+                    "scholarly_publisher",
+                    "academic_repository",
+                    "scholarly_index",
+                ],
+            },
+            "evidence_policy": {
+                "policy_id": "academic_research_evidence",
+                "facet_aliases": ACADEMIC_RESEARCH_FACET_ALIASES,
+                "facet_triggers": ACADEMIC_RESEARCH_FACET_TRIGGERS,
+                "task_kinds": ACADEMIC_RESEARCH_TASK_KINDS,
+                "default_facets": ["scholarly_work"],
+                "task_default_facets": ["bibliographic_metadata"],
+                "numeric_fact_facets": [],
+                "discovery_source_kinds": ACADEMIC_DISCOVERY_SOURCE_KINDS,
+                "discovery_query_markers": ["search", "index", "catalog", "directory"],
+                "discovery_evidence_markers": [
+                    "paper",
+                    "preprint",
+                    "article",
+                    "journal",
+                    "doi",
+                    "arxiv",
+                    "论文",
+                    "文献",
+                ],
+            },
+            "evidence_compaction": {
+                "strategy_id": "profile_facet_authority_compaction",
+                "max_items": 14,
+                "per_source_limit": 4,
+                "prefer_authority": True,
+                "prefer_facet_coverage": True,
+            },
+            "research_depths": {
+                key: dict(value)
+                for key, value in _ACADEMIC_DEPTH_DEFAULTS.items()
+            },
+        },
+    )
+
+
 def profile_by_id(profile_id: str | None) -> ResearchProfile | None:
     if profile_id == FINANCE_FUNDAMENTALS_PROFILE_ID:
         return finance_fundamentals_profile()
     if profile_id == TECHNICAL_DOCUMENTATION_PROFILE_ID:
         return technical_documentation_profile()
+    if profile_id == ACADEMIC_RESEARCH_PROFILE_ID:
+        return academic_research_profile()
     return None
 
 

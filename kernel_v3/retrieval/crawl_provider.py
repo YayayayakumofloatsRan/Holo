@@ -89,6 +89,7 @@ class SourceDirectorySearchProvider:
                 "source_directory_id": entry.source_id,
                 "source_family": entry.source_family,
                 "authority_level": entry.authority_level,
+                "source_kind": _source_directory_source_kind(profile_id),
                 "allowed_hosts": list(entry.allowed_hosts),
                 "source_directory_relevance_score": round(ranked_entry.score, 6),
             }
@@ -743,6 +744,12 @@ def _safe_url_diagnostics(uri: str) -> JsonObject:
         "url_scheme": parsed.scheme,
         "host_hash": hashlib.sha256(host.lower().encode("utf-8")).hexdigest() if host else "",
     }
+
+
+def _source_directory_source_kind(profile_id: str) -> str:
+    if profile_id == "academic_research":
+        return "academic_source_directory"
+    return "source_directory_entry"
 
 
 def _hash(value: str) -> str:

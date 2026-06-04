@@ -79,12 +79,15 @@ normal thread-history surface.
 ## Current Capability Snapshot
 
 Recent kernel-v3 hardening is tracked in
-`docs/KERNEL_V3_PROGRESS_2026-06-03_RETRIEVAL_LOOP_HARDENING.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-03_RETRIEVAL_LOOP_HARDENING.md` and
+`docs/KERNEL_V3_PROGRESS_2026-06-04_ACADEMIC_RESEARCH_PROFILE.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
-payloads before processor calls, and SEC companyfacts/direct-URL retrieval now
+payloads before processor calls, SEC companyfacts/direct-URL retrieval now
 preserves structured financial evidence such as concept, metric, period, filing,
-and value fields.
+and value fields, and scholarly/frontier research can use an
+`academic_research` profile with academic source families, discovery-only
+source handling, topic-coverage gates, and live arXiv paper discovery.
 
 Kernel v3 currently contains the infrastructure for:
 
@@ -215,6 +218,15 @@ Kernel v3 currently contains the infrastructure for:
   domains as well as explicit capability names. This keeps a model packet like
   `domain=finance_fundamentals` connected to the finance source policy even if
   the planner only proposes a generic `retrieval.run`;
+- academic/frontier research is now represented as a first-class semantic
+  profile. Model packets can express `academic.research`,
+  `academic.frontier_research`, `academic.literature_review`,
+  `academic.paper_search`, or `academic.scholarly_sources`; the host maps those
+  to scholarly source policies, rejects dictionary/encyclopedia evidence for
+  academic research, treats source-directory/search surfaces as discovery-only,
+  checks that evidence covers the user's core topic terms, and can use the live
+  arXiv API to discover concrete paper pages instead of citing generic search
+  pages;
 - durable-memory proposals, approval/rejection, recall, deletion, export, and
   context injection;
 - active memory recall inside the agent loop through `memory.recall`: the model

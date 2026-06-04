@@ -60,6 +60,15 @@ def qualify_evidence_candidate(
             result["reason"] = "target_entity_mismatch"
     if _is_finance_profile(goal=goal, research_profile=research_profile):
         _add_finance_compatibility_fields(result)
+    if bool(result.get("accepted", True)) and _is_academic_profile(goal=goal, research_profile=research_profile):
+        topic_diagnostics = _query_topic_coverage(
+            goal.query,
+            [f"{evidence.title} {evidence.uri} {evidence.text}"],
+        )
+        result["query_topic_coverage"] = topic_diagnostics
+        if topic_diagnostics["topic_terms"] and not topic_diagnostics["satisfied"]:
+            result["accepted"] = False
+            result["reason"] = "query_topic_terms_missing"
     placeholder_diagnostics = _template_placeholder_diagnostics(evidence.text)
     if bool(placeholder_diagnostics.get("template_placeholder_evidence")):
         result["accepted"] = False
@@ -122,6 +131,12 @@ class EvidenceEvaluator:
 
         resolved_profile = resolve_goal_research_profile(goal, research_profile)
         if resolved_profile is not None:
+            if resolved_profile.profile_id == "academic_research":
+                topic_diagnostics = _query_topic_coverage(goal.query, [item.text for item in evidence])
+                diagnostics["query_topic_coverage"] = topic_diagnostics
+                if sufficient and topic_diagnostics["topic_terms"] and not topic_diagnostics["satisfied"]:
+                    sufficient = False
+                    reason = "query_topic_terms_missing"
             assessments = [assess_evidence_source(item, profile=resolved_profile) for item in evidence]
             authority_summary = source_authority_summary(assessments)
             diagnostics["research_profile"] = resolved_profile.profile_id
@@ -238,6 +253,11 @@ def _is_finance_profile(*, goal: SearchGoal, research_profile: ResearchProfile |
     return resolved is not None and resolved.profile_id == FINANCE_FUNDAMENTALS_PROFILE_ID
 
 
+def _is_academic_profile(*, goal: SearchGoal, research_profile: ResearchProfile | None = None) -> bool:
+    resolved = resolve_goal_research_profile(goal, research_profile)
+    return resolved is not None and resolved.profile_id == "academic_research"
+
+
 def _evidence_source_kind(evidence: EvidenceItem) -> str:
     return evidence_source_kind(evidence)
 
@@ -277,6 +297,38 @@ def _template_placeholder_diagnostics(text: str) -> dict[str, object]:
     }
 
 
+def _query_topic_coverage(query: str, evidence_texts: list[str]) -> dict[str, object]:
+    terms = _query_topic_terms(query)
+    corpus = "\n".join(evidence_texts).lower()
+    matched = [term for term in terms if term in corpus]
+    required_count = len(terms) if len(terms) <= 1 else max(2, min(len(terms), (len(terms) + 1) // 2))
+    return {
+        "topic_terms": terms,
+        "matched_topic_terms": matched,
+        "missing_topic_terms": [term for term in terms if term not in set(matched)],
+        "required_match_count": required_count,
+        "satisfied": len(matched) >= required_count,
+    }
+
+
+def _query_topic_terms(query: str) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"[A-Za-z0-9]+|[\u4e00-\u9fff]{2,}", query.lower()):
+        term = match.group(0)
+        if term.isdigit() or len(term) < 2:
+            continue
+        if term in _QUERY_TOPIC_STOPWORDS:
+            continue
+        if len(term) < 4 and not re.search(r"[\u4e00-\u9fff]", term):
+            continue
+        if term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+    return terms[:8]
+
+
 def _authority_satisfies(assessments: object, requirement: str) -> bool:
     items = list(assessments) if isinstance(assessments, list) else []
     if requirement == "any_citable":
@@ -290,3 +342,50 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in (str(raw).strip() for raw in value if isinstance(raw, str)) if item]
+
+
+_QUERY_TOPIC_STOPWORDS = {
+    "about",
+    "academic",
+    "advance",
+    "advances",
+    "analysis",
+    "article",
+    "complete",
+    "comprehensive",
+    "deep",
+    "detailed",
+    "frontier",
+    "frontiers",
+    "information",
+    "investigate",
+    "journal",
+    "latest",
+    "literature",
+    "open",
+    "paper",
+    "papers",
+    "preprint",
+    "problem",
+    "problems",
+    "recent",
+    "report",
+    "research",
+    "review",
+    "scholarly",
+    "search",
+    "state",
+    "study",
+    "survey",
+    "前沿",
+    "最新",
+    "查询",
+    "检索",
+    "搜索",
+    "调查",
+    "研究",
+    "论文",
+    "报告",
+    "文献",
+    "综述",
+}

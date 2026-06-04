@@ -293,6 +293,13 @@ driver/download pages, and marketing pages as insufficient unless they contain
 the requested financial statement facts. Replan toward official filings,
 investor-relations reports, exchange disclosures, structured SEC/EDGAR data,
 or reputable market-data sources for valuation metrics.
+For academic or frontier research, treat dictionary pages, encyclopedias,
+generic explainers, course glossaries, and marketing pages as insufficient for
+frontier claims. Replan toward arXiv/preprint pages, journal or proceedings
+pages, DOI/publisher pages, Semantic Scholar/OpenAlex/Crossref/DBLP indexes,
+or field-specific scholarly indexes. If search returns definitions, change the
+query toward "recent papers", "survey", "state of the art", "open problems",
+paper titles, authors, venues, and source-directory scholarly providers.
 For retrieval.run, payload.metadata.search_strategy may propose one of fallback, aggregate, corpus_only, fresh_live, structured, or crawl when the context exposes an adaptive search provider. This only selects among host-configured providers; it does not grant network or tool permission.
 For long tasks, continue one bounded action at a time; the host owns loop budgets, progress detection, repetition detection, and final termination.
 If policy/context constrains part of the user request, explicitly surface that limit instead of silently omitting it.

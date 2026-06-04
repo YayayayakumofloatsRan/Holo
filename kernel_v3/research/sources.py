@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from kernel_v3.research.contracts import ResearchSourceEntry
-from kernel_v3.research.profiles import FINANCE_FUNDAMENTALS_PROFILE_ID, TECHNICAL_DOCUMENTATION_PROFILE_ID
+from kernel_v3.research.profiles import (
+    ACADEMIC_RESEARCH_PROFILE_ID,
+    FINANCE_FUNDAMENTALS_PROFILE_ID,
+    TECHNICAL_DOCUMENTATION_PROFILE_ID,
+)
 
 
 def source_directory_for_profile(profile_id: str | None) -> list[ResearchSourceEntry]:
@@ -9,7 +13,223 @@ def source_directory_for_profile(profile_id: str | None) -> list[ResearchSourceE
         return finance_fundamentals_source_directory()
     if profile_id == TECHNICAL_DOCUMENTATION_PROFILE_ID:
         return technical_documentation_source_directory()
+    if profile_id == ACADEMIC_RESEARCH_PROFILE_ID:
+        return academic_research_source_directory()
     return []
+
+
+def academic_research_source_directory() -> list[ResearchSourceEntry]:
+    profile = ACADEMIC_RESEARCH_PROFILE_ID
+    return [
+        ResearchSourceEntry(
+            source_id="academic-arxiv-search",
+            profile_id=profile,
+            title="arXiv scholarly preprints",
+            source_family="scholarly_preprint",
+            authority_level="primary",
+            base_url="https://arxiv.org/search/",
+            allowed_hosts=["arxiv.org", "export.arxiv.org"],
+            use_cases=["recent preprints", "mathematics papers", "physics papers", "computer science papers", "survey discovery"],
+            required_identifiers=["research topic", "field or keyword"],
+            query_hints=["{query} arXiv recent papers", "{query} arXiv survey open problems"],
+            crawl_notes=[
+                "Prefer individual /abs/ or /pdf/ paper pages over search pages for final evidence.",
+                "Record arXiv identifier, version, authors, and publication date when available.",
+            ],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "arxiv-all-search",
+                        "template": "https://arxiv.org/search/?query={query_url}&searchtype=all&abstracts=show&order=-announced_date_first&size=50",
+                        "title": "arXiv search for {query}",
+                        "snippet": "arXiv search entry point for recent scholarly preprints and survey papers.",
+                        "source_kind": "scholarly_search",
+                        "required_values": ["query"],
+                    }
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="academic-semantic-scholar",
+            profile_id=profile,
+            title="Semantic Scholar literature index",
+            source_family="scholarly_index",
+            authority_level="secondary",
+            base_url="https://www.semanticscholar.org/",
+            allowed_hosts=["semanticscholar.org", "www.semanticscholar.org"],
+            use_cases=["paper discovery", "citation graph", "authors", "related papers"],
+            required_identifiers=["research topic", "paper title", "author"],
+            query_hints=["{query} Semantic Scholar papers", "{query} citation graph survey"],
+            crawl_notes=[
+                "Use as discovery or secondary bibliographic evidence.",
+                "Prefer linked paper/publisher/preprint pages for final technical claims.",
+            ],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "semantic-scholar-search",
+                        "template": "https://www.semanticscholar.org/search?q={query_url}&sort=relevance",
+                        "title": "Semantic Scholar search for {query}",
+                        "snippet": "Semantic Scholar search entry point for papers, authors, and citation graph context.",
+                        "source_kind": "scholarly_index_search",
+                        "required_values": ["query"],
+                    }
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="academic-openalex-works",
+            profile_id=profile,
+            title="OpenAlex scholarly works index",
+            source_family="scholarly_index",
+            authority_level="secondary",
+            base_url="https://openalex.org/",
+            allowed_hosts=["openalex.org", "api.openalex.org"],
+            use_cases=["paper discovery", "institutions", "topics", "publication metadata"],
+            required_identifiers=["research topic", "paper title", "author"],
+            query_hints=["{query} OpenAlex works", "{query} scholarly works index"],
+            crawl_notes=["Use as bibliographic discovery and cross-check source, not as a substitute for the paper body."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "openalex-works-search",
+                        "template": "https://openalex.org/works?page=1&filter=default.search%3A{query_url}",
+                        "title": "OpenAlex works search for {query}",
+                        "snippet": "OpenAlex search entry point for scholarly works and topics.",
+                        "source_kind": "scholarly_index_search",
+                        "required_values": ["query"],
+                    }
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="academic-crossref-search",
+            profile_id=profile,
+            title="Crossref DOI and publication metadata search",
+            source_family="scholarly_index",
+            authority_level="secondary",
+            base_url="https://search.crossref.org/",
+            allowed_hosts=["crossref.org", "www.crossref.org", "search.crossref.org", "doi.org"],
+            use_cases=["DOI lookup", "publisher metadata", "bibliographic verification"],
+            required_identifiers=["paper title", "author", "topic"],
+            query_hints=["{query} DOI Crossref", "{query} journal article DOI"],
+            crawl_notes=["Use DOI metadata for bibliographic verification and link to publisher/preprint sources when possible."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "crossref-search",
+                        "template": "https://search.crossref.org/?q={query_url}",
+                        "title": "Crossref search for {query}",
+                        "snippet": "Crossref search entry point for DOI and publication metadata.",
+                        "source_kind": "scholarly_index_search",
+                        "required_values": ["query"],
+                    }
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="academic-dblp-search",
+            profile_id=profile,
+            title="DBLP computer science bibliography",
+            source_family="scholarly_index",
+            authority_level="secondary",
+            base_url="https://dblp.org/search",
+            allowed_hosts=["dblp.org", "www.dblp.org"],
+            use_cases=["computer science papers", "conference proceedings", "author bibliographies"],
+            required_identifiers=["paper title", "author", "topic"],
+            query_hints=["{query} DBLP conference paper", "{query} bibliography"],
+            crawl_notes=["Use DBLP for bibliographic discovery; final claims should cite paper, publisher, or preprint pages."],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "dblp-search",
+                        "template": "https://dblp.org/search?q={query_url}",
+                        "title": "DBLP search for {query}",
+                        "snippet": "DBLP search entry point for computer-science bibliographic records.",
+                        "source_kind": "scholarly_index_search",
+                        "required_values": ["query"],
+                    }
+                ]
+            },
+        ),
+        ResearchSourceEntry(
+            source_id="academic-math-indexes",
+            profile_id=profile,
+            title="Mathematics indexes and society publishers",
+            source_family="scholarly_index",
+            authority_level="secondary",
+            base_url="https://zbmath.org/",
+            allowed_hosts=[
+                "zbmath.org",
+                "mathscinet.ams.org",
+                "ams.org",
+                "www.ams.org",
+                "projecteuclid.org",
+                "www.projecteuclid.org",
+                "ems.press",
+            ],
+            use_cases=["mathematics literature", "reviews", "journal papers", "bibliographic verification"],
+            required_identifiers=["mathematics topic", "paper title", "author"],
+            query_hints=["{query} zbMATH", "{query} AMS journal paper", "{query} Project Euclid"],
+            crawl_notes=[
+                "Use indexes for discovery and reviews; prefer paper/publisher/preprint pages for final mathematical claims.",
+                "For frontier topics, capture survey papers and open-problem discussions when available.",
+            ],
+        ),
+        ResearchSourceEntry(
+            source_id="academic-publisher-search",
+            profile_id=profile,
+            title="Academic publisher search surfaces",
+            source_family="scholarly_publisher",
+            authority_level="primary",
+            base_url="https://link.springer.com/search",
+            allowed_hosts=[
+                "link.springer.com",
+                "springer.com",
+                "www.springer.com",
+                "cambridge.org",
+                "www.cambridge.org",
+                "sciencedirect.com",
+                "www.sciencedirect.com",
+                "nature.com",
+                "www.nature.com",
+                "epubs.siam.org",
+                "tandfonline.com",
+                "www.tandfonline.com",
+                "wiley.com",
+                "onlinelibrary.wiley.com",
+                "dl.acm.org",
+                "ieeexplore.ieee.org",
+            ],
+            use_cases=["journal articles", "publisher-hosted papers", "book chapters", "review articles"],
+            required_identifiers=["research topic", "paper title", "author", "venue"],
+            query_hints=["{query} Springer article", "{query} Cambridge Core article", "{query} SIAM journal"],
+            crawl_notes=[
+                "Publisher pages can be paywalled; still record title, abstract, venue, authors, and DOI when visible.",
+                "Avoid dictionary/product pages under the same publisher domain unless they are explicitly scholarly articles.",
+            ],
+            metadata={
+                "query_url_templates": [
+                    {
+                        "template_id": "springer-search",
+                        "template": "https://link.springer.com/search?query={query_url}",
+                        "title": "Springer search for {query}",
+                        "snippet": "Springer search entry point for journal articles, books, and review papers.",
+                        "source_kind": "scholarly_search",
+                        "required_values": ["query"],
+                    },
+                    {
+                        "template_id": "cambridge-core-search",
+                        "template": "https://www.cambridge.org/core/search?q={query_url}",
+                        "title": "Cambridge Core search for {query}",
+                        "snippet": "Cambridge Core search entry point for academic books and journals.",
+                        "source_kind": "scholarly_search",
+                        "required_values": ["query"],
+                    },
+                ]
+            },
+        ),
+    ]
 
 
 def technical_documentation_source_directory() -> list[ResearchSourceEntry]:

@@ -15,6 +15,11 @@ from kernel_v3.contracts import JsonObject
 
 _MAX_GRAPH_NODES = 32
 _RETRIEVAL_CAPABILITIES = {
+    "academic.research",
+    "academic.frontier_research",
+    "academic.literature_review",
+    "academic.paper_search",
+    "academic.scholarly_sources",
     "finance.fundamentals_research",
     "finance.market_news",
     "finance.market_data",
@@ -48,6 +53,14 @@ _EXECUTABLE_TOOL_CAPABILITIES = {
 }
 _FINANCE_FUNDAMENTALS_PROFILE_ID = "finance_fundamentals"
 _TECHNICAL_DOCUMENTATION_PROFILE_ID = "technical_documentation"
+_ACADEMIC_RESEARCH_PROFILE_ID = "academic_research"
+_ACADEMIC_RESEARCH_CAPABILITIES = {
+    "academic.research",
+    "academic.frontier_research",
+    "academic.literature_review",
+    "academic.paper_search",
+    "academic.scholarly_sources",
+}
 _TECHNICAL_DOCUMENTATION_CAPABILITIES = {
     "technical.documentation_research",
     "technical.api_documentation",
@@ -61,7 +74,7 @@ def task_graph_from_semantic(intake: SemanticIntake) -> TaskGraphProposal:
     prior_node_id: str | None = None
     for index, intent in enumerate(_intent_dicts(intake), start=1):
         kind = _intent_kind(intent)
-        capabilities = _string_list(intent.get("required_capabilities"))
+        capabilities = _implied_capabilities(kind, _string_list(intent.get("required_capabilities")))
         metadata = _metadata(intent)
         metadata.setdefault("semantic_label", kind)
         metadata.setdefault("capability_plan", _capability_plan(capabilities))
@@ -306,6 +319,20 @@ def _metadata(intent: JsonObject) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _implied_capabilities(kind: str, capabilities: list[str]) -> list[str]:
+    values = list(capabilities)
+    normalized = kind.strip().lower()
+    if normalized in {"academic_frontier_research", "frontier_research"}:
+        values.append("academic.frontier_research")
+    elif normalized in {"literature_review", "scholarly_literature_review"}:
+        values.append("academic.literature_review")
+    elif normalized in {"paper_search", "scholarly_paper_search"}:
+        values.append("academic.paper_search")
+    elif normalized in {"academic_research", "scholarly_research"}:
+        values.append("academic.research")
+    return _ordered_unique(values)
+
+
 def _capability_args(metadata: JsonObject) -> JsonObject:
     value = metadata.get("capability_args")
     if not isinstance(value, dict):
@@ -325,6 +352,52 @@ def _default_capability_args_for_node(node: TaskGraphNode) -> JsonObject:
     capabilities = set(node.required_capabilities)
     if not capabilities.intersection(_RETRIEVAL_CAPABILITIES):
         return {}
+    if capabilities.intersection(_ACADEMIC_RESEARCH_CAPABILITIES):
+        query = " ".join(str(node.goal or "").split()) or "academic research"
+        task_kind = _primary_academic_task_kind(capabilities)
+        payloads = [
+            _profile_retrieval_payload(
+                query=query,
+                task_kind=task_kind,
+                authority="secondary_or_better",
+                strategy="aggregate",
+                profile_id=_ACADEMIC_RESEARCH_PROFILE_ID,
+                required=True,
+            )
+        ]
+        if "academic.frontier_research" in capabilities or "academic.research" in capabilities:
+            payloads.extend(
+                [
+                    _profile_retrieval_payload(
+                        query=f"{query} arXiv recent papers survey open problems",
+                        task_kind="frontier_research",
+                        authority="secondary_or_better",
+                        strategy="aggregate",
+                        profile_id=_ACADEMIC_RESEARCH_PROFILE_ID,
+                        required=False,
+                    ),
+                    _profile_retrieval_payload(
+                        query=f"{query} state of the art review latest results",
+                        task_kind="frontier_research",
+                        authority="secondary_or_better",
+                        strategy="fresh_live",
+                        profile_id=_ACADEMIC_RESEARCH_PROFILE_ID,
+                        required=False,
+                    ),
+                ]
+            )
+        if "academic.literature_review" in capabilities or "academic.paper_search" in capabilities:
+            payloads.append(
+                _profile_retrieval_payload(
+                    query=f"{query} literature review DOI Semantic Scholar OpenAlex Crossref",
+                    task_kind="literature_review",
+                    authority="secondary_or_better",
+                    strategy="aggregate",
+                    profile_id=_ACADEMIC_RESEARCH_PROFILE_ID,
+                    required=False,
+                )
+            )
+        return {"retrieval.run": payloads}
     if capabilities.intersection(_TECHNICAL_DOCUMENTATION_CAPABILITIES):
         query = " ".join(str(node.goal or "").split()) or "technical documentation research"
         payloads = [
@@ -460,6 +533,16 @@ def _primary_technical_documentation_task_kind(capabilities: set[str]) -> str:
     if "technical.developer_docs" in capabilities:
         return "developer_docs"
     return "technical_documentation"
+
+
+def _primary_academic_task_kind(capabilities: set[str]) -> str:
+    if "academic.frontier_research" in capabilities:
+        return "frontier_research"
+    if "academic.literature_review" in capabilities:
+        return "literature_review"
+    if "academic.paper_search" in capabilities:
+        return "paper_search"
+    return "academic_research"
 
 
 def _profile_for_finance_capabilities(capabilities: set[str]) -> str | None:

@@ -16,6 +16,7 @@ from kernel_v3.retrieval.contracts import (
     SearchSource,
 )
 from kernel_v3.retrieval.composite import AdaptiveSearchProvider, AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
+from kernel_v3.retrieval.arxiv_provider import ArxivApiSearchProvider
 from kernel_v3.retrieval.corpus_provider import CorpusFetchProvider, CorpusSearchProvider
 from kernel_v3.retrieval.crawl_provider import BoundedCrawlSearchProvider, DirectUrlSearchProvider, SourceDirectorySearchProvider
 from kernel_v3.retrieval.fiscaldata_provider import FiscalDataSearchProvider
@@ -48,6 +49,7 @@ __all__ = [
     "CorpusSearchProvider",
     "AdaptiveSearchProvider",
     "AggregateSearchProvider",
+    "ArxivApiSearchProvider",
     "BoundedCrawlSearchProvider",
     "DirectUrlSearchProvider",
     "EvidenceEvaluationDecision",

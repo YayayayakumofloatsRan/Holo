@@ -21,6 +21,11 @@ from kernel_v3.research.identity import (
     resolve_issuer_identity,
 )
 from kernel_v3.research.profiles import (
+    ACADEMIC_DISCOVERY_SOURCE_KINDS,
+    ACADEMIC_RESEARCH_FACET_ALIASES,
+    ACADEMIC_RESEARCH_FACET_TRIGGERS,
+    ACADEMIC_RESEARCH_PROFILE_ID,
+    ACADEMIC_RESEARCH_TASK_KINDS,
     FINANCE_DISCOVERY_SOURCE_KINDS,
     FINANCE_FUNDAMENTAL_FACET_ALIASES,
     FINANCE_FUNDAMENTAL_FACET_TRIGGERS,
@@ -30,6 +35,7 @@ from kernel_v3.research.profiles import (
     RESEARCH_PROFILE_IDS,
     RESEARCH_DEPTHS,
     TECHNICAL_DOCUMENTATION_PROFILE_ID,
+    academic_research_profile,
     finance_fundamentals_profile,
     profile_by_id,
     research_depth_defaults,
@@ -52,6 +58,7 @@ from kernel_v3.research.source_policy import (
     source_authority_summary,
 )
 from kernel_v3.research.sources import (
+    academic_research_source_directory,
     finance_fundamentals_source_directory,
     source_directory_for_profile,
     technical_documentation_source_directory,
@@ -69,6 +76,11 @@ from kernel_v3.research.site_index import (
 )
 
 __all__ = [
+    "ACADEMIC_DISCOVERY_SOURCE_KINDS",
+    "ACADEMIC_RESEARCH_FACET_ALIASES",
+    "ACADEMIC_RESEARCH_FACET_TRIGGERS",
+    "ACADEMIC_RESEARCH_PROFILE_ID",
+    "ACADEMIC_RESEARCH_TASK_KINDS",
     "FINANCE_FUNDAMENTALS_PROFILE_ID",
     "FINANCE_DISCOVERY_SOURCE_KINDS",
     "FINANCE_FUNDAMENTAL_FACET_ALIASES",
@@ -90,6 +102,8 @@ __all__ = [
     "ResearchSourceEntry",
     "ResearchCorpusStore",
     "SourceAssessment",
+    "academic_research_profile",
+    "academic_research_source_directory",
     "assess_evidence_source",
     "assess_search_source",
     "classify_source_family",

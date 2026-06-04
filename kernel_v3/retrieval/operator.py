@@ -8,6 +8,7 @@ from kernel_v3.contracts import CandidateAction, JsonObject, Observation, ToolMa
 from kernel_v3.journal import JournalStore
 from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.research.contracts import CorpusDocument, ResearchProfile, SourceAssessment
+from kernel_v3.research.profile_policy import profile_discovery_source_kinds
 from kernel_v3.research.profiles import profile_by_id
 from kernel_v3.research.source_policy import assess_search_source, source_authority_summary
 from kernel_v3.retrieval.citations import citation_from_evidence
@@ -904,6 +905,7 @@ def _fetchable_ranked_sources(goal: SearchGoal, ranked: list[RankedSource]) -> t
             fetchable.append(source)
             continue
         target = _dict_or_empty(source.metadata.get("target_entity"))
+        assessment = _dict_or_empty(source.metadata.get("source_assessment"))
         rejections.append(
             {
                 "source_id": source.source_id,
@@ -919,8 +921,9 @@ def _fetchable_ranked_sources(goal: SearchGoal, ranked: list[RankedSource]) -> t
                 "metadata": _safe_json(
                     {
                         "goal_id": goal.goal_id,
-                        "source_kind": source.metadata.get("source_kind"),
-                        "source_family": source.metadata.get("source_family"),
+                        "source_kind": _ranked_source_kind(source),
+                        "source_family": source.metadata.get("source_family") or assessment.get("source_family"),
+                        "authority_level": assessment.get("authority_level"),
                     }
                 ),
             }
@@ -929,6 +932,12 @@ def _fetchable_ranked_sources(goal: SearchGoal, ranked: list[RankedSource]) -> t
 
 
 def _ranked_source_fetch_rejection_reason(source: RankedSource) -> str | None:
+    discovery_reason = _research_profile_discovery_source_rejection(source)
+    if discovery_reason is not None:
+        return discovery_reason
+    weak_reason = _research_profile_weak_source_rejection(source)
+    if weak_reason is not None:
+        return weak_reason
     target = _dict_or_empty(source.metadata.get("target_entity"))
     if not bool(target.get("target_entity_required")):
         return None
@@ -937,6 +946,41 @@ def _ranked_source_fetch_rejection_reason(source: RankedSource) -> str | None:
     if _ranked_source_target_exempt(source):
         return None
     return "source_target_entity_mismatch"
+
+
+def _research_profile_discovery_source_rejection(source: RankedSource) -> str | None:
+    assessment = _dict_or_empty(source.metadata.get("source_assessment"))
+    profile_id = str(assessment.get("profile_id") or source.metadata.get("research_profile") or "")
+    source_kind = _ranked_source_kind(source)
+    if not profile_id or not source_kind:
+        return None
+    if profile_id != "academic_research":
+        return None
+    profile = profile_by_id(profile_id)
+    if profile is None:
+        return None
+    if source_kind in profile_discovery_source_kinds(profile):
+        return "source_discovery_only_for_research_profile"
+    return None
+
+
+def _research_profile_weak_source_rejection(source: RankedSource) -> str | None:
+    assessment = _dict_or_empty(source.metadata.get("source_assessment"))
+    profile_id = str(assessment.get("profile_id") or source.metadata.get("research_profile") or "")
+    family = str(assessment.get("source_family") or source.metadata.get("source_family") or "")
+    if profile_id == "academic_research" and family in {"reference_dictionary", "encyclopedia"}:
+        return "source_weak_for_academic_research_profile"
+    return None
+
+
+def _ranked_source_kind(source: RankedSource) -> str:
+    raw = source.metadata.get("source_kind")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    assessment = _dict_or_empty(source.metadata.get("source_assessment"))
+    metadata = _dict_or_empty(assessment.get("metadata"))
+    raw = metadata.get("source_kind")
+    return raw.strip() if isinstance(raw, str) and raw.strip() else ""
 
 
 def _ranked_source_target_exempt(source: RankedSource) -> bool:

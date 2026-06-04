@@ -221,6 +221,22 @@ def source_directory_task_boost(*, family: str, task_text: str, candidate_text: 
         if family in {"regulatory_filing", "structured_regulatory_data", "company_ir", "exchange_filing"}:
             boost += 0.25
     if (
+        "academic" in task_text
+        or "scholarly" in task_text
+        or "frontier" in task_text
+        or "literature" in task_text
+        or "paper" in task_text
+        or "preprint" in task_text
+        or "arxiv" in task_text
+        or "论文" in task_text
+        or "文献" in task_text
+        or "前沿" in task_text
+    ):
+        if family in {"scholarly_preprint", "scholarly_publisher", "academic_repository", "scholarly_index"}:
+            boost += 0.4
+        elif "paper" in candidate_text or "journal" in candidate_text or "arxiv" in candidate_text:
+            boost += 0.14
+    if (
         "documentation" in task_text
         or "api" in task_text
         or "developer" in task_text
