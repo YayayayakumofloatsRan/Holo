@@ -80,7 +80,9 @@ normal thread-history surface.
 
 Recent kernel-v3 hardening is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-03_RETRIEVAL_LOOP_HARDENING.md` and
-`docs/KERNEL_V3_PROGRESS_2026-06-04_ACADEMIC_RESEARCH_PROFILE.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-04_ACADEMIC_RESEARCH_PROFILE.md`, with the
+latest open-research loop and attention work in
+`docs/KERNEL_V3_PROGRESS_2026-06-04_OPEN_RESEARCH_ATTENTION.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, SEC companyfacts/direct-URL retrieval now
@@ -197,7 +199,9 @@ Kernel v3 currently contains the infrastructure for:
 - thread-scoped RAG/working-memory context for the agent loop: recent turns,
   assistant results, task traces, evidence refs, citation refs, and failure
   diagnostics are compacted from the journal and injected into planner/evaluator
-  packets. This is thread-local and does not write durable memory;
+  packets. It also exposes prioritized attention blocks for recent failures,
+  current evidence, recent final answers, and latest task state. This is
+  thread-local and does not write durable memory;
 - optional model-backed semantic intake, planner, evaluator, synthesizer, and
   chat routing;
 - bounded retrieval with evidence/citation reports and source quality policy;
@@ -227,6 +231,11 @@ Kernel v3 currently contains the infrastructure for:
   checks that evidence covers the user's core topic terms, and can use the live
   arXiv API to discover concrete paper pages instead of citing generic search
   pages;
+- open-ended research can finish with explicit limitations when enough citable
+  evidence already covers the root objective but remaining planned retrieval
+  subgoals are soft gaps such as language coverage, source breadth, or auxiliary
+  angles. Finance, policy, and hard factual metric tasks keep strict planned
+  retrieval coverage;
 - durable-memory proposals, approval/rejection, recall, deletion, export, and
   context injection;
 - active memory recall inside the agent loop through `memory.recall`: the model

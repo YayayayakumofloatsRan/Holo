@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from kernel_v3.agent.answer_profile import infer_answer_profile
-from kernel_v3.agent.contracts import SemanticIntake
+from kernel_v3.agent.contracts import SemanticIntake, TaskRecipe
+from kernel_v3.agent.retrieval_coverage import adaptive_retrieval_completion
 from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
@@ -466,3 +467,201 @@ def test_phase111_academic_discovery_sources_are_not_final_evidence(tmp_path: Pa
     assert report.diagnostics["source_rejection_reasons"]["source_discovery_only_for_research_profile"] == 1
     assert report.diagnostics["evidence_count"] == 0
     assert report.diagnostics["citation_count"] == 0
+
+
+def test_phase111_open_academic_research_soft_subgoals_can_be_limited() -> None:
+    intake = SemanticIntake(
+        intake_id="intake-academic-soft",
+        goal="请检索双曲动力学的前沿研究，写详细中文报告",
+        primary_intent="academic_frontier_research",
+        suggested_mode="retrieval_answer",
+        compound=False,
+        requires_clarification=False,
+        intents=[
+            {
+                "kind": "academic_frontier_research",
+                "text": "请检索双曲动力学的前沿研究，写详细中文报告",
+                "sequence_index": 1,
+                "required_capabilities": ["academic.frontier_research"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {"domain": "academic_research"},
+            }
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
+    proposal = task_graph_from_semantic(intake)
+    validation = validate_task_graph(proposal)
+    plan = build_task_execution_plan(proposal, validation)
+    recipe = TaskRecipe(
+        recipe_id="recipe-academic-soft",
+        allowed_tools=["retrieval.run"],
+        max_steps=8,
+        max_tool_calls=8,
+        max_network_fetches=100,
+        max_total_artifact_bytes=10_000_000,
+        permission_profile="read_only",
+        citations_required=True,
+        finalizer="synthesizer.answer",
+        context_budget_mode="balanced",
+        mode="retrieval_answer",
+        metadata={"task_execution_plan": plan.to_dict()},
+    )
+    payloads = plan.steps[0]["metadata"]["capability_args"]["retrieval.run"]
+    planned_goal_ids = [f"goal-plan-1-{index}" for index, _ in enumerate(payloads, start=1)]
+    coverage = {
+        "required": True,
+        "sufficient": False,
+        "planned_goal_ids": planned_goal_ids,
+        "optional_goal_ids": [],
+        "complete_goal_ids": [planned_goal_ids[0]],
+        "incomplete_goal_ids": planned_goal_ids[1:],
+        "latest_status_by_goal_id": {planned_goal_ids[0]: "sufficient", planned_goal_ids[1]: "insufficient_evidence"},
+    }
+
+    decision = adaptive_retrieval_completion(
+        recipe=recipe,
+        planned_coverage=coverage,
+        evidence_count=6,
+        citation_count=6,
+    )
+
+    assert decision["sufficient"] is True
+    assert decision["reason"] == "open_research_soft_subgoals_can_be_limited"
+    assert decision["soft_incomplete_goal_ids"] == planned_goal_ids[1:]
+
+
+def test_phase111_open_research_soft_completion_uses_goal_signals_not_only_profile_name() -> None:
+    recipe = TaskRecipe(
+        recipe_id="recipe-live-like-open-research",
+        allowed_tools=["retrieval.run"],
+        max_steps=8,
+        max_tool_calls=8,
+        max_network_fetches=100,
+        max_total_artifact_bytes=10_000_000,
+        permission_profile="read_only",
+        citations_required=True,
+        finalizer="synthesizer.answer",
+        context_budget_mode="balanced",
+        mode="retrieval_answer",
+        metadata={
+            "semantic_intake": {
+                "goal": "请检索双曲动力学的前沿研究，按摘要、关键文献、开放问题写详细报告",
+                "primary_intent": "research",
+                "intents": [{"required_capabilities": ["retrieval.run"]}],
+            },
+            "answer_profile": {
+                "format": "detailed_report",
+                "detail_level": "detailed",
+                "target_sections": ["摘要", "关键文献与来源", "前沿方向", "争议与开放问题", "证据质量与局限"],
+                "minimum_coverage": ["summary", "evidence", "analysis", "limitations"],
+                "metadata": {"domain": "general_research"},
+            },
+            "research_mission": {
+                "domain": "general_research",
+                "root_goal": "请检索双曲动力学的前沿研究，按摘要、关键文献、开放问题写详细报告",
+            },
+            "task_execution_plan": {
+                "steps": [
+                    {
+                        "status": "ready",
+                        "tool_name": "retrieval.run",
+                        "sequence_index": 1,
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": [
+                                    {"query": "hyperbolic dynamics frontier recent papers"},
+                                    {"query": "双曲动力学 前沿 开放问题 论文"},
+                                ]
+                            }
+                        },
+                    }
+                ]
+            },
+        },
+    )
+    coverage = {
+        "required": True,
+        "sufficient": False,
+        "planned_goal_ids": ["goal-plan-1-1", "goal-plan-1-2"],
+        "complete_goal_ids": ["goal-plan-1-1"],
+        "incomplete_goal_ids": ["goal-plan-1-2"],
+    }
+
+    decision = adaptive_retrieval_completion(
+        recipe=recipe,
+        planned_coverage=coverage,
+        evidence_count=12,
+        citation_count=12,
+    )
+
+    assert decision["sufficient"] is True
+    assert decision["diagnostics"]["reason"] == "open_research_signals"
+
+
+def test_phase111_hard_fact_research_does_not_soft_complete_from_sparse_subgoals() -> None:
+    recipe = TaskRecipe(
+        recipe_id="recipe-hard-facts",
+        allowed_tools=["retrieval.run"],
+        max_steps=8,
+        max_tool_calls=8,
+        max_network_fetches=100,
+        max_total_artifact_bytes=10_000_000,
+        permission_profile="read_only",
+        citations_required=True,
+        finalizer="synthesizer.answer",
+        context_budget_mode="balanced",
+        mode="retrieval_answer",
+        metadata={
+            "semantic_intake": {
+                "goal": "调查某公司的规模、员工人数、营收和运作方式",
+                "primary_intent": "company_research",
+                "intents": [{"required_capabilities": ["retrieval.run"]}],
+            },
+            "answer_profile": {
+                "format": "detailed_report",
+                "detail_level": "detailed",
+                "target_sections": ["结论摘要", "证据", "分析", "局限"],
+                "minimum_coverage": ["summary", "evidence", "analysis", "limitations"],
+                "metadata": {"domain": "general_research"},
+            },
+            "research_mission": {"domain": "general_research", "root_goal": "调查某公司的规模、员工人数、营收和运作方式"},
+            "task_execution_plan": {
+                "steps": [
+                    {
+                        "status": "ready",
+                        "tool_name": "retrieval.run",
+                        "sequence_index": 1,
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": [
+                                    {"query": "company size employees revenue"},
+                                    {"query": "company operations business model"},
+                                ]
+                            }
+                        },
+                    }
+                ]
+            },
+        },
+    )
+    coverage = {
+        "required": True,
+        "sufficient": False,
+        "planned_goal_ids": ["goal-plan-1-1", "goal-plan-1-2"],
+        "complete_goal_ids": ["goal-plan-1-1"],
+        "incomplete_goal_ids": ["goal-plan-1-2"],
+    }
+
+    decision = adaptive_retrieval_completion(
+        recipe=recipe,
+        planned_coverage=coverage,
+        evidence_count=12,
+        citation_count=12,
+    )
+
+    assert decision["sufficient"] is False
+    assert decision["reason"] == "hard_research_constraints"

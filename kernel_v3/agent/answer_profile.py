@@ -28,9 +28,12 @@ def infer_answer_profile(
     text = _normalized_text(goal)
     capabilities = _capabilities(semantic_intake=semantic_intake, task_plan=task_plan)
     domain = _domain(text, capabilities)
-    format_name, detail_level = _default_shape(domain=domain, capabilities=capabilities)
+    strict_shape = _strict_output_shape(text)
+    explicit_shape = _explicit_output_shape(text)
+    format_name, detail_level = explicit_shape or _default_shape(domain=domain, capabilities=capabilities)
     sections = _target_sections(format_name=format_name, domain=domain)
     min_chars, min_sections = _minimum_shape(detail_level, format_name=format_name)
+    quality_gate = "strict" if strict_shape is not None and format_name in {"detailed_report", "deep_report", "memo"} else "advisory"
     profile_id = "answer-profile-" + _short_hash(
         {
             "goal": text[:512],
@@ -53,7 +56,8 @@ def infer_answer_profile(
         metadata={
             "domain": domain,
             "source": "host_inferred_answer_profile",
-            "quality_gate": "advisory",
+            "quality_gate": quality_gate,
+            "explicit_output_shape": explicit_shape is not None,
         },
     )
 
@@ -197,6 +201,84 @@ def _default_shape(*, domain: str, capabilities: set[str]) -> tuple[str, str]:
     if domain == "finance" and "finance.fundamentals_research" in capabilities:
         return "detailed_report", "detailed"
     return "answer", "normal"
+
+
+def _explicit_output_shape(text: str) -> tuple[str, str] | None:
+    """Infer only the answer shape from explicit user wording.
+
+    This does not decide the task semantics or answer content. It is a host
+    guardrail so a clear request for a report, memo, deep research, or brief
+    answer survives model variance in semantic.intake.
+    """
+
+    if _contains_any(
+        text,
+        (
+            "短答",
+            "简短",
+            "简要",
+            "brief",
+            "short answer",
+            "concise",
+        ),
+    ):
+        return "brief_answer", "brief"
+    strict_shape = _strict_output_shape(text)
+    if strict_shape is not None:
+        return strict_shape
+    if _contains_any(
+        text,
+        (
+            "详细",
+            "完整",
+            "全面",
+            "调研",
+            "调查",
+            "研究",
+            "分析",
+            "detailed",
+            "thorough",
+            "comprehensive",
+            "investigate",
+            "analysis",
+        ),
+    ):
+        return "detailed_report", "detailed"
+    return None
+
+
+def _strict_output_shape(text: str) -> tuple[str, str] | None:
+    if _contains_any(
+        text,
+        (
+            "深度报告",
+            "深度调研",
+            "深入调研",
+            "深入研究",
+            "deep report",
+            "deep research",
+            "in-depth report",
+        ),
+    ):
+        return "deep_report", "deep"
+    if _contains_any(
+        text,
+        (
+            "详细报告",
+            "完整报告",
+            "全面报告",
+            "研究报告",
+            "调研报告",
+            "详细中文报告",
+            "detailed report",
+            "complete report",
+            "comprehensive report",
+            "research report",
+            "memo",
+        ),
+    ):
+        return "detailed_report", "detailed"
+    return None
 
 
 def _target_sections(*, format_name: str, domain: str) -> list[str]:

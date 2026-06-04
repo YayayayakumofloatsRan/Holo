@@ -165,6 +165,8 @@ warnings string array, response_hint string or null, clarification_question stri
 Each intent object should include: kind, text, sequence_index, required_capabilities, risk, status, metadata.
 Example shape:
 {"primary_intent":"roleplay","suggested_mode":"direct_answer","compound":false,"requires_clarification":false,"intents":[{"kind":"roleplay","text":"Act as a cautious legal intern","sequence_index":1,"required_capabilities":[],"risk":"none","status":"ready","metadata":{"style":"legal intern"}}],"blocked_capabilities":[],"warnings":[],"response_hint":null,"clarification_question":null}
+Example detailed research output contract:
+{"primary_intent":"frontier_research","suggested_mode":"retrieval_answer","compound":false,"requires_clarification":false,"intents":[{"kind":"frontier_research","text":"research recent papers and open problems","sequence_index":1,"required_capabilities":["retrieval.run","academic.frontier_research"],"risk":"none","status":"ready","metadata":{"domain":"academic","answer_profile_hint":{"format":"detailed_report","detail_level":"detailed","target_sections":["摘要","关键文献与来源","前沿方向","争议与开放问题","证据质量与局限"],"quality_gate":"strict"}}}],"blocked_capabilities":[],"warnings":[],"response_hint":null,"clarification_question":null}
 Use broad semantic judgment instead of keyword matching. Split compound user requests into ordered intents.
 Do not require user clarification merely because there are multiple safe steps. For safe read-only compound tasks with clear arguments, set requires_clarification=false and keep the executable mode. Use semantic_answer for broad safe non-tool work such as roleplay, professional framing, education, communication drafting, operations planning, product/risk review, strategy, project planning, and other host-visible semantic work that should not collapse to workspace. Ask the user only when critical scope/tool arguments are missing, a capability is blocked, or the user explicitly requests interruption/confirmation.
 For local file/report generation, use suggested_mode=workspace_write and required_capabilities including workspace.write or workspace:write when the host can validate a concrete workspace-relative path and text payload. Put {"workspace.write":{"path":"...","text":"..."}} under metadata.capability_args when available.
@@ -259,6 +261,12 @@ project-wide durable memory, and "thread" for current-thread memory. Memory
 recall is read-only; never propose memory writes or claim remembered facts that
 were not present in context or memory.recall observations.
 For retrieval/research tasks with configured retrieval capability, be persistent before giving up: broaden or narrow the query, try English and local-language variants, add official-source terms, use company/entity aliases, prefer source-directory/structured providers when present, and change search_strategy when previous attempts were empty. Most retrieval misses can be improved by changing query formulation or source family. Ask the user only when a critical target, permission, or required scope is genuinely missing.
+Reason like a capable human researcher when a subgoal stalls. A failed search
+or soft missing facet is a signal to either change strategy or accept the gap as
+a limitation, not an automatic reason to loop forever. If high-quality evidence
+already covers the user's root objective, especially for open research, use the
+available evidence and state unresolved soft gaps instead of repeating
+near-identical searches.
 When retrieval feedback or rejected_evidence_reasons mention target_entity_mismatch,
 the previous sources matched only part of the target name or a different entity.
 Replan with explicit entity disambiguation: quoted full target phrase, known
@@ -322,6 +330,10 @@ Example:
 {"status":"continue","answer":null,"stop_reason":null,"missing_evidence":["official source citation"]}
 Evaluate whether the latest observation is enough and whether the host should continue.
 If context.state.mission_context is present, evaluate the latest observation against the mission root_goal and directive. A failed tool observation is evidence about what happened, not by itself a reason to stop; return continue when another materially different safe action can still advance the mission.
+For open-ended research, judge whether remaining gaps are hard blockers or soft
+limitations. If the available citations/evidence cover the user's root objective
+and the remaining gaps are language, source-breadth, or auxiliary-angle gaps,
+prefer final_answer_ready with limitations over repeating similar searches.
 If the latest observation is a successful respond with user-visible text and no required evidence/tool work remains,
 return final_answer_ready. Return needs_user_input only when the latest observation explicitly asks the user,
 a critical missing argument prevents any safe next action, or host context marks user input as required.
@@ -364,6 +376,11 @@ The root_goal is the global user objective. Compare the latest run_delta and
 agent_result against that root_goal, not merely against the last tool call.
 If the latest tool/search/retrieval failed but a materially different safe
 strategy remains, choose continue and write that strategy in next_directive.
+If high-quality evidence already covers the root_goal and only soft auxiliary
+gaps remain, choose final_answer and require those gaps to be disclosed as
+limitations. Do not continue merely because a language-specific or optional
+source-breadth subgoal failed when cross-language evidence can support the
+requested answer.
 Do not ask the user unless a critical missing argument, permission, or explicit
 user interruption requires it. Do not mark final_answer unless the host-provided
 agent_result already contains a final answer or the evidence/coverage in the

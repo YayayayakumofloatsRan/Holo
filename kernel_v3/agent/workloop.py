@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass, field
 
 from kernel_v3.agent.contracts import TaskRecipe
+from kernel_v3.agent.retrieval_coverage import adaptive_retrieval_completion
 from kernel_v3.contracts import Contract, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.journal import JournalStore
@@ -523,6 +524,28 @@ def assess_evidence_sufficiency(
             missing.append("sufficient_retrieval_evidence")
             missing.extend(f"retrieval_subgoal:{goal_id}" for goal_id in incomplete_goal_ids)
             reason = "planned_retrieval_subgoals_incomplete"
+    adaptive_completion = (
+        adaptive_retrieval_completion(
+            recipe=recipe,
+            planned_coverage=planned_retrieval_coverage,
+            evidence_count=len(retrieval_evidence),
+            citation_count=len([ref for ref in citation_refs if str(ref).startswith("cite-")]),
+        )
+        if recipe.mode == "retrieval_answer"
+        else {"sufficient": False, "reason": "not_retrieval_answer", "limitations": []}
+    )
+    if (
+        adaptive_completion.get("sufficient") is True
+        and "citation_refs" not in missing
+        and "retrieval_evidence" not in missing
+    ):
+        soft_missing = {
+            "sufficient_retrieval_evidence",
+            *[f"retrieval_subgoal:{goal_id}" for goal_id in _string_list(adaptive_completion.get("soft_incomplete_goal_ids"))],
+        }
+        missing = [item for item in missing if item not in soft_missing]
+        sufficient = True
+        reason = str(adaptive_completion.get("reason") or "open_research_soft_subgoals_can_be_limited")
     if recipe.mode == "workspace_answer" and not workspace_observation_count:
         sufficient = False
         missing.append("workspace_observation")
@@ -562,6 +585,7 @@ def assess_evidence_sufficiency(
             "source_authority": source_authority,
             "missing_source_authority": missing_source_authority,
             "planned_retrieval_coverage": planned_retrieval_coverage,
+            "adaptive_retrieval_completion": adaptive_completion,
         },
     )
 

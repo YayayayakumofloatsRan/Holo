@@ -24,6 +24,7 @@ from kernel_v3.agent.answer_profile import (
     research_mission_metadata,
 )
 from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
+from kernel_v3.agent.retrieval_coverage import adaptive_retrieval_completion
 from kernel_v3.agent.state_space import summarize_state_profiles
 from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from_semantic, validate_task_graph
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
@@ -610,7 +611,13 @@ class AgentRuntime:
             )
         planned_coverage = _planned_retrieval_coverage(self.journal, task_id, run_id, recipe)
         if planned_coverage.get("required") is True and not planned_coverage.get("sufficient"):
-            if _can_synthesize_partial_retrieval(
+            adaptive_completion = adaptive_retrieval_completion(
+                recipe=recipe,
+                planned_coverage=planned_coverage,
+                evidence_count=len(evidence),
+                citation_count=len(citations),
+            )
+            if adaptive_completion.get("sufficient") is True or _can_synthesize_partial_retrieval(
                 terminal_reason=terminal_reason,
                 evidence=evidence,
                 citations=citations,
@@ -621,6 +628,7 @@ class AgentRuntime:
                     planned_coverage=planned_coverage,
                     missing_evidence=_planned_retrieval_missing_evidence(self.journal, task_id, run_id, recipe),
                     terminal_reason=terminal_reason,
+                    adaptive_completion=adaptive_completion,
                 )
                 return self._synthesize_retrieval_final(
                     task_id,
@@ -5504,20 +5512,24 @@ def _report_with_partial_retrieval_limitations(
     planned_coverage: JsonObject,
     missing_evidence: list[str],
     terminal_reason: str | None,
+    adaptive_completion: JsonObject | None = None,
 ) -> RetrievalReport:
     diagnostics = dict(report.diagnostics)
     existing_limitations = diagnostics.get("limitations")
     limitations = [str(item) for item in existing_limitations if isinstance(item, str)] if isinstance(existing_limitations, list) else []
+    adaptive_completion = dict(adaptive_completion or {})
     limitations.extend(
         [
             "retrieval_completed_partially",
             *missing_evidence,
+            *_string_list(adaptive_completion.get("limitations")),
         ]
     )
     diagnostics.update(
         {
             "partial_answer": True,
             "partial_answer_reason": terminal_reason or "retrieval_partial",
+            "adaptive_retrieval_completion": adaptive_completion,
             "planned_retrieval_coverage": planned_coverage,
             "missing_evidence": _ordered_unique(missing_evidence),
             "limitations": _ordered_unique(limitations),

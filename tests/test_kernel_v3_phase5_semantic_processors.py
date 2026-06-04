@@ -15,6 +15,7 @@ from kernel_v3.processors import (
     DEEPSEEK_V4_PRO,
     EVALUATOR_SCHEMA,
     EVALUATOR_PROMPT_CONTRACT,
+    MISSION_ASSESS_PROMPT_CONTRACT,
     PLANNER_SCHEMA,
     PLANNER_PROMPT_CONTRACT,
     PROCESSOR_SYSTEM_PROMPT,
@@ -135,6 +136,15 @@ def test_phase5_user_visible_text_contracts_avoid_generic_agreement_prefaces():
     assert "you are right" in combined
     assert "never begin" in combined
     assert "unless the next clause" not in combined
+
+
+def test_phase5_research_prompts_tell_model_to_judge_soft_gaps_like_researcher():
+    combined = "\n".join([PLANNER_PROMPT_CONTRACT, EVALUATOR_PROMPT_CONTRACT, SYNTHESIZER_PROMPT_CONTRACT, MISSION_ASSESS_PROMPT_CONTRACT]).lower()
+
+    assert "capable human researcher" in combined
+    assert "soft missing facet" in combined
+    assert "soft limitations" in combined or "soft auxiliary" in combined
+    assert "not an automatic reason to loop forever" in combined
 
 
 def test_phase5_user_visible_text_guard_trims_only_stock_agreement_prefix():

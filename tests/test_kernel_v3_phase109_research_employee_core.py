@@ -50,6 +50,27 @@ def test_phase109_detailed_research_short_synthesis_is_not_finalized() -> None:
     assert quality["answer_profile"]["format"] == "detailed_report"
 
 
+def test_phase109_answer_profile_preserves_explicit_detailed_report_shape() -> None:
+    profile = infer_answer_profile(
+        "请检索双曲动力学的前沿研究，按摘要、关键文献、开放问题、局限写一份详细中文报告",
+        response_language="zh",
+    )
+
+    assert profile.format == "detailed_report"
+    assert profile.detail_level == "detailed"
+    assert profile.metadata["quality_gate"] == "strict"
+    assert profile.min_answer_chars >= 1200
+    assert "证据质量与局限" in profile.target_sections or "风险与局限" in profile.target_sections
+
+
+def test_phase109_answer_profile_preserves_explicit_brief_shape() -> None:
+    profile = infer_answer_profile("简短说明什么是双曲动力学", response_language="zh")
+
+    assert profile.format == "brief_answer"
+    assert profile.detail_level == "brief"
+    assert profile.min_answer_chars <= 100
+
+
 def test_phase109_detailed_research_final_creates_memory_proposal() -> None:
     journal = JournalStore.in_memory()
     memory = MemoryStore.in_memory()

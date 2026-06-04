@@ -214,6 +214,45 @@ def test_phase109_thread_working_memory_is_thread_scoped():
     assert "B thread private topic" not in text
 
 
+def test_phase109_thread_working_memory_exposes_attention_blocks():
+    journal = JournalStore.in_memory()
+    task_id = "task-attention"
+    journal.append(
+        task_id=task_id,
+        run_id="run-attention",
+        step_id="step-1",
+        kind="retrieval_evidence",
+        data={"evidence_id": "ev-attention", "text": "Important evidence."},
+    )
+    journal.append(
+        task_id=task_id,
+        run_id="run-attention",
+        step_id="step-1",
+        kind="retrieval_citation",
+        data={"citation_id": "cite-attention", "evidence_id": "ev-attention"},
+    )
+    journal.append(
+        task_id=task_id,
+        run_id="run-attention",
+        step_id=None,
+        kind="agent_failure_report",
+        data={
+            "reason": "missing_source",
+            "missing_evidence": ["source_authority"],
+            "attempted_actions": ["retrieval.run"],
+            "user_help_needed": False,
+        },
+    )
+
+    context = ThreadWorkingMemoryProvider().compile(journal, thread_id="thread-attention", task_id=task_id)
+    blocks = context["attention_blocks"]
+
+    assert [block["kind"] for block in blocks] == ["recent_failure", "current_evidence", "latest_task_state"]
+    assert blocks[0]["priority"] > blocks[1]["priority"]
+    assert "ev-attention" in blocks[1]["refs"]
+    assert "cite-attention" in blocks[1]["refs"]
+
+
 class _CapturingProvider:
     name = "capture"
     model = "capture-model"

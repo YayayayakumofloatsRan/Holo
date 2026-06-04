@@ -10,6 +10,7 @@ from kernel_v3.agent.workloop import (
     ProgressAssessment,
     RepetitionSignal,
     WorkloopConfig,
+    assess_evidence_sufficiency,
     assess_progress,
     decide_termination,
     detect_repetition,
@@ -18,6 +19,7 @@ from kernel_v3.agent.workloop import (
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import Feedback, Observation
 from kernel_v3.journal import JournalStore
+from kernel_v3.research import ACADEMIC_RESEARCH_PROFILE_ID
 from kernel_v3.research import ResearchCorpusStore, corpus_document_from_retrieval
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator
 from kernel_v3.retrieval.providers import FetchResponse
@@ -42,6 +44,70 @@ def test_phase61_retrieval_with_new_citation_finalizes_and_journals_decisions():
     assert journal.records(task_id=result.task_id, kind="progress_assessment")
     assert journal.records(task_id=result.task_id, kind="repetition_signal")
     assert journal.records(task_id=result.task_id, kind="evidence_sufficiency")
+
+
+def test_phase61_open_academic_research_soft_subgoals_can_finalize_with_limitations():
+    journal = JournalStore.in_memory()
+    task_id = "task-academic-soft"
+    run_id = "run-academic-soft"
+    recipe = _academic_research_recipe()
+    for index in range(1, 4):
+        journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=f"step-{index}",
+            kind="retrieval_evidence",
+            data={
+                "evidence_id": f"ev-{index}",
+                "citation_id": f"cite-{index}",
+                "goal_id": "goal-plan-1-1",
+                "text": "Recent hyperbolic dynamics paper evidence.",
+            },
+            state_delta={"retrieval_evidence": "ok"},
+        )
+        journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=f"step-{index}",
+            kind="retrieval_citation",
+            data={
+                "citation_id": f"cite-{index}",
+                "evidence_id": f"ev-{index}",
+                "goal_id": "goal-plan-1-1",
+                "uri": f"https://arxiv.org/abs/2601.0000{index}",
+            },
+            state_delta={"retrieval_citation": "ok"},
+        )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-1",
+        kind="retrieval_report",
+        data={"goal_id": "goal-plan-1-1", "status": "sufficient", "diagnostics": {}},
+        state_delta={"retrieval_report": "sufficient"},
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-2",
+        kind="retrieval_report",
+        data={"goal_id": "goal-plan-1-2", "status": "insufficient_evidence", "diagnostics": {}},
+        state_delta={"retrieval_report": "insufficient"},
+    )
+
+    evidence = assess_evidence_sufficiency(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-final",
+        recipe=recipe,
+    )
+
+    assert evidence.sufficient is True
+    assert evidence.reason == "open_research_soft_subgoals_can_be_limited"
+    adaptive = evidence.diagnostics["adaptive_retrieval_completion"]
+    assert adaptive["soft_incomplete_goal_ids"] == ["goal-plan-1-2"]
+    assert "retrieval_subgoal:goal-plan-1-2" not in evidence.missing
 
 
 def test_phase61_retrieval_without_new_evidence_continues_once_then_fails():
@@ -966,3 +1032,49 @@ def _corpus_with_document(artifacts: ArtifactStore, *, query_text: str) -> Resea
         )
     )
     return corpus
+
+
+def _academic_research_recipe() -> TaskRecipe:
+    payloads = [
+        {
+            "query": "hyperbolic dynamics recent papers",
+            "metadata": {
+                "research_profile": ACADEMIC_RESEARCH_PROFILE_ID,
+                "research_task_kind": "frontier_research",
+                "subgoal_required": True,
+            },
+        },
+        {
+            "query": "hyperbolic dynamics Chinese survey",
+            "metadata": {
+                "research_profile": ACADEMIC_RESEARCH_PROFILE_ID,
+                "research_task_kind": "frontier_research",
+                "subgoal_required": True,
+            },
+        },
+    ]
+    return TaskRecipe(
+        recipe_id="recipe-academic-workloop",
+        allowed_tools=["retrieval.run"],
+        max_steps=8,
+        max_tool_calls=8,
+        max_network_fetches=100,
+        max_total_artifact_bytes=10_000_000,
+        permission_profile="read_only",
+        citations_required=True,
+        finalizer="synthesizer.answer",
+        context_budget_mode="balanced",
+        mode="retrieval_answer",
+        metadata={
+            "task_execution_plan": {
+                "steps": [
+                    {
+                        "status": "ready",
+                        "tool_name": "retrieval.run",
+                        "sequence_index": 1,
+                        "metadata": {"capability_args": {"retrieval.run": payloads}},
+                    }
+                ]
+            }
+        },
+    )

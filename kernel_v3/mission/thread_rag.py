@@ -33,18 +33,27 @@ class ThreadWorkingMemoryProvider:
         evidence_refs = _recent_refs(journal, task_id=task_id, kind="retrieval_evidence", key="evidence_id")
         citation_refs = _recent_refs(journal, task_id=task_id, kind="retrieval_citation", key="citation_id")
         failure_diagnostics = _recent_failure_diagnostics(journal, task_id=task_id)
+        task_trace = trace
+        recent_results = [_compact_result(record, preview_chars=self.config.text_preview_chars) for record in results]
         payload = {
             "kind": "thread_rag_context",
             "thread_id": thread_id,
             "task_id": task_id,
             "mission_id": mission_id,
             "recent_turns": [_compact_turn(record, preview_chars=self.config.text_preview_chars) for record in turns],
-            "recent_results": [_compact_result(record, preview_chars=self.config.text_preview_chars) for record in results],
-            "recent_task_trace": trace,
+            "recent_results": recent_results,
+            "recent_task_trace": task_trace,
             "evidence_refs": evidence_refs,
             "citation_refs": citation_refs,
             "failure_diagnostics": failure_diagnostics,
         }
+        payload["attention_blocks"] = _attention_blocks(
+            recent_results=recent_results,
+            recent_task_trace=task_trace,
+            evidence_refs=evidence_refs,
+            citation_refs=citation_refs,
+            failure_diagnostics=failure_diagnostics,
+        )
         payload["context_hash"] = _hash_payload(payload)
         return payload
 
@@ -247,6 +256,65 @@ def _compact_feedback(record: LedgerRecord) -> JsonObject:
         "stop_reason": record.data.get("stop_reason"),
         "missing_evidence": _string_list(record.data.get("missing_evidence")),
     }
+
+
+def _attention_blocks(
+    *,
+    recent_results: list[JsonObject],
+    recent_task_trace: list[JsonObject],
+    evidence_refs: list[str],
+    citation_refs: list[str],
+    failure_diagnostics: list[JsonObject],
+) -> list[JsonObject]:
+    blocks: list[JsonObject] = []
+    if failure_diagnostics:
+        latest = failure_diagnostics[-1]
+        blocks.append(
+            {
+                "block_id": f"attention-failure-{latest.get('record_ref')}",
+                "kind": "recent_failure",
+                "priority": 0.96,
+                "summary": _preview(
+                    f"Last failure: {latest.get('reason')}; missing={', '.join(_string_list(latest.get('missing_evidence'))[:4])}",
+                    360,
+                ),
+                "refs": [str(latest.get("record_ref"))] if latest.get("record_ref") else [],
+            }
+        )
+    finals = [item for item in recent_results if item.get("status") == "completed" and item.get("answer_preview")]
+    if finals:
+        latest = finals[-1]
+        blocks.append(
+            {
+                "block_id": f"attention-answer-{latest.get('record_ref')}",
+                "kind": "recent_final_answer",
+                "priority": 0.82,
+                "summary": _preview(str(latest.get("answer_preview") or ""), 360),
+                "refs": [str(latest.get("record_ref"))] if latest.get("record_ref") else [],
+            }
+        )
+    if evidence_refs or citation_refs:
+        blocks.append(
+            {
+                "block_id": "attention-current-evidence",
+                "kind": "current_evidence",
+                "priority": 0.9,
+                "summary": f"Current task has {len(evidence_refs)} evidence refs and {len(citation_refs)} citation refs.",
+                "refs": [*evidence_refs[:6], *citation_refs[:6]],
+            }
+        )
+    if recent_task_trace:
+        latest_trace = recent_task_trace[-1]
+        blocks.append(
+            {
+                "block_id": f"attention-trace-{latest_trace.get('record_ref')}",
+                "kind": "latest_task_state",
+                "priority": 0.72,
+                "summary": _preview(str(latest_trace), 360),
+                "refs": [str(latest_trace.get("record_ref"))] if latest_trace.get("record_ref") else [],
+            }
+        )
+    return sorted(blocks, key=lambda item: float(item.get("priority") or 0.0), reverse=True)[:6]
 
 
 def _string_list(value: object) -> list[str]:
