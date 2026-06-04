@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from kernel_v3.contracts import JsonObject
 
 
@@ -45,7 +47,48 @@ def response_language_instruction(language: str) -> str:
     )
 
 
+def guard_user_visible_text(text: object) -> str:
+    """Remove empty agreement prefaces from model-visible user-facing text.
+
+    This is deliberately narrow: it only trims stock agreement/flattery phrases
+    when they appear at the beginning of a response. It does not synthesize a
+    replacement answer and it leaves quoted phrases elsewhere intact.
+    """
+
+    if not isinstance(text, str):
+        return ""
+    value = text.strip()
+    if not value:
+        return ""
+    for pattern in _GENERIC_AGREEMENT_PREFIXES:
+        match = pattern.match(value)
+        if not match:
+            continue
+        remainder = value[match.end() :]
+        remainder = re.sub(r"^[\s，,。.!！:：;；、-]+", "", remainder).strip()
+        return remainder or _GENERIC_AGREEMENT_EMPTY_FALLBACK
+    return value
+
+
 def _is_safe_language_tag(value: str) -> bool:
     if not value or len(value) > 24:
         return False
     return all(char.isalnum() or char == "-" for char in value)
+
+
+_GENERIC_AGREEMENT_EMPTY_FALLBACK = "我会直接处理具体问题。"
+
+_GENERIC_AGREEMENT_PREFIXES = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"^你说得对\b",
+        r"^你说的有道理\b",
+        r"^你说得有道理\b",
+        r"^确实(?:如此|是这样)?\b",
+        r"^没错\b",
+        r"^you(?:'|’)re right\b",
+        r"^you are right\b",
+        r"^that makes sense\b",
+        r"^agreed\b",
+    )
+)

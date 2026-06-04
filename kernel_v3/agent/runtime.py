@@ -30,7 +30,7 @@ from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile, merge_context_budget
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
-from kernel_v3.interaction import interaction_preferences, normalize_response_language
+from kernel_v3.interaction import guard_user_visible_text, interaction_preferences, normalize_response_language
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.loop import LoopControllerV3
@@ -1038,6 +1038,7 @@ class AgentRuntime:
             )
 
     def _append_final(self, answer: FinalAnswer) -> FinalAnswer:
+        answer = replace(answer, answer=guard_user_visible_text(answer.answer))
         record = self.journal.append(
             task_id=answer.task_id,
             run_id=answer.run_id,

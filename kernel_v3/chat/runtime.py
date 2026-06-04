@@ -27,6 +27,7 @@ from kernel_v3.chat.memory_admin import (
 )
 from kernel_v3.chat.thread_store import ThreadTranscriptStore
 from kernel_v3.contracts import JsonObject, LedgerRecord
+from kernel_v3.interaction import guard_user_visible_text
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.memory import MemoryPipeline, MemoryStore
@@ -1813,7 +1814,7 @@ def _build_plan_final_answer(
         ]
     )
     limitations.append("plan_final_answer_uses_only_completed_approved_step_outputs")
-    answer = _plan_final_answer_text(plan=plan, finalizer=finalizer, outputs=outputs)
+    answer = guard_user_visible_text(_plan_final_answer_text(plan=plan, finalizer=finalizer, outputs=outputs))
     confidence = min(_answer_confidence(output["final_answer"]) for output in outputs)
     trace_refs = _ordered_unique(
         [

@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kernel_v3.context.artifacts import ArtifactStore
 from kernel_v3.contracts import ArtifactRef, CandidateAction, JsonObject, Observation, PolicyDecision, ToolManifest
+from kernel_v3.interaction import guard_user_visible_text
 
 WORKSPACE_PREVIEW_CHARS = 240
 WORKSPACE_SEARCH_MAX_MATCHES = 20
@@ -483,15 +484,15 @@ def _response_text(payload: JsonObject, *, fallback: str = "") -> str:
     for key in ("text", "answer", "message", "summary", "response", "content"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
-            return value
+            return guard_user_visible_text(value)
     value = payload.get("cwd")
     if isinstance(value, str) and value.strip():
-        return value
+        return guard_user_visible_text(value)
     user_payload = _user_payload(payload)
     if user_payload:
-        return json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+        return guard_user_visible_text(json.dumps(user_payload, ensure_ascii=False, sort_keys=True))
     if fallback.strip():
-        return fallback
+        return guard_user_visible_text(fallback)
     return ""
 
 
@@ -499,12 +500,12 @@ def _question_text(payload: JsonObject, *, fallback: str = "") -> str:
     for key in ("question", "prompt", "text", "message", "content"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
-            return value
+            return guard_user_visible_text(value)
     user_payload = _user_payload(payload)
     if user_payload:
-        return json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+        return guard_user_visible_text(json.dumps(user_payload, ensure_ascii=False, sort_keys=True))
     if fallback.strip():
-        return fallback
+        return guard_user_visible_text(fallback)
     return ""
 
 

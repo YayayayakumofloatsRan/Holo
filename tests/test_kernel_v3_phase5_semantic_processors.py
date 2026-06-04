@@ -6,6 +6,7 @@ from kernel_v3 import cli
 from kernel_v3.agent import analyze_goal_with_processor
 from kernel_v3.context import ContextCompiler
 from kernel_v3.contracts import CandidateAction, Observation, ProcessorRequest
+from kernel_v3.interaction import guard_user_visible_text
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.policy import PolicyGate
@@ -116,6 +117,30 @@ def test_phase5_processor_system_prompt_guides_visible_text_style_without_overri
     assert "never overrides policy" in lowered
     assert "evidence" in lowered
     assert "default user-visible text to chinese" in lowered
+    assert "generic agreement" in lowered
+    assert "flattery" in lowered
+    assert "specific failure" in lowered
+    assert "concrete fix" in lowered
+    assert "never begin user-visible text" in lowered
+    assert "unless the next clause" not in lowered
+
+
+def test_phase5_user_visible_text_contracts_avoid_generic_agreement_prefaces():
+    combined = "\n".join([PROCESSOR_SYSTEM_PROMPT, PLANNER_PROMPT_CONTRACT, SYNTHESIZER_PROMPT_CONTRACT]).lower()
+
+    assert "generic agreement" in combined
+    assert "flattery" in combined
+    assert "bug report" in combined or "reports a bug" in combined
+    assert "concrete" in combined
+    assert "you are right" in combined
+    assert "never begin" in combined
+    assert "unless the next clause" not in combined
+
+
+def test_phase5_user_visible_text_guard_trims_only_stock_agreement_prefix():
+    assert guard_user_visible_text("你说得对，这个 bug 在 prompt 层。") == "这个 bug 在 prompt 层。"
+    assert guard_user_visible_text("You are right: this needs a host-side guard.") == "this needs a host-side guard."
+    assert guard_user_visible_text("用户报告了“你说得对”这个坏习惯。") == "用户报告了“你说得对”这个坏习惯。"
 
 
 def test_phase5_response_language_preference_is_sent_to_semantic_processor():

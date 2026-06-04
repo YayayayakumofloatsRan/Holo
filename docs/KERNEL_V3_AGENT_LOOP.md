@@ -856,6 +856,12 @@ roleplay, and light humor to sound more natural and less tool-like. This style
 guidance cannot override PolicyGate, evidence/citation requirements, memory
 review rules, or host-owned termination.
 
+User-visible text also passes through a narrow anti-sycophancy guard. The guard
+does not synthesize answers or rewrite factual content; it only removes stock
+agreement/flattery prefixes when they appear at the start of a response or
+question. This keeps bug reports, corrections, and criticism focused on the
+specific issue and next action instead of opening with performative agreement.
+
 Memory traces are structured audit views, not memory exports. `memory-trace`
 renders candidate/proposal/approval/commit/delete/migration events with ids,
 policy/status, privacy class, bounded previews, and hashes. Secret-like memory
