@@ -52,10 +52,12 @@ from kernel_v3.research.profile_policy import (
     resolve_goal_research_profile,
 )
 from kernel_v3.research.source_policy import (
+    assessment_satisfies_authority,
     assess_evidence_source,
     assess_search_source,
     classify_source_family,
     source_authority_summary,
+    source_quality_summary,
 )
 from kernel_v3.research.sources import (
     academic_research_source_directory,
@@ -104,6 +106,7 @@ __all__ = [
     "SourceAssessment",
     "academic_research_profile",
     "academic_research_source_directory",
+    "assessment_satisfies_authority",
     "assess_evidence_source",
     "assess_search_source",
     "classify_source_family",
@@ -128,6 +131,7 @@ __all__ = [
     "seed_urls_for_site_index_entry",
     "source_directory_for_profile",
     "source_authority_summary",
+    "source_quality_summary",
     "site_index_entry_payload",
     "site_index_facets",
     "site_index_families",

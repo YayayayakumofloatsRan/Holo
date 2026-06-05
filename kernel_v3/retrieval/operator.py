@@ -10,7 +10,11 @@ from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.research.contracts import CorpusDocument, ResearchProfile, SourceAssessment
 from kernel_v3.research.profile_policy import profile_discovery_source_kinds
 from kernel_v3.research.profiles import profile_by_id
-from kernel_v3.research.source_policy import assess_search_source, source_authority_summary
+from kernel_v3.research.source_policy import (
+    assess_search_source,
+    source_authority_summary,
+    source_quality_summary,
+)
 from kernel_v3.retrieval.citations import citation_from_evidence
 from kernel_v3.retrieval.contracts import (
     EvidenceEvaluationDecision,
@@ -196,9 +200,14 @@ class RetrievalOperator:
             )
 
         source_assessments: dict[str, SourceAssessment] = {}
+        source_quality: JsonObject = {}
         if research_profile is not None:
             for source in _dedupe_sources(sources):
                 source_assessments[source.source_id] = assess_search_source(source, profile=research_profile)
+            source_quality = source_quality_summary(
+                list(source_assessments.values()),
+                authority_requirement=_source_authority_requirement(goal),
+            )
             _append(
                 journal,
                 task_id,
@@ -209,7 +218,10 @@ class RetrievalOperator:
                     "goal_id": goal.goal_id,
                     "research_profile": research_profile.to_dict(),
                     "assessments": [item.to_dict() for item in source_assessments.values()],
-                    "diagnostics": source_authority_summary(list(source_assessments.values())),
+                    "diagnostics": {
+                        **source_authority_summary(list(source_assessments.values())),
+                        "source_quality": source_quality,
+                    },
                 },
                 action_ref=action_ref,
             )
@@ -438,6 +450,7 @@ class RetrievalOperator:
                             "uri": item.uri,
                             "title": item.title,
                             "reason": qualification.get("reason"),
+                            "source_authority": qualification.get("source_authority", {}),
                             "missing_profile_facets": qualification.get("missing_profile_facets", []),
                             "missing_finance_facets": qualification.get("missing_finance_facets", []),
                             "required_target_phrases": qualification.get("required_target_phrases", []),
@@ -507,6 +520,28 @@ class RetrievalOperator:
             citations=citations,
             research_profile=research_profile,
         )
+        if _decision_has_source_authority_gap(
+            decision=decision,
+            source_quality=source_quality,
+            rejected_evidence=rejected_evidence,
+            evidence=evidence,
+            citations=citations,
+        ):
+            decision = EvidenceEvaluationDecision(
+                decision_id=decision.decision_id,
+                goal_id=decision.goal_id,
+                status="insufficient_evidence",
+                sufficient=False,
+                reason=_authority_gap_reason(source_quality),
+                evidence_count=decision.evidence_count,
+                citation_count=decision.citation_count,
+                diagnostics={
+                    **decision.diagnostics,
+                    "source_quality": source_quality,
+                    "source_authority_requirement": source_quality.get("authority_requirement") or _source_authority_requirement(goal),
+                    "original_reason": decision.reason,
+                },
+            )
         failure_attribution = _failure_attribution(
             decision=decision,
             queries=queries,
@@ -522,6 +557,7 @@ class RetrievalOperator:
             evidence=evidence,
             citations=citations,
             search_summaries=search_summaries,
+            source_quality=source_quality,
         )
         if (
             not decision.sufficient
@@ -601,6 +637,7 @@ class RetrievalOperator:
                     {
                         "research_profile": research_profile.profile_id,
                         "source_authority": source_authority_summary(list(source_assessments.values())),
+                        "source_quality": source_quality,
                     }
                     if research_profile is not None
                     else {}
@@ -1070,6 +1107,7 @@ def _failure_attribution(
     evidence: list[EvidenceItem],
     citations: list[object],
     search_summaries: list[JsonObject],
+    source_quality: JsonObject,
 ) -> JsonObject:
     mode = "none"
     if decision.sufficient:
@@ -1087,9 +1125,14 @@ def _failure_attribution(
     elif not spans:
         mode = "extraction_no_spans"
     elif not evidence_candidates and rejected_evidence:
-        mode = "all_evidence_rejected"
+        if _has_source_authority_rejection(rejected_evidence, source_quality):
+            mode = "source_authority_gap"
+        else:
+            mode = "all_evidence_rejected"
     elif evidence and not citations:
         mode = "citation_generation_missing"
+    elif _source_quality_gap(source_quality, evidence=evidence, citations=citations):
+        mode = "source_authority_gap"
     else:
         mode = "coverage_gap"
     search_empty_count = sum(1 for item in search_summaries if int(item.get("source_count") or 0) == 0)
@@ -1108,6 +1151,7 @@ def _failure_attribution(
             "ranked_count": len(ranked),
             "rejected_count": len(source_rejections),
             "rejection_reasons": _count_by_key(source_rejections, "reason"),
+            "quality": source_quality,
         },
         "fetch": {
             "scheduled_count": len(fetch_jobs),
@@ -1140,9 +1184,62 @@ def _next_strategy_hint(primary_failure_mode: str) -> str:
         "fetch_failed_or_empty": "try_alternate_urls_or_source_family",
         "extraction_no_spans": "fetch_more_relevant_documents_or_change_extract_terms",
         "all_evidence_rejected": "repair_entity_or_source_authority_mismatch",
+        "source_authority_gap": "switch_to_higher_authority_source_family",
         "citation_generation_missing": "repair_citation_generation",
         "coverage_gap": "target_missing_facets_with_new_queries",
     }.get(primary_failure_mode, "continue_if_requirements_remain")
+
+
+def _source_authority_requirement(goal: SearchGoal) -> str:
+    value = goal.metadata.get("source_authority_requirement")
+    if not isinstance(value, str):
+        value = goal.metadata.get("authority_requirement")
+    normalized = str(value or "primary").strip().lower()
+    if normalized in {"secondary_or_better", "secondary_allowed", "secondary"}:
+        return "secondary_or_better"
+    if normalized in {"any", "any_citable"}:
+        return "any_citable"
+    return "primary"
+
+
+def _source_quality_gap(source_quality: JsonObject, *, evidence: list[EvidenceItem], citations: list[object]) -> bool:
+    if not source_quality:
+        return False
+    if not evidence and not citations:
+        return False
+    if source_quality.get("authority_sufficient") is True:
+        return False
+    return int(source_quality.get("assessment_count") or 0) > 0
+
+
+def _has_source_authority_rejection(rejected_evidence: list[JsonObject], source_quality: JsonObject) -> bool:
+    if any(item.get("reason") == "weak_source_authority_for_research_profile" for item in rejected_evidence):
+        return True
+    return bool(source_quality) and source_quality.get("authority_sufficient") is False
+
+
+def _decision_has_source_authority_gap(
+    *,
+    decision: EvidenceEvaluationDecision,
+    source_quality: JsonObject,
+    rejected_evidence: list[JsonObject],
+    evidence: list[EvidenceItem],
+    citations: list[object],
+) -> bool:
+    if decision.sufficient or not source_quality:
+        return False
+    if source_quality.get("authority_sufficient") is True:
+        return False
+    if int(source_quality.get("assessment_count") or 0) <= 0:
+        return False
+    return bool(rejected_evidence or evidence or citations)
+
+
+def _authority_gap_reason(source_quality: JsonObject) -> str:
+    requirement = str(source_quality.get("authority_requirement") or "primary")
+    if requirement == "primary":
+        return "no_primary_source_for_research_profile"
+    return "no_required_authority_source_for_research_profile"
 
 
 def _ordered_unique(values: list[str]) -> list[str]:

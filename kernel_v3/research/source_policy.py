@@ -424,6 +424,70 @@ def source_authority_summary(assessments: list[SourceAssessment]) -> JsonObject:
     }
 
 
+def source_quality_summary(
+    assessments: list[SourceAssessment],
+    *,
+    authority_requirement: str = "primary",
+) -> JsonObject:
+    """Summarize whether retrieved sources are usable for the requested profile.
+
+    This is intentionally profile-agnostic: the profile has already been folded
+    into each SourceAssessment. Retrieval, mission supervision, and prompt
+    context can all consume the same compact quality signal without re-deriving
+    domain-specific rules.
+    """
+
+    requirement = _normalized_authority_requirement(authority_requirement)
+    primary = [item for item in assessments if item.usable_as_primary]
+    secondary = [item for item in assessments if item.authority_level == "secondary"]
+    weak = [item for item in assessments if item.authority_level == "weak"]
+    acceptable = [
+        item
+        for item in assessments
+        if assessment_satisfies_authority(item, requirement)
+    ]
+    best_score = max([item.authority_score for item in assessments], default=0.0)
+    best = sorted(assessments, key=lambda item: (-item.authority_score, item.source_id))[:5]
+    return {
+        "authority_requirement": requirement,
+        "assessment_count": len(assessments),
+        "acceptable_source_count": len(acceptable),
+        "authority_sufficient": bool(acceptable),
+        "primary_source_count": len(primary),
+        "secondary_source_count": len(secondary),
+        "weak_source_count": len(weak),
+        "only_weak_sources": bool(assessments) and len(weak) == len(assessments),
+        "best_authority_score": best_score,
+        "best_sources": [
+            {
+                "source_id": item.source_id,
+                "uri": item.uri,
+                "source_family": item.source_family,
+                "authority_level": item.authority_level,
+                "authority_score": item.authority_score,
+                "usable_as_primary": item.usable_as_primary,
+            }
+            for item in best
+        ],
+        "source_family_counts": _count_strings([item.source_family for item in assessments]),
+        "authority_level_counts": _count_strings([item.authority_level for item in assessments]),
+        "recommended_next_source_action": _recommended_next_source_action(
+            requirement=requirement,
+            assessments=assessments,
+            acceptable_count=len(acceptable),
+        ),
+    }
+
+
+def assessment_satisfies_authority(assessment: SourceAssessment, requirement: str) -> bool:
+    requirement = _normalized_authority_requirement(requirement)
+    if requirement == "any_citable":
+        return True
+    if requirement == "secondary_or_better":
+        return assessment.usable_as_primary or assessment.authority_level == "secondary"
+    return assessment.usable_as_primary
+
+
 def _host_matches(host: str, domains: set[str]) -> bool:
     return any(host == domain or host.endswith(f".{domain}") for domain in domains)
 
@@ -487,3 +551,38 @@ def _assessment_source_metadata(metadata: JsonObject | None) -> JsonObject:
         for key, value in metadata.items()
         if key in allowed and isinstance(value, (str, int, float, bool)) and str(value)
     }
+
+
+def _normalized_authority_requirement(value: str) -> str:
+    normalized = str(value or "primary").strip().lower()
+    if normalized in {"secondary", "secondary_allowed", "secondary_or_better"}:
+        return "secondary_or_better"
+    if normalized in {"any", "any_citable"}:
+        return "any_citable"
+    return "primary"
+
+
+def _count_strings(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        if not value:
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _recommended_next_source_action(
+    *,
+    requirement: str,
+    assessments: list[SourceAssessment],
+    acceptable_count: int,
+) -> str:
+    if acceptable_count > 0:
+        return "use_acceptable_sources_and_cover_missing_facets"
+    if not assessments:
+        return "search_for_profile_aware_sources"
+    if requirement == "primary":
+        return "switch_to_primary_or_official_source_family"
+    if requirement == "secondary_or_better":
+        return "switch_to_secondary_or_primary_source_family"
+    return "increase_topic_relevance_or_fetch_quality"

@@ -154,7 +154,14 @@ class MissionSupervisor:
         evidence_refs = _string_list(run_delta.get("evidence_refs"))
         citation_refs = _string_list(run_delta.get("citation_refs"))
         missing = _mission_missing_requirements(mission, result, run_delta=run_delta)
-        coverage_score = _coverage_score(result, mission=mission, evidence_refs=evidence_refs, citation_refs=citation_refs, missing=missing)
+        coverage_score = _coverage_score(
+            result,
+            mission=mission,
+            run_delta=run_delta,
+            evidence_refs=evidence_refs,
+            citation_refs=citation_refs,
+            missing=missing,
+        )
         no_progress_count = _no_progress_count(mission) + (0 if _has_material_progress(result, run_delta) else 1)
         hard_block = _hard_block_reason(result)
         final_answer_covers_goal = _final_answer_covers_mission(result, mission=mission)
@@ -411,6 +418,7 @@ def _coverage_score(
     result: AgentRuntimeResult,
     *,
     mission: MissionState,
+    run_delta: JsonObject,
     evidence_refs: list[str],
     citation_refs: list[str],
     missing: list[str],
@@ -418,10 +426,11 @@ def _coverage_score(
     if result.status == "completed" and result.final_answer is not None and _final_answer_covers_mission(result, mission=mission):
         return 1.0
     score = 0.0
+    retrieval_quality_factor = _retrieval_quality_factor(run_delta)
     if evidence_refs:
-        score += 0.32
+        score += 0.32 * retrieval_quality_factor
     if citation_refs:
-        score += 0.38
+        score += 0.38 * retrieval_quality_factor
     if result.status == "needs_user_input":
         score += 0.05
     if result.status == "failed":
@@ -435,8 +444,32 @@ def _has_material_progress(result: AgentRuntimeResult, run_delta: JsonObject) ->
     if result.status == "completed" and result.final_answer is not None and _final_answer_covers_mission(result, mission=None):
         return True
     if _string_list(run_delta.get("evidence_refs")) or _string_list(run_delta.get("citation_refs")):
-        return True
+        return _retrieval_quality_factor(run_delta) >= 0.75
     return False
+
+
+def _retrieval_quality_factor(run_delta: JsonObject) -> float:
+    reports = [
+        item
+        for item in run_delta.get("retrieval_reports", [])
+        if isinstance(item, dict)
+    ]
+    if not reports:
+        return 1.0
+    if any(item.get("status") == "sufficient" for item in reports):
+        return 1.0
+    quality_items = [
+        item.get("source_quality")
+        for item in reports
+        if isinstance(item.get("source_quality"), dict) and item.get("source_quality")
+    ]
+    if not quality_items:
+        return 0.5
+    if any(item.get("authority_sufficient") is True for item in quality_items if isinstance(item, dict)):
+        return 1.0
+    if any(int(item.get("acceptable_source_count") or 0) > 0 for item in quality_items if isinstance(item, dict)):
+        return 0.75
+    return 0.2
 
 
 def _final_answer_covers_mission(result: AgentRuntimeResult, *, mission: MissionState | None) -> bool:

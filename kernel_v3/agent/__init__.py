@@ -25,7 +25,18 @@ from kernel_v3.agent.workloop import (
     WorkloopIteration,
     WorkloopState,
 )
-from kernel_v3.mission import MissionRuntime, MissionSupervisor
+
+
+def __getattr__(name: str):
+    if name == "MissionRuntime":
+        from kernel_v3.mission.runtime import MissionRuntime
+
+        return MissionRuntime
+    if name == "MissionSupervisor":
+        from kernel_v3.mission.supervisor import MissionSupervisor
+
+        return MissionSupervisor
+    raise AttributeError(name)
 
 __all__ = [
     "AgentRuntime",

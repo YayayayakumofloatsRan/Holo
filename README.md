@@ -88,7 +88,9 @@ loop-coupling and memory-context pass is tracked in
 strategy-supervision and safety-boundary pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-05_STRATEGY_SUPERVISION.md`, and the next
 retrieval-campaign pass is tracked in
-`docs/KERNEL_V3_PROGRESS_2026-06-05_RETRIEVAL_CAMPAIGN.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-05_RETRIEVAL_CAMPAIGN.md`. Source-quality
+feedback and discovery-only fallback hardening are tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-05_SOURCE_QUALITY_FEEDBACK.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -291,7 +293,13 @@ Kernel v3 currently contains the infrastructure for:
 - retrieval failure attribution in every report. Failed or insufficient runs now
   identify the primary failing layer, such as `search_no_sources`,
   `fetch_failed_or_empty`, `extraction_no_spans`, `all_evidence_rejected`, or
-  `coverage_gap`, and include a `next_strategy_hint` for the next planner loop;
+  `source_authority_gap`/`coverage_gap`, and include a `next_strategy_hint` for
+  the next planner loop;
+- retrieval source-quality feedback. `SourceAssessment` is summarized into
+  `source_quality`, weak profile sources do not become formal citations,
+  authority gaps stay visible in report and mission context, and fallback search
+  continues past discovery-only index/search pages when later providers can
+  return fetchable primary sources;
 - retrieval workloop feedback that carries missing query facets and missing
   source-authority signals into the next planner packet, allowing bounded
   replan attempts without weakening host termination guards;

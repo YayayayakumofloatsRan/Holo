@@ -23,7 +23,11 @@ from kernel_v3.research.profiles import (
     FINANCE_FUNDAMENTALS_PROFILE_ID,
     FINANCE_NUMERIC_FACT_FACETS,
 )
-from kernel_v3.research.source_policy import assess_evidence_source, source_authority_summary
+from kernel_v3.research.source_policy import (
+    assess_evidence_source,
+    source_authority_summary,
+    source_quality_summary,
+)
 from kernel_v3.retrieval.contracts import (
     CitationItem,
     EvidenceEvaluationDecision,
@@ -60,6 +64,12 @@ def qualify_evidence_candidate(
             result["reason"] = "target_entity_mismatch"
     if _is_finance_profile(goal=goal, research_profile=research_profile):
         _add_finance_compatibility_fields(result)
+    if bool(result.get("accepted", True)):
+        weak_source = _weak_source_for_required_profile(goal=goal, evidence=evidence, research_profile=research_profile)
+        if weak_source:
+            result["accepted"] = False
+            result["reason"] = "weak_source_authority_for_research_profile"
+            result["source_authority"] = weak_source
     if bool(result.get("accepted", True)) and _is_academic_profile(goal=goal, research_profile=research_profile):
         topic_diagnostics = _query_topic_coverage(
             goal.query,
@@ -143,6 +153,10 @@ class EvidenceEvaluator:
             diagnostics["source_authority"] = authority_summary
             authority_requirement = _source_authority_requirement(goal)
             diagnostics["source_authority_requirement"] = authority_requirement
+            diagnostics["source_quality"] = source_quality_summary(
+                assessments,
+                authority_requirement=authority_requirement,
+            )
             if not evidence:
                 sufficient = False
                 reason = "insufficient_evidence"
@@ -272,6 +286,30 @@ def _source_authority_requirement(goal: SearchGoal) -> str:
     if normalized in {"any", "any_citable"}:
         return "any_citable"
     return "primary"
+
+
+def _weak_source_for_required_profile(
+    *,
+    goal: SearchGoal,
+    evidence: EvidenceItem,
+    research_profile: ResearchProfile | None,
+) -> dict[str, object] | None:
+    profile = resolve_goal_research_profile(goal, research_profile)
+    if profile is None:
+        return None
+    assessment = evidence.diagnostics.get("source_assessment")
+    if not isinstance(assessment, dict):
+        return None
+    authority_level = str(assessment.get("authority_level") or "")
+    if authority_level != "weak":
+        return None
+    return {
+        "profile_id": profile.profile_id,
+        "authority_level": authority_level,
+        "source_family": str(assessment.get("source_family") or ""),
+        "authority_score": assessment.get("authority_score"),
+        "required_authority": _source_authority_requirement(goal),
+    }
 
 
 def _template_placeholder_diagnostics(text: str) -> dict[str, object]:

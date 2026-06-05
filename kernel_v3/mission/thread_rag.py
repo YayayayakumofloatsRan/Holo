@@ -200,6 +200,9 @@ def _compact_observation(record: LedgerRecord) -> JsonObject:
 
 def _compact_retrieval_report(record: LedgerRecord) -> JsonObject:
     diagnostics = record.data.get("diagnostics") if isinstance(record.data.get("diagnostics"), dict) else {}
+    failure_attribution = diagnostics.get("failure_attribution") if isinstance(diagnostics.get("failure_attribution"), dict) else {}
+    source_quality = diagnostics.get("source_quality") if isinstance(diagnostics.get("source_quality"), dict) else {}
+    source_authority = diagnostics.get("source_authority") if isinstance(diagnostics.get("source_authority"), dict) else {}
     return {
         "record_ref": record.record_id,
         "kind": "retrieval_report",
@@ -211,6 +214,26 @@ def _compact_retrieval_report(record: LedgerRecord) -> JsonObject:
         "missing_query_facets": _string_list(diagnostics.get("missing_query_facets")),
         "missing_finance_facets": _string_list(diagnostics.get("missing_finance_facets")),
         "rejected_evidence_count": diagnostics.get("rejected_evidence_count"),
+        "failure_attribution": {
+            "primary_failure_mode": failure_attribution.get("primary_failure_mode"),
+            "next_strategy_hint": failure_attribution.get("next_strategy_hint"),
+            "reason": failure_attribution.get("reason"),
+        } if failure_attribution else {},
+        "source_quality": {
+            "authority_requirement": source_quality.get("authority_requirement"),
+            "authority_sufficient": source_quality.get("authority_sufficient"),
+            "acceptable_source_count": source_quality.get("acceptable_source_count"),
+            "primary_source_count": source_quality.get("primary_source_count"),
+            "secondary_source_count": source_quality.get("secondary_source_count"),
+            "weak_source_count": source_quality.get("weak_source_count"),
+            "recommended_next_source_action": source_quality.get("recommended_next_source_action"),
+        } if source_quality else {},
+        "source_authority": {
+            "primary_source_count": source_authority.get("primary_source_count"),
+            "secondary_source_count": source_authority.get("secondary_source_count"),
+            "weak_source_count": source_authority.get("weak_source_count"),
+            "best_authority_score": source_authority.get("best_authority_score"),
+        } if source_authority else {},
     }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 
+from kernel_v3.research.profile_policy import profile_discovery_source_kinds
 from kernel_v3.research.profiles import profile_by_id
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
@@ -68,12 +69,15 @@ class FallbackSearchProvider:
                 {
                     "provider_id": provider_id,
                     "source_count": len(sources),
-                    "status": "failed" if error else "ok",
+                    "status": "failed" if error else ("discovery_only" if _all_sources_discovery_only(sources, goal=goal) else "ok"),
                     "diagnostics": _provider_diagnostics(provider),
                     **({"error": error} if error else {}),
                 }
             )
             if sources:
+                if _all_sources_discovery_only(sources, goal=goal):
+                    last_empty = sources
+                    continue
                 self._last_search_diagnostics = {
                     "provider_id": self.provider_id,
                     "status": "ok",
@@ -455,6 +459,22 @@ def _empty_status(attempts: list[dict]) -> str:
     if _all_attempts_skipped(attempts):
         return "skipped"
     return "empty"
+
+
+def _all_sources_discovery_only(sources: list[SearchSource], *, goal: SearchGoal) -> bool:
+    if not sources:
+        return False
+    profile = profile_by_id(_research_profile_id(goal))
+    discovery_kinds = profile_discovery_source_kinds(profile)
+    if not discovery_kinds:
+        return False
+    return all(_source_kind(source) in discovery_kinds for source in sources)
+
+
+def _source_kind(source: SearchSource) -> str:
+    metadata = source.metadata if isinstance(source.metadata, dict) else {}
+    value = metadata.get("source_kind")
+    return value.strip() if isinstance(value, str) and value.strip() else ""
 
 
 def _provider_goal(goal: SearchGoal, *, max_sources_per_provider: int | None) -> SearchGoal:

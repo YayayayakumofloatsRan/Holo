@@ -2634,6 +2634,8 @@ def _retrieval_replan_hints(
     report_data = dict(report_record.data) if report_record is not None else {}
     diagnostics = _json_object(report_data.get("diagnostics"))
     evaluation = _json_object(diagnostics.get("evaluation_diagnostics"))
+    failure_attribution = _json_object(diagnostics.get("failure_attribution"))
+    source_quality = _json_object(diagnostics.get("source_quality"))
     evidence_data = dict(evidence_record.data) if evidence_record is not None else {}
     evidence_diagnostics = _json_object(evidence_data.get("diagnostics"))
     planned_coverage = _json_object(evidence_diagnostics.get("planned_retrieval_coverage"))
@@ -2654,6 +2656,12 @@ def _retrieval_replan_hints(
             *_string_list(evidence_diagnostics.get("missing_source_authority")),
             *(["candidate_evidence_rejected"] if rejected_evidence_count > 0 else []),
             *(["candidate_source_rejected"] if source_rejection_count > 0 else []),
+            *(["source_authority_gap"] if source_quality.get("authority_sufficient") is False else []),
+            *(
+                [f"retrieval_failure:{failure_attribution.get('primary_failure_mode')}"]
+                if _string_value(failure_attribution.get("primary_failure_mode")) not in {"", "none"}
+                else []
+            ),
         ]
     )
     attempts = _retrieval_attempt_hints(journal, task_id=task_id, run_id=run_id)
@@ -2746,6 +2754,12 @@ def _retrieval_replan_hints(
         "covered_query_facets": _string_list(evaluation.get("covered_query_facets")),
         "source_authority_requirement": requirement,
         "source_authority": source_authority,
+        "source_quality": source_quality,
+        "failure_attribution": {
+            "primary_failure_mode": _string_value(failure_attribution.get("primary_failure_mode")),
+            "next_strategy_hint": _string_value(failure_attribution.get("next_strategy_hint")),
+            "reason": _string_value(failure_attribution.get("reason")),
+        } if failure_attribution else {},
         "suggested_search_strategies": strategy_hints,
         "suggested_query_hints": query_hints,
         "suggested_source_targets": source_targets,
@@ -3422,6 +3436,8 @@ def _suggested_retrieval_strategies(
     suggestions: list[str] = []
     if "primary_source" in missing or "source_authority:primary" in missing or requirement == "primary":
         suggestions.extend(["structured", "aggregate", "fresh_live", "crawl"])
+    if "source_authority_gap" in missing:
+        suggestions.extend(["structured", "aggregate", "crawl", "fresh_live"])
     if any(item.startswith("query_facet:") for item in missing):
         suggestions.extend(["aggregate", "fresh_live", "crawl"])
     if "candidate_evidence_rejected" in missing or "candidate_source_rejected" in missing:
@@ -3430,6 +3446,12 @@ def _suggested_retrieval_strategies(
         suggestions.extend(["structured", "aggregate", "fresh_live", "crawl"])
     if "retrieval_evidence" in missing or "sufficient_retrieval_evidence" in missing:
         suggestions.extend(["aggregate", "structured", "crawl", "fresh_live"])
+    if "retrieval_failure:source_authority_gap" in missing:
+        suggestions.extend(["structured", "aggregate", "crawl"])
+    if "retrieval_failure:no_fetchable_sources" in missing:
+        suggestions.extend(["structured", "crawl", "aggregate"])
+    if "retrieval_failure:fetch_failed_or_empty" in missing:
+        suggestions.extend(["aggregate", "crawl", "fresh_live"])
     if report_reason in {"no_primary_source_for_research_profile", "no_required_authority_source_for_research_profile"}:
         suggestions.extend(["structured", "aggregate", "fresh_live"])
     result = [item for item in _ordered_unique(suggestions) if item not in attempted]
@@ -3440,6 +3462,8 @@ def _suggested_query_hints(*, base_query: str, missing: list[str], requirement: 
     additions: list[str] = []
     if "primary_source" in missing or "source_authority:primary" in missing or requirement == "primary":
         additions.extend(["official filing", "annual report", "10-K 10-Q", "issuer investor relations", "exchange disclosure"])
+    if "source_authority_gap" in missing or "retrieval_failure:source_authority_gap" in missing:
+        additions.extend(["official source", "primary source", "official report", "source documentation"])
     facet_terms = {
         "candidate_evidence_rejected": "different primary source quoted facts relevant passages",
         "query_facet:model": "models",
@@ -3489,6 +3513,7 @@ def _suggested_source_targets(
     if (
         "primary_source" in missing
         or "source_authority:primary" in missing
+        or "source_authority_gap" in missing
         or requirement == "primary"
         or any(item.startswith("finance_facet:") for item in missing)
     ):

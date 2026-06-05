@@ -174,7 +174,8 @@ def test_phase82_finance_retrieval_rejects_generic_web_as_final_primary_evidence
     )
 
     assert report.status == "insufficient_evidence"
-    assert report.diagnostics["reason"] == "insufficient_evidence"
+    assert report.diagnostics["reason"] == "no_primary_source_for_research_profile"
+    assert report.diagnostics["source_quality"]["authority_sufficient"] is False
     assert report.diagnostics["rejected_evidence_count"] == 1
     assert not journal.records(task_id="task-finance-weak", kind="retrieval_evidence")
     assert not journal.records(task_id="task-finance-weak", kind="retrieval_citation")
@@ -699,7 +700,8 @@ def test_phase82_model_taskgraph_capability_args_reach_retrieval_without_agent_d
     assert action["payload"]["metadata"]["research_profile"] == FINANCE_FUNDAMENTALS_PROFILE_ID
     report = journal.records(task_id=result.task_id, kind="retrieval_report")[0].data
     assert report["status"] == "insufficient_evidence"
-    assert report["diagnostics"]["reason"] == "insufficient_evidence"
+    assert report["diagnostics"]["reason"] == "no_primary_source_for_research_profile"
+    assert report["diagnostics"]["source_quality"]["authority_sufficient"] is False
     assert report["diagnostics"]["rejected_evidence_count"] == 1
 
 
