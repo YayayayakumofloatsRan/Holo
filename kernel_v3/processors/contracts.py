@@ -121,6 +121,7 @@ CHAT_ROUTE_SCHEMA = JsonSchema(
         "confidence": "number",
         "reasons": "list",
     },
+    optional={"route_relation": "dict"},
 )
 
 
@@ -141,7 +142,9 @@ MISSION_ASSESS_SCHEMA = JsonSchema(
 
 CHAT_ROUTE_PROMPT_CONTRACT = """Return one JSON object matching chat.route.
 Fields: route string, command string or null, target_task_id string or null,
-confidence number 0..1, reasons string array.
+confidence number 0..1, reasons string array, optional route_relation object.
+route_relation may include same_task boolean, is_standalone_goal boolean,
+and relation_reason string.
 Allowed routes: summary, new_task, continue_task, continue_plan, answer_pending_question.
 Allowed commands: approve_plan, reject_plan, or null.
 Use broad semantic judgment over the current user turn and provided thread state.
@@ -149,11 +152,19 @@ Pending user input is context, not a forced route. Use answer_pending_question o
 when the turn directly supplies the missing information, approval, rejection, or
 parameter for the pending task. Use new_task for a complete standalone goal, even
 when an older broad clarification is pending. Use summary only for prior
-conversation recap, not current agent/runtime state. A broad pending clarification
-from a vague turn such as "I do not understand" must not capture later operational
-goals such as search, retrieval, research, file read/write, time, or system-state
-requests; classify those as new_task. Use summary only for explicit recap/history
-requests; a bare confusion turn such as "I do not understand" is not a summary request.
+conversation recap, not current agent/runtime state. Summary is for broad
+overview/recap/list-history requests. If the user asks a specific question whose
+answer should be extracted from current thread context, route new_task so the
+normal agent can answer naturally from the compiled thread context. A broad
+pending clarification from a vague turn such as "I do not understand" must not
+capture later operational goals such as search, retrieval, research, file
+read/write, time, or system-state requests; classify those as new_task. Use
+summary only for explicit broad recap/history requests; a bare confusion turn
+such as "I do not understand" is not a summary request.
+When pending_user_input is true, always fill route_relation from semantic
+comparison, not from phrase matching. If the turn is a standalone goal rather
+than an answer to the pending question, set same_task=false and
+is_standalone_goal=true.
 The model only classifies the turn. The host validates state, policy, pending questions,
 unfinished plans, and execution. Never request tool execution or memory writes here."""
 
@@ -252,6 +263,7 @@ When context.state.agent_retrieval_plan_state contains planned_subgoals, choose 
 When feedback.status is continue, inspect feedback.missing_evidence and the latest observations, then propose a materially new next action when one is available. Avoid repeating the same action payload unless the context shows new progress or the host explicitly asks for a retry.
 When context.state.agent_replan_hints.status is needs_replan, use its retrieval gaps, suggested_query_hints, suggested_search_strategies, do_not_finalize_until, and avoid_repeating fields to propose one materially different safe action. Do not answer as final while any do_not_finalize_until rule is unmet.
 When context.state.mission_context is present, treat mission_context.mission_state.root_goal as the global objective for the whole task, not merely as commentary. Use mission_context.directive and context.state.thread_rag_context to understand previous attempts, evidence, failures, and conversation continuity. If the previous run failed but the mission directive says continue, propose a materially different safe action instead of giving up or asking the user by default.
+When context.state.semantic_goal is present, treat semantic_goal.root_goal as the stable objective and semantic_goal.current_input_preview only as the current continuation instruction. Do not replace the objective with a generated continuation directive.
 When memory.recall is available and the task depends on previous user
 preferences, project conventions, earlier thread state, "what do you remember",
 "what did we discuss", or continuity across turns, propose memory.recall before

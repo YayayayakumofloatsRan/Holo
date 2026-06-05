@@ -62,6 +62,32 @@ def test_phase72_context_injects_project_memory_across_threads():
     assert access_event["payload"]["memory_ids"] == [same_project.memory_id]
 
 
+def test_phase72_context_injects_project_and_thread_memory_views_together():
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    project_item = _memory_item(summary="项目默认使用 kernel-v3 分支", thread_id="thread-old")
+    thread_item = _memory_item(summary="当前线程正在审查多轮 loop 衔接", thread_id="thread-current", project_id="local")
+    store.commit(project_item)
+    store.commit(thread_item)
+    profile = ProjectProfile(
+        project_id="holo-kernel-v3",
+        root="",
+        summary="Kernel v3 project.",
+        constraints=[],
+        redaction_markers=[],
+    )
+
+    pack = ContextPackCompiler(durable_memory_store=store, project_profile=profile).compile(
+        _task(thread_id="thread-current", input_text="继续审查多轮 loop"),
+        JournalStore.in_memory(),
+    )
+
+    durable = next(section for section in pack.sections if section["name"] == "durable_memory")
+    assert durable["views"]["project"]["items"][0]["memory_id"] == project_item.memory_id
+    assert durable["views"]["thread"]["items"][0]["memory_id"] == thread_item.memory_id
+    assert durable["combined"]["memory_ids"] == [project_item.memory_id, thread_item.memory_id]
+    assert [item["memory_id"] for item in durable["items"]] == [project_item.memory_id, thread_item.memory_id]
+
+
 def test_phase72_context_fallback_thread_memory_is_user_scoped():
     store = MemoryStore.in_memory(clock_ms=_clock())
     current_user = _memory_item(summary="current user thread memory", thread_id="thread-1")

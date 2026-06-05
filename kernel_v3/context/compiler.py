@@ -108,7 +108,7 @@ class ContextPackCompiler:
         durable_memory: JsonObject = {}
         durable_memory_items: list[JsonObject] = []
         if durable_memory_enabled:
-            durable_memory = _recall_durable_memory(
+            durable_memory = _recall_durable_memory_views(
                 self.durable_memory_store,
                 task=task,
                 user_id=self.durable_memory_user_id,
@@ -150,6 +150,8 @@ class ContextPackCompiler:
                     "name": "durable_memory",
                     "items": durable_memory_items,
                     "scope": durable_memory.get("scope", {}),
+                    "views": durable_memory.get("views", {}),
+                    "combined": durable_memory.get("combined", {}),
                     "total": durable_memory.get("total", 0),
                     "filtered": durable_memory.get("filtered", {}),
                     "limit": durable_memory.get("limit", self.durable_memory_limit),
@@ -661,6 +663,107 @@ def _recall_durable_memory(
     ).to_dict()
     result["limit"] = max(0, int(limit))
     return result
+
+
+def _recall_durable_memory_views(
+    store: MemoryStore | None,
+    *,
+    task: TaskState,
+    user_id: str,
+    project_id: str,
+    limit: int,
+    include_sensitive: bool,
+    context_id: str,
+    step_id: str,
+) -> JsonObject:
+    primary = _recall_durable_memory(
+        store,
+        task=task,
+        user_id=user_id,
+        project_id=project_id,
+        limit=limit,
+        include_sensitive=include_sensitive,
+        context_id=context_id,
+        step_id=step_id,
+    )
+    if store is None or limit <= 0:
+        return {**primary, "views": {}, "combined": {"memory_ids": [], "total": 0}}
+    views: JsonObject = {}
+    primary_scope = primary.get("scope") if isinstance(primary.get("scope"), dict) else {}
+    if project_id and project_id != "local":
+        views["project"] = _durable_memory_view(primary, label="project")
+        thread_scope: JsonObject = {"user_id": user_id, "thread_id": task.thread_id} if user_id else {"thread_id": task.thread_id}
+        thread_probe = store.recall(
+            query=None,
+            scope=thread_scope,
+            include_sensitive=include_sensitive,
+            limit=limit,
+            record_access=False,
+            rank_query=task.input_text,
+        )
+        if thread_probe.total > 0:
+            thread_result = store.recall(
+                query=None,
+                scope=thread_scope,
+                include_sensitive=include_sensitive,
+                limit=limit,
+                record_access=True,
+                rank_query=task.input_text,
+                access_context={
+                    "usage": "context_pack",
+                    "context_id": context_id,
+                    "task_id": task.task_id,
+                    "run_id": task.run_id,
+                    "thread_id": task.thread_id,
+                    "step_id": step_id,
+                    "rank_query_hash": deterministic_hash({"text": task.input_text}),
+                    "durable_memory_limit": max(0, int(limit)),
+                    "scope_label": "thread",
+                },
+            ).to_dict()
+        else:
+            thread_result = thread_probe.to_dict()
+        thread_result["limit"] = max(0, int(limit))
+        views["thread"] = _durable_memory_view(thread_result, label="thread")
+        item_by_id: dict[str, JsonObject] = {}
+        for item in [*primary.get("items", []), *thread_result.get("items", [])]:
+            if isinstance(item, dict) and item.get("memory_id"):
+                item_by_id.setdefault(str(item["memory_id"]), item)
+        return {
+            **primary,
+            "items": list(item_by_id.values()),
+            "total": len(item_by_id),
+            "scope": primary_scope,
+            "views": views,
+            "combined": {"memory_ids": list(item_by_id), "total": len(item_by_id)},
+        }
+    views["thread"] = _durable_memory_view(primary, label="thread")
+    memory_ids = [
+        str(item.get("memory_id"))
+        for item in primary.get("items", [])
+        if isinstance(item, dict) and item.get("memory_id")
+    ]
+    return {
+        **primary,
+        "views": views,
+        "combined": {"memory_ids": _ordered_unique(memory_ids), "total": len(_ordered_unique(memory_ids))},
+    }
+
+
+def _durable_memory_view(result: JsonObject, *, label: str) -> JsonObject:
+    items = [
+        _compact_durable_memory_item(item)
+        for item in result.get("items", [])
+        if isinstance(item, dict)
+    ]
+    return {
+        "label": label,
+        "scope": result.get("scope", {}),
+        "items": items,
+        "total": result.get("total", 0),
+        "filtered": result.get("filtered", {}),
+        "limit": result.get("limit", 0),
+    }
 
 
 def _durable_memory_recall_scope(*, task: TaskState, user_id: str, project_id: str) -> JsonObject:

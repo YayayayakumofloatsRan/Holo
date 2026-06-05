@@ -82,14 +82,20 @@ Recent kernel-v3 hardening is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-03_RETRIEVAL_LOOP_HARDENING.md` and
 `docs/KERNEL_V3_PROGRESS_2026-06-04_ACADEMIC_RESEARCH_PROFILE.md`, with the
 latest open-research loop and attention work in
-`docs/KERNEL_V3_PROGRESS_2026-06-04_OPEN_RESEARCH_ATTENTION.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-04_OPEN_RESEARCH_ATTENTION.md`. The 2026-06-05
+loop-coupling and memory-context pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-05_LOOP_COUPLING_MEMORY.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
-payloads before processor calls, SEC companyfacts/direct-URL retrieval now
-preserves structured financial evidence such as concept, metric, period, filing,
-and value fields, and scholarly/frontier research can use an
-`academic_research` profile with academic source families, discovery-only
-source handling, topic-coverage gates, and live arXiv paper discovery.
+payloads before processor calls, mission continuations preserve the original
+root goal while passing the current directive separately, `chat.route` remains
+model-owned with structured route-relation validation instead of phrase tables,
+durable memory is visible as both project and thread context views, SEC
+companyfacts/direct-URL retrieval now preserves structured financial evidence
+such as concept, metric, period, filing, and value fields, and
+scholarly/frontier research can use an `academic_research` profile with academic
+source families, discovery-only source handling, topic-coverage gates, and live
+arXiv paper discovery.
 
 Kernel v3 currently contains the infrastructure for:
 

@@ -41,6 +41,38 @@ def test_phase109_mission_continues_after_inner_retrieval_failure_then_fails_glo
     assert "sufficient_retrieval_evidence" in result.failure_report["missing_evidence"]
 
 
+def test_phase109_mission_continuation_keeps_root_goal_stable_in_agent_context():
+    journal = JournalStore.in_memory()
+    runtime = MissionRuntime(
+        agent_runtime=AgentRuntime(
+            journal=journal,
+            artifact_store=ArtifactStore.in_memory(),
+            retrieval_operator=RetrievalOperator(
+                search_provider=FakeSearchProvider({"missing": []}),
+                fetch_provider=FakeFetchProvider({}),
+            ),
+            workloop_config=WorkloopConfig(repeated_action_limit=1, repeated_missing_evidence_limit=1, no_progress_step_limit=1),
+        ),
+        max_iterations=2,
+    )
+
+    result = runtime.run("调查一个很难命中的目标", mode="retrieval")
+
+    assert result.status == "failed"
+    run2_contexts = [
+        record.data["state"]
+        for record in journal.records(task_id=result.task_id, kind="context")
+        if record.run_id == "run-2"
+    ]
+    assert run2_contexts
+    state = run2_contexts[0]
+    assert state["mission_context"]["mission_state"]["root_goal"] == "调查一个很难命中的目标"
+    assert state["mission_context"]["current_step"]["is_continuation"] is True
+    assert state["semantic_goal"]["root_goal"] == "调查一个很难命中的目标"
+    assert state["research_mission"]["root_goal"] == "调查一个很难命中的目标"
+    assert "Continue the same global mission" not in state["research_mission"]["root_goal"]
+
+
 def test_phase109_mission_finalizes_when_inner_loop_covers_goal():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()

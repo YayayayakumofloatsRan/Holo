@@ -703,7 +703,11 @@ def decide_termination(
         decision = "failure_report"
         reason = "repeated_no_progress"
         override = True
-    if recipe.mode == "clarify_first":
+    if recipe.mode == "clarify_first" and not _successful_response_can_finalize(
+        observation=observation,
+        evidence=evidence,
+        recipe=recipe,
+    ):
         decision = "ask_user"
         reason = "clarification_required"
         override = feedback.status != "needs_user_input"
@@ -756,7 +760,7 @@ def _successful_response_can_finalize(
         return False
     if observation.source != "respond" or observation.status != "ok":
         return False
-    if recipe.mode not in {"direct_answer", "semantic_answer"}:
+    if recipe.mode not in {"direct_answer", "semantic_answer", "clarify_first"}:
         return False
     if recipe.citations_required or not evidence.sufficient:
         return False

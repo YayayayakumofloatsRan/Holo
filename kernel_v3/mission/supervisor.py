@@ -49,18 +49,15 @@ class MissionSupervisor:
 
     def start(self, *, root_goal: str, thread_id: str, metadata: JsonObject | None = None) -> MissionState:
         mission_id = _stable_id("mission", thread_id, root_goal)
-        requirement = MissionRequirement(
-            requirement_id=f"req-{_short_hash(root_goal)}",
-            text=root_goal,
-            status="open",
-        )
+        metadata = dict(metadata or {})
+        requirements = _mission_requirements(root_goal, metadata=metadata)
         coverage = CoverageMap(
             mission_id=mission_id,
             coverage_score=0.0,
-            requirements=[requirement.to_dict()],
+            requirements=[requirement.to_dict() for requirement in requirements],
             evidence_refs=[],
             citation_refs=[],
-            missing_requirements=[requirement.text],
+            missing_requirements=[requirement.text for requirement in requirements],
             diagnostics={},
         )
         state = MissionState(
@@ -68,13 +65,13 @@ class MissionSupervisor:
             thread_id=thread_id,
             root_goal=root_goal,
             status="running",
-            requirements=[requirement.to_dict()],
+            requirements=[requirement.to_dict() for requirement in requirements],
             coverage_map=coverage.to_dict(),
             attempted_strategies=[],
-            open_gaps=[requirement.text],
+            open_gaps=[requirement.text for requirement in requirements],
             blocked_reasons=[],
             iteration_count=0,
-            metadata=dict(metadata or {}),
+            metadata=metadata,
         )
         self._append(
             task_id=None,
@@ -334,6 +331,26 @@ def _merge_model_assessment(rule: MissionAssessment, model: JsonObject | None) -
     )
 
 
+def _mission_requirements(root_goal: str, *, metadata: JsonObject) -> list[MissionRequirement]:
+    profile = metadata.get("answer_profile") if isinstance(metadata.get("answer_profile"), dict) else {}
+    coverage = _string_list(profile.get("minimum_coverage")) if isinstance(profile, dict) else []
+    useful = [
+        item
+        for item in coverage
+        if item and item not in {"answer", "final_answer", "reply", "response"}
+    ]
+    if not useful:
+        useful = [root_goal]
+    return [
+        MissionRequirement(
+            requirement_id=f"req-{_short_hash(f'{index}:{item}')}",
+            text=item,
+            status="open",
+        )
+        for index, item in enumerate(_ordered_unique(useful), start=1)
+    ]
+
+
 def _directive_for_gap(
     mission: MissionState,
     result: AgentRuntimeResult,
@@ -419,12 +436,6 @@ def _has_material_progress(result: AgentRuntimeResult, run_delta: JsonObject) ->
         return True
     if _string_list(run_delta.get("evidence_refs")) or _string_list(run_delta.get("citation_refs")):
         return True
-    for report in run_delta.get("retrieval_reports", []) if isinstance(run_delta.get("retrieval_reports"), list) else []:
-        if not isinstance(report, dict):
-            continue
-        rejected_count = report.get("rejected_evidence_count")
-        if isinstance(rejected_count, int) and rejected_count > 0:
-            return True
     return False
 
 

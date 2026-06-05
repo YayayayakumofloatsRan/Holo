@@ -176,6 +176,8 @@ class MissionRuntime:
                 mission=mission,
                 thread_id=thread_id,
                 task_id=current_task_id,
+                current_input=current_input,
+                iteration_index=index,
             )
             if current_task_id is None:
                 result = self.agent_runtime.run(
@@ -223,6 +225,8 @@ class MissionRuntime:
         mission: MissionState,
         thread_id: str,
         task_id: str | None,
+        current_input: str,
+        iteration_index: int,
     ) -> JsonObject:
         merged = dict(metadata or {})
         thread_rag = self.thread_memory.compile(
@@ -234,6 +238,12 @@ class MissionRuntime:
         merged["mission_context"] = {
             "mission_state": mission.to_dict(),
             "directive": mission.directive,
+            "current_step": {
+                "iteration_index": iteration_index,
+                "current_input_preview": current_input[:720],
+                "is_continuation": iteration_index > 1 or mission.directive is not None,
+                "active_task_id": task_id or mission.active_task_id,
+            },
             "instruction": (
                 "Treat root_goal as the global task objective. If the previous run failed, "
                 "use the directive to propose a materially different safe next action instead of giving up."

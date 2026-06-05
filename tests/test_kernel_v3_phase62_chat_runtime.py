@@ -346,6 +346,11 @@ def test_phase62_broad_pending_clarification_does_not_swallow_operational_goal_e
                 "target_task_id": pending.task_id,
                 "confidence": 0.91,
                 "reasons": ["model_thought_this_answered_the_pending_question"],
+                "route_relation": {
+                    "same_task": False,
+                    "is_standalone_goal": True,
+                    "relation_reason": "The turn is a fresh operational goal rather than an answer to the old broad clarification.",
+                },
             },
             "semantic.intake": _direct_intake(),
         },
@@ -366,7 +371,7 @@ def test_phase62_broad_pending_clarification_does_not_swallow_operational_goal_e
     assert not journal.records(task_id=pending.task_id, kind="resume")
     route = journal.records(kind="chat_routing_decision")[-1].data
     assert route["route"] == "new_task"
-    assert "standalone_goal_overrode_pending_question" in route["reasons"]
+    assert "model_relation_overrode_pending_question" in route["reasons"]
 
 
 def test_phase62_continue_after_completed_task_asks_for_clarification_not_resume():
@@ -566,7 +571,7 @@ def test_phase62_summary_route_is_thread_level_and_does_not_reprint_pending_prom
     assert "needs input:" not in rendered
 
 
-def test_phase62_summary_route_requires_explicit_recap_request():
+def test_phase62_summary_route_is_model_owned_not_phrase_guarded():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(
         {
@@ -590,9 +595,38 @@ def test_phase62_summary_route_requires_explicit_recap_request():
 
     result = chat.receive("我不明白", thread_id="thread-summary-guard")
 
+    assert result.route == "summary"
+    route = journal.records(kind="chat_routing_decision")[-1].data
+    assert "model_misread_confusion_as_recap" in route["reasons"]
+
+
+def test_phase62_specific_thread_memory_question_follows_model_route():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "chat.route": {
+                "route": "new_task",
+                "command": None,
+                "target_task_id": None,
+                "confidence": 0.88,
+                "reasons": ["model_classified_specific_memory_question_as_task"],
+            },
+            "semantic.intake": _direct_intake(),
+        },
+        journal=journal,
+    )
+    chat = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, processor_fabric=fabric),
+        semantic_mode="model",
+        turn_router_mode="model",
+    )
+
+    result = chat.receive("刚才我说我正在审查什么？", thread_id="thread-specific-memory")
+
     assert result.route == "new_task"
     route = journal.records(kind="chat_routing_decision")[-1].data
-    assert "summary_without_recap_request" in route["reasons"]
+    assert "model_classified_specific_memory_question_as_task" in route["reasons"]
 
 
 def test_phase62_no_durable_memory_is_written():

@@ -259,8 +259,9 @@ class AgentRuntime:
     ) -> AgentRuntimeResult:
         effective_language = normalize_response_language(response_language or self.response_language)
         execution_metadata = _with_interaction_preferences(execution_metadata, response_language=effective_language)
+        semantic_goal = _semantic_goal_for_execution(goal, execution_metadata)
         intake = self._semantic_intake(
-            goal,
+            semantic_goal,
             semantic_mode=semantic_mode,
             task_id=task_id,
             response_language=effective_language,
@@ -285,26 +286,32 @@ class AgentRuntime:
             }
         if (
             selected_mode == "workspace_answer"
-            and _workspace_target(goal, task_plan) is None
+            and _workspace_target(semantic_goal, task_plan) is None
             and not _task_plan_has_workspace_read_actions(task_plan)
-            and _ambiguous_workspace_file_read(goal)
+            and _ambiguous_workspace_file_read(semantic_goal)
         ):
             selected_mode = "clarify_first"
-        if selected_mode == "workspace_write" and planner_mode != "model" and _workspace_write_target(goal, task_plan) is None:
+        if selected_mode == "workspace_write" and planner_mode != "model" and _workspace_write_target(semantic_goal, task_plan) is None:
             selected_mode = "clarify_first"
         answer_profile = infer_answer_profile(
-            goal,
+            semantic_goal,
             semantic_intake=intake,
             task_plan=task_plan,
             execution_metadata=execution_metadata,
             response_language=effective_language,
         )
         research_mission = research_mission_metadata(
-            goal,
+            semantic_goal,
             answer_profile=answer_profile,
             semantic_intake=intake,
             task_plan=task_plan,
         )
+        if semantic_goal != goal:
+            execution_metadata = _with_semantic_goal_metadata(
+                execution_metadata,
+                semantic_goal=semantic_goal,
+                current_input=goal,
+            )
         execution_metadata = _with_answer_profile_metadata(
             execution_metadata,
             answer_profile=answer_profile,
@@ -325,10 +332,10 @@ class AgentRuntime:
             },
         )
         recipe = _with_active_memory_access(recipe, enabled=self.memory_store is not None)
-        recipe = _with_planned_action_count(goal, recipe)
+        recipe = _with_planned_action_count(semantic_goal, recipe)
         recipe = _with_runtime_loop_budget(recipe, planner_mode=planner_mode)
-        registry = self._registry(recipe, goal)
-        planner = self._planner(goal, recipe, registry, planner_mode)
+        registry = self._registry(recipe, semantic_goal)
+        planner = self._planner(semantic_goal, recipe, registry, planner_mode)
         evaluator = WorkloopEvaluator(
             inner=self._evaluator(recipe, evaluator_mode),
             journal=self.journal,
@@ -1253,6 +1260,7 @@ class _AgentContextCompiler:
                     recipe=self.recipe,
                 ),
                 "agent_runtime_directive": _compact_agent_runtime_directive_for_prompt(_planner_directive(self.recipe)),
+                "semantic_goal": _semantic_goal_metadata(self.recipe),
                 "agent_retrieval_plan_state": _agent_retrieval_plan_state(
                     journal,
                     task_id=task.task_id,
@@ -3617,6 +3625,11 @@ def _research_mission_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _semantic_goal_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = _execution_metadata(recipe).get("semantic_goal")
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _final_answer_contract(answer_profile: JsonObject) -> JsonObject:
     if not answer_profile:
         return {"format": "answer", "detail_level": "normal"}
@@ -3813,6 +3826,14 @@ def _compact_mission_context_for_prompt(value: object) -> JsonObject:
         }
     if isinstance(directive, dict):
         result["directive"] = _compact_mission_directive_for_prompt(directive)
+    current_step = value.get("current_step")
+    if isinstance(current_step, dict):
+        result["current_step"] = {
+            "iteration_index": current_step.get("iteration_index"),
+            "current_input_preview": _text_preview(current_step.get("current_input_preview"), limit=480),
+            "is_continuation": bool(current_step.get("is_continuation")),
+            "active_task_id": current_step.get("active_task_id"),
+        }
     return {key: val for key, val in result.items() if val not in ({}, [], None, "")}
 
 
@@ -3982,6 +4003,23 @@ def _mission_id_from_context(context: JsonObject) -> str | None:
     return str(mission_id) if isinstance(mission_id, str) and mission_id else None
 
 
+def _semantic_goal_for_execution(current_input: str, metadata: JsonObject | None) -> str:
+    if not isinstance(metadata, dict):
+        return current_input
+    mission_context = metadata.get("mission_context")
+    if not isinstance(mission_context, dict):
+        return current_input
+    current_step = mission_context.get("current_step")
+    directive = mission_context.get("directive")
+    if not isinstance(current_step, dict) and not isinstance(directive, dict):
+        return current_input
+    state = mission_context.get("mission_state")
+    root_goal = state.get("root_goal") if isinstance(state, dict) else None
+    if isinstance(root_goal, str) and root_goal.strip():
+        return root_goal
+    return current_input
+
+
 def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
     if not isinstance(metadata, dict):
         return {}
@@ -3992,6 +4030,7 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
         "mission_context",
         "answer_profile",
         "research_mission",
+        "semantic_goal",
         "task_execution_step",
         "interaction_preferences",
         "agent_loop",
@@ -4007,6 +4046,22 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
             else:
                 context[key] = dict(value)
     return context
+
+
+def _with_semantic_goal_metadata(
+    metadata: JsonObject | None,
+    *,
+    semantic_goal: str,
+    current_input: str,
+) -> JsonObject:
+    result = dict(metadata or {})
+    result["semantic_goal"] = {
+        "root_goal": semantic_goal,
+        "current_input_preview": _text_preview(current_input, limit=480),
+        "current_input_is_directive": True,
+        "host_rule": "Use root_goal for task semantics; use current_input only as the current continuation directive.",
+    }
+    return result
 
 
 def _with_answer_profile_metadata(

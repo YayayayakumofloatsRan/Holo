@@ -541,6 +541,71 @@ def test_phase61_spurious_user_input_after_successful_direct_response_finalizes(
     assert decision.override is True
 
 
+def test_phase61_clarify_first_does_not_override_successful_direct_response():
+    decision = decide_termination(
+        feedback=Feedback(
+            feedback_id="fb-clarify-spurious-ask",
+            run_id="run-1",
+            status="needs_user_input",
+            stop_reason="needs_user_input",
+            answer=None,
+            missing_evidence=["clarification_required"],
+        ),
+        observation=Observation(
+            observation_id="obs-respond-clarify",
+            run_id="run-1",
+            kind="respond_result",
+            status="ok",
+            source="respond",
+            content={"text": "我可以先给出一个有限但有用的回答。"},
+            observed_at_ms=1,
+            action_id="act-respond",
+            tool_call_id=None,
+        ),
+        progress=ProgressAssessment(
+            assessment_id="progress-clarify",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            made_progress=True,
+            progress_score=0.35,
+            progress_type="new_artifact",
+            new_refs=["artifact-1"],
+            signals=[],
+        ),
+        repetition=RepetitionSignal(
+            signal_id="repeat-clarify",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            repeated=False,
+            repeat_type=None,
+            repeat_count=0,
+            threshold=2,
+            repeated_refs=[],
+        ),
+        evidence=EvidenceSufficiency(
+            sufficiency_id="evidence-clarify",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            sufficient=True,
+            citations_required=False,
+            evidence_count=0,
+            citation_count=0,
+            valid_citation_refs=[],
+            missing=[],
+            reason="sufficient",
+        ),
+        recipe=_clarify_recipe(),
+        no_progress_count=0,
+        config=WorkloopConfig(),
+    )
+
+    assert decision.decision == "final_answer"
+    assert decision.reason == "successful_response_overrode_spurious_user_input"
+
+
 def test_phase61_evaluator_blocked_without_host_block_retries_when_evidence_missing():
     decision = decide_termination(
         feedback=Feedback(
@@ -892,6 +957,22 @@ def _semantic_recipe() -> TaskRecipe:
         finalizer="direct",
         context_budget_mode="standard",
         mode="semantic_answer",
+    )
+
+
+def _clarify_recipe() -> TaskRecipe:
+    return TaskRecipe(
+        recipe_id="recipe-clarify-test",
+        allowed_tools=[],
+        max_steps=4,
+        max_tool_calls=0,
+        max_network_fetches=0,
+        max_total_artifact_bytes=128_000,
+        permission_profile="read_only",
+        citations_required=False,
+        finalizer="direct",
+        context_budget_mode="standard",
+        mode="clarify_first",
     )
 
 
