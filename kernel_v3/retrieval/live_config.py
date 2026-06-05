@@ -263,7 +263,7 @@ class LiveRetrievalConfig:
     web_search: LiveWebSearchConfig = field(default_factory=LiveWebSearchConfig)
     crawl: LiveCrawlSearchConfig = field(default_factory=LiveCrawlSearchConfig)
     fetch: LiveHttpFetchConfig = field(default_factory=LiveHttpFetchConfig)
-    search_strategy: str = "fallback"
+    search_strategy: str = "adaptive"
     max_sources_per_provider: int | None = None
 
     @classmethod
@@ -471,7 +471,7 @@ def _source_directory_allowed_hosts() -> list[str]:
 
 
 def _search_strategy(value: object) -> str:
-    normalized = str(value or "fallback").strip().lower()
+    normalized = str(value or "adaptive").strip().lower()
     if normalized in {"aggregate", "merged", "blend", "blended"}:
         return "aggregate"
     if normalized in {"adaptive", "dynamic", "planner", "model"}:

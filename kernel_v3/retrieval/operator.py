@@ -153,7 +153,8 @@ class RetrievalOperator:
             except Exception as exc:  # pragma: no cover - concrete providers decide error types.
                 provider_sources = []
                 search_error = type(exc).__name__
-            bounded_sources = _dedupe_sources(provider_sources)[: goal.max_sources]
+            search_candidate_limit = _search_candidate_limit(goal)
+            bounded_sources = _dedupe_sources(provider_sources)[:search_candidate_limit]
             provider_diagnostics = _provider_search_diagnostics(self.search_provider)
             attempt_status = _search_attempt_status(
                 search_error=search_error,
@@ -163,6 +164,7 @@ class RetrievalOperator:
             diagnostics = {
                 "provider_source_count": len(provider_sources),
                 "journaled_source_count": len(bounded_sources),
+                "search_candidate_limit": search_candidate_limit,
                 **provider_diagnostics,
             }
             if search_error:
@@ -226,12 +228,19 @@ class RetrievalOperator:
                 action_ref=action_ref,
             )
 
-        ranked = rank_sources(goal, _dedupe_sources(sources), research_profile=research_profile)[: goal.max_sources]
+        ranked_all = rank_sources(goal, _dedupe_sources(sources), research_profile=research_profile)
+        fetchable_ranked, source_rejections = _fetchable_ranked_sources(goal, ranked_all)
+        ranked = fetchable_ranked[: goal.max_sources] if fetchable_ranked else ranked_all[: goal.max_sources]
         ranking = RankSources(
             ranking_id=f"rank-{goal.goal_id}",
             goal_id=goal.goal_id,
             ranked_sources=[_safe_source_dict(source) for source in ranked],
-            diagnostics={"ranked_source_count": len(ranked), "max_sources": goal.max_sources},
+            diagnostics={
+                "ranked_source_count": len(ranked),
+                "raw_ranked_source_count": len(ranked_all),
+                "rejected_ranked_source_count": len(source_rejections),
+                "max_sources": goal.max_sources,
+            },
         )
         _append(
             journal,
@@ -243,7 +252,6 @@ class RetrievalOperator:
             action_ref=action_ref,
         )
 
-        fetchable_ranked, source_rejections = _fetchable_ranked_sources(goal, ranked)
         if source_rejections:
             _append(
                 journal,
@@ -267,9 +275,15 @@ class RetrievalOperator:
         fetch_attempt_ids: list[str] = []
         fetch_summaries: list[JsonObject] = []
         source_by_id = {source.source_id: source for source in _dedupe_sources(sources)}
+        if fetchable_ranked:
+            fetch_queue = fetchable_ranked
+        elif _should_fetch_rejected_sources(goal, research_profile=research_profile, source_rejections=source_rejections):
+            fetch_queue = ranked_all
+        else:
+            fetch_queue = []
         fetch_jobs = [
             (index, ranked_source, source_by_id[ranked_source.source_id])
-            for index, ranked_source in enumerate(fetchable_ranked[: goal.max_fetches], start=1)
+            for index, ranked_source in enumerate(fetch_queue[: goal.max_fetches], start=1)
             if ranked_source.source_id in source_by_id
         ]
         for index, ranked_source, source, response, fetch_error in self._fetch_ranked_sources(fetch_jobs):
@@ -526,6 +540,7 @@ class RetrievalOperator:
             rejected_evidence=rejected_evidence,
             evidence=evidence,
             citations=citations,
+            source_rejections=source_rejections,
         ):
             decision = EvidenceEvaluationDecision(
                 decision_id=decision.decision_id,
@@ -862,6 +877,32 @@ def _goal_budget(goal: SearchGoal) -> JsonObject:
     }
 
 
+def _search_candidate_limit(goal: SearchGoal) -> int:
+    if not _needs_expanded_search_candidate_pool(goal):
+        return goal.max_sources
+    return min(
+        max(
+            24,
+            goal.max_sources,
+            goal.max_fetches * 4,
+        ),
+        512,
+    )
+
+
+def _needs_expanded_search_candidate_pool(goal: SearchGoal) -> bool:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    if metadata.get("research_profile") or metadata.get("research_profile_id"):
+        return True
+    if str(metadata.get("research_depth") or "").strip().lower() in {"balanced", "deep"}:
+        return True
+    if str(metadata.get("search_strategy") or "").strip().lower() in {"aggregate", "fresh_live", "structured", "crawl"}:
+        return True
+    if str(metadata.get("query_campaign") or "").strip().lower() in {"auto", "deep", "enabled", "true"}:
+        return True
+    return goal.max_sources >= 16 or goal.max_fetches >= 16
+
+
 def _default_query_count(metadata: JsonObject, *, data: JsonObject | None = None) -> int:
     for key in ("queries", "query_templates"):
         value = metadata.get(key)
@@ -996,7 +1037,7 @@ def _fetchable_ranked_sources(goal: SearchGoal, ranked: list[RankedSource]) -> t
     fetchable: list[RankedSource] = []
     rejections: list[JsonObject] = []
     for source in ranked:
-        reason = _ranked_source_fetch_rejection_reason(source)
+        reason = _ranked_source_fetch_rejection_reason(goal, source)
         if reason is None:
             fetchable.append(source)
             continue
@@ -1027,8 +1068,8 @@ def _fetchable_ranked_sources(goal: SearchGoal, ranked: list[RankedSource]) -> t
     return fetchable, rejections
 
 
-def _ranked_source_fetch_rejection_reason(source: RankedSource) -> str | None:
-    discovery_reason = _research_profile_discovery_source_rejection(source)
+def _ranked_source_fetch_rejection_reason(goal: SearchGoal, source: RankedSource) -> str | None:
+    discovery_reason = _research_profile_discovery_source_rejection(goal, source)
     if discovery_reason is not None:
         return discovery_reason
     weak_reason = _research_profile_weak_source_rejection(source)
@@ -1044,16 +1085,34 @@ def _ranked_source_fetch_rejection_reason(source: RankedSource) -> str | None:
     return "source_target_entity_mismatch"
 
 
-def _research_profile_discovery_source_rejection(source: RankedSource) -> str | None:
+def _should_fetch_rejected_sources(
+    goal: SearchGoal,
+    *,
+    research_profile: ResearchProfile | None,
+    source_rejections: list[JsonObject],
+) -> bool:
+    if not source_rejections:
+        return False
+    if is_discovery_goal(goal=goal, research_profile=research_profile):
+        return True
+    profile = _research_profile_from_goal(goal) if research_profile is None else research_profile
+    if profile is None:
+        return False
+    if profile.profile_id == "finance_fundamentals":
+        return True
+    return any(str(item.get("reason") or "").startswith("source_weak_for_") for item in source_rejections)
+
+
+def _research_profile_discovery_source_rejection(goal: SearchGoal, source: RankedSource) -> str | None:
     assessment = _dict_or_empty(source.metadata.get("source_assessment"))
     profile_id = str(assessment.get("profile_id") or source.metadata.get("research_profile") or "")
     source_kind = _ranked_source_kind(source)
     if not profile_id or not source_kind:
         return None
-    if profile_id != "academic_research":
-        return None
     profile = profile_by_id(profile_id)
     if profile is None:
+        return None
+    if is_discovery_goal(goal=goal, research_profile=profile):
         return None
     if source_kind in profile_discovery_source_kinds(profile):
         return "source_discovery_only_for_research_profile"
@@ -1064,8 +1123,13 @@ def _research_profile_weak_source_rejection(source: RankedSource) -> str | None:
     assessment = _dict_or_empty(source.metadata.get("source_assessment"))
     profile_id = str(assessment.get("profile_id") or source.metadata.get("research_profile") or "")
     family = str(assessment.get("source_family") or source.metadata.get("source_family") or "")
-    if profile_id == "academic_research" and family in {"reference_dictionary", "encyclopedia"}:
-        return "source_weak_for_academic_research_profile"
+    profile = profile_by_id(profile_id) if profile_id else None
+    if profile is None or not family:
+        return None
+    if family in set(profile.weak_source_families):
+        if profile_id == "academic_research":
+            return "source_weak_for_academic_research_profile"
+        return "source_weak_for_research_profile"
     return None
 
 
@@ -1119,7 +1183,10 @@ def _failure_attribution(
     elif not ranked:
         mode = "ranking_no_sources"
     elif not fetch_jobs:
-        mode = "no_fetchable_sources"
+        if _fetch_rejections_indicate_source_authority_gap(source_rejections, source_quality):
+            mode = "source_authority_gap"
+        else:
+            mode = "no_fetchable_sources"
     elif not documents:
         mode = "fetch_failed_or_empty"
     elif not spans:
@@ -1218,6 +1285,12 @@ def _has_source_authority_rejection(rejected_evidence: list[JsonObject], source_
     return bool(source_quality) and source_quality.get("authority_sufficient") is False
 
 
+def _fetch_rejections_indicate_source_authority_gap(source_rejections: list[JsonObject], source_quality: JsonObject) -> bool:
+    if bool(source_quality) and source_quality.get("authority_sufficient") is False:
+        return True
+    return any(str(item.get("reason") or "").startswith("source_weak_for_") for item in source_rejections)
+
+
 def _decision_has_source_authority_gap(
     *,
     decision: EvidenceEvaluationDecision,
@@ -1225,6 +1298,7 @@ def _decision_has_source_authority_gap(
     rejected_evidence: list[JsonObject],
     evidence: list[EvidenceItem],
     citations: list[object],
+    source_rejections: list[JsonObject],
 ) -> bool:
     if decision.sufficient or not source_quality:
         return False
@@ -1232,7 +1306,7 @@ def _decision_has_source_authority_gap(
         return False
     if int(source_quality.get("assessment_count") or 0) <= 0:
         return False
-    return bool(rejected_evidence or evidence or citations)
+    return bool(rejected_evidence or evidence or citations or source_rejections)
 
 
 def _authority_gap_reason(source_quality: JsonObject) -> str:

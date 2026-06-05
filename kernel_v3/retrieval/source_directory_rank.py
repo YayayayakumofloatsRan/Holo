@@ -89,6 +89,7 @@ def rank_source_directory_sources(
             score += 0.3
         if metadata_requests_authority(metadata, authority):
             score += 0.2
+        score += _template_priority_boost(source.metadata)
         score += source_directory_task_boost(
             family=family.lower(),
             task_text=task_text,
@@ -161,6 +162,14 @@ def source_directory_source_text(source: SearchSource) -> str:
     ]
     pieces.extend(metadata_text_values(source.metadata))
     return " ".join(pieces)
+
+
+def _template_priority_boost(metadata: JsonObject) -> float:
+    try:
+        index = int(metadata.get("source_directory_template_index"))
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, 0.12 - (0.03 * index))
 
 
 def _matched_directory_targets(entries: list[object], query_terms: list[str]) -> set[str]:

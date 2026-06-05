@@ -4491,6 +4491,7 @@ def _retrieval_payload(goal: str, recipe: TaskRecipe) -> JsonObject:
     payload.setdefault("goal_id", "goal-agent-retrieval")
     payload.setdefault("query", goal)
     payload.setdefault("max_spans_per_document", 2)
+    payload = _apply_recipe_profile_defaults(payload, recipe)
     payload = _apply_research_depth_defaults(payload)
     return payload
 
@@ -4508,6 +4509,12 @@ def _apply_research_depth_defaults(payload: JsonObject) -> JsonObject:
     if not defaults:
         return payload
     merged = dict(payload)
+    metadata = merged.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if bool(metadata.get("respect_explicit_budget") or merged.get("respect_explicit_budget")):
+        if "research_depth" not in merged and isinstance(depth, str) and depth:
+            merged["research_depth"] = depth
+        return merged
     floor_budget = not (explicit_depth and str(depth).strip().lower() == "light")
     for key in ("max_queries", "max_sources", "max_fetches", "max_spans_per_document"):
         if key not in merged and key in defaults:
@@ -4564,7 +4571,8 @@ def _apply_profile_capability_defaults(payload: JsonObject, step: JsonObject) ->
 
 def _apply_recipe_profile_defaults(payload: JsonObject, recipe: TaskRecipe) -> JsonObject:
     capabilities = _recipe_research_profile_capabilities(recipe)
-    updated = _apply_finance_capability_defaults(payload, capabilities)
+    updated = _attach_research_context_to_payload(payload, recipe=recipe)
+    updated = _apply_finance_capability_defaults(updated, capabilities)
     updated = _apply_academic_research_capability_defaults(updated, capabilities)
     updated = _apply_technical_documentation_capability_defaults(updated, capabilities)
     profile_id = _research_profile_id(recipe)
@@ -4583,7 +4591,80 @@ def _apply_recipe_profile_defaults(payload: JsonObject, recipe: TaskRecipe) -> J
             updated,
             capabilities | {"academic.research"},
         )
+    return _apply_general_research_defaults(updated, recipe=recipe)
+
+
+def _attach_research_context_to_payload(payload: JsonObject, *, recipe: TaskRecipe) -> JsonObject:
+    updated = dict(payload)
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    answer_profile = _answer_profile_metadata(recipe)
+    research_mission = _research_mission_metadata(recipe)
+    if answer_profile:
+        metadata.setdefault("answer_profile", answer_profile)
+        coverage = answer_profile.get("minimum_coverage")
+        if isinstance(coverage, list):
+            metadata.setdefault("minimum_coverage", coverage)
+    if research_mission:
+        metadata.setdefault("research_mission", research_mission)
+    if metadata:
+        updated["metadata"] = metadata
     return updated
+
+
+def _apply_general_research_defaults(payload: JsonObject, *, recipe: TaskRecipe) -> JsonObject:
+    if recipe.mode != "retrieval_answer":
+        return payload
+    answer_profile = _answer_profile_metadata(recipe)
+    format_name = str(answer_profile.get("format") or "")
+    detail_level = str(answer_profile.get("detail_level") or "")
+    metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+    profile_metadata = answer_profile.get("metadata") if isinstance(answer_profile.get("metadata"), dict) else {}
+    domain = str(profile_metadata.get("domain") or "")
+    if format_name not in {"detailed_report", "deep_report", "memo"} and domain != "general_research":
+        return payload
+    updated = dict(payload)
+    if bool(metadata.get("respect_explicit_budget") or updated.get("respect_explicit_budget")):
+        return updated
+    depth = "deep" if format_name == "deep_report" or detail_level == "deep" else "balanced"
+    metadata.setdefault("research_depth", depth)
+    metadata.setdefault("search_strategy", "aggregate")
+    metadata.setdefault("query_campaign", "auto")
+    updated["metadata"] = metadata
+    if bool(metadata.get("respect_explicit_budget") or updated.get("respect_explicit_budget")):
+        return updated
+    defaults = _general_research_depth_defaults(depth)
+    for key, floor in defaults.items():
+        if key not in updated:
+            updated[key] = floor
+        elif _should_floor_general_research_budget(updated, key):
+            current = _positive_metadata_int(updated.get(key), default=0)
+            if current > 0:
+                updated[key] = max(current, floor)
+    return updated
+
+
+def _general_research_depth_defaults(depth: str) -> JsonObject:
+    if depth == "deep":
+        return {
+            "max_queries": 48,
+            "max_sources": 750,
+            "max_fetches": 192,
+            "max_spans_per_document": 24,
+        }
+    return {
+        "max_queries": 24,
+        "max_sources": 320,
+        "max_fetches": 96,
+        "max_spans_per_document": 16,
+    }
+
+
+def _should_floor_general_research_budget(payload: JsonObject, key: str) -> bool:
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if bool(metadata.get("respect_explicit_budget") or payload.get("respect_explicit_budget")):
+        return False
+    return key in {"max_queries", "max_sources", "max_fetches", "max_spans_per_document"}
 
 
 def _apply_finance_capability_defaults(payload: JsonObject, capabilities: set[str]) -> JsonObject:
@@ -4700,9 +4781,29 @@ def _retrieval_execution_args(recipe: TaskRecipe) -> JsonObject:
     metadata = _execution_metadata(recipe)
     direct = _direct_tool_payload(metadata, "retrieval.run")
     if direct:
-        return direct
+        return _mark_explicit_retrieval_budget(direct)
     nested = _nested_json(metadata, "retrieval.run") or _nested_json(metadata, "retrieval")
-    return _direct_tool_payload(nested, "retrieval.run") if nested else {}
+    return _mark_explicit_retrieval_budget(_direct_tool_payload(nested, "retrieval.run")) if nested else {}
+
+
+def _mark_explicit_retrieval_budget(payload: JsonObject) -> JsonObject:
+    if not payload:
+        return {}
+    budget_keys = {
+        "max_queries",
+        "max_sources",
+        "max_fetches",
+        "max_spans_per_document",
+        "max_network_fetches",
+        "max_total_artifact_bytes",
+    }
+    if not any(key in payload for key in budget_keys):
+        return payload
+    updated = dict(payload)
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    metadata.setdefault("respect_explicit_budget", True)
+    updated["metadata"] = metadata
+    return updated
 
 
 def _retrieval_network_fetch_budget(recipe_metadata: JsonObject) -> int:

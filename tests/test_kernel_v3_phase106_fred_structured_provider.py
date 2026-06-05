@@ -201,7 +201,9 @@ def test_phase106_model_planner_continues_from_fred_search_to_structured_csv() -
     assert macro_hints[0]["suggested_payload"]["metadata"] == hinted_payload["metadata"]
     actions = journal.records(task_id=result.task_id, kind="action")
     assert [record.data["payload"]["goal_id"] for record in actions] == ["goal-plan-1-1", "goal-plan-1-2"]
-    assert actions[1].data["payload"]["metadata"] == hinted_payload["metadata"]
+    action_metadata = actions[1].data["payload"]["metadata"]
+    for key, value in hinted_payload["metadata"].items():
+        assert action_metadata[key] == value
     searches = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")
     assert any(
         source["provider"] == "fred_structured_search"

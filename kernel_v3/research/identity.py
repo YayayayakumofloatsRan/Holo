@@ -5,10 +5,11 @@ import re
 from dataclasses import dataclass, field
 
 from kernel_v3.contracts import Contract, JsonObject
+from kernel_v3.research.issuer_registry import builtin_issuer_for_text
 
 
 _CIK_PATTERN = re.compile(r"\bCIK\s*0*([0-9]{1,10})\b", re.IGNORECASE)
-_TICKER_PATTERN = re.compile(r"\b[A-Z][A-Z0-9.]{0,5}\b")
+_TICKER_PATTERN = re.compile(r"\b[A-Z][A-Z0-9.]{0,4}\b")
 _ASX_PATTERN = re.compile(r"\bASX\s*[:：]?\s*([A-Z][A-Z0-9]{1,5})\b", re.IGNORECASE)
 _HK_PATTERN = re.compile(r"\b(?:HKEX|HKG|HK)\s*[:：]?\s*([0-9]{1,5})\b", re.IGNORECASE)
 _SGX_PATTERN = re.compile(r"\bSGX\s*[:：]?\s*([A-Z0-9]{1,6})\b", re.IGNORECASE)
@@ -95,6 +96,14 @@ def resolve_issuer_identity(query: str, metadata: JsonObject | None = None) -> I
         cik = _normalize_cik(_ticker_cik_map(flattened).get(ticker.upper()))
         if cik:
             sources.append("metadata_ticker_cik_map")
+    if not ticker and not cik and _allow_builtin_issuer_registry(query, flattened):
+        registered = builtin_issuer_for_text(query)
+        if registered:
+            ticker = _first_string(registered, "ticker")
+            cik = _normalize_cik(registered.get("sec_cik"))
+            company = company or _first_string(registered, "company")
+            market = market or _first_string(registered, "market")
+            sources.append("builtin_issuer_registry")
 
     identifiers = {
         key: value
@@ -248,6 +257,29 @@ def _non_us_market(market: str | None) -> bool:
     if not market:
         return False
     return market.upper() in {"ASX", "HKEX", "HKG", "HK", "SGX", "LSE", "SEDAR", "EDINET"}
+
+
+def _allow_builtin_issuer_registry(query: str, metadata: JsonObject) -> bool:
+    profile = str(metadata.get("research_profile") or metadata.get("research_profile_id") or "")
+    if profile == "finance_fundamentals":
+        return True
+    lowered = str(query or "").lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "10-k",
+            "10-q",
+            "sec",
+            "edgar",
+            "companyfacts",
+            "fundamental",
+            "fundamentals",
+            "revenue",
+            "net income",
+            "market cap",
+            "valuation",
+        )
+    )
 
 
 def _confidence(*, identifiers: JsonObject, sources: list[str]) -> float:

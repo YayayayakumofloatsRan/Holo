@@ -264,6 +264,7 @@ class AdaptiveSearchProvider:
             "requested_strategy": request["requested_strategy"],
             "selected_strategy": request["mode"],
             "selected_provider_ids": _provider_ids(providers),
+            "selected_provider_id": child_diagnostics.get("selected_provider_id"),
             "provider_count": len(providers),
             "child_provider_id": getattr(provider, "provider_id", provider.__class__.__name__),
             "child_diagnostics": child_diagnostics,

@@ -597,9 +597,10 @@ def _attempted_queries(run_delta: JsonObject) -> list[str]:
     for report in run_delta.get("retrieval_reports", []) if isinstance(run_delta.get("retrieval_reports"), list) else []:
         if not isinstance(report, dict):
             continue
-        preview = report.get("preview")
-        if isinstance(preview, str) and preview:
-            queries.append(preview)
+        queries.extend(_string_list(report.get("attempted_queries")))
+        goal_query = report.get("goal_query")
+        if isinstance(goal_query, str) and goal_query:
+            queries.append(goal_query)
     return _ordered_unique(queries)
 
 

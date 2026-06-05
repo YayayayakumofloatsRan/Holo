@@ -453,7 +453,10 @@ def test_phase95_agent_live_crawl_uses_sitemap_discovery_for_relevant_fetches() 
         "https://docs.example.com/quick_start/token_usage",
     }
     search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
-    assert search.data["diagnostics"]["provider_diagnostics"]["selected_provider_id"] == "bounded_crawl_search"
+    provider_diagnostics = search.data["diagnostics"]["provider_diagnostics"]
+    assert provider_diagnostics["provider_id"] == "adaptive_search"
+    assert provider_diagnostics["child_provider_id"] == "fallback_search"
+    assert provider_diagnostics["selected_provider_id"] == "bounded_crawl_search"
 
 
 def test_phase95_agent_can_crawl_from_finance_source_directory_seed() -> None:
@@ -675,7 +678,8 @@ def test_phase95_agent_live_retrieval_can_use_bounded_crawl_without_search_endpo
     }
     search = journal.records(task_id=result.task_id, kind="retrieval_search_attempt")[0]
     diagnostics = search.data["diagnostics"]["provider_diagnostics"]
-    assert diagnostics["provider_id"] == "fallback_search"
+    assert diagnostics["provider_id"] == "adaptive_search"
+    assert diagnostics["child_provider_id"] == "fallback_search"
     assert diagnostics["selected_provider_id"] == "bounded_crawl_search"
 
 

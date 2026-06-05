@@ -55,6 +55,7 @@ It keeps the processor as a replaceable "compute brain", while a local daemon ha
 - `python3 -m holo_host show-activation-state --thread-key TestUser --chat-name TestUser --channel wechat`
 - `python3 -m holo_host vector-health`
 - `python3 -m holo_host stream-tick --stream-name association_stream`
+- Kernel v3 branch: https://github.com/YayayayakumofloatsRan/Holo/tree/kernel-v3
 - `python3 -m holo_host benchmark-memory-fabric --thread-key TestUser --chat-name TestUser --channel wechat --query "你还记得重新上线前吗" --probe mind`
 - `python3 -m holo_host accept-memory-fabric-stage1 --thread-key TestUser --chat-name TestUser --channel wechat`
 - `python3 -m holo_host show-stream-status`

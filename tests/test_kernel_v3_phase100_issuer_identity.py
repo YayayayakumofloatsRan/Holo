@@ -30,6 +30,18 @@ def test_phase100_issuer_identity_uses_injected_ticker_cik_map_without_network()
     assert "metadata_ticker_cik_map" in identity.sources
 
 
+def test_phase100_issuer_identity_resolves_common_us_company_name_in_finance_context():
+    identity = resolve_issuer_identity(
+        "NVIDIA fundamentals revenue net income",
+        {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+    )
+
+    assert identity.ticker == "NVDA"
+    assert identity.cik == "0001045810"
+    assert identity.company == "NVIDIA Corporation"
+    assert "builtin_issuer_registry" in identity.sources
+
+
 def test_phase100_issuer_identity_ignores_finance_acronyms_as_us_tickers():
     identity = resolve_issuer_identity("SEC EDGAR API JSON companyfacts")
 

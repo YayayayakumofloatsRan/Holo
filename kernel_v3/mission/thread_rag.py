@@ -203,12 +203,22 @@ def _compact_retrieval_report(record: LedgerRecord) -> JsonObject:
     failure_attribution = diagnostics.get("failure_attribution") if isinstance(diagnostics.get("failure_attribution"), dict) else {}
     source_quality = diagnostics.get("source_quality") if isinstance(diagnostics.get("source_quality"), dict) else {}
     source_authority = diagnostics.get("source_authority") if isinstance(diagnostics.get("source_authority"), dict) else {}
+    search_summaries = diagnostics.get("search_summaries")
+    attempted_queries = []
+    if isinstance(search_summaries, list):
+        attempted_queries = [
+            str(item.get("query"))
+            for item in search_summaries
+            if isinstance(item, dict) and isinstance(item.get("query"), str) and item.get("query")
+        ]
     return {
         "record_ref": record.record_id,
         "kind": "retrieval_report",
         "report_id": record.data.get("report_id"),
         "status": record.data.get("status"),
         "goal_id": record.data.get("goal_id"),
+        "goal_query": _preview(str(diagnostics.get("goal_query") or ""), 240),
+        "attempted_queries": attempted_queries[-12:],
         "preview": _preview(str(record.data.get("preview") or ""), 360),
         "reason": diagnostics.get("reason"),
         "missing_query_facets": _string_list(diagnostics.get("missing_query_facets")),

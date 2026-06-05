@@ -152,6 +152,27 @@ def test_phase98_sec_edgar_provider_uses_injected_ticker_cik_map_without_network
     assert provider.search_diagnostics()["cik_present"] is True
 
 
+def test_phase98_sec_edgar_provider_uses_builtin_issuer_registry_for_common_company_name():
+    provider = SecEdgarSearchProvider()
+
+    sources = provider.search(
+        "NVIDIA fundamentals revenue net income",
+        goal=SearchGoal(
+            goal_id="goal-nvidia-name",
+            query="NVIDIA fundamentals revenue net income",
+            max_sources=8,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        plan=_plan(),
+    )
+
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json" in [source.uri for source in sources]
+    diagnostics = provider.search_diagnostics()
+    assert diagnostics["ticker"] == "NVDA"
+    assert diagnostics["cik_present"] is True
+    assert "builtin_issuer_registry" in diagnostics["identity_sources"]
+
+
 def test_phase98_sec_edgar_provider_is_profile_gated():
     provider = SecEdgarSearchProvider()
 

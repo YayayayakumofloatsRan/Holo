@@ -91,6 +91,8 @@ retrieval-campaign pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-05_RETRIEVAL_CAMPAIGN.md`. Source-quality
 feedback and discovery-only fallback hardening are tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-05_SOURCE_QUALITY_FEEDBACK.md`. The current
+retrieval campaign and live-smoke pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-05_DEEP_RETRIEVAL_SYSTEM.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -98,10 +100,12 @@ root goal while passing the current directive separately, `chat.route` remains
 model-owned with structured route-relation validation instead of phrase tables,
 durable memory is visible as both project and thread context views, SEC
 companyfacts/direct-URL retrieval now preserves structured financial evidence
-such as concept, metric, annual/quarterly period, filing, and value fields, and
-scholarly/frontier research can use an `academic_research` profile with academic
-source families, discovery-only source handling, topic-coverage gates, and live
-arXiv paper discovery.
+such as concept, metric, annual/quarterly period, filing, and value fields,
+deep retrieval can run adaptive multi-axis query campaigns with large candidate
+pools, concurrent fetch, source-family rejection, and structured coverage-gap
+diagnostics, and scholarly/frontier research can use an `academic_research`
+profile with academic source families, discovery-only source handling,
+topic-coverage gates, and live arXiv paper discovery.
 
 Kernel v3 currently contains the infrastructure for:
 

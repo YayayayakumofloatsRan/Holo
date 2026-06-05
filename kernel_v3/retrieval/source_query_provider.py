@@ -42,8 +42,8 @@ class ResearchSourceQuerySearchProvider:
         skipped = 0
         for entry in source_directory_for_profile(profile_id):
             templates = _query_templates(entry.metadata)
-            for template in templates:
-                rendered = _render_source(entry=entry, template=template, values=values)
+            for template_index, template in enumerate(templates):
+                rendered = _render_source(entry=entry, template=template, values=values, template_index=template_index)
                 if rendered is None:
                     skipped += 1
                     continue
@@ -76,7 +76,13 @@ class ResearchSourceQuerySearchProvider:
         return dict(self._last_search_diagnostics)
 
 
-def _render_source(*, entry: object, template: JsonObject, values: dict[str, str]) -> SearchSource | None:
+def _render_source(
+    *,
+    entry: object,
+    template: JsonObject,
+    values: dict[str, str],
+    template_index: int,
+) -> SearchSource | None:
     if not _template_matches(template, values):
         return None
     raw_template = template.get("template")
@@ -109,6 +115,7 @@ def _render_source(*, entry: object, template: JsonObject, values: dict[str, str
             "allowed_hosts": allowed_hosts,
             "source_kind": source_kind,
             "template_id": template_id,
+            "source_directory_template_index": template_index,
             "source_directory_rank_text": _rank_text(entry=entry, template=template),
             **(
                 {"template_match_any": [str(item) for item in match_any if isinstance(item, str)]}

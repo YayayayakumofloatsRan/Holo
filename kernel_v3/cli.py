@@ -2533,7 +2533,12 @@ class _InlineFetchProvider:
 def _research_metadata(research_profile_id: str | None) -> dict[str, object]:
     if research_profile_id is None:
         return {}
-    return {"research_profile": research_profile_id}
+    return {
+        "research_profile": research_profile_id,
+        "research_depth": DEFAULT_RESEARCH_DEPTH,
+        "search_strategy": DEFAULT_LIVE_SEARCH_STRATEGY,
+        "query_campaign": "auto",
+    }
 
 
 def _positive_limit(value: int, *, default: int = 20) -> int:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from kernel_v3.contracts import JsonObject
@@ -17,12 +18,14 @@ class GenerationAssessment:
     prompt_chars: int
     complexity_band: str
     latency_target: str
+    task_difficulty: str
 
     def to_dict(self) -> JsonObject:
         return {
             "prompt_chars": self.prompt_chars,
             "complexity_band": self.complexity_band,
             "latency_target": self.latency_target,
+            "task_difficulty": self.task_difficulty,
         }
 
 
@@ -43,6 +46,7 @@ def adapt_generation_parameters(
         prompt_chars=len(prompt),
         complexity_band=_complexity_band(len(prompt)),
         latency_target=target,
+        task_difficulty=_task_difficulty(prompt),
     )
     explicit_thinking = bool(merged.get("thinking_locked"))
     explicit_temperature = bool(merged.get("temperature_locked"))
@@ -114,6 +118,16 @@ def _thinking_for(*, task_type: str, assessment: GenerationAssessment) -> str:
         if task_type == "chat.route":
             return "disabled"
         return "enabled"
+    if assessment.latency_target == "balanced":
+        if task_type == "chat.route":
+            return "disabled"
+        if assessment.task_difficulty in {"replan", "deep_research"} and task_type in {
+            "planner.propose",
+            "evaluator.assess",
+            "mission.assess",
+            "synthesizer.answer",
+        }:
+            return "enabled"
     return "disabled"
 
 
@@ -124,6 +138,9 @@ def _model_for(*, task_type: str, assessment: GenerationAssessment, provider: st
         return DEEPSEEK_FLASH_MODEL
     if assessment.latency_target in {"quality", "thorough"}:
         return DEEPSEEK_PRO_MODEL
+    if assessment.latency_target == "balanced" and assessment.task_difficulty in {"replan", "deep_research"}:
+        if task_type in {"planner.propose", "mission.assess", "synthesizer.answer"}:
+            return DEEPSEEK_PRO_MODEL
     return DEEPSEEK_FLASH_MODEL
 
 
@@ -134,6 +151,10 @@ def _reasoning_effort_for(assessment: GenerationAssessment) -> str:
         return "max"
     if assessment.latency_target == "quality":
         return "max" if assessment.complexity_band == "huge" else "high"
+    if assessment.task_difficulty == "deep_research":
+        return "high"
+    if assessment.task_difficulty == "replan":
+        return "medium"
     if assessment.complexity_band in {"large", "huge"}:
         return "high"
     if assessment.complexity_band == "medium":
@@ -166,3 +187,69 @@ def _timeout_for(*, target: str, current: object, thinking_enabled: bool) -> int
     if target == "thorough":
         return max(parsed, 180)
     return parsed
+
+
+def _task_difficulty(prompt: str) -> str:
+    """Classify prompt difficulty from host state, not user keyword tables."""
+
+    payload = _json_payload(prompt)
+    if _has_replan_signal(payload):
+        return "replan"
+    answer_profile = _find_object(payload, "answer_profile")
+    if answer_profile:
+        format_name = str(answer_profile.get("format") or "")
+        detail_level = str(answer_profile.get("detail_level") or "")
+        metadata = answer_profile.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        quality_gate = str(answer_profile.get("quality_gate") or metadata.get("quality_gate") or "")
+        if format_name == "deep_report" or detail_level == "deep":
+            return "deep_research"
+        if format_name in {"detailed_report", "memo"} and quality_gate == "strict":
+            return "deep_research"
+        if format_name in {"detailed_report", "memo"}:
+            return "research"
+    if _find_object(payload, "research_mission") or _find_object(payload, "mission_context"):
+        return "research"
+    return "routine"
+
+
+def _json_payload(prompt: str) -> object:
+    text = str(prompt or "").strip()
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _has_replan_signal(value: object) -> bool:
+    if isinstance(value, dict):
+        status = value.get("status")
+        if status in {"needs_replan", "continue_or_fail_under_host_guards"}:
+            return True
+        if value.get("needs_replan") is True:
+            return True
+        if value.get("primary_failure_mode") not in {None, "", "none"}:
+            return True
+        return any(_has_replan_signal(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_replan_signal(item) for item in value)
+    return False
+
+
+def _find_object(value: object, key: str) -> JsonObject:
+    if isinstance(value, dict):
+        found = value.get(key)
+        if isinstance(found, dict):
+            return dict(found)
+        for item in value.values():
+            nested = _find_object(item, key)
+            if nested:
+                return nested
+    elif isinstance(value, list):
+        for item in value:
+            nested = _find_object(item, key)
+            if nested:
+                return nested
+    return {}

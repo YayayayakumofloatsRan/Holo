@@ -510,6 +510,13 @@ def finance_fundamentals_profile() -> ResearchProfile:
                     "ticker cik",
                     "cik directory",
                     "company_tickers",
+                    "directory",
+                    "filing history",
+                    "search",
+                    "series search",
+                    "macro series",
+                    "announcement",
+                    "announcements",
                 ],
                 "discovery_evidence_markers": [
                     "fundamental",

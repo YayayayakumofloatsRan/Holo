@@ -127,10 +127,10 @@ def profile_is_discovery_goal(
     policy = profile_evidence_policy(profile)
     query = goal.query.lower()
     discovery_markers = _string_list(policy.get("discovery_query_markers"))
-    if not discovery_markers or not any(marker.lower() in query for marker in discovery_markers):
+    if not discovery_markers or not any(_marker_matches(query, marker) for marker in discovery_markers):
         return False
     evidence_markers = _string_list(policy.get("discovery_evidence_markers"))
-    return not any(marker.lower() in query for marker in evidence_markers)
+    return not any(_marker_matches(query, marker) for marker in evidence_markers)
 
 
 def qualify_profile_evidence_candidate(
@@ -350,3 +350,14 @@ def _ordered_unique(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _marker_matches(text: str, marker: str) -> bool:
+    marker = marker.strip().lower()
+    if not marker:
+        return False
+    if re.search(r"[\u4e00-\u9fff]", marker):
+        return marker in text
+    if re.search(r"\s|[_:/.-]", marker):
+        return marker in text
+    return re.search(rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])", text) is not None

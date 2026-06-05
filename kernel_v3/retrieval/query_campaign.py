@@ -6,10 +6,13 @@ from kernel_v3.contracts import JsonObject
 from kernel_v3.research.contracts import ResearchProfile
 from kernel_v3.retrieval.contracts import SearchGoal
 from kernel_v3.retrieval.strategy import materially_different_query, query_signature
+from kernel_v3.retrieval.targeting import target_entity_phrases
 
 
 QUERY_TEXT_LIMIT = 500
 DEFAULT_GENERIC_CAMPAIGN_QUERIES = 8
+MAX_ENTITY_CAMPAIGN_QUERIES = 8
+MAX_FACET_CAMPAIGN_QUERIES = 16
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -45,6 +48,9 @@ def build_query_campaign(
     if expansion_enabled:
         candidates.extend((item, "suggested_query_hint") for item in _metadata_string_list(goal.metadata.get("suggested_query_hints")))
         candidates.extend((item, "source_target_hint") for item in _source_target_queries(goal.metadata))
+        candidates.extend((item, "target_entity_axis") for item in _target_entity_queries(query, goal, research_profile=research_profile))
+        candidates.extend((item, "profile_facet_axis") for item in _profile_facet_queries(query, goal, research_profile=research_profile))
+        candidates.extend((item, "mission_coverage_axis") for item in _mission_coverage_queries(query, goal.metadata))
         candidates.extend((item, "source_family_switch") for item in _source_family_queries(query, goal, research_profile=research_profile))
         candidates.extend((item, "generic_research_axis") for item in _generic_research_queries(query))
 
@@ -84,6 +90,8 @@ def build_query_campaign(
             "explicit_query_count": len(explicit),
             "template_count": len(active_templates),
             "profile_template_count": len(profile_templates),
+            "target_entities": target_entity_phrases(query),
+            "profile_facets": _profile_facets(query, goal, research_profile=research_profile),
             "attempted_query_signatures": [query_signature(item) for item in attempted_queries[-12:]],
             "selected": selected_reasons[:32],
             "skipped": skipped[:32],
@@ -132,13 +140,136 @@ def _source_target_queries(metadata: JsonObject) -> list[str]:
     return queries
 
 
+def _target_entity_queries(
+    query: str,
+    goal: SearchGoal,
+    *,
+    research_profile: ResearchProfile | None,
+) -> list[str]:
+    entities = target_entity_phrases(query)
+    if not entities:
+        return []
+    source_terms = [
+        _source_family_query_terms(family)
+        for family in _preferred_campaign_families(goal, research_profile=research_profile)[:4]
+    ]
+    source_terms = [item for item in source_terms if item]
+    task_terms = _task_axis_terms(goal.metadata)
+    queries: list[str] = []
+    for entity in entities[:3]:
+        quoted = f'"{entity}"'
+        queries.extend(
+            [
+                f"{quoted} official source",
+                f"{quoted} profile operations scale",
+                f"{quoted} primary source",
+            ]
+        )
+        for term in source_terms[:3]:
+            queries.append(f"{quoted} {term}")
+        for term in task_terms[:3]:
+            queries.append(f"{quoted} {term}")
+    return _ordered_unique(queries)[:MAX_ENTITY_CAMPAIGN_QUERIES]
+
+
+def _profile_facet_queries(
+    query: str,
+    goal: SearchGoal,
+    *,
+    research_profile: ResearchProfile | None,
+) -> list[str]:
+    facets = _profile_facets(query, goal, research_profile=research_profile)
+    if research_profile is None or not facets:
+        return []
+    policy = research_profile.metadata.get("evidence_policy")
+    if not isinstance(policy, dict):
+        return []
+    aliases = policy.get("facet_aliases")
+    if not isinstance(aliases, dict):
+        return []
+    queries: list[str] = []
+    for facet in facets[:8]:
+        raw_terms = aliases.get(facet)
+        terms = _metadata_string_list(raw_terms)[:4]
+        if not terms:
+            continue
+        queries.append(f"{query} {' '.join(terms[:2])}")
+        for term in terms[:3]:
+            queries.append(f"{query} {term}")
+    return _ordered_unique(queries)[:MAX_FACET_CAMPAIGN_QUERIES]
+
+
+def _mission_coverage_queries(query: str, metadata: JsonObject) -> list[str]:
+    terms: list[str] = []
+    for item in _metadata_string_list(metadata.get("minimum_coverage")):
+        terms.append(_coverage_term(item))
+    answer_profile = metadata.get("answer_profile")
+    if isinstance(answer_profile, dict):
+        for item in _metadata_string_list(answer_profile.get("minimum_coverage")):
+            terms.append(_coverage_term(item))
+        for item in _metadata_string_list(answer_profile.get("target_sections")):
+            terms.append(_coverage_term(item))
+    research_mission = metadata.get("research_mission")
+    if isinstance(research_mission, dict):
+        requirements = research_mission.get("requirements")
+        if isinstance(requirements, list):
+            for requirement in requirements:
+                if isinstance(requirement, dict):
+                    terms.append(_coverage_term(str(requirement.get("text") or "")))
+    return _ordered_unique([f"{query} {term}" for term in terms if term])[:12]
+
+
+def _profile_facets(
+    query: str,
+    goal: SearchGoal,
+    *,
+    research_profile: ResearchProfile | None,
+) -> list[str]:
+    if research_profile is None:
+        return []
+    policy = research_profile.metadata.get("evidence_policy")
+    if not isinstance(policy, dict):
+        return []
+    triggers = policy.get("facet_triggers")
+    facets: list[str] = []
+    if isinstance(triggers, dict):
+        normalized = query.lower()
+        for facet, raw_markers in triggers.items():
+            markers = _metadata_string_list(raw_markers)
+            if any(marker.lower() in normalized for marker in markers):
+                facets.append(str(facet))
+    task_kind = _string(goal.metadata.get("research_task_kind"))
+    if task_kind:
+        facets.extend(_metadata_string_list(policy.get("task_default_facets")))
+    facets.extend(_metadata_string_list(policy.get("default_facets")))
+    missing = _metadata_string_list(goal.metadata.get("missing"))
+    for item in missing:
+        if ":" in item:
+            facets.append(item.split(":", 1)[1])
+    return _ordered_unique(facets)
+
+
 def _source_family_queries(
     query: str,
     goal: SearchGoal,
     *,
     research_profile: ResearchProfile | None,
 ) -> list[str]:
-    families = _ordered_unique(
+    families = _preferred_campaign_families(goal, research_profile=research_profile)
+    result: list[str] = []
+    for family in families[:10]:
+        terms = _source_family_query_terms(family)
+        if terms:
+            result.append(f"{query} {terms}")
+    return result
+
+
+def _preferred_campaign_families(
+    goal: SearchGoal,
+    *,
+    research_profile: ResearchProfile | None,
+) -> list[str]:
+    return _ordered_unique(
         [
             *_metadata_string_list(goal.metadata.get("preferred_source_families")),
             *(
@@ -153,12 +284,6 @@ def _source_family_queries(
             ),
         ]
     )
-    result: list[str] = []
-    for family in families[:10]:
-        terms = _source_family_query_terms(family)
-        if terms:
-            result.append(f"{query} {terms}")
-    return result
 
 
 def _source_family_query_terms(source_family: str) -> str:
@@ -194,6 +319,22 @@ def _generic_research_queries(query: str) -> list[str]:
         f"{query} methodology evidence",
         f"{query} source documentation",
     ]
+
+
+def _task_axis_terms(metadata: JsonObject) -> list[str]:
+    task_kind = _string(metadata.get("research_task_kind")) or ""
+    if not task_kind:
+        return []
+    return [
+        task_kind.replace("_", " "),
+        "facts evidence",
+        "operations",
+        "scale",
+    ]
+
+
+def _coverage_term(value: str) -> str:
+    return " ".join(str(value or "").replace("_", " ").replace("-", " ").split())
 
 
 def _profile_query_templates(profile: ResearchProfile | None) -> list[str]:

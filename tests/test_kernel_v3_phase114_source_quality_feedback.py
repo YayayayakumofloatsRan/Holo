@@ -51,8 +51,8 @@ def test_phase114_weak_profile_source_does_not_become_formal_citation() -> None:
     assert report.diagnostics["failure_attribution"]["next_strategy_hint"] == "switch_to_higher_authority_source_family"
     assert report.diagnostics["source_quality"]["authority_sufficient"] is False
     assert report.diagnostics["source_quality"]["weak_source_count"] == 1
-    rejections = journal.records(task_id="task-weak-docs", kind="retrieval_evidence_rejections")[-1].data
-    assert rejections["diagnostics"]["reasons"]["weak_source_authority_for_research_profile"] == 1
+    rejections = journal.records(task_id="task-weak-docs", kind="retrieval_source_rejections")[-1].data
+    assert rejections["diagnostics"]["reasons"]["source_weak_for_research_profile"] == 1
     assert not journal.records(task_id="task-weak-docs", kind="retrieval_citation")
 
 

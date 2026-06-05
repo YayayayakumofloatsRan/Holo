@@ -69,7 +69,8 @@ def test_phase91_live_retrieval_config_builds_inspectable_operator() -> None:
     assert operator.network_access is True
     assert inspection.generated_at_ms == 9191
     assert inspection.network_access is True
-    assert inspection.provider_capabilities[0]["provider_id"] == "fallback_search"
+    assert inspection.provider_capabilities[0]["provider_id"] == "adaptive_search"
+    assert inspection.provider_capabilities[0]["diagnostics"]["default_strategy"] == "fallback"
     provider_ids = {item["provider_id"] for item in inspection.diagnostics["provider_chain"]}
     assert {
         "direct_url_search",

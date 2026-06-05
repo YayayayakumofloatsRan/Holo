@@ -61,7 +61,8 @@ def test_phase104_live_retrieval_operator_searches_corpus_before_live_fetch() ->
     assert report.status == "sufficient"
     assert transport.calls == []
     capabilities = report.diagnostics["provider_capabilities"]
-    assert capabilities[0]["provider_id"] == "fallback_search"
+    assert capabilities[0]["provider_id"] == "adaptive_search"
+    assert capabilities[0]["diagnostics"]["default_strategy"] == "fallback"
     assert capabilities[0]["diagnostics"]["providers"][0]["provider_id"] == "research_corpus"
     assert capabilities[1]["provider_id"] == "routing_fetch"
     assert "research_corpus" in capabilities[1]["diagnostics"]["routes"]

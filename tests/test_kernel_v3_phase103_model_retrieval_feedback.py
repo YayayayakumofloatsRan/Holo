@@ -531,7 +531,9 @@ def test_phase103_model_planner_uses_sec_filing_continuation_hint_for_next_loop(
     assert continuation_hints[0]["suggested_payload"]["metadata"]["sec_primary_document"] == "aapl-20240928.htm"
     actions = journal.records(task_id=result.task_id, kind="action")
     assert [record.data["payload"]["goal_id"] for record in actions] == ["goal-plan-1-1", "goal-plan-1-2"]
-    assert actions[1].data["payload"]["metadata"] == hinted_payload["metadata"]
+    action_metadata = actions[1].data["payload"]["metadata"]
+    for key, value in hinted_payload["metadata"].items():
+        assert action_metadata[key] == value
     fetch_uris = [
         record.data["uri"]
         for record in journal.records(task_id=result.task_id, kind="retrieval_fetch_attempt")
@@ -645,7 +647,9 @@ def test_phase103_model_planner_gets_sec_structured_hint_from_ticker_directory()
     assert structured_hints[0]["suggested_payload"]["metadata"] == hinted_payload["metadata"]
     actions = journal.records(task_id=result.task_id, kind="action")
     assert [record.data["payload"]["goal_id"] for record in actions] == ["goal-plan-1-1", "goal-plan-1-2"]
-    assert actions[1].data["payload"]["metadata"] == hinted_payload["metadata"]
+    action_metadata = actions[1].data["payload"]["metadata"]
+    for key, value in hinted_payload["metadata"].items():
+        assert action_metadata[key] == value
     fetch_uris = [
         record.data["uri"]
         for record in journal.records(task_id=result.task_id, kind="retrieval_fetch_attempt")
