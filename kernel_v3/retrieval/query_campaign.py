@@ -31,28 +31,38 @@ def build_query_campaign(
         return QueryCampaign(queries=[], diagnostics={"campaign_status": "empty_query"})
 
     explicit = _metadata_string_list(goal.metadata.get("queries"))
+    model_strategy = _retrieval_strategy(goal.metadata)
+    strategy_queries = _strategy_query_candidates(model_strategy)
+    strategy_driven = bool(strategy_queries)
     templates = _metadata_string_list(goal.metadata.get("query_templates"))
     profile_templates = _profile_query_templates(research_profile)
     expansion_enabled = _campaign_expansion_enabled(goal, explicit=explicit)
+    host_axis_expansion_enabled = _host_axis_expansion_enabled(goal.metadata, strategy_driven=strategy_driven)
     attempted_queries = _attempted_queries(goal.metadata)
 
     candidates: list[tuple[str, str]] = []
     if explicit:
         candidates.extend((item, "explicit_query") for item in explicit)
-    else:
+    if strategy_queries:
+        candidates.extend(strategy_queries)
+    if not explicit and not strategy_queries:
         candidates.append((query, "base_query"))
+    elif not explicit and strategy_queries:
+        candidates.append((query, "base_query_fallback"))
 
-    active_templates = templates or profile_templates
+    active_templates = templates if strategy_driven else templates or profile_templates
     candidates.extend((_render_query_template(template, query=query), "template") for template in active_templates)
 
     if expansion_enabled:
         candidates.extend((item, "suggested_query_hint") for item in _metadata_string_list(goal.metadata.get("suggested_query_hints")))
         candidates.extend((item, "source_target_hint") for item in _source_target_queries(goal.metadata))
-        candidates.extend((item, "target_entity_axis") for item in _target_entity_queries(query, goal, research_profile=research_profile))
-        candidates.extend((item, "profile_facet_axis") for item in _profile_facet_queries(query, goal, research_profile=research_profile))
-        candidates.extend((item, "mission_coverage_axis") for item in _mission_coverage_queries(query, goal.metadata))
-        candidates.extend((item, "source_family_switch") for item in _source_family_queries(query, goal, research_profile=research_profile))
-        candidates.extend((item, "generic_research_axis") for item in _generic_research_queries(query))
+        candidates.extend(_strategy_fallback_query_candidates(model_strategy, base_query=query))
+        if host_axis_expansion_enabled:
+            candidates.extend((item, "target_entity_axis") for item in _target_entity_queries(query, goal, research_profile=research_profile))
+            candidates.extend((item, "profile_facet_axis") for item in _profile_facet_queries(query, goal, research_profile=research_profile))
+            candidates.extend((item, "mission_coverage_axis") for item in _mission_coverage_queries(query, goal.metadata))
+            candidates.extend((item, "source_family_switch") for item in _source_family_queries(query, goal, research_profile=research_profile))
+            candidates.extend((item, "generic_research_axis") for item in _generic_research_queries(query))
 
     selected: list[str] = []
     selected_reasons: list[JsonObject] = []
@@ -88,6 +98,9 @@ def build_query_campaign(
             "query_count": len(selected),
             "max_queries": goal.max_queries,
             "explicit_query_count": len(explicit),
+            "model_strategy_present": bool(model_strategy),
+            "model_strategy_query_count": len(strategy_queries),
+            "host_axis_expansion_enabled": host_axis_expansion_enabled,
             "template_count": len(active_templates),
             "profile_template_count": len(profile_templates),
             "target_entities": target_entity_phrases(query),
@@ -98,6 +111,72 @@ def build_query_campaign(
             "skipped_count": len(skipped),
         },
     )
+
+
+def _retrieval_strategy(metadata: JsonObject) -> JsonObject:
+    raw = metadata.get("retrieval_strategy")
+    if isinstance(raw, dict):
+        return dict(raw)
+    raw = metadata.get("model_retrieval_strategy")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _strategy_query_candidates(strategy: JsonObject) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    candidates.extend((item, "model_strategy_query") for item in _metadata_string_list(strategy.get("queries")))
+    candidates.extend(_strategy_query_plan_candidates(strategy.get("query_plan"), source="model_strategy_query_plan"))
+    candidates.extend(_strategy_query_plan_candidates(strategy.get("search_moves"), source="model_strategy_search_move"))
+    return _ordered_unique_candidates(candidates)
+
+
+def _strategy_query_plan_candidates(value: object, *, source: str) -> list[tuple[str, str]]:
+    if not isinstance(value, list):
+        return []
+    candidates: list[tuple[str, str]] = []
+    for item in value:
+        if isinstance(item, str):
+            query = item.strip()
+        elif isinstance(item, dict):
+            query = _string(item.get("query")) or _string(item.get("search_query")) or ""
+        else:
+            query = ""
+        if query:
+            candidates.append((query, source))
+    return candidates
+
+
+def _strategy_fallback_query_candidates(strategy: JsonObject, *, base_query: str) -> list[tuple[str, str]]:
+    value = strategy.get("fallback_moves")
+    if not isinstance(value, list):
+        return []
+    candidates: list[tuple[str, str]] = []
+    for item in value:
+        if isinstance(item, dict):
+            query = _string(item.get("query")) or _string(item.get("search_query"))
+            if query:
+                candidates.append((query, "model_strategy_fallback"))
+            continue
+        if not isinstance(item, str):
+            continue
+        text = " ".join(item.split())
+        if not text:
+            continue
+        if any(marker in text.lower() for marker in ("search ", "query ", "site:", "\"")):
+            candidates.append((f"{base_query} {text}", "model_strategy_fallback"))
+    return _ordered_unique_candidates(candidates)
+
+
+def _host_axis_expansion_enabled(metadata: JsonObject, *, strategy_driven: bool) -> bool:
+    value = metadata.get("host_query_axes", metadata.get("fixed_query_axes"))
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+        if normalized in {"1", "true", "yes", "on", "enabled", "auto", "fallback"}:
+            return True
+    return not strategy_driven
 
 
 def _campaign_expansion_enabled(goal: SearchGoal, *, explicit: list[str]) -> bool:
@@ -269,8 +348,10 @@ def _preferred_campaign_families(
     *,
     research_profile: ResearchProfile | None,
 ) -> list[str]:
+    strategy = _retrieval_strategy(goal.metadata)
     return _ordered_unique(
         [
+            *_strategy_source_families(strategy),
             *_metadata_string_list(goal.metadata.get("preferred_source_families")),
             *(
                 list(research_profile.primary_source_families)
@@ -284,6 +365,21 @@ def _preferred_campaign_families(
             ),
         ]
     )
+
+
+def _strategy_source_families(strategy: JsonObject) -> list[str]:
+    families: list[str] = []
+    families.extend(_metadata_string_list(strategy.get("preferred_source_families")))
+    plan = strategy.get("source_family_plan")
+    if isinstance(plan, list):
+        for item in plan:
+            if isinstance(item, str):
+                families.append(item)
+            elif isinstance(item, dict):
+                family = _string(item.get("family")) or _string(item.get("source_family"))
+                if family:
+                    families.append(family)
+    return _ordered_unique(families)
 
 
 def _source_family_query_terms(source_family: str) -> str:
@@ -380,4 +476,16 @@ def _ordered_unique(values: list[str]) -> list[str]:
             continue
         seen.add(value)
         result.append(value)
+    return result
+
+
+def _ordered_unique_candidates(values: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    seen: set[str] = set()
+    result: list[tuple[str, str]] = []
+    for query, source in values:
+        signature = query_signature(query)
+        if not query or signature in seen:
+            continue
+        seen.add(signature)
+        result.append((query, source))
     return result

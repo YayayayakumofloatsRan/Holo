@@ -70,13 +70,18 @@ def supervise_retrieval_payload(
     attempted_signatures = [query_signature(item) for item in attempted_queries]
     query = _string(updated.get("query")) or root_goal
     strategy_has_changed = _strategy_has_changed(metadata, hints)
-    payload_has_targeted_source = _payload_has_targeted_source(updated, metadata) or strategy_has_changed
+    model_strategy = _retrieval_strategy(metadata)
+    model_strategy_queries = _strategy_query_texts(model_strategy)
+    payload_has_model_strategy = bool(model_strategy_queries) or bool(_strategy_source_families(model_strategy))
+    payload_has_targeted_source = _payload_has_targeted_source(updated, metadata) or strategy_has_changed or payload_has_model_strategy
     needs_replan = hints.get("needs_replan") is True or bool(attempted_queries)
     diagnostics: JsonObject = {
         "status": "not_needed" if not needs_replan else "checked",
         "rewritten": False,
         "query_signature": query_signature(query),
         "attempted_query_signatures": attempted_signatures[-12:],
+        "model_strategy_present": bool(model_strategy),
+        "model_strategy_query_count": len(model_strategy_queries),
     }
     if not needs_replan:
         if metadata:
@@ -270,6 +275,54 @@ def _preferred_source_families(hints: JsonObject, *, existing: list[str]) -> lis
                 if family:
                     families.append(family)
     return _ordered_unique(families)[:12]
+
+
+def _retrieval_strategy(metadata: JsonObject) -> JsonObject:
+    raw = metadata.get("retrieval_strategy")
+    if isinstance(raw, dict):
+        return dict(raw)
+    raw = metadata.get("model_retrieval_strategy")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _strategy_query_texts(strategy: JsonObject) -> list[str]:
+    queries: list[str] = []
+    queries.extend(_string_list(strategy.get("queries")))
+    queries.extend(_strategy_query_plan_texts(strategy.get("query_plan")))
+    queries.extend(_strategy_query_plan_texts(strategy.get("search_moves")))
+    queries.extend(_strategy_query_plan_texts(strategy.get("fallback_moves")))
+    return _ordered_unique(queries)
+
+
+def _strategy_query_plan_texts(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    queries: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = _string(item.get("query")) or _string(item.get("search_query")) or ""
+        else:
+            text = ""
+        if text:
+            queries.append(text)
+    return queries
+
+
+def _strategy_source_families(strategy: JsonObject) -> list[str]:
+    families: list[str] = []
+    families.extend(_string_list(strategy.get("preferred_source_families")))
+    plan = strategy.get("source_family_plan")
+    if isinstance(plan, list):
+        for item in plan:
+            if isinstance(item, str):
+                families.append(item)
+            elif isinstance(item, dict):
+                family = _string(item.get("family")) or _string(item.get("source_family"))
+                if family:
+                    families.append(family)
+    return _ordered_unique(families)
 
 
 def _payload_has_targeted_source(payload: JsonObject, metadata: JsonObject) -> bool:

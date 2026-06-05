@@ -101,11 +101,15 @@ model-owned with structured route-relation validation instead of phrase tables,
 durable memory is visible as both project and thread context views, SEC
 companyfacts/direct-URL retrieval now preserves structured financial evidence
 such as concept, metric, annual/quarterly period, filing, and value fields,
-deep retrieval can run adaptive multi-axis query campaigns with large candidate
-pools, concurrent fetch, source-family rejection, and structured coverage-gap
-diagnostics, and scholarly/frontier research can use an `academic_research`
-profile with academic source families, discovery-only source handling,
-topic-coverage gates, and live arXiv paper discovery.
+deep retrieval can run model-owned retrieval strategy packets first, then fall
+back to adaptive host query campaigns with large candidate pools, concurrent
+fetch, source-family rejection, and structured coverage-gap diagnostics. A
+strategy packet can carry domain hypotheses, source-family plans, concrete query
+plans, fallback moves, evidence criteria, and stop conditions, so mathematics,
+physics, finance, policy, engineering, and other research domains do not need
+separate hard-coded search scripts. Scholarly/frontier research can also use an
+`academic_research` profile with academic source families, discovery-only source
+handling, topic-coverage gates, and live arXiv paper discovery.
 
 Kernel v3 currently contains the infrastructure for:
 
@@ -178,6 +182,11 @@ Kernel v3 currently contains the infrastructure for:
   `queries` or `query_templates`, Holo derives a safe default `max_queries` from
   that list so one retrieval subgoal can run multiple bounded search attempts
   without the model needing to guess budget fields;
+- model-owned retrieval strategy payloads: when the model supplies
+  `metadata.retrieval_strategy.query_plan`, Holo preserves that strategy through
+  action binding, executes those model-chosen queries first, disables fixed host
+  query axes by default, and keeps host supervision focused on validation,
+  dedupe, budget, policy, evidence, and termination;
 - model-planner dynamic loops that recompile context, re-call
   `planner.propose`, journal plan revisions, and continue for 10+ bounded
   iterations when evaluator feedback says more work remains;

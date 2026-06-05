@@ -1593,9 +1593,21 @@ def _preserve_retrieval_capability_context(payload: JsonObject, *, recipe: TaskR
         "research_depth",
         "research_task_kind",
         "source_authority_requirement",
+        "search_strategy",
+        "query_campaign",
     ):
         value = cap_metadata.get(key, capability_args.get(key))
         if isinstance(value, str) and value:
+            metadata.setdefault(key, value)
+    for key in (
+        "retrieval_strategy",
+        "model_retrieval_strategy",
+        "preferred_source_families",
+        "source_family_plan",
+        "minimum_coverage",
+    ):
+        value = cap_metadata.get(key, capability_args.get(key))
+        if isinstance(value, (dict, list)) and value:
             metadata.setdefault(key, value)
     cap_query = capability_args.get("query")
     current_query = updated.get("query")
@@ -5223,6 +5235,14 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
             "research_depth",
             "queries",
             "query_templates",
+            "retrieval_strategy",
+            "model_retrieval_strategy",
+            "preferred_source_families",
+            "source_family_plan",
+            "source_authority_requirement",
+            "search_strategy",
+            "query_campaign",
+            "minimum_coverage",
             "url",
             "urls",
             "source_url",
@@ -5241,6 +5261,19 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
                 metadata["research_profile"] = profile
             if isinstance(profile_id, str) and profile_id:
                 metadata["research_profile_id"] = profile_id
+            for key in (
+                "retrieval_strategy",
+                "model_retrieval_strategy",
+                "preferred_source_families",
+                "source_family_plan",
+                "source_authority_requirement",
+                "search_strategy",
+                "query_campaign",
+                "minimum_coverage",
+            ):
+                value = result.pop(key, None)
+                if isinstance(value, (dict, list, str)) and value:
+                    metadata[key] = value
             if metadata:
                 result["metadata"] = metadata
             return result

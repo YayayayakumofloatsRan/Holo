@@ -822,6 +822,14 @@ def _goal_from_payload(action: CandidateAction) -> SearchGoal:
         "research_depth",
         "queries",
         "query_templates",
+        "retrieval_strategy",
+        "model_retrieval_strategy",
+        "preferred_source_families",
+        "source_family_plan",
+        "source_authority_requirement",
+        "search_strategy",
+        "query_campaign",
+        "minimum_coverage",
         "url",
         "urls",
         "source_url",
@@ -910,6 +918,9 @@ def _default_query_count(metadata: JsonObject, *, data: JsonObject | None = None
             count = sum(1 for item in value if isinstance(item, str) and item.strip())
             if count > 0:
                 return count
+    strategy_count = _retrieval_strategy_query_count(metadata)
+    if strategy_count > 0:
+        return strategy_count
     data = data if isinstance(data, dict) else {}
     if bool(metadata.get("respect_explicit_budget") or data.get("respect_explicit_budget")):
         return 1
@@ -922,6 +933,26 @@ def _default_query_count(metadata: JsonObject, *, data: JsonObject | None = None
     if max_fetches >= 16 or max_sources >= 16:
         return 8
     return 1
+
+
+def _retrieval_strategy_query_count(metadata: JsonObject) -> int:
+    raw = metadata.get("retrieval_strategy")
+    if not isinstance(raw, dict):
+        raw = metadata.get("model_retrieval_strategy")
+    if not isinstance(raw, dict):
+        return 0
+    count = 0
+    for key in ("queries", "query_plan", "search_moves"):
+        value = raw.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                count += 1
+            elif isinstance(item, dict) and isinstance(item.get("query") or item.get("search_query"), str):
+                if str(item.get("query") or item.get("search_query")).strip():
+                    count += 1
+    return count
 
 
 def _bounded_goal(goal: SearchGoal) -> SearchGoal:

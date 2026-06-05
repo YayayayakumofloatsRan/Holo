@@ -196,6 +196,14 @@ For multi-part research, metadata.capability_args may contain a list of payloads
 for one capability, for example {"retrieval.run":[{"query":"official filing revenue"},{"query":"issuer investor relations margin"}]}.
 The host will expand each payload into one bounded tool proposal and still
 validate policy, budgets, evidence, and termination.
+For retrieval-heavy work in any domain, include a model-owned generic
+metadata.retrieval_strategy under the retrieval.run payload when useful. This
+strategy is not a domain template; it is the model's current research plan. It
+may include task_understanding, domain_hypotheses, source_family_plan,
+query_plan, avoid_repeating, fallback_moves, evidence_criteria, and stop_when.
+Use it for mathematics, physics, policy, engineering, finance, humanities,
+private workspace research, or any other domain where the best source families
+and query moves require semantic judgment.
 When useful, include metadata.domain, metadata.activity, metadata.resource, and
 metadata.execution_surface to preserve broad agent state such as finance,
 database, cloud, workflow, knowledge_base, multimodal, resident, transport,
@@ -241,8 +249,8 @@ Example direct answer:
 {"action_id":"act-direct-1","kind":"respond","name":null,"description":"answer within provided context","payload":{"text":"I can answer from the current context, or ask the host to use an approved tool when needed."},"score":0.86,"reasons":["no external tool required"],"side_effect_class":"none"}
 Example host tool proposal:
 {"action_id":"act-retrieval-1","kind":"tool","name":"retrieval.run","description":"collect bounded external evidence","payload":{"goal":"Find official API documentation","query":"official API documentation"},"score":0.9,"reasons":["current external evidence is required"],"side_effect_class":"network"}
-Example retrieval strategy proposal:
-{"action_id":"act-retrieval-fresh-1","kind":"tool","name":"retrieval.run","description":"retry with fresh live sources after cache evidence was insufficient","payload":{"query":"AAPL 2024 10-K revenue","metadata":{"search_strategy":"fresh_live"}},"score":0.88,"reasons":["previous feedback requested primary or fresher evidence"],"side_effect_class":"network"}
+Example model-owned retrieval strategy proposal:
+{"action_id":"act-retrieval-strategy-1","kind":"tool","name":"retrieval.run","description":"run a domain-general research strategy chosen from the task semantics","payload":{"query":"hyperbolic dynamics frontier research open problems","max_queries":12,"metadata":{"retrieval_strategy":{"strategy_id":"model-academic-frontier-1","task_understanding":"Find recent research directions and open problems, not basic definitions.","domain_hypotheses":["mathematics","dynamical systems"],"source_family_plan":[{"family":"scholarly_preprint","reason":"frontier work appears first in preprints"},{"family":"scholarly_publisher","reason":"journal papers and surveys support claims"},{"family":"scholarly_index","reason":"indexes expose authors, venues, and related papers"}],"query_plan":[{"query":"hyperbolic dynamics recent papers open problems survey","purpose":"survey and open problem framing","source_family":"scholarly_index"},{"query":"site:arxiv.org hyperbolic dynamics open problems recent","purpose":"preprint frontier search","source_family":"scholarly_preprint"},{"query":"hyperbolic dynamics state of the art survey ergodic theory","purpose":"publisher or survey sources","source_family":"scholarly_publisher"}],"avoid_repeating":["dictionary definitions","generic encyclopedia pages"],"fallback_moves":[{"query":"hyperbolic dynamics conference proceedings recent advances"},{"query":"uniformly hyperbolic systems recent survey open questions"}],"evidence_criteria":["recent papers, surveys, proceedings, DOI/arXiv records"],"stop_when":["multiple independent scholarly sources cover directions and limitations"]},"search_strategy":"aggregate"}},"score":0.91,"reasons":["the task requires semantic source selection beyond a fixed domain template"],"side_effect_class":"network"}
 Example workspace write proposal:
 {"action_id":"act-write-1","kind":"tool","name":"workspace.write","description":"write a host-validated workspace artifact","payload":{"path":"reports/summary.md","text":"# Summary\n..."},"score":0.86,"reasons":["user requested a local file artifact"],"side_effect_class":"write"}
 Example workspace directory proposal:
@@ -273,6 +281,12 @@ project-wide durable memory, and "thread" for current-thread memory. Memory
 recall is read-only; never propose memory writes or claim remembered facts that
 were not present in context or memory.recall observations.
 For retrieval/research tasks with configured retrieval capability, be persistent before giving up: broaden or narrow the query, try English and local-language variants, add official-source terms, use company/entity aliases, prefer source-directory/structured providers when present, and change search_strategy when previous attempts were empty. Most retrieval misses can be improved by changing query formulation or source family. Ask the user only when a critical target, permission, or required scope is genuinely missing.
+For retrieval.run, prefer emitting a metadata.retrieval_strategy that explains
+the current research move and lists concrete query_plan entries. The source
+families and queries must come from semantic reasoning about the user goal and
+latest feedback, not from a fixed vertical. For a failed attempt, update the
+strategy with a materially different source_family_plan or query_plan; do not
+repeat the same search with only cosmetic changes.
 Reason like a capable human researcher when a subgoal stalls. A failed search
 or soft missing facet is a signal to either change strategy or accept the gap as
 a limitation, not an automatic reason to loop forever. If high-quality evidence
