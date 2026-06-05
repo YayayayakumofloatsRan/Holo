@@ -134,6 +134,31 @@ finalize a direct/semantic task from the recall observation alone. A
 direct/semantic finalization needs either an explicit final answer in evaluator
 feedback or a successful user-facing `respond` observation.
 
+## WorkMethod Layer
+
+The agent loop now carries a compact WorkMethod packet in planner/evaluator
+context. This packet is created after semantic intake and task planning, then
+journaled as `workmethod_state` once the real `task_id/run_id` exists.
+
+WorkMethod is not a second controller. It does not execute tools, grant
+permissions, finalize answers, or write memory. It gives the model a structured
+working view:
+
+- `work_frame`: user goal, inferred goal, work type, difficulty, risk, output
+  shape, done criteria, tool needs, and memory needs;
+- `work_method`: first moves, evidence strategy, failure moves, stop policy,
+  and user-interaction policy;
+- `thread_working_set`: successful findings, failed attempts, open gaps,
+  preferences, next intent, and trace refs from the current thread/mission.
+
+In live model mode the frame can be produced by `workmethod.frame`; in
+deterministic/fake tests it uses a host rule fallback. After a task run,
+`MissionSupervisor` also emits `work_gap_assessment`. If the task made weak or
+repetitive progress, it may journal a `strategy_shift` and enrich the next
+`mission_directive` with avoid-repeat and materially-different-method hints.
+The following planner call sees these hints through normal context and still
+must return a host-valid action packet.
+
 ## Adaptive Processor Generation
 
 Live processor calls pass through a host-owned generation policy before the

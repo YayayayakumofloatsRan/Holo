@@ -67,6 +67,7 @@ from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalR
 from kernel_v3.retrieval.source_directory_rank import rank_source_directory_entries
 from kernel_v3.session import TaskState
 from kernel_v3.tools import ToolManifest, ToolRegistry
+from kernel_v3.workmethod import WorkMethodState, WorkMethodSupervisor
 
 
 _FINANCE_RESEARCH_PROFILE_CAPABILITIES = {
@@ -318,6 +319,31 @@ class AgentRuntime:
             answer_profile=answer_profile,
             research_mission=research_mission,
         )
+        workmethod_state = WorkMethodSupervisor(
+            processor_fabric=self.processor_fabric,
+            mode=(
+                "model"
+                if _use_model_workmethod(
+                    self.processor_fabric,
+                    semantic_mode=semantic_mode,
+                    execution_metadata=execution_metadata,
+                )
+                else "rule"
+            ),
+        ).frame_task(
+            goal=semantic_goal,
+            thread_id=thread_id,
+            semantic_intake=intake,
+            task_plan=task_plan,
+            answer_profile=answer_profile,
+            execution_metadata=execution_metadata,
+            task_id=task_id,
+            run_id="workmethod-pre",
+        )
+        execution_metadata = _with_workmethod_metadata(
+            execution_metadata,
+            workmethod=workmethod_state.to_dict(),
+        )
         recipe = task_recipe(
             selected_mode,
             citations_required=citations_required,
@@ -384,6 +410,7 @@ class AgentRuntime:
         )
         self._append_task_plan(task_plan, task_id=result.task_id, run_id=result.run_id)
         self._append_state_profile(task_plan, task_id=result.task_id, run_id=result.run_id)
+        self._append_workmethod_state(workmethod_state, task_id=result.task_id, run_id=result.run_id)
         self._maybe_propose_memory(
             intake,
             task_id=result.task_id,
@@ -946,6 +973,19 @@ class AgentRuntime:
             state_delta={"agent_recipe": recipe.recipe_id, "agent_mode": recipe.mode},
         )
 
+    def _append_workmethod_state(self, state: WorkMethodState, *, task_id: str, run_id: str) -> None:
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="workmethod_state",
+            data=redact_journal_data(state.to_dict()),
+            state_delta={
+                "workmethod_state": state.state_id,
+                "workmethod_source": state.source,
+            },
+        )
+
     def _append_semantic_intake(self, intake: SemanticIntake, *, task_id: str, run_id: str):
         return self.journal.append(
             task_id=task_id,
@@ -1261,6 +1301,7 @@ class _AgentContextCompiler:
                     recipe=self.recipe,
                 ),
                 "agent_runtime_directive": _compact_agent_runtime_directive_for_prompt(_planner_directive(self.recipe)),
+                "workmethod": _compact_workmethod_for_prompt(_workmethod_metadata(self.recipe)),
                 "semantic_goal": _semantic_goal_metadata(self.recipe),
                 "agent_retrieval_plan_state": _agent_retrieval_plan_state(
                     journal,
@@ -2333,6 +2374,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     active_memory = _active_memory_directive(recipe)
     answer_profile = _answer_profile_metadata(recipe)
     research_mission = _research_mission_metadata(recipe)
+    workmethod = _compact_workmethod_for_prompt(_workmethod_metadata(recipe))
     if recipe.mode == "retrieval_answer":
         return {
             "mode": recipe.mode,
@@ -2376,6 +2418,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
+            "workmethod": workmethod,
         }
     if recipe.mode == "workspace_answer":
         return {
@@ -2415,6 +2458,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
+            "workmethod": workmethod,
         }
     if recipe.mode == "workspace_write":
         return {
@@ -2450,6 +2494,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
+            "workmethod": workmethod,
         }
     if recipe.mode == "semantic_answer":
         return {
@@ -2463,6 +2508,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
+            "workmethod": workmethod,
             "state_space_rule": (
                 "Preserve broad semantic domains and limitations. Do not collapse "
                 "professional, planning, communication, data, resident, transport, "
@@ -2482,6 +2528,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
+            "workmethod": workmethod,
         }
     if recipe.mode == "system_answer":
         return {
@@ -2500,6 +2547,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             "semantic_intake": semantic,
             "semantic_state_profile_summary": state_profile_summary,
             "active_memory": active_memory,
+            "workmethod": workmethod,
         }
     return {
         "mode": recipe.mode,
@@ -2512,6 +2560,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         "semantic_intake": semantic,
         "semantic_state_profile_summary": state_profile_summary,
         "active_memory": active_memory,
+        "workmethod": workmethod,
     }
 
 
@@ -3682,6 +3731,11 @@ def _mission_context_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _workmethod_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = _execution_metadata(recipe).get("workmethod")
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _mission_directive_metadata(recipe: TaskRecipe) -> JsonObject:
     context = _mission_context_metadata(recipe)
     directive = context.get("directive")
@@ -3754,6 +3808,8 @@ def _compact_agent_recipe_for_prompt(recipe: TaskRecipe) -> JsonObject:
         execution["thread_rag_context"] = _compact_thread_rag_context_for_prompt(execution.get("thread_rag_context"))
     if "thread_working_context" in execution:
         execution["thread_working_context"] = _compact_thread_working_context_for_prompt(execution.get("thread_working_context"))
+    if "workmethod" in execution:
+        execution["workmethod"] = _compact_workmethod_for_prompt(execution.get("workmethod"))
     metadata = {
         "allowed_permissions": _string_list(metadata.get("allowed_permissions")),
         "active_memory_recall": _compact_simple_dict(metadata.get("active_memory_recall"), limit=8),
@@ -3768,6 +3824,7 @@ def _compact_agent_recipe_for_prompt(recipe: TaskRecipe) -> JsonObject:
             "mission_context": execution.get("mission_context", {}),
             "thread_rag_context": execution.get("thread_rag_context", {}),
             "thread_working_context": execution.get("thread_working_context", {}),
+            "workmethod": execution.get("workmethod", {}),
         },
     }
     data["metadata"] = metadata
@@ -3877,6 +3934,7 @@ def _compact_agent_runtime_directive_for_prompt(value: object) -> JsonObject:
         "answer_profile": _compact_simple_dict(value.get("answer_profile"), limit=16),
         "final_answer_contract": _compact_simple_dict(value.get("final_answer_contract"), limit=16),
         "search_strategy_hint": _compact_simple_dict(value.get("search_strategy_hint"), limit=12),
+        "workmethod": _compact_workmethod_for_prompt(value.get("workmethod")),
         "interaction_preferences": _compact_simple_dict(value.get("interaction_preferences"), limit=8),
         "semantic_state_profile_summary": _compact_simple_dict(value.get("semantic_state_profile_summary"), limit=16),
         "state_space_rule": _text_preview(value.get("state_space_rule"), limit=360),
@@ -3963,6 +4021,7 @@ def _compact_requirement_for_prompt(value: JsonObject) -> JsonObject:
 def _compact_mission_directive_for_prompt(value: object) -> JsonObject:
     if not isinstance(value, dict):
         return {}
+    metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
     return {
         "directive_id": value.get("directive_id"),
         "mission_id": value.get("mission_id"),
@@ -3978,6 +4037,7 @@ def _compact_mission_directive_for_prompt(value: object) -> JsonObject:
             for item in list(value.get("suggested_actions") or [])[:4]
             if isinstance(item, dict)
         ],
+        "strategy_shift": _compact_simple_dict(metadata.get("strategy_shift"), limit=12),
     }
 
 
@@ -3996,6 +4056,50 @@ def _compact_thread_rag_context_for_prompt(value: object) -> JsonObject:
         "evidence_refs": _string_list(value.get("evidence_refs"))[:16],
         "citation_refs": _string_list(value.get("citation_refs"))[:16],
         "failure_diagnostics": [_compact_failure_for_prompt(item) for item in list(value.get("failure_diagnostics") or [])[-3:] if isinstance(item, dict)],
+    }
+
+
+def _compact_workmethod_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    frame = value.get("frame") if isinstance(value.get("frame"), dict) else {}
+    method = value.get("method") if isinstance(value.get("method"), dict) else {}
+    working = value.get("thread_working_set") if isinstance(value.get("thread_working_set"), dict) else {}
+    diagnostics = value.get("diagnostics") if isinstance(value.get("diagnostics"), dict) else {}
+    return {
+        "state_id": value.get("state_id"),
+        "source": value.get("source"),
+        "frame": {
+            "user_goal": _text_preview(frame.get("user_goal"), limit=720),
+            "inferred_goal": _text_preview(frame.get("inferred_goal"), limit=720),
+            "work_type": frame.get("work_type"),
+            "difficulty": frame.get("difficulty"),
+            "risk_level": frame.get("risk_level"),
+            "expected_output": _compact_simple_dict(frame.get("expected_output"), limit=10),
+            "done_criteria": _string_list(frame.get("done_criteria"))[:16],
+            "tool_needs": _string_list(frame.get("tool_needs"))[:12],
+            "memory_needs": _string_list(frame.get("memory_needs"))[:12],
+            "assumptions": _string_list(frame.get("assumptions"))[:8],
+        },
+        "method": {
+            "method_name": method.get("method_name"),
+            "first_moves": _string_list(method.get("first_moves"))[:8],
+            "evidence_strategy": _string_list(method.get("evidence_strategy"))[:10],
+            "failure_moves": _string_list(method.get("failure_moves"))[:10],
+            "stop_policy": _string_list(method.get("stop_policy"))[:8],
+            "user_interaction_policy": _string_list(method.get("user_interaction_policy"))[:6],
+        },
+        "thread_working_set": {
+            "active_goal": _text_preview(working.get("active_goal"), limit=720),
+            "current_method": working.get("current_method"),
+            "successful_findings": _string_list(working.get("successful_findings"))[-10:],
+            "failed_attempts": _string_list(working.get("failed_attempts"))[-10:],
+            "open_gaps": _string_list(working.get("open_gaps"))[:16],
+            "next_intent": _text_preview(working.get("next_intent"), limit=240),
+            "trace_refs": _string_list(working.get("trace_refs"))[-12:],
+        },
+        "diagnostics": _compact_simple_dict(diagnostics, limit=12),
+        "host_rule": "Use this as a working-method packet; do not treat it as permission to execute tools or ignore policy.",
     }
 
 
@@ -4172,6 +4276,31 @@ def _with_answer_profile_metadata(
         context_budget.setdefault("profile", "large" if answer_profile.format != "deep_report" else "huge")
         result["context_budget"] = context_budget
     return result
+
+
+def _with_workmethod_metadata(metadata: JsonObject | None, *, workmethod: JsonObject) -> JsonObject:
+    result = dict(metadata or {})
+    result["workmethod"] = dict(workmethod)
+    return result
+
+
+def _use_model_workmethod(
+    fabric: ProcessorFabric | None,
+    *,
+    semantic_mode: str,
+    execution_metadata: JsonObject | None,
+) -> bool:
+    if semantic_mode != "model" or fabric is None:
+        return False
+    metadata = dict(execution_metadata or {})
+    requested = metadata.get("workmethod")
+    if isinstance(requested, dict) and requested.get("mode") in {"model", "rule"}:
+        return requested["mode"] == "model"
+    try:
+        route = fabric.router.route("workmethod.frame")
+    except Exception:
+        return False
+    return route.provider not in {"fake_json", "fake_malformed_json", "fake_timeout"}
 
 
 def _pending_answer_prefers_semantic_mode(

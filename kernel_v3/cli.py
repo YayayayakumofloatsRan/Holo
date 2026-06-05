@@ -97,6 +97,7 @@ from kernel_v3.retrieval.live_config import (
     LIVE_WEB_SEARCH_MAX_RESULTS_PER_ENGINE_ENV,
     LIVE_WEB_SEARCH_PROVIDERS_ENV,
 )
+from kernel_v3.workmethod.prompts import WORKMETHOD_FRAME_PROMPT_CONTRACT, WORKMETHOD_GAP_PROMPT_CONTRACT
 from kernel_v3.resident import ResidentDoctor, ResidentQueue, ResidentRuntime, ResidentScheduler
 from kernel_v3.resident.projection import resident_doctor_event, resident_inbox_event, resident_outbox_event
 from kernel_v3.storage import (
@@ -610,7 +611,16 @@ def main(argv: list[str] | None = None) -> int:
     model_packet.add_argument("--provider", choices=["deepseek", "openai_compatible"], default="deepseek")
     model_packet.add_argument(
         "--task-type",
-        choices=["chat.route", "semantic.intake", "planner.propose", "evaluator.assess", "synthesizer.answer", "mission.assess"],
+        choices=[
+            "chat.route",
+            "semantic.intake",
+            "planner.propose",
+            "evaluator.assess",
+            "synthesizer.answer",
+            "mission.assess",
+            "workmethod.frame",
+            "workmethod.gap",
+        ],
         default="planner.propose",
     )
     model_packet.add_argument("--goal", default="你能做什么？你是谁")
@@ -2301,6 +2311,48 @@ def _packet_prompt(task_type: str, goal: str) -> str:
             },
             "agent_result": {"status": "failed", "failure_report": {"reason": "retrieval_empty"}},
             "run_delta": {"actions": [{"name": "retrieval.run"}], "evidence_refs": [], "citation_refs": []},
+        }
+    elif task_type == "workmethod.frame":
+        payload = {
+            "contract": WORKMETHOD_FRAME_PROMPT_CONTRACT,
+            "goal": goal,
+            "thread_id": "preview-thread",
+            "semantic_intake": {
+                "primary_intent": "research",
+                "suggested_mode": "retrieval_answer",
+                "requires_clarification": False,
+                "intents": [],
+            },
+            "task_execution_plan": {
+                "selected_mode": "retrieval_answer",
+                "steps": [{"goal": goal, "tool_name": "retrieval.run"}],
+            },
+            "answer_profile": {
+                "format": "detailed_report",
+                "detail_level": "detailed",
+                "target_sections": ["结论", "证据", "局限"],
+            },
+            "execution_metadata": {
+                "thread_rag_context": {"recent_turns": [], "recent_task_trace": []},
+                "mission_context": {"mission_state": {"open_gaps": [goal]}},
+            },
+        }
+    elif task_type == "workmethod.gap":
+        payload = {
+            "contract": WORKMETHOD_GAP_PROMPT_CONTRACT,
+            "root_goal": goal,
+            "workmethod": {
+                "frame": {"done_criteria": ["answer the user's goal with evidence"]},
+                "method": {"method_name": "goal_directed_research"},
+            },
+            "run_delta": {
+                "actions": [{"name": "retrieval.run"}],
+                "retrieval_reports": [{"status": "insufficient", "attempted_queries": [goal]}],
+                "evidence_refs": [],
+                "citation_refs": [],
+            },
+            "agent_result": {"status": "failed", "failure_report": {"reason": "insufficient_evidence"}},
+            "mission_assessment": {"decision": "continue", "missing_requirements": [goal]},
         }
     else:
         payload = {

@@ -15,6 +15,8 @@ DEEPSEEK_V4_TASK_TYPES = (
     "evaluator.assess",
     "synthesizer.answer",
     "mission.assess",
+    "workmethod.frame",
+    "workmethod.gap",
 )
 
 
@@ -183,6 +185,8 @@ def deepseek_v4_routes(
             "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 1024),
             "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 4096),
             "mission.assess": (DEEPSEEK_V4_FLASH, "disabled", 1536),
+            "workmethod.frame": (DEEPSEEK_V4_FLASH, "disabled", 1536),
+            "workmethod.gap": (DEEPSEEK_V4_FLASH, "disabled", 1536),
         }
     elif profile == "quality":
         specs = {
@@ -192,6 +196,8 @@ def deepseek_v4_routes(
             "evaluator.assess": (DEEPSEEK_V4_PRO, "enabled", 2048),
             "synthesizer.answer": (DEEPSEEK_V4_PRO, "enabled", 8192),
             "mission.assess": (DEEPSEEK_V4_PRO, "enabled", 4096),
+            "workmethod.frame": (DEEPSEEK_V4_PRO, "enabled", 4096),
+            "workmethod.gap": (DEEPSEEK_V4_PRO, "enabled", 4096),
         }
     elif profile == "balanced":
         specs = {
@@ -201,6 +207,8 @@ def deepseek_v4_routes(
             "evaluator.assess": (DEEPSEEK_V4_FLASH, "disabled", 1536),
             "synthesizer.answer": (DEEPSEEK_V4_FLASH, "disabled", 6144),
             "mission.assess": (DEEPSEEK_V4_FLASH, "disabled", 2048),
+            "workmethod.frame": (DEEPSEEK_V4_FLASH, "disabled", 2048),
+            "workmethod.gap": (DEEPSEEK_V4_FLASH, "disabled", 2048),
         }
     else:
         raise ValueError(f"unknown DeepSeek V4 routing profile: {profile}")

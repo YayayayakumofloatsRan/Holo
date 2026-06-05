@@ -7,7 +7,15 @@ from kernel_v3.contracts import JsonObject
 
 
 LATENCY_TARGETS = {"fast", "balanced", "quality", "thorough"}
-STRUCTURED_TASK_TYPES = {"chat.route", "semantic.intake", "planner.propose", "evaluator.assess", "mission.assess"}
+STRUCTURED_TASK_TYPES = {
+    "chat.route",
+    "semantic.intake",
+    "planner.propose",
+    "evaluator.assess",
+    "mission.assess",
+    "workmethod.frame",
+    "workmethod.gap",
+}
 DEEPSEEK_FLASH_MODEL = "deepseek-v4-flash"
 DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
 DEEPSEEK_MODELS = {DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL, "deepseek-reasoner"}
@@ -125,6 +133,8 @@ def _thinking_for(*, task_type: str, assessment: GenerationAssessment) -> str:
             "planner.propose",
             "evaluator.assess",
             "mission.assess",
+            "workmethod.frame",
+            "workmethod.gap",
             "synthesizer.answer",
         }:
             return "enabled"
@@ -139,7 +149,7 @@ def _model_for(*, task_type: str, assessment: GenerationAssessment, provider: st
     if assessment.latency_target in {"quality", "thorough"}:
         return DEEPSEEK_PRO_MODEL
     if assessment.latency_target == "balanced" and assessment.task_difficulty in {"replan", "deep_research"}:
-        if task_type in {"planner.propose", "mission.assess", "synthesizer.answer"}:
+        if task_type in {"planner.propose", "mission.assess", "workmethod.frame", "workmethod.gap", "synthesizer.answer"}:
             return DEEPSEEK_PRO_MODEL
     return DEEPSEEK_FLASH_MODEL
 

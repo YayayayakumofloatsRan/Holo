@@ -20,6 +20,7 @@ from kernel_v3.mission.contracts import (
 from kernel_v3.mission.thread_rag import collect_run_delta
 from kernel_v3.processors.contracts import MISSION_ASSESS_PROMPT_CONTRACT, MISSION_ASSESS_SCHEMA
 from kernel_v3.processors.fabric import ProcessorFabric
+from kernel_v3.workmethod import WorkMethodSupervisor
 
 
 HARD_BLOCK_REASONS = {
@@ -87,6 +88,19 @@ class MissionSupervisor:
         rule_assessment = self._rule_assessment(mission, result, run_delta=run_delta, index=index)
         model_assessment = self._model_assessment(mission, result, run_delta=run_delta, rule_assessment=rule_assessment)
         assessment = _merge_model_assessment(rule_assessment, model_assessment)
+        work_gap = WorkMethodSupervisor(
+            processor_fabric=self.processor_fabric,
+            mode="model" if self.assessor_mode == "model" and self.processor_fabric is not None else "rule",
+        ).assess_gap(
+            root_goal=mission.root_goal,
+            run_delta=run_delta,
+            agent_result=result.to_dict(),
+            mission_assessment=assessment.to_dict(),
+            workmethod=_latest_workmethod_state(self.journal, task_id=result.task_id, run_id=result.run_id),
+            task_id=result.task_id,
+            run_id=result.run_id,
+        )
+        assessment = _with_work_gap_directive(assessment, work_gap)
         iteration = MissionIteration(
             iteration_id=f"mission-iteration-{mission.mission_id}-{index}",
             mission_id=mission.mission_id,
@@ -112,6 +126,28 @@ class MissionSupervisor:
             data=assessment.to_dict(),
             state_delta={"mission_id": mission.mission_id, "mission_decision": assessment.decision},
         )
+        self._append(
+            task_id=result.task_id,
+            run_id=result.run_id,
+            kind="work_gap_assessment",
+            data=work_gap.to_dict(),
+            state_delta={
+                "mission_id": mission.mission_id,
+                "work_gap_decision": (
+                    "shift_strategy"
+                    if work_gap.should_shift_strategy
+                    else ("finalize" if work_gap.should_finalize else "continue")
+                ),
+            },
+        )
+        if work_gap.strategy_shift is not None:
+            self._append(
+                task_id=result.task_id,
+                run_id=result.run_id,
+                kind="strategy_shift",
+                data=work_gap.strategy_shift,
+                state_delta={"mission_id": mission.mission_id, "strategy_shift": "proposed"},
+            )
         if assessment.next_directive is not None:
             self._append(
                 task_id=result.task_id,
@@ -336,6 +372,60 @@ def _merge_model_assessment(rule: MissionAssessment, model: JsonObject | None) -
         reason_summary=str(model.get("reason_summary") or rule.reason_summary),
         model_decision=dict(model),
     )
+
+
+def _with_work_gap_directive(assessment: MissionAssessment, work_gap) -> MissionAssessment:
+    diagnostics = dict(assessment.diagnostics)
+    diagnostics["work_gap_assessment"] = {
+        "assessment_id": work_gap.assessment_id,
+        "should_continue": work_gap.should_continue,
+        "should_shift_strategy": work_gap.should_shift_strategy,
+        "should_finalize": work_gap.should_finalize,
+        "reason": work_gap.reason,
+        "missing": list(work_gap.missing)[:12],
+        "redundant_work": list(work_gap.redundant_work)[:8],
+        "wrong_strategy": list(work_gap.wrong_strategy)[:8],
+    }
+    directive = dict(assessment.next_directive) if isinstance(assessment.next_directive, dict) else None
+    if directive is not None and isinstance(work_gap.strategy_shift, dict):
+        shift = dict(work_gap.strategy_shift)
+        directive_metadata = dict(directive.get("metadata")) if isinstance(directive.get("metadata"), dict) else {}
+        directive_metadata["work_gap_assessment_id"] = work_gap.assessment_id
+        directive_metadata["strategy_shift"] = shift
+        directive["metadata"] = directive_metadata
+        directive["strategy"] = str(shift.get("next_method") or directive.get("strategy") or "materially_different_strategy")
+        directive["reason"] = str(shift.get("shift_reason") or directive.get("reason") or work_gap.reason)
+        directive["avoid_repeating"] = _ordered_unique(
+            [
+                *_string_list(directive.get("avoid_repeating")),
+                *_string_list(shift.get("avoid_repeating")),
+            ]
+        )[-32:]
+        suggested = [
+            item
+            for item in list(directive.get("suggested_actions") or [])
+            if isinstance(item, dict)
+        ]
+        suggested.append(
+            {
+                "kind": "strategy_shift",
+                "instruction": "Use a materially different method in the next loop; do not repeat the failed pattern.",
+                "source_families": _string_list(shift.get("new_source_families")),
+                "query_moves": _string_list(shift.get("new_query_moves")),
+                "tool_plan_hint": shift.get("new_tool_plan_hint") if isinstance(shift.get("new_tool_plan_hint"), dict) else {},
+            }
+        )
+        directive["suggested_actions"] = suggested[-6:]
+    return replace(assessment, next_directive=directive, diagnostics=diagnostics)
+
+
+def _latest_workmethod_state(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    records = [
+        record
+        for record in journal.records(task_id=task_id, kind="workmethod_state")
+        if record.run_id == run_id and isinstance(record.data, dict)
+    ]
+    return dict(records[-1].data) if records else {}
 
 
 def _mission_requirements(root_goal: str, *, metadata: JsonObject) -> list[MissionRequirement]:

@@ -92,7 +92,9 @@ retrieval-campaign pass is tracked in
 feedback and discovery-only fallback hardening are tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-05_SOURCE_QUALITY_FEEDBACK.md`. The current
 retrieval campaign and live-smoke pass is tracked in
-`docs/KERNEL_V3_PROGRESS_2026-06-05_DEEP_RETRIEVAL_SYSTEM.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-05_DEEP_RETRIEVAL_SYSTEM.md`. The WorkMethod
+layer and strategy-shift handoff are tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-05_WORKMETHOD_LAYER.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -125,6 +127,16 @@ Kernel v3 currently contains the infrastructure for:
   assessment. The model can suggest coverage and next strategy, but the host
   validates the decision and never lets mission assessment execute tools,
   bypass policy, or commit memory;
+- a WorkMethod layer that frames each task as a compact work packet containing
+  the current work frame, done criteria, method, failure moves, user-interaction
+  policy, and thread working set. In live model mode, `workmethod.frame` and
+  `workmethod.gap` are schema-first processor packets; in deterministic/fake
+  tests they fall back to host rules. The packet enters planner context but
+  does not execute tools, grant permissions, or replace `LoopControllerV3`;
+- work-gap assessment and strategy-shift records above the inner loop. After a
+  run, `MissionSupervisor` journals `work_gap_assessment` and, when needed,
+  `strategy_shift`, then passes avoid-repeat and materially-different-method
+  hints into the next `mission_directive`;
 - mission directives that become hard planner context instead of passive text.
   If the mission supervisor says a retrieval loop must avoid a failed query,
   switch strategy, or fill missing requirements, the next planner packet sees
