@@ -373,6 +373,51 @@ class ResidentQueue:
         finally:
             conn.close()
 
+    def cancel(self, message_id: str, *, reason: str = "manual_cancel") -> InboundMessage | None:
+        now = self._now_ms()
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _inbox_by_id(conn, message_id)
+            if existing is None or existing.status in {"completed", "canceled", "dead_letter"}:
+                conn.rollback()
+                return None
+            metadata = dict(existing.metadata)
+            metadata["cancel_reason"] = reason
+            metadata["canceled_at_ms"] = now
+            updated = conn.execute(
+                """
+                UPDATE resident_inbox
+                SET status = 'canceled', lease_owner = NULL, lease_until_ms = NULL,
+                    next_attempt_at_ms = NULL, metadata_json = ?
+                WHERE message_id = ?
+                  AND status NOT IN ('completed', 'canceled', 'dead_letter')
+                """,
+                (_json(metadata), message_id),
+            )
+            if updated.rowcount != 1:
+                conn.rollback()
+                return None
+            conn.commit()
+            return InboundMessage(
+                message_id=existing.message_id,
+                thread_id=existing.thread_id,
+                text=existing.text,
+                source=existing.source,
+                status="canceled",
+                created_at_ms=existing.created_at_ms,
+                lease_owner=None,
+                lease_until_ms=None,
+                attempts=existing.attempts,
+                next_attempt_at_ms=None,
+                metadata=metadata,
+            )
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def append_outbox(
         self,
         *,

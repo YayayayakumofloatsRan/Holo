@@ -322,6 +322,11 @@ def _metadata(intent: JsonObject) -> JsonObject:
 def _implied_capabilities(kind: str, capabilities: list[str]) -> list[str]:
     values = list(capabilities)
     normalized = kind.strip().lower()
+    values = [
+        capability
+        for capability in values
+        if capability != "system.time" or normalized == "system_time"
+    ]
     if normalized in {"academic_frontier_research", "frontier_research"}:
         values.append("academic.frontier_research")
     elif normalized in {"literature_review", "scholarly_literature_review"}:
@@ -618,6 +623,8 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
         "system_answer",
         "clarify_first",
     }:
+        if requested == "system_answer" and not _has_any(capabilities, _SYSTEM_TOOL_CAPABILITIES):
+            return "semantic_answer"
         return requested
     if _has_any(capabilities, _SYSTEM_TOOL_CAPABILITIES):
         return "system_answer"

@@ -41,6 +41,13 @@ from kernel_v3.retrieval.providers import (
 )
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
 from kernel_v3.retrieval.source_query_provider import ResearchSourceQuerySearchProvider
+from kernel_v3.retrieval.strategy import (
+    RetrievalStrategyDecision,
+    materially_different_query,
+    normalize_query,
+    query_signature,
+    supervise_retrieval_payload,
+)
 from kernel_v3.retrieval.web_search_provider import LiveWebSearchProvider, supported_web_search_engines
 
 __all__ = [
@@ -80,6 +87,7 @@ __all__ = [
     "RetrievalProviderCapability",
     "RetrievalProviderInspection",
     "RetrievalReport",
+    "RetrievalStrategyDecision",
     "RoutingFetchProvider",
     "SearchAttempt",
     "SearchGoal",
@@ -89,7 +97,11 @@ __all__ = [
     "UnconfiguredFetchProvider",
     "UnconfiguredSearchProvider",
     "inspect_retrieval_providers",
+    "materially_different_query",
+    "normalize_query",
     "provider_capability",
+    "query_signature",
     "register_retrieval_tool",
+    "supervise_retrieval_payload",
     "supported_web_search_engines",
 ]

@@ -341,12 +341,56 @@ def _recent_companyfacts_records(records: list[object]) -> list[object]:
     return sorted(
         filtered,
         key=lambda record: (
+            _companyfacts_period_rank(record),
+            _companyfacts_duration_days(record),
+            int(record.get("fy") or 0) if isinstance(record.get("fy"), int) else 0,
             str(record.get("filed") or ""),
             str(record.get("end") or ""),
-            int(record.get("fy") or 0) if isinstance(record.get("fy"), int) else 0,
         ),
         reverse=True,
     )
+
+
+def _companyfacts_period_rank(record: dict) -> int:
+    form = str(record.get("form") or "").upper().replace(" ", "")
+    fp = str(record.get("fp") or "").upper().replace(" ", "")
+    frame = str(record.get("frame") or "").upper()
+    if form in {"10-K", "20-F", "40-F"} or fp == "FY" or frame.endswith("I"):
+        return 3
+    if form == "10-Q" or fp.startswith("Q"):
+        return 2
+    return 1
+
+
+def _companyfacts_period_label(record: dict) -> str:
+    rank = _companyfacts_period_rank(record)
+    if rank >= 3:
+        return "annual"
+    if rank == 2:
+        return "quarterly"
+    return "period"
+
+
+def _companyfacts_duration_days(record: dict) -> int:
+    start = str(record.get("start") or "")
+    end = str(record.get("end") or "")
+    if not start or not end:
+        return 0
+    start_days = _date_days(start)
+    end_days = _date_days(end)
+    if start_days is None or end_days is None:
+        return 0
+    return max(0, end_days - start_days)
+
+
+def _date_days(value: str) -> int | None:
+    match = re.match(r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})$", value)
+    if not match:
+        return None
+    year = int(match.group("year"))
+    month = int(match.group("month"))
+    day = int(match.group("day"))
+    return year * 372 + month * 31 + day
 
 
 def _companyfacts_record_line(
@@ -368,6 +412,7 @@ def _companyfacts_record_line(
         f"metric={metric}",
         f"label={label}",
         f"unit={unit}",
+        f"period={_companyfacts_period_label(record)}",
     ]
     for key in ("val", "fy", "fp", "form", "filed", "end", "start", "frame", "accn"):
         value = record.get(key)

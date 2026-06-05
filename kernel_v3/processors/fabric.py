@@ -8,6 +8,7 @@ from collections.abc import Callable
 from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
+from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.processors.contracts import JsonSchema, ProcessorOutcome, ProcessorProvider
 from kernel_v3.processors.generation import adapt_generation_parameters
 from kernel_v3.processors.json_repair import parse_json_object
@@ -105,6 +106,41 @@ class ProcessorFabric:
         )
         provider_model = str(request.parameters.get("model") or route.model)
         self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
+        boundary_error = _external_private_context_boundary_error(request, provider_name=route.provider, provider=selected)
+        if boundary_error is not None:
+            result = ProcessorResult(
+                result_id=f"result-{request.request_id}",
+                request_id=request.request_id,
+                status="failed",
+                output={
+                    "provider": route.provider,
+                    "model": provider_model,
+                    "boundary": "private_context_external_model",
+                    "redaction": {"prompt": "not_sent_to_provider"},
+                },
+                usage={},
+                error=boundary_error,
+            )
+            self._journal_result(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                request=request,
+                result=result,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                duration_ms=0,
+            )
+            return ProcessorOutcome(
+                request=request,
+                result=result,
+                parsed=None,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                duration_ms=0,
+            )
         started = self.clock_ms()
         provider_result: ProcessorResult | None = None
         try:
@@ -344,6 +380,49 @@ def _result_text(result: ProcessorResult) -> str:
     if isinstance(text, str):
         return text
     return json.dumps(result.output, ensure_ascii=False, sort_keys=True)
+
+
+def _external_private_context_boundary_error(
+    request: ProcessorRequest,
+    *,
+    provider_name: str,
+    provider: ProcessorProvider,
+) -> str | None:
+    if _private_context_allowed(request):
+        return None
+    if not _is_external_model_provider(provider_name, provider):
+        return None
+    if contains_secret_like_content(request.prompt):
+        return "private_context_external_model_blocked:secret_like_content"
+    if _has_private_context_marker(request.prompt):
+        return "private_context_external_model_blocked:sensitive_context_marker"
+    return None
+
+
+def _private_context_allowed(request: ProcessorRequest) -> bool:
+    value = request.parameters.get("allow_private_context_to_external_model")
+    return bool(value is True or str(value).lower() in {"1", "true", "yes", "allow"})
+
+
+def _is_external_model_provider(provider_name: str, provider: ProcessorProvider) -> bool:
+    name = str(getattr(provider, "name", provider_name) or provider_name).lower()
+    if name.startswith("fake") or name in {"capture", "local", "local_cli", "local_model"}:
+        return False
+    if bool(getattr(provider, "local_only", False)):
+        return False
+    return True
+
+
+def _has_private_context_marker(prompt: str) -> bool:
+    compact = prompt.replace(" ", "").lower()
+    markers = (
+        '"privacy_class":"sensitive"',
+        '"private_context":true',
+        '"external_model_allowed":false',
+        '"allow_external_model":false',
+        "[private_context]",
+    )
+    return any(marker in compact for marker in markers)
 
 
 def _safe_request(request: ProcessorRequest) -> JsonObject:

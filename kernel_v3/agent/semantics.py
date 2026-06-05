@@ -252,7 +252,12 @@ def _intake_from_model(goal: str, data: JsonObject, *, fallback: SemanticIntake)
         requires_clarification = True
     elif _has_non_ready_intent(intents):
         requires_clarification = True
-    suggested_mode = _normalize_mode(str(data.get("suggested_mode") or ""), primary=primary, requires_clarification=requires_clarification)
+    suggested_mode = _normalize_mode(
+        str(data.get("suggested_mode") or ""),
+        primary=primary,
+        requires_clarification=requires_clarification,
+        intents=intents,
+    )
     model_warnings = [str(item) for item in data.get("warnings", [])] if isinstance(data.get("warnings"), list) else []
     warnings = _ordered_unique([*model_warnings, *_warnings(intents, compound=compound)])
     response_hint = _response_hint(primary, intents=intents, blocked=blocked)
@@ -306,6 +311,7 @@ def _model_intents(value: object) -> list[TaskIntent]:
         capabilities = _string_list(item.get("required_capabilities"))
         if kind == "memory_write":
             capabilities = _ordered_unique([*capabilities, "durable_memory:write"])
+        capabilities = _validated_capabilities_for_intent(kind, capabilities)
         risk = str(item.get("risk") or _risk_for_kind(kind))
         status = str(item.get("status") or _status_for_kind(kind))
         metadata = item.get("metadata")
@@ -325,6 +331,15 @@ def _model_intents(value: object) -> list[TaskIntent]:
             )
         )
     return intents
+
+
+def _validated_capabilities_for_intent(kind: str, capabilities: list[str]) -> list[str]:
+    normalized = _normalize_intent_kind(kind)
+    return [
+        capability
+        for capability in capabilities
+        if capability != "system.time" or normalized == "system_time"
+    ]
 
 
 def _apply_hard_capability_overrides(goal: str, intents: list[TaskIntent]) -> list[TaskIntent]:
@@ -496,9 +511,17 @@ def _suggested_mode(primary: str, *, requires_clarification: bool) -> str:
     return "direct_answer"
 
 
-def _normalize_mode(value: str, *, primary: str, requires_clarification: bool) -> str:
+def _normalize_mode(
+    value: str,
+    *,
+    primary: str,
+    requires_clarification: bool,
+    intents: list[TaskIntent] | None = None,
+) -> str:
     if requires_clarification:
         return "clarify_first"
+    if value == "system_answer" and primary != "system_time" and not _requires_system_tool(intents or []):
+        return "semantic_answer"
     if value in {
         "direct_answer",
         "semantic_answer",
@@ -510,6 +533,10 @@ def _normalize_mode(value: str, *, primary: str, requires_clarification: bool) -
     }:
         return value
     return _suggested_mode(primary, requires_clarification=requires_clarification)
+
+
+def _requires_system_tool(intents: list[TaskIntent]) -> bool:
+    return any("system.time" in intent.required_capabilities for intent in intents)
 
 
 def _semantic_mode_primary(primary: str) -> bool:

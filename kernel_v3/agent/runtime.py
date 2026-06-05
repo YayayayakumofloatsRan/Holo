@@ -61,6 +61,7 @@ from kernel_v3.retrieval import (
     UnconfiguredFetchProvider,
     UnconfiguredSearchProvider,
     register_retrieval_tool,
+    supervise_retrieval_payload,
 )
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
 from kernel_v3.retrieval.source_directory_rank import rank_source_directory_entries
@@ -1546,8 +1547,28 @@ def _bind_model_action_to_recipe(
         payload = _apply_recipe_profile_defaults(payload, recipe)
         payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
         payload = _apply_research_depth_defaults(payload)
+        decision = supervise_retrieval_payload(
+            payload,
+            replan_hints=_retrieval_hints_from_context(context),
+            root_goal=goal,
+        )
+        payload = decision.payload
+        reasons = list(action.reasons)
+        if decision.diagnostics.get("rewritten") is True:
+            reasons = _ordered_unique([*reasons, "host_strategy_supervision_rewrote_retrieval_payload"])
+            metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+            metadata["strategy_supervision_diagnostics"] = decision.diagnostics
+            payload["metadata"] = metadata
+            action = replace(action, reasons=reasons)
         return replace(action, payload=payload)
     return action
+
+
+def _retrieval_hints_from_context(context: ContextBundle) -> JsonObject:
+    hints = context.state.get("agent_replan_hints")
+    hints = hints if isinstance(hints, dict) else {}
+    retrieval = hints.get("retrieval")
+    return dict(retrieval) if isinstance(retrieval, dict) else {}
 
 
 def _preserve_retrieval_capability_context(payload: JsonObject, *, recipe: TaskRecipe) -> JsonObject:
@@ -2617,11 +2638,16 @@ def _retrieval_replan_hints(
     evidence_diagnostics = _json_object(evidence_data.get("diagnostics"))
     planned_coverage = _json_object(evidence_diagnostics.get("planned_retrieval_coverage"))
     incomplete_planned_goal_ids = _string_list(planned_coverage.get("incomplete_goal_ids"))
+    mission_directive = _mission_directive_metadata(recipe)
+    mission_avoid_queries = _string_list(mission_directive.get("avoid_repeating"))
+    mission_missing = _string_list(mission_directive.get("missing_requirements"))
+    mission_strategy = _string_value(mission_directive.get("strategy"))
     rejected_evidence_count = _int_or_none(diagnostics.get("rejected_evidence_count")) or 0
     source_rejection_count = _int_or_none(diagnostics.get("source_rejection_count")) or 0
     missing = _ordered_unique(
         [
             *_string_list(evidence_data.get("missing")),
+            *mission_missing,
             *[f"query_facet:{facet}" for facet in _string_list(evaluation.get("missing_query_facets"))],
             *[f"finance_facet:{facet}" for facet in _string_list(evaluation.get("missing_finance_facets"))],
             *[f"finance_facet:{facet}" for facet in _string_list(evidence_diagnostics.get("missing_finance_facets"))],
@@ -2639,20 +2665,29 @@ def _retrieval_replan_hints(
     )
     report_status = _string_value(report_data.get("status"))
     report_reason = _string_value(diagnostics.get("reason") or evaluation.get("reason") or report_status)
+    base_query = _string_value(
+        report_data.get("preview")
+        or diagnostics.get("goal_query")
+        or diagnostics.get("query")
+        or mission_directive.get("next_subgoal")
+        or mission_directive.get("root_goal")
+    )
     strategy_hints = _suggested_retrieval_strategies(
         missing=missing,
         report_reason=report_reason,
         requirement=requirement,
         attempts=attempts,
     )
+    if mission_strategy:
+        strategy_hints = _ordered_unique([mission_strategy, *strategy_hints])
     query_hints = _suggested_query_hints(
-        base_query=_string_value(report_data.get("preview") or diagnostics.get("goal_query") or diagnostics.get("query")),
+        base_query=base_query,
         missing=missing,
         requirement=requirement,
     )
     source_targets = _suggested_source_targets(
         recipe=recipe,
-        query=_string_value(report_data.get("preview") or diagnostics.get("goal_query") or diagnostics.get("query")),
+        query=base_query,
         missing=missing,
         requirement=requirement,
         strategy_hints=strategy_hints,
@@ -2682,7 +2717,17 @@ def _retrieval_replan_hints(
         run_id=run_id,
         recipe=recipe,
     )
-    needs_replan = bool(report_record is not None and (report_status != "sufficient" or incomplete_planned_goal_ids))
+    needs_replan = bool(
+        (report_record is not None and (report_status != "sufficient" or incomplete_planned_goal_ids))
+        or mission_avoid_queries
+        or mission_strategy
+    )
+    attempted_queries = _ordered_unique(
+        [
+            *[item["query"] for item in attempts if isinstance(item.get("query"), str)],
+            *mission_avoid_queries,
+        ]
+    )
     return {
         "needs_replan": needs_replan,
         "latest_report_status": report_status,
@@ -2708,7 +2753,7 @@ def _retrieval_replan_hints(
         "suggested_sec_structured_sources": suggested_sec_structured_sources,
         "suggested_macro_series": suggested_macro_series,
         "suggested_fiscaldata_endpoints": suggested_fiscaldata_endpoints,
-        "attempted_queries": _ordered_unique([item["query"] for item in attempts if isinstance(item.get("query"), str)]),
+        "attempted_queries": attempted_queries,
         "attempted_search_strategies": _ordered_unique(
             [item["search_strategy"] for item in attempts if isinstance(item.get("search_strategy"), str)]
         ),
@@ -2721,6 +2766,7 @@ def _retrieval_replan_hints(
             ]
         ),
         "attempts": attempts[-6:],
+        "mission_directive": mission_directive,
         "fetch_summary": _retrieval_fetch_summary(fetches),
         "recent_fetches": fetches[-8:],
         "do_not_finalize_until": _do_not_finalize_until(missing=missing, requirement=requirement),
@@ -3597,6 +3643,17 @@ def _thread_working_context_metadata(recipe: TaskRecipe) -> JsonObject:
 def _mission_context_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("mission_context")
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _mission_directive_metadata(recipe: TaskRecipe) -> JsonObject:
+    context = _mission_context_metadata(recipe)
+    directive = context.get("directive")
+    if isinstance(directive, dict):
+        return dict(directive)
+    state = context.get("mission_state")
+    if isinstance(state, dict) and isinstance(state.get("directive"), dict):
+        return dict(state["directive"])
+    return {}
 
 
 def _thread_id_metadata(recipe: TaskRecipe) -> str:

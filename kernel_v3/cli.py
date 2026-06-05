@@ -437,6 +437,9 @@ def main(argv: list[str] | None = None) -> int:
     resident_requeue.add_argument("message_id")
     resident_requeue.add_argument("--reason", default="manual_requeue")
     resident_requeue.add_argument("--keep-attempts", action="store_true")
+    resident_cancel = resident_sub.add_parser("cancel")
+    resident_cancel.add_argument("message_id")
+    resident_cancel.add_argument("--reason", default="manual_cancel")
     resident_ack = resident_sub.add_parser("ack")
     resident_ack.add_argument("outbox_id")
     resident_ack.add_argument("--status", default="acknowledged")
@@ -1907,6 +1910,19 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             run_id="resident-cli",
             step_id=None,
             kind="resident_inbox_requeued",
+            data=resident_inbox_event(message),
+            state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
+        )
+        return {"status": "ok", "message": message.to_dict()}
+    if command == "cancel":
+        message = queue.cancel(args.message_id, reason=args.reason)
+        if message is None:
+            return {"status": "failed", "reason": "inbox_not_cancelable_or_missing", "message_id": args.message_id}
+        journal.append(
+            task_id=None,
+            run_id="resident-cli",
+            step_id=None,
+            kind="resident_inbox_canceled",
             data=resident_inbox_event(message),
             state_delta={"resident_inbox_status": message.status, "resident_message_id": message.message_id},
         )

@@ -84,7 +84,9 @@ Recent kernel-v3 hardening is tracked in
 latest open-research loop and attention work in
 `docs/KERNEL_V3_PROGRESS_2026-06-04_OPEN_RESEARCH_ATTENTION.md`. The 2026-06-05
 loop-coupling and memory-context pass is tracked in
-`docs/KERNEL_V3_PROGRESS_2026-06-05_LOOP_COUPLING_MEMORY.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-05_LOOP_COUPLING_MEMORY.md`. The same day's
+strategy-supervision and safety-boundary pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-05_STRATEGY_SUPERVISION.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -92,7 +94,7 @@ root goal while passing the current directive separately, `chat.route` remains
 model-owned with structured route-relation validation instead of phrase tables,
 durable memory is visible as both project and thread context views, SEC
 companyfacts/direct-URL retrieval now preserves structured financial evidence
-such as concept, metric, period, filing, and value fields, and
+such as concept, metric, annual/quarterly period, filing, and value fields, and
 scholarly/frontier research can use an `academic_research` profile with academic
 source families, discovery-only source handling, topic-coverage gates, and live
 arXiv paper discovery.
@@ -111,6 +113,11 @@ Kernel v3 currently contains the infrastructure for:
   assessment. The model can suggest coverage and next strategy, but the host
   validates the decision and never lets mission assessment execute tools,
   bypass policy, or commit memory;
+- mission directives that become hard planner context instead of passive text.
+  If the mission supervisor says a retrieval loop must avoid a failed query,
+  switch strategy, or fill missing requirements, the next planner packet sees
+  those constraints as `agent_replan_hints`; the host retrieval strategy
+  supervisor then validates the next `retrieval.run` payload against them;
 - LLM-declared answer profiles for research work. `semantic.intake` may emit
   `metadata.answer_profile_hint` with `format`, `detail_level`,
   `target_sections`, and `quality_gate`; the host validates that packet,
@@ -133,6 +140,10 @@ Kernel v3 currently contains the infrastructure for:
 - safe host context state such as thread/task/run identity through
   `system.environment`; this is model-visible context for response planning, not
   shell access, process inspection, or a time-tool alias;
+- system capability ABI validation. `system.time` is executable only for the
+  canonical `system_time` intent; generic system-state, self-description, or
+  capability-check packets are downgraded to semantic/direct answers even if a
+  live model incorrectly attaches `system.time`;
 - semantic work plans that can expand one model-proposed capability into many
   ordered tool actions, including 10+ iteration workspace loops;
 - semantic research plans that can expand one model-proposed `retrieval.run`
@@ -221,8 +232,10 @@ Kernel v3 currently contains the infrastructure for:
 - structured JSON/CSV retrieval extraction for financial databases such as SEC
   companyfacts, FRED, and Treasury/FiscalData-style responses: raw payloads
   remain artifacts. SEC companyfacts JSON is projected into compact metric
-  rows such as concept, unit, value, fiscal period, form, filing date, and
-  accession number before evidence ranking; generic JSON/CSV still uses
+  rows such as concept, unit, value, annual/quarterly period, fiscal period,
+  form, filing date, and accession number before evidence ranking. Annual
+  filings are preferred for annual/fundamental queries while quarterly facts
+  remain available for recent-period coverage; generic JSON/CSV still uses
   bounded readable projections;
 - finance/technical research profiles can be inferred from structured semantic
   domains as well as explicit capability names. This keeps a model packet like
@@ -253,9 +266,20 @@ Kernel v3 currently contains the infrastructure for:
   planner/evaluator step. This is not direct memory writeback and not a
   fixed-response RAG shortcut;
 - local resident inbox/outbox, leases, schedules, and audit/doctor surfaces;
+- resident control-plane cancellation through `holo-v3 resident cancel
+  <message_id>`, which marks pending/running/retry messages as canceled,
+  clears leases/retry timers, journals the cancellation, and prevents worker
+  claim/replay;
 - finance-fundamentals research profile and local corpus-backed retrieval;
 - model-planner retrieval binding that applies host-validated research profile
   defaults from semantic intake/task plans before tool execution;
+- host-owned retrieval strategy supervision: after the model proposes
+  `retrieval.run`, the host checks whether the payload materially changes the
+  failed search state. Repeated queries can be rewritten into diversified query
+  batches, source-family switches, or structured/direct-source payloads derived
+  from prior diagnostics. Direct URLs, SEC/FRED/FiscalData structured payloads,
+  and genuinely new search strategies are treated as valid strategy
+  transitions rather than overwritten;
 - retrieval workloop feedback that carries missing query facets and missing
   source-authority signals into the next planner packet, allowing bounded
   replan attempts without weakening host termination guards;
@@ -379,6 +403,12 @@ Kernel v3 currently contains the infrastructure for:
   user or semantic metadata names a required source URL, the answer may only
   pass if at least one used citation resolves to that URL or a safe prefix of
   it; citations from unrelated search results do not satisfy the task.
+- private/sensitive context is blocked before external model calls unless an
+  explicit host parameter authorizes that boundary crossing. ProcessorFabric
+  journals the request/result metadata, but does not send secret-like prompts,
+  sensitive durable-memory sections, or private-context markers to DeepSeek or
+  another external provider by default. Local/fake providers remain available
+  for controlled diagnostics.
 
 Live model and live retrieval are not default unit-test dependencies. Online
 `chat`, `agent`, and resident `run/run-once` now get bounded live web-discovery
