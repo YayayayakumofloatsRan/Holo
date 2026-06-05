@@ -482,6 +482,7 @@ def main(argv: list[str] | None = None) -> int:
     retrieve_parser.add_argument("--uri", default="inline://holo-v3-cli")
     retrieve_parser.add_argument("--title", default="Holo v3 CLI inline evidence")
     retrieve_parser.add_argument("--profile", choices=RESEARCH_PROFILE_IDS, default=None)
+    retrieve_parser.add_argument("--max-queries", type=int, default=None)
     retrieve_parser.add_argument("--max-sources", type=int, default=5)
     retrieve_parser.add_argument("--max-fetches", type=int, default=3)
     retrieve_parser.add_argument("--max-spans-per-document", type=int, default=1)
@@ -872,6 +873,7 @@ def main(argv: list[str] | None = None) -> int:
             source_uri=args.uri,
             source_title=args.title,
             research_profile_id=args.profile,
+            max_queries=args.max_queries,
             max_sources=args.max_sources,
             max_fetches=args.max_fetches,
             max_spans_per_document=args.max_spans_per_document,
@@ -2401,6 +2403,7 @@ def _run_retrieve(
     source_uri: str = "inline://holo-v3-cli",
     source_title: str = "Holo v3 CLI evidence",
     research_profile_id: str | None = None,
+    max_queries: int | None = None,
     max_sources: int = 5,
     max_fetches: int = 3,
     max_spans_per_document: int = 1,
@@ -2411,6 +2414,11 @@ def _run_retrieve(
     goal = SearchGoal(
         goal_id="goal-cli",
         query=query,
+        max_queries=_positive_limit(max_queries) if max_queries is not None else _default_cli_query_count(
+            research_profile_id=research_profile_id,
+            max_sources=max_sources,
+            max_fetches=max_fetches,
+        ),
         max_sources=_positive_limit(max_sources),
         max_fetches=_positive_limit(max_fetches),
         max_spans_per_document=_positive_limit(max_spans_per_document),
@@ -2534,6 +2542,14 @@ def _positive_limit(value: int, *, default: int = 20) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, parsed)
+
+
+def _default_cli_query_count(*, research_profile_id: str | None, max_sources: int, max_fetches: int) -> int:
+    if research_profile_id:
+        return 8
+    if _positive_limit(max_sources, default=0) >= 16 or _positive_limit(max_fetches, default=0) >= 16:
+        return 8
+    return 1
 
 
 def _exception_reason(exc: Exception) -> str:

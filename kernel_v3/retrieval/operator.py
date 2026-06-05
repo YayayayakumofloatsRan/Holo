@@ -29,7 +29,8 @@ from kernel_v3.retrieval.evidence_compaction import EvidenceCandidate, compact_e
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator, is_discovery_goal, qualify_evidence_candidate
 from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
-from kernel_v3.retrieval.rank import plan_queries, rank_sources
+from kernel_v3.retrieval.query_campaign import build_query_campaign
+from kernel_v3.retrieval.rank import rank_sources
 from kernel_v3.tools import ToolRegistry, ToolResult
 
 
@@ -109,7 +110,8 @@ class RetrievalOperator:
         requested_goal = goal
         goal = _bounded_goal(goal)
         research_profile = _research_profile_from_goal(goal)
-        queries = plan_queries(goal, research_profile=research_profile)
+        query_campaign = build_query_campaign(goal, research_profile=research_profile)
+        queries = query_campaign.queries
         plan = QueryPlan(
             plan_id=f"plan-{goal.goal_id}",
             goal_id=goal.goal_id,
@@ -118,6 +120,7 @@ class RetrievalOperator:
             max_fetches=goal.max_fetches,
             diagnostics={
                 "query_count": len(queries),
+                "query_campaign": query_campaign.diagnostics,
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
                 **_budget_clamp_diagnostics(requested_goal, goal),
@@ -138,6 +141,7 @@ class RetrievalOperator:
 
         sources: list[SearchSource] = []
         search_attempt_ids: list[str] = []
+        search_summaries: list[JsonObject] = []
         for index, query in enumerate(queries, start=1):
             search_error = None
             try:
@@ -172,6 +176,15 @@ class RetrievalOperator:
             )
             search_attempt_ids.append(attempt.attempt_id)
             sources.extend(bounded_sources)
+            search_summaries.append(
+                {
+                    "attempt_id": attempt.attempt_id,
+                    "query": query,
+                    "status": attempt_status,
+                    "source_count": len(bounded_sources),
+                    "error": search_error or diagnostics.get("error"),
+                }
+            )
             _append(
                 journal,
                 task_id,
@@ -240,6 +253,7 @@ class RetrievalOperator:
 
         documents: list[tuple[FetchedDocument, str]] = []
         fetch_attempt_ids: list[str] = []
+        fetch_summaries: list[JsonObject] = []
         source_by_id = {source.source_id: source for source in _dedupe_sources(sources)}
         fetch_jobs = [
             (index, ranked_source, source_by_id[ranked_source.source_id])
@@ -322,6 +336,16 @@ class RetrievalOperator:
                         response.diagnostics if response is not None else {"error": fetch_error}
                     ),
                 )
+            fetch_summaries.append(
+                {
+                    "fetch_id": fetch_id,
+                    "source_id": source.source_id,
+                    "uri": source.uri,
+                    "status": attempt.status,
+                    "size_bytes": attempt.size_bytes,
+                    "reason": attempt.diagnostics.get("reason") or attempt.diagnostics.get("error"),
+                }
+            )
             fetch_attempt_ids.append(fetch_id)
             _append(
                 journal,
@@ -483,6 +507,22 @@ class RetrievalOperator:
             citations=citations,
             research_profile=research_profile,
         )
+        failure_attribution = _failure_attribution(
+            decision=decision,
+            queries=queries,
+            sources=sources,
+            ranked=ranked,
+            source_rejections=source_rejections,
+            fetch_jobs=fetch_jobs,
+            fetch_summaries=fetch_summaries,
+            documents=documents,
+            spans=spans,
+            evidence_candidates=evidence_candidates,
+            rejected_evidence=rejected_evidence,
+            evidence=evidence,
+            citations=citations,
+            search_summaries=search_summaries,
+        )
         if (
             not decision.sufficient
             and not evidence
@@ -504,6 +544,11 @@ class RetrievalOperator:
                     "original_reason": decision.reason,
                 },
             )
+            failure_attribution = {
+                **failure_attribution,
+                "primary_failure_mode": "none",
+                "reason": "discovery_artifact_available",
+            }
         _append(
             journal,
             task_id,
@@ -538,7 +583,10 @@ class RetrievalOperator:
                 "fetch_concurrency": min(self.fetch_concurrency, max(1, len(fetch_jobs))),
                 "provider_capabilities": self.provider_capabilities(),
                 "search_attempt_count": len(search_attempt_ids),
+                "search_summaries": search_summaries[-16:],
                 "fetch_attempt_count": len(fetch_attempt_ids),
+                "fetch_summaries": fetch_summaries[-16:],
+                "failure_attribution": failure_attribution,
                 "source_rejection_count": len(source_rejections),
                 "source_rejection_reasons": _count_by_key(source_rejections, "reason"),
                 "candidate_span_count": len(spans),
@@ -736,7 +784,7 @@ def _goal_from_payload(action: CandidateAction) -> SearchGoal:
     return SearchGoal(
         goal_id=goal_id,
         query=query,
-        max_queries=_positive_int(data.get("max_queries"), default=_default_query_count(metadata)),
+        max_queries=_positive_int(data.get("max_queries"), default=_default_query_count(metadata, data=data)),
         max_sources=_positive_int(data.get("max_sources"), default=5),
         max_fetches=_positive_int(data.get("max_fetches"), default=3),
         max_spans_per_document=_positive_int(data.get("max_spans_per_document"), default=2),
@@ -777,13 +825,24 @@ def _goal_budget(goal: SearchGoal) -> JsonObject:
     }
 
 
-def _default_query_count(metadata: JsonObject) -> int:
+def _default_query_count(metadata: JsonObject, *, data: JsonObject | None = None) -> int:
     for key in ("queries", "query_templates"):
         value = metadata.get(key)
         if isinstance(value, list):
             count = sum(1 for item in value if isinstance(item, str) and item.strip())
             if count > 0:
                 return count
+    data = data if isinstance(data, dict) else {}
+    if bool(metadata.get("respect_explicit_budget") or data.get("respect_explicit_budget")):
+        return 1
+    if str(metadata.get("research_depth") or data.get("research_depth") or "").strip().lower() in {"balanced", "deep"}:
+        return 8
+    if str(metadata.get("search_strategy") or "").strip().lower() in {"aggregate", "adaptive", "fresh_live", "structured"}:
+        return 8
+    max_fetches = _positive_int(data.get("max_fetches"), default=0)
+    max_sources = _positive_int(data.get("max_sources"), default=0)
+    if max_fetches >= 16 or max_sources >= 16:
+        return 8
     return 1
 
 
@@ -993,6 +1052,97 @@ def _ranked_source_target_exempt(source: RankedSource) -> bool:
         return True
     authority = assessment.get("authority_level")
     return isinstance(authority, str) and authority == "primary"
+
+
+def _failure_attribution(
+    *,
+    decision: EvidenceEvaluationDecision,
+    queries: list[str],
+    sources: list[SearchSource],
+    ranked: list[RankedSource],
+    source_rejections: list[JsonObject],
+    fetch_jobs: list[tuple[int, RankedSource, SearchSource]],
+    fetch_summaries: list[JsonObject],
+    documents: list[tuple[FetchedDocument, str]],
+    spans: list[object],
+    evidence_candidates: list[EvidenceCandidate],
+    rejected_evidence: list[JsonObject],
+    evidence: list[EvidenceItem],
+    citations: list[object],
+    search_summaries: list[JsonObject],
+) -> JsonObject:
+    mode = "none"
+    if decision.sufficient:
+        mode = "none"
+    elif not queries:
+        mode = "query_plan_empty"
+    elif not sources:
+        mode = "search_no_sources"
+    elif not ranked:
+        mode = "ranking_no_sources"
+    elif not fetch_jobs:
+        mode = "no_fetchable_sources"
+    elif not documents:
+        mode = "fetch_failed_or_empty"
+    elif not spans:
+        mode = "extraction_no_spans"
+    elif not evidence_candidates and rejected_evidence:
+        mode = "all_evidence_rejected"
+    elif evidence and not citations:
+        mode = "citation_generation_missing"
+    else:
+        mode = "coverage_gap"
+    search_empty_count = sum(1 for item in search_summaries if int(item.get("source_count") or 0) == 0)
+    fetch_failed_count = sum(1 for item in fetch_summaries if item.get("status") != "ok")
+    return {
+        "primary_failure_mode": mode,
+        "reason": decision.reason,
+        "search": {
+            "query_count": len(queries),
+            "attempt_count": len(search_summaries),
+            "empty_attempt_count": search_empty_count,
+            "status_counts": _count_by_key(search_summaries, "status"),
+        },
+        "source": {
+            "candidate_count": len(sources),
+            "ranked_count": len(ranked),
+            "rejected_count": len(source_rejections),
+            "rejection_reasons": _count_by_key(source_rejections, "reason"),
+        },
+        "fetch": {
+            "scheduled_count": len(fetch_jobs),
+            "attempt_count": len(fetch_summaries),
+            "failed_count": fetch_failed_count,
+            "status_counts": _count_by_key(fetch_summaries, "status"),
+            "failure_reasons": _count_by_key([item for item in fetch_summaries if item.get("reason")], "reason"),
+        },
+        "extract": {
+            "document_count": len(documents),
+            "span_count": len(spans),
+        },
+        "evidence": {
+            "candidate_count": len(evidence_candidates),
+            "accepted_count": len(evidence),
+            "citation_count": len(citations),
+            "rejected_count": len(rejected_evidence),
+            "rejection_reasons": _count_by_key(rejected_evidence, "reason"),
+        },
+        "next_strategy_hint": _next_strategy_hint(mode),
+    }
+
+
+def _next_strategy_hint(primary_failure_mode: str) -> str:
+    return {
+        "query_plan_empty": "create_non_empty_query_plan",
+        "search_no_sources": "diversify_query_or_switch_search_provider",
+        "ranking_no_sources": "relax_ranking_or_change_source_family",
+        "no_fetchable_sources": "switch_to_direct_or_structured_source",
+        "fetch_failed_or_empty": "try_alternate_urls_or_source_family",
+        "extraction_no_spans": "fetch_more_relevant_documents_or_change_extract_terms",
+        "all_evidence_rejected": "repair_entity_or_source_authority_mismatch",
+        "citation_generation_missing": "repair_citation_generation",
+        "coverage_gap": "target_missing_facets_with_new_queries",
+    }.get(primary_failure_mode, "continue_if_requirements_remain")
 
 
 def _ordered_unique(values: list[str]) -> list[str]:

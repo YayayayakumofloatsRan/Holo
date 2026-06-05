@@ -86,7 +86,9 @@ latest open-research loop and attention work in
 loop-coupling and memory-context pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-05_LOOP_COUPLING_MEMORY.md`. The same day's
 strategy-supervision and safety-boundary pass is tracked in
-`docs/KERNEL_V3_PROGRESS_2026-06-05_STRATEGY_SUPERVISION.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-05_STRATEGY_SUPERVISION.md`, and the next
+retrieval-campaign pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-05_RETRIEVAL_CAMPAIGN.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -280,6 +282,16 @@ Kernel v3 currently contains the infrastructure for:
   from prior diagnostics. Direct URLs, SEC/FRED/FiscalData structured payloads,
   and genuinely new search strategies are treated as valid strategy
   transitions rather than overwritten;
+- query-campaign planning for deep retrieval. When a task has research depth,
+  large source/fetch budgets, aggregate/adaptive search, or profile strategy,
+  the retrieval FSM expands one base query into a bounded multi-view campaign:
+  profile templates, model/mission hints, source-family switches, and generic
+  research axes. Campaign diagnostics record selected/skipped query signatures
+  so later loops can avoid repeating unproductive searches;
+- retrieval failure attribution in every report. Failed or insufficient runs now
+  identify the primary failing layer, such as `search_no_sources`,
+  `fetch_failed_or_empty`, `extraction_no_spans`, `all_evidence_rejected`, or
+  `coverage_gap`, and include a `next_strategy_hint` for the next planner loop;
 - retrieval workloop feedback that carries missing query facets and missing
   source-authority signals into the next planner packet, allowing bounded
   replan attempts without weakening host termination guards;

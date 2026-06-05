@@ -39,6 +39,7 @@ from kernel_v3.retrieval.providers import (
     UnconfiguredSearchProvider,
     provider_capability,
 )
+from kernel_v3.retrieval.query_campaign import QueryCampaign, build_query_campaign
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
 from kernel_v3.retrieval.source_query_provider import ResearchSourceQuerySearchProvider
 from kernel_v3.retrieval.strategy import (
@@ -80,6 +81,7 @@ __all__ = [
     "LiveWebSearchConfig",
     "LiveWebSearchProvider",
     "QueryPlan",
+    "QueryCampaign",
     "RankedSource",
     "RankSources",
     "ResearchSourceQuerySearchProvider",
@@ -97,6 +99,7 @@ __all__ = [
     "UnconfiguredFetchProvider",
     "UnconfiguredSearchProvider",
     "inspect_retrieval_providers",
+    "build_query_campaign",
     "materially_different_query",
     "normalize_query",
     "provider_capability",
