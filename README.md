@@ -97,6 +97,8 @@ layer and strategy-shift handoff are tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-05_WORKMETHOD_LAYER.md`. The 2026-06-06
 discovery-expansion and retrieval benchmark pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-06_DISCOVERY_EXPANSION.md`. The current
+system-time/resident scheduling pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-06_RESIDENT_TIME_PRIORITY.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -172,10 +174,11 @@ Kernel v3 currently contains the infrastructure for:
 - safe host context state such as thread/task/run identity through
   `system.environment`; this is model-visible context for response planning, not
   shell access, process inspection, or a time-tool alias;
-- system capability ABI validation. `system.time` is executable only for the
-  canonical `system_time` intent; generic system-state, self-description, or
-  capability-check packets are downgraded to semantic/direct answers even if a
-  live model incorrectly attaches `system.time`;
+- system capability ABI validation. Time/date/clock intent aliases such as
+  `time_query` are normalized to the canonical `system_time` intent and force a
+  `system_answer` recipe when they carry `system.time`; generic system-state,
+  self-description, or capability-check packets are still downgraded to
+  semantic/direct answers if a live model incorrectly attaches `system.time`;
 - semantic work plans that can expand one model-proposed capability into many
   ordered tool actions, including 10+ iteration workspace loops;
 - semantic research plans that can expand one model-proposed `retrieval.run`
@@ -218,6 +221,18 @@ Kernel v3 currently contains the infrastructure for:
   success rate, evidence/citation counts, final answer length, failure mode,
   next tool actions, and research-graph coverage without asserting fixed
   answers;
+- resident queue and scheduler priority. Inbox messages and local schedules now
+  carry a first-class `priority` field, and resident workers claim due work by
+  priority before age. Scheduler ticks preserve schedule priority when they
+  enqueue normal resident inbox messages;
+- host-owned reminder compilation for resident workers. Relative reminder
+  messages such as "十分钟后提醒我喝水" compile into deterministic local
+  schedules and a ready outbox confirmation; when due, the schedule emits a
+  normal resident inbox message. The compiler does not route chat, call models,
+  or bypass the queue/scheduler audit path;
+- human resident status output with `holo-v3 resident --output human status`,
+  showing queue claimable/running/retry/outbox/pending-input counts plus active,
+  due, recurring, and next-due schedule state.
 - model-planner dynamic loops that recompile context, re-call
   `planner.propose`, journal plan revisions, and continue for 10+ bounded
   iterations when evaluator feedback says more work remains;

@@ -361,10 +361,12 @@ def main(argv: list[str] | None = None) -> int:
     memory_migrate.add_argument("--limit", type=int, default=None)
 
     resident_parser = sub.add_parser("resident")
+    resident_parser.add_argument("--output", choices=["json", "human"], default="json")
     resident_sub = resident_parser.add_subparsers(dest="resident_command", required=True)
     resident_enqueue = resident_sub.add_parser("enqueue")
     resident_enqueue.add_argument("text")
     resident_enqueue.add_argument("--thread", default="default")
+    resident_enqueue.add_argument("--priority", type=int, default=0)
     resident_enqueue.add_argument("--message-id", default=None)
     resident_run_once = resident_sub.add_parser("run-once")
     resident_run_once.add_argument("--worker-id", default="resident-worker-1")
@@ -456,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     resident_schedule_add.add_argument("--due-in-ms", type=int, default=0)
     resident_schedule_add.add_argument("--interval-ms", type=int, default=None)
     resident_schedule_add.add_argument("--max-runs", type=int, default=1)
+    resident_schedule_add.add_argument("--priority", type=int, default=0)
     resident_schedule_add.add_argument("--unbounded", action="store_true")
     resident_schedule_tick = resident_sub.add_parser("schedule-tick")
     resident_schedule_tick.add_argument("--limit", type=int, default=20)
@@ -821,7 +824,10 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(live_block, sort_keys=True))
             return 1
         payload = _resident_command(args, journal)
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        if getattr(args, "output", "json") == "human":
+            print(_resident_human_text(payload))
+        else:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0 if payload.get("status") not in {"failed", "blocked", "error"} else 1
 
     if args.command == "inspect-run":
@@ -1812,7 +1818,13 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
     queue = _resident_queue(args)
     command = args.resident_command
     if command == "enqueue":
-        message = queue.enqueue(thread_id=args.thread, text=args.text, source="cli", message_id=args.message_id)
+        message = queue.enqueue(
+            thread_id=args.thread,
+            text=args.text,
+            source="cli",
+            priority=args.priority,
+            message_id=args.message_id,
+        )
         journal.append(
             task_id=None,
             run_id="resident-cli",
@@ -1898,6 +1910,7 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
             due_in_ms=args.due_in_ms,
             interval_ms=args.interval_ms,
             max_runs=None if args.unbounded else args.max_runs,
+            priority=args.priority,
         )
         return {"status": "ok", "schedule": schedule.to_dict()}
     if command == "schedule-list":
@@ -2026,6 +2039,131 @@ def _resident_command(args, journal: JournalStore) -> dict[str, object]:
         )
         return {"status": "ok", "outbox": outbox.to_dict()}
     return {"status": "failed", "reason": f"unknown_resident_command:{command}"}
+
+
+def _resident_human_text(payload: dict[str, object]) -> str:
+    lines: list[str] = []
+    status = str(payload.get("status") or "unknown")
+    lines.append(f"resident status: {status}")
+    queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else payload.get("queue_status")
+    schedules = payload.get("schedules") if isinstance(payload.get("schedules"), dict) else payload.get("schedule_status")
+    if isinstance(queue, dict):
+        inbox_counts = queue.get("inbox_counts") if isinstance(queue.get("inbox_counts"), dict) else {}
+        outbox_counts = queue.get("outbox_counts") if isinstance(queue.get("outbox_counts"), dict) else {}
+        pending_input = int(outbox_counts.get("pending_user_input") or 0) + int(outbox_counts.get("pending_user_input_delivered") or 0)
+        running = int(inbox_counts.get("running") or 0)
+        lines.extend(
+            [
+                "",
+                "queue",
+                f"  claimable: {queue.get('claimable_count', 0)}",
+                f"  running: {running}",
+                f"  retry due: {queue.get('due_retry_count', 0)}",
+                f"  stale running: {queue.get('stale_running_count', 0)}",
+                f"  outbox ready: {queue.get('ready_outbox_count', 0)}",
+                f"  pending input: {pending_input}",
+                f"  dead letters: {queue.get('dead_letter_count', 0)}",
+            ]
+        )
+        active_lease = queue.get("active_lease")
+        if isinstance(active_lease, dict):
+            lines.append(f"  active lease: {active_lease.get('worker_id')} until {active_lease.get('expires_at_ms')}")
+    if isinstance(schedules, dict):
+        lines.extend(
+            [
+                "",
+                "schedules",
+                f"  active: {schedules.get('active_count', 0)}",
+                f"  due: {schedules.get('due_count', 0)}",
+                f"  recurring: {schedules.get('recurring_count', 0)}",
+                f"  unbounded: {schedules.get('unbounded_count', 0)}",
+                f"  next due: {schedules.get('next_due_at_ms') or '-'}",
+            ]
+        )
+    if isinstance(payload.get("message"), dict):
+        lines.extend(["", "message", _resident_message_line(payload["message"])])
+    if isinstance(payload.get("schedule"), dict):
+        lines.extend(["", "schedule", _resident_schedule_line(payload["schedule"])])
+    if isinstance(payload.get("tick"), dict):
+        tick = payload["tick"]
+        lines.extend(
+            [
+                "",
+                "schedule tick",
+                f"  status: {tick.get('status')}",
+                f"  due: {tick.get('due_count', 0)} enqueued: {tick.get('enqueued_count', 0)} failed: {tick.get('failed_count', 0)}",
+            ]
+        )
+        for item in _dict_list(tick.get("enqueued_messages"))[:5]:
+            lines.append("  " + _resident_message_line(item).strip())
+    for key in ("messages", "schedules"):
+        values = _dict_list(payload.get(key))
+        if values:
+            lines.extend(["", key])
+            formatter = _resident_schedule_line if key == "schedules" else _resident_message_line
+            for item in values[:10]:
+                lines.append(formatter(item))
+            if len(values) > 10:
+                lines.append(f"  ... {len(values) - 10} more")
+    if isinstance(payload.get("inspection"), dict):
+        _append_resident_inspection(lines, "queue inspection", payload["inspection"])
+    if isinstance(payload.get("schedule_inspection"), dict):
+        _append_resident_inspection(lines, "schedule inspection", payload["schedule_inspection"])
+    if isinstance(payload.get("results"), list):
+        lines.extend(["", "worker results"])
+        for item in _dict_list(payload.get("results"))[:10]:
+            lines.append(f"  {item.get('status')} message={item.get('message_id') or '-'} reason={item.get('reason') or '-'}")
+    if isinstance(payload.get("payload"), dict):
+        payload_detail = payload["payload"]
+        if isinstance(payload_detail.get("schedule_tick"), dict):
+            tick = payload_detail["schedule_tick"]
+            lines.extend(
+                [
+                    "",
+                    "schedule tick",
+                    f"  status: {tick.get('status')} due={tick.get('due_count', 0)} enqueued={tick.get('enqueued_count', 0)}",
+                ]
+            )
+    reason = payload.get("reason")
+    if reason:
+        lines.extend(["", f"reason: {reason}"])
+    return "\n".join(lines)
+
+
+def _append_resident_inspection(lines: list[str], title: str, inspection: dict[str, object]) -> None:
+    lines.extend(["", title, f"  status: {inspection.get('status')}"])
+    for issue in _dict_list(inspection.get("issues"))[:10]:
+        lines.append(f"  {issue.get('severity', 'info')}: {issue.get('code')} count={issue.get('count', '-')}")
+    actions = inspection.get("recommended_actions")
+    if isinstance(actions, list) and actions:
+        lines.append("  actions: " + "; ".join(str(item) for item in actions[:5]))
+
+
+def _resident_message_line(message: dict[str, object]) -> str:
+    text = str(message.get("text") or message.get("text_preview") or "")
+    preview = text[:80].replace("\n", " ")
+    return (
+        f"  {message.get('message_id') or message.get('outbox_id')} "
+        f"p={message.get('priority', 0)} status={message.get('status')} "
+        f"thread={message.get('thread_id')} text={preview!r}"
+    )
+
+
+def _resident_schedule_line(schedule: dict[str, object]) -> str:
+    text = str(schedule.get("text") or schedule.get("text_preview") or "")
+    preview = text[:80].replace("\n", " ")
+    return (
+        f"  {schedule.get('schedule_id')} p={schedule.get('priority', 0)} "
+        f"status={schedule.get('status')} due={schedule.get('next_due_at_ms') or '-'} "
+        f"runs={schedule.get('run_count', 0)}/{schedule.get('max_runs') or '∞'} "
+        f"thread={schedule.get('thread_id')} text={preview!r}"
+    )
+
+
+def _dict_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _combined_health(*statuses: str) -> str:

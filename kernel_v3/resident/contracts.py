@@ -12,6 +12,7 @@ class InboundMessage(Contract):
     text: str
     source: str
     status: str
+    priority: int
     created_at_ms: int
     lease_owner: str | None
     lease_until_ms: int | None
@@ -98,6 +99,7 @@ class ResidentSchedule(Contract):
     text: str
     source: str
     status: str
+    priority: int
     created_at_ms: int
     next_due_at_ms: int | None
     interval_ms: int | None

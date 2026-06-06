@@ -48,6 +48,7 @@ class ResidentScheduler:
         text: str,
         schedule_id: str | None = None,
         source: str = "schedule",
+        priority: int = 0,
         due_at_ms: int | None = None,
         due_in_ms: int = 0,
         interval_ms: int | None = None,
@@ -63,6 +64,7 @@ class ResidentScheduler:
             text=text,
             source=source,
             status="active",
+            priority=_normalize_priority(priority),
             created_at_ms=now,
             next_due_at_ms=due_at,
             interval_ms=interval_ms,
@@ -84,6 +86,7 @@ class ResidentScheduler:
                     existing.thread_id == schedule.thread_id
                     and existing.text == schedule.text
                     and existing.source == schedule.source
+                    and existing.priority == schedule.priority
                     and existing.next_due_at_ms == schedule.next_due_at_ms
                     and existing.interval_ms == schedule.interval_ms
                     and existing.max_runs == schedule.max_runs
@@ -97,9 +100,9 @@ class ResidentScheduler:
                 """
                 INSERT INTO resident_schedules (
                     schedule_id, thread_id, text, source, status, created_at_ms,
-                    next_due_at_ms, interval_ms, max_runs, run_count,
+                    priority, next_due_at_ms, interval_ms, max_runs, run_count,
                     last_enqueued_at_ms, last_message_id, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _schedule_row(schedule),
             )
@@ -123,12 +126,12 @@ class ResidentScheduler:
             rows = conn.execute(
                 """
                 SELECT schedule_id, thread_id, text, source, status, created_at_ms,
-                       next_due_at_ms, interval_ms, max_runs, run_count,
+                       priority, next_due_at_ms, interval_ms, max_runs, run_count,
                        last_enqueued_at_ms, last_message_id, metadata_json
                 FROM resident_schedules
                 """
                 + where
-                + " ORDER BY created_at_ms, schedule_id"
+                + " ORDER BY priority DESC, created_at_ms, schedule_id"
             ).fetchall()
             return [_schedule_from_row(row) for row in rows]
         finally:
@@ -288,12 +291,14 @@ class ResidentScheduler:
                     thread_id=schedule.thread_id,
                     text=schedule.text,
                     source=schedule.source,
+                    priority=schedule.priority,
                     message_id=message_id,
                     metadata={
                         **dict(schedule.metadata),
                         "schedule_id": schedule.schedule_id,
                         "scheduled_due_at_ms": schedule.next_due_at_ms,
                         "schedule_run_index": schedule.run_count + 1,
+                        "schedule_priority": schedule.priority,
                     },
                 )
                 updated = self._advance_schedule(schedule, message=message, ticked_at_ms=now)
@@ -347,14 +352,14 @@ class ResidentScheduler:
             rows = conn.execute(
                 """
                 SELECT schedule_id, thread_id, text, source, status, created_at_ms,
-                       next_due_at_ms, interval_ms, max_runs, run_count,
+                       priority, next_due_at_ms, interval_ms, max_runs, run_count,
                        last_enqueued_at_ms, last_message_id, metadata_json
                 FROM resident_schedules
                 WHERE status = 'active'
                   AND next_due_at_ms IS NOT NULL
                   AND next_due_at_ms <= ?
                   AND (max_runs IS NULL OR run_count < max_runs)
-                ORDER BY next_due_at_ms, created_at_ms, schedule_id
+                ORDER BY priority DESC, next_due_at_ms, created_at_ms, schedule_id
                 LIMIT ?
                 """,
                 (now_ms, max(0, int(limit))),
@@ -374,7 +379,7 @@ class ResidentScheduler:
                   AND next_due_at_ms IS NOT NULL
                   AND next_due_at_ms <= ?
                   AND (max_runs IS NULL OR run_count < max_runs)
-                ORDER BY next_due_at_ms, created_at_ms, schedule_id
+                ORDER BY priority DESC, next_due_at_ms, created_at_ms, schedule_id
                 LIMIT ?
                 """,
                 (now_ms, limit),
@@ -391,7 +396,7 @@ class ResidentScheduler:
                 SELECT schedule_id
                 FROM resident_schedules
                 WHERE status = 'active' AND max_runs IS NULL
-                ORDER BY created_at_ms, schedule_id
+                ORDER BY priority DESC, created_at_ms, schedule_id
                 LIMIT ?
                 """,
                 (limit,),
@@ -406,10 +411,10 @@ class ResidentScheduler:
             rows = conn.execute(
                 """
                 SELECT schedule_id, thread_id, text, source, status, created_at_ms,
-                       next_due_at_ms, interval_ms, max_runs, run_count,
+                       priority, next_due_at_ms, interval_ms, max_runs, run_count,
                        last_enqueued_at_ms, last_message_id, metadata_json
                 FROM resident_schedules
-                ORDER BY created_at_ms, schedule_id
+                ORDER BY priority DESC, created_at_ms, schedule_id
                 LIMIT ?
                 """,
                 (limit,),
@@ -468,6 +473,7 @@ class ResidentScheduler:
                     source TEXT NOT NULL,
                     status TEXT NOT NULL,
                     created_at_ms INTEGER NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
                     next_due_at_ms INTEGER,
                     interval_ms INTEGER,
                     max_runs INTEGER,
@@ -478,8 +484,12 @@ class ResidentScheduler:
                 )
                 """
             )
+            _ensure_column(conn, "resident_schedules", "priority", "INTEGER NOT NULL DEFAULT 0")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_resident_schedules_due ON resident_schedules(status, next_due_at_ms)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_resident_schedules_priority_due ON resident_schedules(status, priority DESC, next_due_at_ms)"
             )
             conn.commit()
         finally:
@@ -524,6 +534,7 @@ def _schedule_row(schedule: ResidentSchedule) -> tuple[object, ...]:
         schedule.source,
         schedule.status,
         schedule.created_at_ms,
+        schedule.priority,
         schedule.next_due_at_ms,
         schedule.interval_ms,
         schedule.max_runs,
@@ -543,13 +554,14 @@ def _schedule_from_row(row) -> ResidentSchedule:
             "source": row[3],
             "status": row[4],
             "created_at_ms": int(row[5]),
-            "next_due_at_ms": int(row[6]) if row[6] is not None else None,
-            "interval_ms": int(row[7]) if row[7] is not None else None,
-            "max_runs": int(row[8]) if row[8] is not None else None,
-            "run_count": int(row[9]),
-            "last_enqueued_at_ms": int(row[10]) if row[10] is not None else None,
-            "last_message_id": row[11],
-            "metadata": _json_dict(row[12]),
+            "priority": int(row[6]) if row[6] is not None else 0,
+            "next_due_at_ms": int(row[7]) if row[7] is not None else None,
+            "interval_ms": int(row[8]) if row[8] is not None else None,
+            "max_runs": int(row[9]) if row[9] is not None else None,
+            "run_count": int(row[10]),
+            "last_enqueued_at_ms": int(row[11]) if row[11] is not None else None,
+            "last_message_id": row[12],
+            "metadata": _json_dict(row[13]),
         }
     )
 
@@ -558,7 +570,7 @@ def _schedule_by_id(conn: sqlite3.Connection, schedule_id: str) -> ResidentSched
     row = conn.execute(
         """
         SELECT schedule_id, thread_id, text, source, status, created_at_ms,
-               next_due_at_ms, interval_ms, max_runs, run_count,
+               priority, next_due_at_ms, interval_ms, max_runs, run_count,
                last_enqueued_at_ms, last_message_id, metadata_json
         FROM resident_schedules
         WHERE schedule_id = ?
@@ -578,8 +590,19 @@ def _count(conn: sqlite3.Connection, query: str, values: tuple[object, ...]) -> 
     return int(row[0]) if row is not None else 0
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if column in {str(row[1]) for row in rows}:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _clamp_limit(value: int, *, cap: int) -> int:
     return min(max(0, int(value)), cap)
+
+
+def _normalize_priority(value: int) -> int:
+    return max(-1000, min(1000, int(value)))
 
 
 def _limit_diagnostics(*, requested_limit: int, effective_limit: int, limit_cap: int) -> JsonObject:

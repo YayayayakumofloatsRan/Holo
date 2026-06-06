@@ -14,6 +14,7 @@ from kernel_v3.resident.contracts import (
 )
 from kernel_v3.resident.doctor import ResidentDoctor
 from kernel_v3.resident.queue import ResidentQueue
+from kernel_v3.resident.reminder import ReminderDirective, compile_reminder
 from kernel_v3.resident.runtime import ResidentRuntime
 from kernel_v3.resident.scheduler import ResidentScheduler
 
@@ -22,6 +23,7 @@ __all__ = [
     "OutboxMessage",
     "ResidentDoctor",
     "ResidentDoctorReport",
+    "ReminderDirective",
     "ResidentQueue",
     "ResidentLoopResult",
     "ResidentQueueInspection",
@@ -34,4 +36,5 @@ __all__ = [
     "ResidentScheduleStatus",
     "ResidentScheduleTickResult",
     "WorkerLease",
+    "compile_reminder",
 ]

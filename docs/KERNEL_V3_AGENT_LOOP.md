@@ -969,6 +969,26 @@ schedule ticking is enabled and no inbox item is claimable, `resident run`
 reports `waiting_for_schedule` instead of plain `idle` if a future active
 schedule is still pending; the loop result includes `schedule_status` so a
 supervisor can see the next due time.
+Inbox messages and schedules carry first-class `priority` values. Claiming and
+due-schedule selection sort by priority before age, then preserve age/id as a
+deterministic tie-breaker. `resident enqueue --priority <n>` and `resident
+schedule-add --priority <n>` expose this without changing default FIFO behavior
+for priority-zero work. When a schedule ticks, the generated inbox message
+inherits the schedule priority, so urgent reminders or background jobs do not
+wait behind low-priority resident work.
+The resident runtime also has a host-owned relative reminder compiler. If a
+claimed message says, for example, "十分钟后提醒我喝水" or "in 10 minutes remind
+me to stretch", the worker creates a deterministic local schedule, appends a
+ready outbox confirmation, journals `resident_reminder_compiled`, and completes
+the original inbox message. The reminder compiler does not call providers,
+route chat, or commit memory. When the schedule becomes due, it enqueues a
+normal resident inbox message that then goes through the ordinary resident
+worker path.
+For operator comfort, `holo-v3 resident --output human status` renders the
+resident control plane as a readable snapshot: claimable inbox, running work,
+due retries, stale leases, ready outbox, pending user input, active/due/
+recurring schedules, and next due time. JSON remains the default output for
+automation.
 Resident run loops also accept `--max-duration-ms` as a host-owned wall-clock
 budget in addition to `--max-iterations`. Hitting that budget returns
 `max_duration_ms` and journals the loop result; it does not let the model decide

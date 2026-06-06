@@ -321,7 +321,7 @@ def _metadata(intent: JsonObject) -> JsonObject:
 
 def _implied_capabilities(kind: str, capabilities: list[str]) -> list[str]:
     values = list(capabilities)
-    normalized = kind.strip().lower()
+    normalized = _normalize_intent_kind(kind)
     values = [
         capability
         for capability in values
@@ -336,6 +336,20 @@ def _implied_capabilities(kind: str, capabilities: list[str]) -> list[str]:
     elif normalized in {"academic_research", "scholarly_research"}:
         values.append("academic.research")
     return _ordered_unique(values)
+
+
+def _normalize_intent_kind(value: str) -> str:
+    normalized = value.strip().lower()
+    return {
+        "time_query": "system_time",
+        "current_time": "system_time",
+        "current_date": "system_time",
+        "date_query": "system_time",
+        "system_date": "system_time",
+        "clock_query": "system_time",
+        "system_clock": "system_time",
+        "now_query": "system_time",
+    }.get(normalized, normalized)
 
 
 def _capability_args(metadata: JsonObject) -> JsonObject:
@@ -614,6 +628,8 @@ def _json_object(value: object) -> JsonObject:
 
 def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject) -> str:
     requested = metadata.get("suggested_mode")
+    if _has_any(capabilities, _SYSTEM_TOOL_CAPABILITIES):
+        return "system_answer"
     if isinstance(requested, str) and requested in {
         "direct_answer",
         "semantic_answer",
@@ -626,8 +642,6 @@ def _mode_for_intent(kind: str, capabilities: list[str], *, metadata: JsonObject
         if requested == "system_answer" and not _has_any(capabilities, _SYSTEM_TOOL_CAPABILITIES):
             return "semantic_answer"
         return requested
-    if _has_any(capabilities, _SYSTEM_TOOL_CAPABILITIES):
-        return "system_answer"
     if _has_any(capabilities, _SYSTEM_HOST_CAPABILITIES):
         return "semantic_answer"
     if _has_any(capabilities, _RETRIEVAL_CAPABILITIES):

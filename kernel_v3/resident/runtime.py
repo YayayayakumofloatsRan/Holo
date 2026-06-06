@@ -9,9 +9,11 @@ from kernel_v3.resident.projection import (
     resident_chat_result_payload,
     resident_inbox_event,
     resident_outbox_event,
+    resident_schedule_event,
     resident_schedule_tick_event,
 )
 from kernel_v3.resident.queue import ResidentQueue
+from kernel_v3.resident.reminder import compile_reminder
 from kernel_v3.resident.scheduler import ResidentScheduler
 
 
@@ -265,6 +267,9 @@ class ResidentRuntime:
                         schedule_tick,
                     ),
                 )
+            reminder_result = self._try_compile_reminder(message=message, schedule_tick=schedule_tick)
+            if reminder_result is not None:
+                return reminder_result
             chat_result = self.chat_runtime.receive(message.text, thread_id=message.thread_id)
             renewed = self.queue.renew_lease(worker_id=self.worker_id, ttl_ms=self.lease_ttl_ms)
             if renewed is None:
@@ -425,6 +430,116 @@ class ResidentRuntime:
                 state_delta={"resident_schedule_tick_status": "failed"},
             )
             return payload
+
+    def _try_compile_reminder(
+        self,
+        *,
+        message: InboundMessage,
+        schedule_tick: JsonObject | None,
+    ) -> ResidentRunResult | None:
+        if self.scheduler is None:
+            return None
+        directive = compile_reminder(message.text, default_priority=message.priority)
+        if directive is None:
+            return None
+        due_at_ms = message.created_at_ms + directive.due_in_ms
+        schedule = self.scheduler.add_schedule(
+            schedule_id=f"reminder-{message.message_id}",
+            thread_id=message.thread_id,
+            text=directive.reminder_text,
+            source="reminder",
+            priority=directive.priority,
+            due_at_ms=due_at_ms,
+            interval_ms=directive.interval_ms,
+            max_runs=directive.max_runs,
+            metadata={
+                **dict(directive.metadata),
+                "compiled_from_message_id": message.message_id,
+                "compiled_by": "resident_reminder_compiler",
+            },
+        )
+        self._journal_event(
+            "resident_reminder_compiled",
+            {
+                "worker_id": self.worker_id,
+                "message_id": message.message_id,
+                "schedule": resident_schedule_event(schedule),
+            },
+            state_delta={
+                "resident_schedule_status": schedule.status,
+                "resident_schedule_id": schedule.schedule_id,
+                "resident_message_id": message.message_id,
+            },
+        )
+        outbox = self.queue.append_outbox(
+            in_reply_to=message.message_id,
+            thread_id=message.thread_id,
+            text=f"已安排提醒：{directive.reminder_text}（due_at_ms={schedule.next_due_at_ms}）",
+            status="ready",
+            task_id=None,
+            run_id=f"resident-{self.worker_id}",
+            payload={
+                "status": "scheduled",
+                "route": "resident_reminder",
+                "thread_id": message.thread_id,
+                "schedule_id": schedule.schedule_id,
+                "next_due_at_ms": schedule.next_due_at_ms,
+                "priority": schedule.priority,
+            },
+        )
+        self._journal_event(
+            "resident_outbox_appended",
+            resident_outbox_event(outbox),
+            state_delta={"resident_outbox_status": outbox.status, "resident_outbox_id": outbox.outbox_id},
+        )
+        completed = self.queue.complete(message.message_id, worker_id=self.worker_id)
+        if not completed:
+            self._journal_event(
+                "resident_worker_blocked",
+                {
+                    "worker_id": self.worker_id,
+                    "message_id": message.message_id,
+                    "outbox_id": outbox.outbox_id,
+                    "reason": "message_ownership_lost_before_reminder_complete",
+                },
+                state_delta={"resident_worker_status": "blocked"},
+            )
+            return ResidentRunResult(
+                status="blocked",
+                worker_id=self.worker_id,
+                message_id=message.message_id,
+                outbox_id=outbox.outbox_id,
+                reason="message_ownership_lost_before_reminder_complete",
+                payload=_with_schedule_tick({"outbox_status": outbox.status}, schedule_tick),
+            )
+        self._journal_event(
+            "resident_inbox_completed",
+            {
+                "worker_id": self.worker_id,
+                "message_id": message.message_id,
+                "outbox_id": outbox.outbox_id,
+                "schedule_id": schedule.schedule_id,
+            },
+            state_delta={"resident_inbox_status": "completed", "resident_message_id": message.message_id},
+        )
+        return ResidentRunResult(
+            status="processed",
+            worker_id=self.worker_id,
+            message_id=message.message_id,
+            outbox_id=outbox.outbox_id,
+            reason=None,
+            payload=_with_schedule_tick(
+                {
+                    "chat_status": "scheduled",
+                    "chat_route": "resident_reminder",
+                    "outbox_status": outbox.status,
+                    "schedule_id": schedule.schedule_id,
+                    "next_due_at_ms": schedule.next_due_at_ms,
+                    "priority": schedule.priority,
+                },
+                schedule_tick,
+            ),
+        )
 
     def _schedule_status(self) -> JsonObject:
         if self.scheduler is None:

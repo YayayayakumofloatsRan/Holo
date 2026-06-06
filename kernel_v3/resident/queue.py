@@ -38,6 +38,7 @@ class ResidentQueue:
         thread_id: str,
         text: str,
         source: str = "local",
+        priority: int = 0,
         message_id: str | None = None,
         metadata: JsonObject | None = None,
     ) -> InboundMessage:
@@ -58,6 +59,7 @@ class ResidentQueue:
             text=text,
             source=source,
             status="pending",
+            priority=_normalize_priority(priority),
             created_at_ms=now,
             lease_owner=None,
             lease_until_ms=None,
@@ -76,6 +78,7 @@ class ResidentQueue:
                     text=message.text,
                     source=message.source,
                     status=message.status,
+                    priority=message.priority,
                     created_at_ms=message.created_at_ms,
                     lease_owner=message.lease_owner,
                     lease_until_ms=message.lease_until_ms,
@@ -94,8 +97,8 @@ class ResidentQueue:
                 """
                 INSERT INTO resident_inbox (
                     message_id, thread_id, text, source, status, created_at_ms,
-                    lease_owner, lease_until_ms, attempts, next_attempt_at_ms, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    lease_owner, lease_until_ms, attempts, next_attempt_at_ms, metadata_json, priority
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _inbox_row(message),
             )
@@ -208,12 +211,12 @@ class ResidentQueue:
             row = conn.execute(
                 """
                 SELECT message_id, thread_id, text, source, status, created_at_ms,
-                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms
+                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms, priority
                 FROM resident_inbox
                 WHERE status = 'pending'
                    OR (status = 'retry_wait' AND next_attempt_at_ms IS NOT NULL AND next_attempt_at_ms <= ?)
                    OR (status = 'running' AND lease_until_ms IS NOT NULL AND lease_until_ms <= ?)
-                ORDER BY created_at_ms, message_id
+                ORDER BY priority DESC, created_at_ms, message_id
                 LIMIT 1
                 """,
                 (now, now),
@@ -246,6 +249,7 @@ class ResidentQueue:
                     "text": row[2],
                     "source": row[3],
                     "status": "running",
+                    "priority": int(row[11]),
                     "created_at_ms": int(row[5]),
                     "lease_owner": worker_id,
                     "lease_until_ms": lease_until,
@@ -360,6 +364,7 @@ class ResidentQueue:
                 text=existing.text,
                 source=existing.source,
                 status="pending",
+                priority=existing.priority,
                 created_at_ms=existing.created_at_ms,
                 lease_owner=None,
                 lease_until_ms=None,
@@ -405,6 +410,7 @@ class ResidentQueue:
                 text=existing.text,
                 source=existing.source,
                 status="canceled",
+                priority=existing.priority,
                 created_at_ms=existing.created_at_ms,
                 lease_owner=None,
                 lease_until_ms=None,
@@ -474,9 +480,9 @@ class ResidentQueue:
             rows = conn.execute(
                 """
                 SELECT message_id, thread_id, text, source, status, created_at_ms,
-                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms
+                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms, priority
                 FROM resident_inbox
-                ORDER BY created_at_ms, message_id
+                ORDER BY priority DESC, created_at_ms, message_id
                 """
             ).fetchall()
             return [_inbox_from_row(row) for row in rows]
@@ -704,7 +710,7 @@ class ResidentQueue:
                 SELECT message_id
                 FROM resident_inbox
                 WHERE status IN ({placeholders})
-                ORDER BY created_at_ms, message_id
+                ORDER BY priority DESC, created_at_ms, message_id
                 LIMIT ?
                 """,
                 (*statuses, limit),
@@ -723,7 +729,7 @@ class ResidentQueue:
                 WHERE status = 'running'
                   AND lease_until_ms IS NOT NULL
                   AND lease_until_ms <= ?
-                ORDER BY created_at_ms, message_id
+                ORDER BY priority DESC, created_at_ms, message_id
                 LIMIT ?
                 """,
                 (now_ms, limit),
@@ -742,7 +748,7 @@ class ResidentQueue:
                 WHERE status = 'retry_wait'
                   AND next_attempt_at_ms IS NOT NULL
                   AND next_attempt_at_ms <= ?
-                ORDER BY created_at_ms, message_id
+                ORDER BY priority DESC, created_at_ms, message_id
                 LIMIT ?
                 """,
                 (now_ms, limit),
@@ -775,9 +781,9 @@ class ResidentQueue:
             rows = conn.execute(
                 """
                 SELECT message_id, thread_id, text, source, status, created_at_ms,
-                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms
+                       lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms, priority
                 FROM resident_inbox
-                ORDER BY created_at_ms, message_id
+                ORDER BY priority DESC, created_at_ms, message_id
                 LIMIT ?
                 """,
                 (limit,),
@@ -1131,6 +1137,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             source TEXT NOT NULL,
             status TEXT NOT NULL,
             created_at_ms INTEGER NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0,
             lease_owner TEXT,
             lease_until_ms INTEGER,
             attempts INTEGER NOT NULL,
@@ -1140,7 +1147,11 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(conn, "resident_inbox", "next_attempt_at_ms", "INTEGER")
+    _ensure_column(conn, "resident_inbox", "priority", "INTEGER NOT NULL DEFAULT 0")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_resident_inbox_status ON resident_inbox(status, created_at_ms)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_resident_inbox_claim ON resident_inbox(status, priority DESC, created_at_ms)"
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS resident_outbox (
@@ -1230,6 +1241,7 @@ def _inbox_sample(message: InboundMessage) -> JsonObject:
         "thread_id": message.thread_id,
         "source": message.source,
         "status": message.status,
+        "priority": message.priority,
         "created_at_ms": message.created_at_ms,
         "lease_owner": message.lease_owner,
         "lease_until_ms": message.lease_until_ms,
@@ -1357,6 +1369,7 @@ def _inbox_row(message: InboundMessage) -> tuple[object, ...]:
         message.attempts,
         message.next_attempt_at_ms,
         _json(message.metadata),
+        message.priority,
     )
 
 
@@ -1382,6 +1395,7 @@ def _inbox_from_row(row) -> InboundMessage:
             "text": row[2],
             "source": row[3],
             "status": row[4],
+            "priority": int(row[11]) if len(row) > 11 and row[11] is not None else 0,
             "created_at_ms": int(row[5]),
             "lease_owner": row[6],
             "lease_until_ms": int(row[7]) if row[7] is not None else None,
@@ -1412,7 +1426,7 @@ def _inbox_by_id(conn: sqlite3.Connection, message_id: str) -> InboundMessage | 
     row = conn.execute(
         """
         SELECT message_id, thread_id, text, source, status, created_at_ms,
-               lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms
+               lease_owner, lease_until_ms, attempts, metadata_json, next_attempt_at_ms, priority
         FROM resident_inbox
         WHERE message_id = ?
         """,
@@ -1436,6 +1450,10 @@ def _generated_inbox_message_id(
         "metadata": metadata,
     }
     return f"inbox-{now_ms}-{_hash(payload)[:12]}"
+
+
+def _normalize_priority(value: int) -> int:
+    return max(-1000, min(1000, int(value)))
 
 
 def _next_generated_inbox_message_id(conn: sqlite3.Connection, base_message_id: str) -> str:

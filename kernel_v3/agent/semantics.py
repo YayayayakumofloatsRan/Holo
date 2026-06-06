@@ -58,6 +58,23 @@ _HOST_BOUNDARY_RULES = (
     ),
 )
 
+
+_INTENT_KIND_ALIASES = {
+    "time_query": "system_time",
+    "current_time": "system_time",
+    "current_date": "system_time",
+    "date_query": "system_time",
+    "system_date": "system_time",
+    "clock_query": "system_time",
+    "system_clock": "system_time",
+    "now_query": "system_time",
+    "calendar_reminder": "calendar_or_reminder",
+    "reminder": "calendar_or_reminder",
+    "alarm": "calendar_or_reminder",
+    "scheduled_reminder": "calendar_or_reminder",
+}
+
+
 def analyze_goal(goal: str) -> SemanticIntake:
     """Boundary-only offline intake.
 
@@ -520,6 +537,8 @@ def _normalize_mode(
 ) -> str:
     if requires_clarification:
         return "clarify_first"
+    if _requires_system_tool(intents or []):
+        return "system_answer"
     if value == "system_answer" and primary != "system_time" and not _requires_system_tool(intents or []):
         return "semantic_answer"
     if value in {
@@ -601,7 +620,9 @@ def _normalize_intent_kind(value: str) -> str:
     safe = "".join(
         ch if ch.isalnum() or ch in {"_", "-", ".", ":"} else "_"
         for ch in cleaned
-    ).strip("_")
+    ).strip("_").lower()
+    if safe in _INTENT_KIND_ALIASES:
+        return _INTENT_KIND_ALIASES[safe]
     return safe or "direct_answer"
 
 
