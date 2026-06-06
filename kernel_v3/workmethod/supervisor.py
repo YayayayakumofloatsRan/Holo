@@ -569,6 +569,7 @@ def _compact_prompt_metadata(value: JsonObject | None) -> JsonObject:
         "thread_rag_context",
         "mission_context",
         "semantic_goal",
+        "host_situation",
     ):
         item = value.get(key)
         if isinstance(item, dict):

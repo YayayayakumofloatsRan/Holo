@@ -270,6 +270,7 @@ class MissionSupervisor:
             "contract": MISSION_ASSESS_PROMPT_CONTRACT,
             "mission_state": mission.to_dict(),
             "agent_result": result.to_dict(),
+            "host_situation": dict(result.host_situation),
             "run_delta": run_delta,
             "host_rule_assessment": rule_assessment.to_dict(),
         }

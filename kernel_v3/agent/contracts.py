@@ -201,6 +201,7 @@ class FailureReport(Contract):
     task_id: str
     run_id: str
     trace_refs: list[str]
+    host_situation: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -213,3 +214,4 @@ class AgentRuntimeResult(Contract):
     final_answer: JsonObject | None
     failure_report: JsonObject | None
     trace_refs: list[str]
+    host_situation: JsonObject = field(default_factory=dict)

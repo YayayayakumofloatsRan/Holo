@@ -229,6 +229,7 @@ def _compact_runtime_context(value: JsonObject | None) -> JsonObject:
         "task_execution_step",
         "interaction_preferences",
         "agent_loop",
+        "host_situation",
         "answer_profile",
         "research_mission",
     ):

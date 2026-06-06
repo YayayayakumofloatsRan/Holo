@@ -5,6 +5,7 @@ from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import AgentRuntimeResult, FinalAnswer
+from kernel_v3.agent.host_situation import build_host_situation
 from kernel_v3.capabilities import SAFE_SEMANTIC_CAPABILITIES
 from kernel_v3.chat.contracts import (
     ChatCommand,
@@ -270,6 +271,11 @@ class ChatRuntime:
                 state=state,
                 continuable_plan=plan_record,
                 pending_plan=pending_plan_record,
+                host_situation=build_host_situation(
+                    journal=self.journal,
+                    task_id=state.active_task_id,
+                    thread_id=state.thread_id,
+                ),
             ),
             schema=CHAT_ROUTE_SCHEMA,
             parameters={"adapter": "ChatTurnRouter", "contract_version": 1},
@@ -1170,6 +1176,7 @@ def _chat_route_prompt(
     state: ThreadState,
     continuable_plan: LedgerRecord | None,
     pending_plan: LedgerRecord | None,
+    host_situation: JsonObject | None = None,
 ) -> str:
     pending_plan_confirmation = _is_pending_plan_confirmation(pending_plan)
     pending_task = _route_plan_summary(pending_plan)
@@ -1196,6 +1203,7 @@ def _chat_route_prompt(
             "continuable_task_id": continuable_plan.task_id if continuable_plan is not None else None,
             "continuable_plan_id": continuable_plan.data.get("plan_id") if continuable_plan is not None else None,
         },
+        "host_situation": dict(host_situation or {}),
         "host_rules": [
             "Do not execute commands, tools, memory writes, or transports.",
             "pending_user_input is context, not a forced route.",
@@ -2372,8 +2380,40 @@ def _failure_answer_text(failure_report: JsonObject, *, user_goal: str) -> str:
         lines.append(f"缺少的关键材料是：{', '.join(missing[:4])}。")
     if isinstance(next_action, str) and next_action:
         lines.append(f"下一步应当是：{next_action}。")
-    lines.append("所以我不能编造结论；如果你允许 live retrieval 或配置可用检索源，我可以继续查。")
+    lines.append(_failure_host_situation_sentence(failure_report))
     return "\n".join(lines)
+
+
+def _failure_host_situation_sentence(failure_report: JsonObject) -> str:
+    situation = failure_report.get("host_situation")
+    situation = situation if isinstance(situation, dict) else {}
+    retrieval = situation.get("retrieval")
+    retrieval = retrieval if isinstance(retrieval, dict) else {}
+    task = situation.get("task")
+    task = task if isinstance(task, dict) else {}
+    failure = situation.get("failure")
+    failure = failure if isinstance(failure, dict) else {}
+    diagnosis = str(failure.get("diagnosis") or "")
+    configured = retrieval.get("configured")
+    live_available = bool(retrieval.get("live_search_available") or retrieval.get("live_fetch_available"))
+    network_budget = retrieval.get("network_budget_available")
+    task_mode = str(task.get("mode") or "")
+
+    if diagnosis == "processor_or_planning_failure":
+        return "所以我不能编造结论；当前问题是模型处理或规划步骤失败，宿主已经把失败记录进上下文供下一轮重试或降级。"
+    if diagnosis == "non_retrieval_task_incomplete":
+        return "所以我不能编造结论；当前问题不是联网权限，而是这轮直接回答流程没有形成可用的最终回答。"
+    if task_mode == "retrieval_answer" and configured is False:
+        return "所以我不能编造结论；当前问题是检索工具或检索源没有配置成可执行状态。"
+    if network_budget is False:
+        return "所以我不能编造结论；当前问题是网络检索预算或权限不可用，需要先由宿主开放相应能力。"
+    if diagnosis == "tool_budget_exhausted_after_attempts":
+        return "所以我不能编造结论；当前已经进行过检索尝试，问题是工具预算在证据覆盖完成前被耗尽。"
+    if diagnosis == "citation_coverage_insufficient":
+        return "所以我不能编造结论；当前检索路径可用，但缺少可引用证据或 citation 覆盖。"
+    if live_available:
+        return "所以我不能编造结论；当前不是缺少 live retrieval 权限，而是搜索、抓取、解析、来源权威性或证据覆盖还不够。"
+    return "所以我不能编造结论；当前应当根据失败归因换策略、补证据，或明确给出受限结论。"
 
 
 def _failure_observation_reasons(observations: list[object]) -> list[str]:

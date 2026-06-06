@@ -375,6 +375,15 @@ Kernel v3 currently contains the infrastructure for:
   whether live fetch is available, whether network budget exists, and which
   profile-aware structured providers are visible. This is model input for
   planning, while PolicyGate and loop guards still own execution;
+- processor-visible `host_situation`, a compact host-owned state packet that
+  summarizes task/thread ids, recipe limits, allowed tools, live retrieval
+  availability, recent actions, retrieval/search/fetch attempts, latest
+  termination/failure reasons, and failure attribution. It is injected into
+  chat routing, semantic intake runtime context, planner/evaluator context,
+  synthesizer payloads, mission assessment, and failure reports so models do not
+  hallucinate that network, finance research, or tools are unavailable when the
+  host already attempted them. It contains only refs, previews, counters,
+  provider ids, and diagnostics, never raw fetched bodies or secrets;
 - dynamic planner retries for planned retrieval subgoals: semantic task plans
   can declare multiple `goal-plan-*` retrieval subgoals, and
   `agent_replan_hints` reports incomplete subgoal ids even when the latest
@@ -1060,6 +1069,7 @@ Targeted smoke commands:
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase100_issuer_identity.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase109_research_employee_core.py
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase110_active_memory_recall.py
+.venv/bin/python -m pytest -q tests/test_kernel_v3_phase120_host_situation.py
 ```
 
 Optional live checks must be explicitly gated by environment variables and must

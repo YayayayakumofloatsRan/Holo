@@ -227,6 +227,7 @@ def _synthesizer_prompt(
         "response_language": preferences.get("response_language"),
         "answer_profile": _json_object(report.diagnostics.get("answer_profile")) if isinstance(report.diagnostics, dict) else {},
         "research_mission": _json_object(report.diagnostics.get("research_mission")) if isinstance(report.diagnostics, dict) else {},
+        "host_situation": _json_object(report.diagnostics.get("host_situation")) if isinstance(report.diagnostics, dict) else {},
         "required_citation_refs": [item.citation_id for item in citations],
         "required_evidence_refs": [item.evidence_id for item in evidence],
         "answer_requirements": [
@@ -238,6 +239,9 @@ def _synthesizer_prompt(
             "If answer_profile.format is detailed_report, deep_report, or memo, write a sectioned report that covers answer_profile.target_sections and answer_profile.minimum_coverage.",
             "If the evidence does not support a required section, include that section with a clear limitation instead of collapsing the whole answer into a short summary.",
             "For finance research, distinguish facts, source-backed metrics, analysis, risks, and limitations; do not rely on generic product or encyclopedia pages as if they were financial statements.",
+            "Use host_situation as the source of truth for whether live retrieval, tools, permissions, and finance research are available.",
+            "Do not say live retrieval, network access, or finance research is unavailable unless host_situation.retrieval or host_situation.failure says so.",
+            "If host_situation says retrieval was attempted but evidence is insufficient, describe the real failure as search/fetch/extraction/citation/coverage quality instead of a permission problem.",
         ],
         "retrieval_report": report.to_dict(),
         "evidence": [_compact_evidence_for_provider(item, preview_chars=evidence_preview_chars) for item in evidence],

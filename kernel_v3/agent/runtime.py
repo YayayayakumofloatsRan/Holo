@@ -23,6 +23,7 @@ from kernel_v3.agent.answer_profile import (
     infer_answer_profile,
     research_mission_metadata,
 )
+from kernel_v3.agent.host_situation import build_host_situation
 from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
 from kernel_v3.agent.retrieval_coverage import adaptive_retrieval_completion
 from kernel_v3.agent.state_space import summarize_state_profiles
@@ -186,6 +187,7 @@ class AgentRuntime:
         self.memory_pipeline = MemoryPipeline(store=memory_store, journal=self.journal) if memory_store is not None else None
         self.research_corpus_store = research_corpus_store
         self.response_language = normalize_response_language(response_language)
+        self._tool_manifests_by_run: dict[tuple[str, str], list[ToolManifest]] = {}
 
     def run(
         self,
@@ -261,6 +263,13 @@ class AgentRuntime:
     ) -> AgentRuntimeResult:
         effective_language = normalize_response_language(response_language or self.response_language)
         execution_metadata = _with_interaction_preferences(execution_metadata, response_language=effective_language)
+        execution_metadata = _with_host_situation_metadata(
+            execution_metadata,
+            host_situation=build_host_situation(
+                journal=self.journal,
+                thread_id=thread_id,
+            ),
+        )
         semantic_goal = _semantic_goal_for_execution(goal, execution_metadata)
         intake = self._semantic_intake(
             semantic_goal,
@@ -401,6 +410,7 @@ class AgentRuntime:
             )
         else:
             result = loop.resume(task_id, user_input=goal, thread_id=thread_id)
+        self._tool_manifests_by_run[(result.task_id, result.run_id)] = registry.manifests()
         semantic_record = self._append_semantic_intake(intake, task_id=result.task_id, run_id=result.run_id)
         self._append_task_graph(
             task_graph,
@@ -432,6 +442,7 @@ class AgentRuntime:
                         ]
                     ),
                     next_action="retry_model_planner_or_reduce_context",
+                    recipe=recipe,
                 )
                 return AgentRuntimeResult(
                     status="failed",
@@ -442,6 +453,7 @@ class AgentRuntime:
                     final_answer=None,
                     failure_report=failure.to_dict(),
                     trace_refs=_trace_refs(self.journal, result.task_id),
+                    host_situation=self._host_situation(result.task_id, result.run_id, recipe=recipe),
                 )
             if recipe.mode == "retrieval_answer" and _latest_action_is_no_planned_action(self.journal, result.task_id, result.run_id):
                 planned_missing = _planned_retrieval_missing_evidence(self.journal, result.task_id, result.run_id, recipe)
@@ -459,6 +471,7 @@ class AgentRuntime:
                         ]
                     ),
                     next_action="refine_plan_or_configure_more_tools",
+                    recipe=recipe,
                 )
                 return AgentRuntimeResult(
                     status="failed",
@@ -469,6 +482,7 @@ class AgentRuntime:
                     final_answer=None,
                     failure_report=failure.to_dict(),
                     trace_refs=_trace_refs(self.journal, result.task_id),
+                    host_situation=self._host_situation(result.task_id, result.run_id, recipe=recipe),
                 )
             return AgentRuntimeResult(
                 status="needs_user_input",
@@ -479,6 +493,7 @@ class AgentRuntime:
                 final_answer=None,
                 failure_report=None,
                 trace_refs=_trace_refs(self.journal, result.task_id),
+                host_situation=self._host_situation(result.task_id, result.run_id, recipe=recipe),
             )
         final_answer, failure = self._finalize(
             result.task_id,
@@ -498,6 +513,7 @@ class AgentRuntime:
             final_answer=final_answer.to_dict() if final_answer is not None else None,
             failure_report=failure.to_dict() if failure is not None else None,
             trace_refs=_trace_refs(self.journal, result.task_id),
+            host_situation=self._host_situation(result.task_id, result.run_id, recipe=recipe),
         )
 
     def _registry(self, recipe: TaskRecipe, goal: str) -> ToolRegistry:
@@ -581,10 +597,11 @@ class AgentRuntime:
                     "citations_required_but_missing",
                     missing_evidence=["citation_refs"],
                     next_action="use_retrieval_or_workspace_mode",
+                    recipe=recipe,
                 )
             text = loop_answer or _last_response_text(self.journal, task_id, run_id) or ""
             if not text:
-                return None, self._failure(task_id, run_id, "missing_direct_answer", next_action="ask_user")
+                return None, self._failure(task_id, run_id, "missing_direct_answer", next_action="ask_user", recipe=recipe)
             return self._append_final(
                 FinalAnswer(
                     answer=text,
@@ -608,14 +625,15 @@ class AgentRuntime:
         if recipe.mode == "workspace_answer":
             return self._finalize_workspace(task_id, run_id, recipe=recipe, synthesizer_mode=synthesizer_mode)
         if recipe.mode == "workspace_write":
-            return self._finalize_workspace_write(task_id, run_id)
+            return self._finalize_workspace_write(task_id, run_id, recipe=recipe)
         if recipe.mode == "system_answer":
-            return self._finalize_system(task_id, run_id)
+            return self._finalize_system(task_id, run_id, recipe=recipe)
         return None, self._failure(
             task_id,
             run_id,
             loop_stop_reason or "needs_user_input",
             next_action="provide_more_detail",
+            recipe=recipe,
         )
 
     def _finalize_retrieval(
@@ -643,6 +661,7 @@ class AgentRuntime:
                 reason,
                 missing_evidence=_missing_evidence(self.journal, task_id, run_id),
                 next_action="increase_budget_or_retry_retrieval" if reason in LOOP_GUARD_STOP_REASONS else "retry_retrieval",
+                recipe=recipe,
             )
         planned_coverage = _planned_retrieval_coverage(self.journal, task_id, run_id, recipe)
         if planned_coverage.get("required") is True and not planned_coverage.get("sufficient"):
@@ -685,6 +704,7 @@ class AgentRuntime:
                     if reason in LOOP_GUARD_STOP_REASONS
                     else "refine_failed_retrieval_subgoals"
                 ),
+                recipe=recipe,
             )
         if report.status != "sufficient":
             reason = terminal_reason or f"retrieval_{report.status}"
@@ -698,6 +718,7 @@ class AgentRuntime:
                     if reason in LOOP_GUARD_STOP_REASONS
                     else "refine_query_or_add_sources"
                 ),
+                recipe=recipe,
             )
         if recipe.citations_required and not citations:
             return None, self._failure(
@@ -706,6 +727,7 @@ class AgentRuntime:
                 "citations_required_but_missing",
                 missing_evidence=["citation_refs"],
                 next_action="retry_retrieval_with_citable_sources",
+                recipe=recipe,
             )
         return self._synthesize_retrieval_final(
             task_id,
@@ -728,7 +750,11 @@ class AgentRuntime:
         citations: list[CitationItem],
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
-        report = _report_with_task_goal(report, recipe)
+        report = _report_with_task_goal(
+            report,
+            recipe,
+            host_situation=self._host_situation(task_id, run_id, recipe=recipe),
+        )
         synthesized = self._synthesize(
             task_id,
             run_id,
@@ -744,6 +770,7 @@ class AgentRuntime:
                 synthesized.error or "synthesis_failed",
                 missing_evidence=list(synthesized.limitations),
                 next_action="collect_more_evidence",
+                recipe=recipe,
             )
         final = _agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))
         quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe)
@@ -755,6 +782,7 @@ class AgentRuntime:
                 "final_answer_quality_insufficient",
                 missing_evidence=quality_gaps,
                 next_action="expand_final_answer_or_collect_more_evidence",
+                recipe=recipe,
             )
         final = self._append_final(final)
         self._maybe_propose_research_memory(final, recipe=recipe)
@@ -786,6 +814,7 @@ class AgentRuntime:
                 "missing_workspace_evidence",
                 missing_evidence=["file.read observation"],
                 next_action="search_or_read_a_specific_file",
+                recipe=recipe,
             )
         if recipe.citations_required and not citations:
             return None, self._failure(
@@ -794,8 +823,13 @@ class AgentRuntime:
                 "citations_required_but_missing",
                 missing_evidence=["workspace citation refs"],
                 next_action="read_a_citable_file",
+                recipe=recipe,
             )
-        report = _report_with_task_goal(report, recipe)
+        report = _report_with_task_goal(
+            report,
+            recipe,
+            host_situation=self._host_situation(task_id, run_id, recipe=recipe),
+        )
         synthesized = self._synthesize(
             task_id,
             run_id,
@@ -805,7 +839,7 @@ class AgentRuntime:
             synthesizer_mode=synthesizer_mode,
         )
         if synthesized.status != "ok" or synthesized.answer is None:
-            return None, self._failure(task_id, run_id, synthesized.error or "synthesis_failed", next_action="read_more_files")
+            return None, self._failure(task_id, run_id, synthesized.error or "synthesis_failed", next_action="read_more_files", recipe=recipe)
         final = _agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))
         quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe)
         self._append_final_quality_check(final, recipe=recipe, gaps=quality_gaps)
@@ -816,6 +850,7 @@ class AgentRuntime:
                 "final_answer_quality_insufficient",
                 missing_evidence=quality_gaps,
                 next_action="expand_final_answer_or_read_more_files",
+                recipe=recipe,
             )
         final = self._append_final(final)
         self._maybe_propose_research_memory(final, recipe=recipe)
@@ -825,6 +860,8 @@ class AgentRuntime:
         self,
         task_id: str,
         run_id: str,
+        *,
+        recipe: TaskRecipe,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
         write_records = _workspace_write_observations(self.journal, task_id, run_id)
         if not write_records:
@@ -834,6 +871,7 @@ class AgentRuntime:
                 "missing_workspace_write_observation",
                 missing_evidence=["workspace.write observation"],
                 next_action="propose_workspace_write",
+                recipe=recipe,
             )
         latest = write_records[-1].data
         content = latest.get("content") if isinstance(latest, dict) else {}
@@ -858,6 +896,8 @@ class AgentRuntime:
         self,
         task_id: str,
         run_id: str,
+        *,
+        recipe: TaskRecipe,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
         time_records = _system_time_observations(self.journal, task_id, run_id)
         if not time_records:
@@ -867,6 +907,7 @@ class AgentRuntime:
                 "missing_system_observation",
                 missing_evidence=["system.time observation"],
                 next_action="use_system_time",
+                recipe=recipe,
             )
         latest = time_records[-1].data
         content = latest.get("content") if isinstance(latest, dict) else {}
@@ -1185,6 +1226,8 @@ class AgentRuntime:
         *,
         missing_evidence: list[str] | None = None,
         next_action: str | None,
+        recipe: TaskRecipe | None = None,
+        tool_manifests: list[ToolManifest] | None = None,
     ) -> FailureReport:
         failure = FailureReport(
             reason=reason,
@@ -1198,6 +1241,25 @@ class AgentRuntime:
             run_id=run_id,
             trace_refs=_trace_refs(self.journal, task_id),
         )
+        host_situation = self._host_situation(
+            task_id,
+            run_id,
+            recipe=recipe,
+            tool_manifests=tool_manifests,
+            failure_report=failure.to_dict(),
+        )
+        failure = replace(failure, host_situation=host_situation)
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="host_situation",
+            data=redact_journal_data(host_situation),
+            state_delta={
+                "host_situation": "failure",
+                "host_situation_schema": host_situation.get("schema"),
+            },
+        )
         self.journal.append(
             task_id=task_id,
             run_id=run_id,
@@ -1207,6 +1269,25 @@ class AgentRuntime:
             state_delta={"agent_final_answer": "failed", "reason": reason},
         )
         return failure
+
+    def _host_situation(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe | None,
+        tool_manifests: list[ToolManifest] | None = None,
+        failure_report: JsonObject | None = None,
+    ) -> JsonObject:
+        return build_host_situation(
+            journal=self.journal,
+            task_id=task_id,
+            run_id=run_id,
+            recipe=recipe,
+            tool_manifests=tool_manifests or self._tool_manifests_by_run.get((task_id, run_id), []),
+            failure_report=failure_report,
+            thread_id=_thread_id_from_recipe(recipe),
+        )
 
 
 class _AgentContextCompiler:
@@ -1279,6 +1360,14 @@ class _AgentContextCompiler:
             mission_id=_mission_id_from_context(mission_context),
         )
         thread_rag_context = _compact_thread_rag_context_for_prompt(thread_rag_context)
+        host_situation = build_host_situation(
+            journal=journal,
+            task_id=task.task_id,
+            run_id=task.run_id,
+            recipe=self.recipe,
+            tool_manifests=self.tool_manifests,
+            thread_id=task.thread_id,
+        )
         state = redact_journal_data(
             {
                 "task_id": task.task_id,
@@ -1300,6 +1389,7 @@ class _AgentContextCompiler:
                     self.tool_manifests,
                     recipe=self.recipe,
                 ),
+                "host_situation": host_situation,
                 "agent_runtime_directive": _compact_agent_runtime_directive_for_prompt(_planner_directive(self.recipe)),
                 "workmethod": _compact_workmethod_for_prompt(_workmethod_metadata(self.recipe)),
                 "semantic_goal": _semantic_goal_metadata(self.recipe),
@@ -4232,6 +4322,7 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
         "task_execution_step",
         "interaction_preferences",
         "agent_loop",
+        "host_situation",
     ):
         value = metadata.get(key)
         if isinstance(value, dict):
@@ -4281,6 +4372,12 @@ def _with_answer_profile_metadata(
 def _with_workmethod_metadata(metadata: JsonObject | None, *, workmethod: JsonObject) -> JsonObject:
     result = dict(metadata or {})
     result["workmethod"] = dict(workmethod)
+    return result
+
+
+def _with_host_situation_metadata(metadata: JsonObject | None, *, host_situation: JsonObject) -> JsonObject:
+    result = dict(metadata or {})
+    result["host_situation"] = dict(host_situation)
     return result
 
 
@@ -5869,7 +5966,12 @@ def _grounded_answer(*, report: RetrievalReport, evidence: list[EvidenceItem], c
     return preview or report.preview
 
 
-def _report_with_task_goal(report: RetrievalReport, recipe: TaskRecipe) -> RetrievalReport:
+def _report_with_task_goal(
+    report: RetrievalReport,
+    recipe: TaskRecipe,
+    *,
+    host_situation: JsonObject | None = None,
+) -> RetrievalReport:
     semantic = _semantic_intake_metadata(recipe)
     task_goal = semantic.get("goal")
     diagnostics = dict(report.diagnostics)
@@ -5882,6 +5984,8 @@ def _report_with_task_goal(report: RetrievalReport, recipe: TaskRecipe) -> Retri
     research_mission = _research_mission_metadata(recipe)
     if research_mission:
         diagnostics.setdefault("research_mission", research_mission)
+    if host_situation:
+        diagnostics.setdefault("host_situation", dict(host_situation))
     preferences = _interaction_preferences_metadata(recipe)
     if preferences:
         diagnostics.setdefault("interaction_preferences", preferences)
@@ -5950,6 +6054,19 @@ def _with_interaction_preferences(metadata: JsonObject | None, *, response_langu
 def _interaction_preferences_metadata(recipe: TaskRecipe) -> JsonObject:
     metadata = _execution_metadata(recipe).get("interaction_preferences")
     return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def _thread_id_from_recipe(recipe: TaskRecipe | None) -> str | None:
+    if recipe is None:
+        return None
+    metadata = recipe.metadata if isinstance(recipe.metadata, dict) else {}
+    thread_id = metadata.get("thread_id")
+    if isinstance(thread_id, str):
+        return thread_id
+    execution = metadata.get("execution_metadata")
+    if isinstance(execution, dict) and isinstance(execution.get("thread_id"), str):
+        return str(execution["thread_id"])
+    return None
 
 
 def _agent_final_from_processor(processor_answer, *, task_id: str, run_id: str, trace_refs: list[str]) -> FinalAnswer:
