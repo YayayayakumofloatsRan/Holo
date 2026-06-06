@@ -294,7 +294,7 @@ def _compact_processor_result(record: LedgerRecord) -> JsonObject:
         "status": data.get("status"),
         "duration_ms": data.get("duration_ms"),
         "error": data.get("error"),
-        "error_preview": output.get("error_message_preview"),
+        "error_preview": output.get("error_message_preview") or output.get("previous_error_preview"),
     }
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from kernel_v3 import cli
 from kernel_v3.agent import analyze_goal_with_processor
 from kernel_v3.context import ContextCompiler
-from kernel_v3.contracts import CandidateAction, Observation, ProcessorRequest
+from kernel_v3.contracts import CandidateAction, Observation, ProcessorRequest, ProcessorResult
 from kernel_v3.interaction import guard_user_visible_text
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -513,6 +513,63 @@ def test_phase5_timeout_provider_produces_failed_processor_result():
     assert result_record.data["status"] == "failed"
     assert result_record.data["error"] == "TimeoutError"
     assert result_record.data["output"]["error_message_preview"] == "fake processor timeout"
+
+
+def test_phase5_processor_fabric_short_circuits_repeated_provider_availability_failure():
+    class NetworkFailingProvider:
+        name = "deepseek"
+        model = "deepseek-v4-flash"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, request: ProcessorRequest) -> ProcessorResult:
+            self.calls += 1
+            return ProcessorResult(
+                result_id=f"result-{request.request_id}",
+                request_id=request.request_id,
+                status="failed",
+                output={
+                    "provider": self.name,
+                    "model": self.model,
+                    "error_message_preview": "deepseek network error: temporary failure in name resolution",
+                },
+                usage={},
+                error="RuntimeError",
+            )
+
+    provider = NetworkFailingProvider()
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={"deepseek": provider},
+        router=ProcessorRouter(default_provider="deepseek", default_model="deepseek-v4-flash"),
+        journal=journal,
+    )
+
+    first = fabric.run_json(
+        task_type="planner.propose",
+        task_id="task-circuit",
+        run_id="run-circuit",
+        context_id="ctx-circuit-1",
+        prompt="first provider failure",
+        schema=PLANNER_SCHEMA,
+    )
+    second = fabric.run_json(
+        task_type="evaluator.assess",
+        task_id="task-circuit",
+        run_id="run-circuit",
+        context_id="ctx-circuit-2",
+        prompt="second call should short circuit",
+        schema=EVALUATOR_SCHEMA,
+    )
+
+    assert first.result.status == "failed"
+    assert second.result.status == "failed"
+    assert second.result.error == "provider_circuit_open"
+    assert provider.calls == 1
+    result_records = journal.records(task_id="task-circuit", kind="processor_result")
+    assert result_records[-1].data["output"]["circuit"] == "provider_unavailable"
+    assert result_records[-1].data["duration_ms"] == 0
 
 
 def test_phase5_evaluator_prompt_uses_observation_previews_not_raw_bodies():

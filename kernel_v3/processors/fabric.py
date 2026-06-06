@@ -32,6 +32,7 @@ class ProcessorFabric:
         self.clock_ms = clock_ms or (lambda: time.monotonic_ns() // 1_000_000)
         self.max_repair_attempts = max(0, max_repair_attempts)
         self._counter = 0
+        self._provider_circuit: dict[str, JsonObject] = {}
 
     def run_json(
         self,
@@ -106,6 +107,43 @@ class ProcessorFabric:
         )
         provider_model = str(request.parameters.get("model") or route.model)
         self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
+        circuit = self._provider_circuit.get(route.provider)
+        if circuit is not None:
+            result = ProcessorResult(
+                result_id=f"result-{request.request_id}",
+                request_id=request.request_id,
+                status="failed",
+                output={
+                    "provider": route.provider,
+                    "model": provider_model,
+                    "circuit": "provider_unavailable",
+                    "previous_error": circuit.get("error"),
+                    "previous_error_preview": circuit.get("error_preview"),
+                    "previous_task_type": circuit.get("task_type"),
+                },
+                usage={},
+                error="provider_circuit_open",
+            )
+            self._journal_result(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                request=request,
+                result=result,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                duration_ms=0,
+            )
+            return ProcessorOutcome(
+                request=request,
+                result=result,
+                parsed=None,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                duration_ms=0,
+            )
         boundary_error = _external_private_context_boundary_error(request, provider_name=route.provider, provider=selected)
         if boundary_error is not None:
             result = ProcessorResult(
@@ -147,6 +185,7 @@ class ProcessorFabric:
             provider_result = selected.run(request)
         except Exception as exc:  # concrete providers normalize availability, but host catches all provider faults.
             duration_ms = max(0, self.clock_ms() - started)
+            error_preview = _preview(str(exc) or type(exc).__name__, 240)
             result = ProcessorResult(
                 result_id=f"result-{request.request_id}",
                 request_id=request.request_id,
@@ -155,10 +194,16 @@ class ProcessorFabric:
                     "provider": route.provider,
                     "model": provider_model,
                     "error_type": type(exc).__name__,
-                    "error_message_preview": _preview(str(exc) or type(exc).__name__, 240),
+                    "error_message_preview": error_preview,
                 },
                 usage={},
                 error=type(exc).__name__,
+            )
+            self._open_provider_circuit(
+                route.provider,
+                task_type=task_type,
+                error=type(exc).__name__,
+                error_preview=error_preview,
             )
             self._journal_result(
                 task_id=task_id,
@@ -183,14 +228,22 @@ class ProcessorFabric:
 
         duration_ms = max(0, self.clock_ms() - started)
         if provider_result.status != "ok":
+            output = _safe_json(provider_result.output)
             result = ProcessorResult(
                 result_id=provider_result.result_id,
                 request_id=request.request_id,
                 status="failed",
-                output=_safe_json(provider_result.output),
+                output=output,
                 usage=coerce_usage(provider_result.usage),
                 error=provider_result.error or "provider_failed",
             )
+            if _is_provider_availability_error(provider_result.error or "", output):
+                self._open_provider_circuit(
+                    route.provider,
+                    task_type=task_type,
+                    error=provider_result.error or "provider_failed",
+                    error_preview=_provider_error_preview(output),
+                )
             self._journal_result(
                 task_id=task_id,
                 run_id=run_id,
@@ -257,6 +310,16 @@ class ProcessorFabric:
             duration_ms=duration_ms,
             repaired=parsed.repaired,
             repair_attempts=parsed.attempts,
+        )
+
+    def _open_provider_circuit(self, provider: str, *, task_type: str, error: str, error_preview: str | None) -> None:
+        self._provider_circuit.setdefault(
+            provider,
+            {
+                "task_type": task_type,
+                "error": error,
+                "error_preview": error_preview,
+            },
         )
 
     def _request(
@@ -484,6 +547,45 @@ def _safe_json(data: JsonObject) -> JsonObject:
         else:
             safe[key] = _preview(str(value), 240)
     return safe
+
+
+def _is_provider_availability_error(error: str, output: JsonObject) -> bool:
+    text = " ".join(
+        str(value)
+        for value in (
+            error,
+            output.get("error"),
+            output.get("error_type"),
+            output.get("error_message_preview"),
+            output.get("reason"),
+        )
+        if isinstance(value, str)
+    ).lower()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "network error",
+            "temporary failure",
+            "name resolution",
+            "timeout",
+            "timed out",
+            "connection refused",
+            "connection reset",
+            "provider_disabled",
+            "provider unavailable",
+            "service unavailable",
+        )
+    )
+
+
+def _provider_error_preview(output: JsonObject) -> str | None:
+    for key in ("error_message_preview", "error", "reason"):
+        value = output.get(key)
+        if isinstance(value, str) and value:
+            return _preview(value, 240)
+    return None
 
 
 def _is_secret_key(lowered: str) -> bool:

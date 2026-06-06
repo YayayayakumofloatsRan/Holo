@@ -22,6 +22,11 @@ defaults. They should read the host packet.
   including task type, provider, model, status, duration, and redacted error
   preview. This lets user-visible failure reports distinguish model/API
   connectivity or JSON/planning failures from tool/retrieval failures.
+- Added ProcessorFabric provider-availability circuit breaking: after a live
+  provider network/unavailable failure, later calls to the same provider in the
+  same process return a journaled `provider_circuit_open` result with the
+  previous redacted error preview instead of repeatedly waiting on the same
+  unreachable API.
 - Added `host_situation` to synthesizer payloads through retrieval/workspace
   report diagnostics.
 - Added `host_situation` to chat route prompts and semantic intake runtime
@@ -94,6 +99,9 @@ Broader smoke used during implementation:
 - Live retrieval quality still needs stronger source acquisition and extraction
   coverage. HostSituation makes failures visible; it does not by itself improve
   retrieval ranking or document acquisition.
+- Live model/API unavailability is now clearer and faster, but a future resident
+  runtime should add explicit provider health status and recovery/backoff rather
+  than keeping the circuit only in process memory.
 - Mission/workmethod loops should use host_situation to force strategy shifts
   when repeated retrieval attempts have the same failure diagnosis.
 - Finance reports should use the same packet to avoid claiming finance is

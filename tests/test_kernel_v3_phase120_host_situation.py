@@ -147,6 +147,37 @@ def test_phase120_host_situation_captures_processor_failure_preview() -> None:
     assert situation["failure"]["diagnosis"] == "processor_or_planning_failure"
 
 
+def test_phase120_host_situation_uses_provider_circuit_previous_error_preview() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-circuit",
+        run_id="run-1",
+        step_id=None,
+        kind="processor_result",
+        data={
+            "task_type": "planner.propose",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "status": "failed",
+            "error": "provider_circuit_open",
+            "output": {
+                "circuit": "provider_unavailable",
+                "previous_error_preview": "deepseek network error: temporary failure in name resolution",
+            },
+        },
+    )
+
+    situation = build_host_situation(
+        journal=journal,
+        task_id="task-circuit",
+        run_id="run-1",
+        recipe=_semantic_recipe(),
+        failure_report={"reason": "model_planner_processor_failed", "missing_evidence": ["planner_action"]},
+    )
+
+    assert "temporary failure" in situation["recent_activity"]["latest_processor_error"]
+
+
 def test_phase120_synthesizer_prompt_carries_host_situation() -> None:
     host_situation = {
         "schema": "holo.kernel_v3.host_situation.v1",

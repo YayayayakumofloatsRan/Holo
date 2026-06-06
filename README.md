@@ -27,7 +27,8 @@ reference only. New kernel work should start from `kernel_v3/`,
 - `kernel_v3/chat/`: multi-turn thread runtime, routing, pending user input,
   journal-derived summaries, and memory admin surfaces.
 - `kernel_v3/processors/`: schema-first processor fabric, fake providers,
-  optional live model providers, JSON repair, routing, usage, and adapters.
+  optional live model providers, JSON repair, routing, usage, provider
+  availability circuit breaking, and adapters.
 - `kernel_v3/retrieval/`: bounded retrieval FSM, evidence, citations, corpus
   providers, direct URL/source-directory/query-template/crawl/SEC EDGAR
   structured search providers, optional live HTTP provider surfaces, and source
@@ -638,6 +639,10 @@ Model planner/provider failures are internal runtime failures, not user
 clarifications. AgentRuntime journals the failed processor packet and returns a
 `FailureReport` with missing evidence, attempted actions, and a suggested next
 action instead of creating a fake pending `needs_user_input` prompt.
+ProcessorFabric also opens a per-process provider availability circuit after a
+network/unavailable provider failure, so the same agent run does not repeatedly
+wait on an unreachable live model API. Subsequent processor results are
+journaled as `provider_circuit_open` with the previous redacted error preview.
 Likewise, a successful direct/semantic `respond` with user-visible text is a
 valid terminal answer when no citation/tool requirement remains; the workloop
 does not turn that completed response into a generic "please provide more
