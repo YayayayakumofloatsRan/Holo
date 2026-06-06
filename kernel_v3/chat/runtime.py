@@ -1031,6 +1031,7 @@ class ChatRuntime:
             command_result=None,
             summary=None,
             trace_refs=list(agent_result.trace_refs),
+            host_situation=dict(agent_result.host_situation),
         )
 
     def _summary_result(
@@ -1167,6 +1168,7 @@ def _replace_command_result(result: ChatRuntimeResult, command_result: JsonObjec
         command_result=command_result,
         summary=result.summary,
         trace_refs=result.trace_refs,
+        host_situation=dict(result.host_situation),
     )
 
 
@@ -2036,6 +2038,7 @@ def _compact_conversation_record(record: LedgerRecord) -> JsonObject:
     failure = data.get("failure_report") if isinstance(data.get("failure_report"), dict) else None
     pending = data.get("pending_question") if isinstance(data.get("pending_question"), dict) else None
     summary = data.get("summary") if isinstance(data.get("summary"), dict) else None
+    host_situation = data.get("host_situation") if isinstance(data.get("host_situation"), dict) else {}
     return {
         "record_ref": record.record_id,
         "kind": "chat_agent_result",
@@ -2049,6 +2052,7 @@ def _compact_conversation_record(record: LedgerRecord) -> JsonObject:
         "failure_reason": failure.get("reason") if failure else None,
         "pending_question": _compact_pending_question(pending),
         "summary_preview": _preview(str(summary.get("text") or summary.get("summary") or ""), limit=360) if summary else None,
+        "host_situation": _compact_host_situation_for_context(host_situation),
     }
 
 
@@ -2056,6 +2060,7 @@ def _latest_agent_result_context(journal: JournalStore, thread_id: str) -> JsonO
     for record in reversed(journal.records(kind="chat_agent_result")):
         if record.data.get("thread_id") != thread_id or not _is_task_result(record.data):
             continue
+        host_situation = record.data.get("host_situation") if isinstance(record.data.get("host_situation"), dict) else {}
         return {
             "record_ref": record.record_id,
             "task_id": record.data.get("task_id"),
@@ -2064,6 +2069,7 @@ def _latest_agent_result_context(journal: JournalStore, thread_id: str) -> JsonO
             "status": record.data.get("status"),
             "answer_preview": _preview(str(record.data.get("answer") or ""), limit=360),
             "pending_question": _compact_pending_question(record.data.get("pending_question") if isinstance(record.data.get("pending_question"), dict) else None),
+            "host_situation": _compact_host_situation_for_context(host_situation),
         }
     return None
 

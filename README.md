@@ -390,7 +390,10 @@ Kernel v3 currently contains the infrastructure for:
   situation summary for operator review. Thread working context and thread RAG
   now carry compact `host_situation` trace items into later turns so follow-up
   planner/evaluator calls inherit the previous loop's real capability and
-  failure state;
+  failure state. `ChatRuntimeResult` and `chat_agent_result` journal records
+  also persist the compact host situation for success and failure turns, so
+  summaries, resident projections, and future routing can inspect it without
+  replaying raw logs;
 - dynamic planner retries for planned retrieval subgoals: semantic task plans
   can declare multiple `goal-plan-*` retrieval subgoals, and
   `agent_replan_hints` reports incomplete subgoal ids even when the latest

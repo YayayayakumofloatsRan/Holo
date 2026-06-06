@@ -4,6 +4,7 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import TaskRecipe
 from kernel_v3.agent.host_situation import build_host_situation
 from kernel_v3.agent.runtime import _compact_thread_rag_context_for_prompt
+from kernel_v3.chat import ChatRuntime
 from kernel_v3.chat.runtime import _recent_task_trace_context
 from kernel_v3.chat.runtime import _failure_answer_text
 from kernel_v3.contracts import ToolManifest
@@ -302,6 +303,26 @@ def test_phase120_thread_memory_carries_host_situation_into_next_prompt_context(
     assert prompt_host_items[-1]["next_possible_action"] == "change_search_strategy"
     assert prompt_host_items[-1]["live_search_available"] is True
     assert chat_host_items[-1]["failure_reason"] == "planned_retrieval_subgoals_incomplete"
+
+
+def test_phase120_chat_agent_result_persists_host_situation_for_thread_memory() -> None:
+    journal = JournalStore.in_memory()
+    runtime = ChatRuntime(journal=journal)
+
+    result = runtime.receive("你是谁？", thread_id="thread-chat-host")
+
+    chat_records = journal.records(kind="chat_agent_result")
+    thread_memory = ThreadWorkingMemoryProvider().compile(
+        journal,
+        thread_id="thread-chat-host",
+        task_id=result.task_id,
+    )
+    recent_result_host = thread_memory["recent_results"][-1]["host_situation"]
+    assert result.status == "completed"
+    assert result.host_situation["schema"] == "holo.kernel_v3.host_situation.v1"
+    assert chat_records[-1].data["host_situation"]["schema"] == "holo.kernel_v3.host_situation.v1"
+    assert recent_result_host["task_mode"] == "direct_answer"
+    assert recent_result_host["retrieval_configured"] is False
 
 
 def _retrieval_recipe() -> TaskRecipe:

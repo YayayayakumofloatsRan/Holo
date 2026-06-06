@@ -31,6 +31,10 @@ defaults. They should read the host packet.
   real capability state, retrieval attempt counts, failure diagnosis, and next
   possible action into semantic/planner/evaluator packets instead of forcing the
   model to infer them from scattered logs.
+- `ChatRuntimeResult` and `chat_agent_result` journal records now persist the
+  compact host situation after agent turns. This gives thread summaries,
+  resident projections, route prompts, and future context compilers a direct
+  result-level view of what the host knew, without replaying raw trace logs.
 - Added compact processor-result summaries to `HostSituation.recent_activity`,
   including task type, provider, model, status, duration, and redacted error
   preview. This lets user-visible failure reports distinguish model/API
@@ -102,7 +106,7 @@ Full kernel-v3 regression after terminal host-situation trace rendering:
 
 ```bash
 .venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
-# 738 passed
+# 739 passed
 ```
 
 Broader smoke used during implementation:

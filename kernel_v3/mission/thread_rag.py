@@ -144,6 +144,7 @@ def _compact_turn(record: LedgerRecord, *, preview_chars: int) -> JsonObject:
 
 def _compact_result(record: LedgerRecord, *, preview_chars: int) -> JsonObject:
     failure = record.data.get("failure_report") if isinstance(record.data.get("failure_report"), dict) else None
+    host_situation = record.data.get("host_situation") if isinstance(record.data.get("host_situation"), dict) else {}
     return {
         "record_ref": record.record_id,
         "task_id": record.data.get("task_id"),
@@ -152,6 +153,7 @@ def _compact_result(record: LedgerRecord, *, preview_chars: int) -> JsonObject:
         "status": record.data.get("status"),
         "answer_preview": _preview(str(record.data.get("answer") or ""), preview_chars),
         "failure_reason": failure.get("reason") if failure else None,
+        "host_situation": _compact_host_situation_data(host_situation),
     }
 
 
@@ -296,14 +298,23 @@ def _compact_feedback(record: LedgerRecord) -> JsonObject:
 
 def _compact_host_situation(record: LedgerRecord) -> JsonObject:
     data = record.data
+    result = _compact_host_situation_data(data)
+    result.update(
+        {
+            "record_ref": record.record_id,
+            "kind": "host_situation",
+            "phase": record.state_delta.get("host_situation"),
+        }
+    )
+    return result
+
+
+def _compact_host_situation_data(data: JsonObject) -> JsonObject:
     task = data.get("task") if isinstance(data.get("task"), dict) else {}
     retrieval = data.get("retrieval") if isinstance(data.get("retrieval"), dict) else {}
     activity = data.get("recent_activity") if isinstance(data.get("recent_activity"), dict) else {}
     failure = data.get("failure") if isinstance(data.get("failure"), dict) else {}
     return {
-        "record_ref": record.record_id,
-        "kind": "host_situation",
-        "phase": record.state_delta.get("host_situation"),
         "task_mode": task.get("mode"),
         "citations_required": task.get("citations_required"),
         "retrieval_configured": retrieval.get("configured"),

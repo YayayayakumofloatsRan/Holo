@@ -110,3 +110,4 @@ class ChatRuntimeResult(Contract):
     command_result: JsonObject | None
     summary: JsonObject | None
     trace_refs: list[str]
+    host_situation: JsonObject = field(default_factory=dict)
