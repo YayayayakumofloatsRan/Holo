@@ -2369,7 +2369,7 @@ def _failure_answer_text(failure_report: JsonObject, *, user_goal: str) -> str:
     observations = failure_report.get("last_observations")
     observed_reasons = _failure_observation_reasons(observations if isinstance(observations, list) else [])
 
-    lines = [f"我这次没有拿到足够证据来完成“{_preview(user_goal, limit=80)}”。"]
+    lines = [_failure_intro_sentence(failure_report, user_goal=user_goal)]
     if attempted:
         lines.append(f"我已经尝试过：{', '.join(attempted[:4])}。")
     if observed_reasons:
@@ -2382,6 +2382,32 @@ def _failure_answer_text(failure_report: JsonObject, *, user_goal: str) -> str:
         lines.append(f"下一步应当是：{next_action}。")
     lines.append(_failure_host_situation_sentence(failure_report))
     return "\n".join(lines)
+
+
+def _failure_intro_sentence(failure_report: JsonObject, *, user_goal: str) -> str:
+    situation = failure_report.get("host_situation")
+    situation = situation if isinstance(situation, dict) else {}
+    task = situation.get("task")
+    task = task if isinstance(task, dict) else {}
+    failure = situation.get("failure")
+    failure = failure if isinstance(failure, dict) else {}
+    diagnosis = str(failure.get("diagnosis") or "")
+    task_mode = str(task.get("mode") or "")
+    reason = str(failure_report.get("reason") or "")
+    attempted = _string_list(failure_report.get("attempted_actions"))
+    missing = _string_list(failure_report.get("missing_evidence"))
+    goal_preview = _preview(user_goal, limit=80)
+    if diagnosis == "processor_or_planning_failure":
+        return f"我这轮没有完成“{goal_preview}”，原因是模型/API处理或规划步骤失败。"
+    if (
+        task_mode == "retrieval_answer"
+        or "retrieval.run" in attempted
+        or reason.startswith("retrieval_")
+        or "retrieval" in reason
+        or "sufficient_retrieval_evidence" in missing
+    ):
+        return f"我这次没有拿到足够证据来完成“{goal_preview}”。"
+    return f"我这轮没有完成“{goal_preview}”。"
 
 
 def _failure_host_situation_sentence(failure_report: JsonObject) -> str:

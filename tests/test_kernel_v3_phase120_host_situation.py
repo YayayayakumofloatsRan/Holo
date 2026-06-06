@@ -114,6 +114,7 @@ def test_phase120_non_retrieval_failure_is_not_reported_as_missing_retrieval_too
     assert "模型/API处理或规划步骤失败" in text
     assert "temporary failure in name resolution" in text
     assert "检索工具或检索源没有配置" not in text
+    assert "没有拿到足够证据" not in text
 
 
 def test_phase120_host_situation_captures_processor_failure_preview() -> None:
