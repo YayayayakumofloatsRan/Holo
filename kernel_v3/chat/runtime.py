@@ -2391,6 +2391,8 @@ def _failure_host_situation_sentence(failure_report: JsonObject) -> str:
     retrieval = retrieval if isinstance(retrieval, dict) else {}
     task = situation.get("task")
     task = task if isinstance(task, dict) else {}
+    activity = situation.get("recent_activity")
+    activity = activity if isinstance(activity, dict) else {}
     failure = situation.get("failure")
     failure = failure if isinstance(failure, dict) else {}
     diagnosis = str(failure.get("diagnosis") or "")
@@ -2400,6 +2402,9 @@ def _failure_host_situation_sentence(failure_report: JsonObject) -> str:
     task_mode = str(task.get("mode") or "")
 
     if diagnosis == "processor_or_planning_failure":
+        processor_error = activity.get("latest_processor_error")
+        if isinstance(processor_error, str) and processor_error:
+            return f"所以我不能编造结论；当前问题是模型/API处理或规划步骤失败：{_preview(processor_error, limit=120)}。"
         return "所以我不能编造结论；当前问题是模型处理或规划步骤失败，宿主已经把失败记录进上下文供下一轮重试或降级。"
     if diagnosis == "non_retrieval_task_incomplete":
         return "所以我不能编造结论；当前问题不是联网权限，而是这轮直接回答流程没有形成可用的最终回答。"

@@ -18,6 +18,10 @@ defaults. They should read the host packet.
   when the agent returns a failure report.
 - Added `AgentRuntimeResult.host_situation` so mission, chat, resident, and
   post-run supervision can inspect the same state after success or failure.
+- Added compact processor-result summaries to `HostSituation.recent_activity`,
+  including task type, provider, model, status, duration, and redacted error
+  preview. This lets user-visible failure reports distinguish model/API
+  connectivity or JSON/planning failures from tool/retrieval failures.
 - Added `host_situation` to synthesizer payloads through retrieval/workspace
   report diagnostics.
 - Added `host_situation` to chat route prompts and semantic intake runtime
@@ -31,6 +35,7 @@ defaults. They should read the host packet.
   - network budget or permission unavailable;
   - tool budget exhausted after attempts;
   - citation coverage insufficient;
+  - model/API processing or planning failure;
   - search/fetch/extraction/source-authority/evidence-coverage failures.
 
 ## Design Boundary

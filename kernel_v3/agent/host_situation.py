@@ -226,13 +226,26 @@ def _recent_activity(records: list[LedgerRecord]) -> JsonObject:
     retrieval_reports = [record for record in records if record.kind == "retrieval_report"]
     search_attempts = [record for record in records if record.kind == "retrieval_search_attempt"]
     fetch_attempts = [record for record in records if record.kind == "retrieval_fetch_attempt"]
+    processor_results = [record for record in records if record.kind == "processor_result"]
     termination = [record for record in records if record.kind == "termination_decision"]
     failures = [record for record in records if record.kind == "agent_failure_report"]
     latest_report = retrieval_reports[-1].data if retrieval_reports else {}
     latest_failure = failures[-1].data if failures else {}
+    processor_summary = [_compact_processor_result(record) for record in processor_results[-8:]]
+    latest_processor_error = next(
+        (
+            item.get("error_preview") or item.get("error")
+            for item in reversed(processor_summary)
+            if item.get("status") == "failed"
+        ),
+        None,
+    )
     return {
         "attempted_actions": _ordered_unique([_action_name(record.data) for record in action_records if _action_name(record.data)]),
         "tool_observations": [_compact_observation(record) for record in observation_records[-8:]],
+        "processor_results": processor_summary,
+        "failed_processor_results": sum(1 for item in processor_summary if item.get("status") == "failed"),
+        "latest_processor_error": latest_processor_error,
         "retrieval_runs": len(retrieval_reports),
         "search_attempts": len(search_attempts),
         "fetch_attempts": len(fetch_attempts),
@@ -267,6 +280,21 @@ def _compact_observation(record: LedgerRecord) -> JsonObject:
         "source": data.get("source"),
         "status": data.get("status") or content.get("status"),
         "reason": _first_string(content, ("reason", "error", "stop_reason")),
+    }
+
+
+def _compact_processor_result(record: LedgerRecord) -> JsonObject:
+    data = record.data
+    output = data.get("output") if isinstance(data.get("output"), dict) else {}
+    return {
+        "record_id": record.record_id,
+        "task_type": data.get("task_type"),
+        "provider": data.get("provider"),
+        "model": data.get("model"),
+        "status": data.get("status"),
+        "duration_ms": data.get("duration_ms"),
+        "error": data.get("error"),
+        "error_preview": output.get("error_message_preview"),
     }
 
 
@@ -335,6 +363,8 @@ def _failure_diagnosis(reason: str, *, retrieval: JsonObject, activity: JsonObje
     if retrieval_runs > 0:
         return "evidence_extraction_or_coverage_issue"
     if reason in {"model_planner_processor_failed", "model_evaluator_failed", "semantic_intake_processor_failed"}:
+        return "processor_or_planning_failure"
+    if int(activity.get("failed_processor_results") or 0) > 0:
         return "processor_or_planning_failure"
     if task_mode in {"direct_answer", "semantic_answer", "clarify_first"}:
         return "non_retrieval_task_incomplete"

@@ -378,12 +378,13 @@ Kernel v3 currently contains the infrastructure for:
 - processor-visible `host_situation`, a compact host-owned state packet that
   summarizes task/thread ids, recipe limits, allowed tools, live retrieval
   availability, recent actions, retrieval/search/fetch attempts, latest
-  termination/failure reasons, and failure attribution. It is injected into
-  chat routing, semantic intake runtime context, planner/evaluator context,
-  synthesizer payloads, mission assessment, and failure reports so models do not
-  hallucinate that network, finance research, or tools are unavailable when the
-  host already attempted them. It contains only refs, previews, counters,
-  provider ids, and diagnostics, never raw fetched bodies or secrets;
+  processor/API results, termination/failure reasons, and failure attribution.
+  It is injected into chat routing, semantic intake runtime context,
+  planner/evaluator context, synthesizer payloads, mission assessment, and
+  failure reports so models do not hallucinate that network, finance research,
+  or tools are unavailable when the host already attempted them. It contains
+  only refs, previews, counters, provider ids, and diagnostics, never raw fetched
+  bodies or secrets;
 - dynamic planner retries for planned retrieval subgoals: semantic task plans
   can declare multiple `goal-plan-*` retrieval subgoals, and
   `agent_replan_hints` reports incomplete subgoal ids even when the latest

@@ -91,6 +91,9 @@ def test_phase120_non_retrieval_failure_is_not_reported_as_missing_retrieval_too
     situation = {
         "task": {"mode": "semantic_answer"},
         "retrieval": {"configured": False, "live_search_available": False, "live_fetch_available": False},
+        "recent_activity": {
+            "latest_processor_error": "deepseek network error: temporary failure in name resolution",
+        },
         "failure": {
             "diagnosis": "processor_or_planning_failure",
             "failure_is_permission_or_configuration_issue": False,
@@ -108,8 +111,39 @@ def test_phase120_non_retrieval_failure_is_not_reported_as_missing_retrieval_too
         user_goal="你能做什么？",
     )
 
-    assert "模型处理或规划步骤失败" in text
+    assert "模型/API处理或规划步骤失败" in text
+    assert "temporary failure in name resolution" in text
     assert "检索工具或检索源没有配置" not in text
+
+
+def test_phase120_host_situation_captures_processor_failure_preview() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-processor",
+        run_id="run-1",
+        step_id=None,
+        kind="processor_result",
+        data={
+            "task_type": "planner.propose",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "status": "failed",
+            "error": "RuntimeError",
+            "output": {"error_message_preview": "deepseek network error: temporary failure in name resolution"},
+        },
+    )
+
+    situation = build_host_situation(
+        journal=journal,
+        task_id="task-processor",
+        run_id="run-1",
+        recipe=_semantic_recipe(),
+        failure_report={"reason": "model_planner_processor_failed", "missing_evidence": ["planner_action"]},
+    )
+
+    assert situation["recent_activity"]["failed_processor_results"] == 1
+    assert "temporary failure" in situation["recent_activity"]["latest_processor_error"]
+    assert situation["failure"]["diagnosis"] == "processor_or_planning_failure"
 
 
 def test_phase120_synthesizer_prompt_carries_host_situation() -> None:
@@ -176,6 +210,23 @@ def _retrieval_recipe() -> TaskRecipe:
             "thread_id": "thread-1",
             "execution_metadata": {"allowed_permissions": ["network:fetch"]},
         },
+    )
+
+
+def _semantic_recipe() -> TaskRecipe:
+    return TaskRecipe(
+        recipe_id="recipe-semantic",
+        allowed_tools=["respond"],
+        max_steps=4,
+        max_tool_calls=1,
+        max_network_fetches=0,
+        max_total_artifact_bytes=128_000,
+        permission_profile="read_only",
+        citations_required=False,
+        finalizer="direct",
+        context_budget_mode="truncate",
+        mode="semantic_answer",
+        metadata={"thread_id": "thread-processor"},
     )
 
 
