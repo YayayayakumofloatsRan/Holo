@@ -113,7 +113,11 @@ plans, fallback moves, evidence criteria, and stop conditions, so mathematics,
 physics, finance, policy, engineering, and other research domains do not need
 separate hard-coded search scripts. Scholarly/frontier research can also use an
 `academic_research` profile with academic source families, discovery-only source
-handling, topic-coverage gates, and live arXiv paper discovery.
+handling, topic-coverage gates, live arXiv paper discovery, and paper-level
+metadata extraction for arXiv Atom, OpenAlex, Crossref, and Semantic Scholar
+responses. Scholarly metadata evidence must match core topic anchors from the
+user goal, so generic `research`/`review`/`paper` wording alone is not enough to
+pass the evidence gate.
 
 Kernel v3 currently contains the infrastructure for:
 

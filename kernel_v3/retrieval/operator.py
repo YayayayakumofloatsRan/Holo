@@ -348,7 +348,7 @@ class RetrievalOperator:
                     payload_hash=artifact.payload_hash,
                     preview=preview,
                     size_bytes=int(artifact.metadata.get("size_bytes", 0)),
-                    metadata={"mime_type": response.mime_type},
+                    metadata={"mime_type": response.mime_type, "source_metadata": _safe_json(source.metadata)},
                 )
                 documents.append((document, response.body))
                 artifact_refs.append(artifact.artifact_id)

@@ -5,6 +5,7 @@ import html
 import io
 import json
 import re
+import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
 from kernel_v3.research.profile_policy import (
@@ -24,6 +25,54 @@ JSON_MIME_MARKERS = ("json", "application/json")
 CSV_MIME_MARKERS = ("csv", "comma-separated-values")
 STRUCTURED_LINE_LIMIT = 2_000
 STRUCTURED_VALUE_LIMIT = 240
+SCHOLARLY_RECORD_LIMIT = 80
+SCHOLARLY_ABSTRACT_LIMIT = 700
+SCHOLARLY_METADATA_SOURCE_KINDS = {
+    "scholarly_preprint",
+    "scholarly_index_metadata",
+    "scholarly_publisher_metadata",
+}
+GENERIC_QUERY_TERMS = {
+    "academic",
+    "analysis",
+    "article",
+    "case",
+    "complete",
+    "comprehensive",
+    "deep",
+    "detailed",
+    "evidence",
+    "frontier",
+    "frontiers",
+    "information",
+    "investigate",
+    "journal",
+    "latest",
+    "literature",
+    "open",
+    "paper",
+    "papers",
+    "preprint",
+    "problem",
+    "problems",
+    "recent",
+    "report",
+    "research",
+    "review",
+    "scholarly",
+    "state",
+    "study",
+    "survey",
+    "thorough",
+}
+STRUCTURED_TEXT_MODES = {
+    "sec_companyfacts_readable_text",
+    "arxiv_atom_readable_text",
+    "openalex_readable_text",
+    "crossref_readable_text",
+    "semantic_scholar_readable_text",
+    "scholarly_json_readable_text",
+}
 SEC_COMPANYFACTS_CONCEPTS = (
     ("Revenues", "revenue"),
     ("RevenueFromContractWithCustomerExcludingAssessedTax", "revenue"),
@@ -102,8 +151,12 @@ def extract_spans(
         return []
     spans: list[ExtractedSpan] = []
     candidates = (
-        _ranked_structured_line_candidates(text, terms)
-        if text_mode == "sec_companyfacts_readable_text"
+        _ranked_structured_line_candidates(
+            text,
+            terms,
+            required_terms=_topic_anchor_terms(goal.query) if text_mode in _scholarly_text_modes() else None,
+        )
+        if text_mode in STRUCTURED_TEXT_MODES
         else _ranked_span_candidates(text, terms)
     )
     for candidate in candidates:
@@ -120,6 +173,7 @@ def extract_spans(
                 metadata={
                     "matched_terms": candidate["matched_terms"],
                     "text_mode": text_mode,
+                    **({"anchor_terms": candidate["anchor_terms"]} if candidate.get("anchor_terms") else {}),
                 },
             )
         )
@@ -136,6 +190,10 @@ def readable_document_text(body: str, *, document: FetchedDocument) -> tuple[str
         text = _extract_sec_companyfacts_readable_text(body)
         if text:
             return text, "sec_companyfacts_readable_text"
+    if _looks_like_scholarly_metadata(body, document=document, mime_type=mime_type):
+        text, mode = _extract_scholarly_metadata_readable_text(body, document=document)
+        if text:
+            return text, mode
     if _looks_like_json(body, mime_type=mime_type):
         text = _extract_json_readable_text(body)
         if text:
@@ -187,15 +245,29 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
     )
 
 
-def _ranked_structured_line_candidates(text: str, terms: list[str]) -> list[dict]:
+def _ranked_structured_line_candidates(
+    text: str,
+    terms: list[str],
+    *,
+    required_terms: list[str] | None = None,
+) -> list[dict]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return []
     header = lines[0]
+    required_terms = required_terms or []
+    required_match_count = min(2, len(required_terms)) if required_terms else 0
     candidates: list[dict] = []
     offset = 0
-    for line in lines:
+    for line_index, line in enumerate(lines):
         lower = line.lower()
+        if line_index == 0 and _looks_like_structured_header(line):
+            offset += len(line) + 1
+            continue
+        required_matched = [candidate for candidate in required_terms if candidate in lower]
+        if required_match_count and len(required_matched) < required_match_count:
+            offset += len(line) + 1
+            continue
         matched = [candidate for candidate in terms if candidate in lower]
         if matched:
             snippet = _normalize_span(f"{header} {line}")
@@ -205,7 +277,8 @@ def _ranked_structured_line_candidates(text: str, terms: list[str]) -> list[dict
                     "end_offset": offset + len(line),
                     "text": snippet,
                     "matched_terms": matched,
-                    "score": min(1.0, len(matched) / max(1, len(terms))),
+                    "anchor_terms": required_matched,
+                    "score": min(1.0, (len(matched) + len(required_matched)) / max(1, len(terms))),
                 }
             )
         offset += len(line) + 1
@@ -221,6 +294,36 @@ def _ranked_structured_line_candidates(text: str, terms: list[str]) -> list[dict
 
 def _coarse_window_key(start: int, end: int) -> tuple[int, int]:
     return start // 120, end // 120
+
+
+def _scholarly_text_modes() -> set[str]:
+    return {
+        "arxiv_atom_readable_text",
+        "openalex_readable_text",
+        "crossref_readable_text",
+        "semantic_scholar_readable_text",
+        "scholarly_json_readable_text",
+    }
+
+
+def _looks_like_structured_header(line: str) -> bool:
+    normalized = line.lower()
+    return normalized.startswith("scholarly metadata records") or normalized.startswith("sec companyfacts official")
+
+
+def _topic_anchor_terms(text: str) -> list[str]:
+    anchors: list[str] = []
+    seen: set[str] = set()
+    normalized = text.lower().replace("-", " ").replace("_", " ")
+    for raw in normalized.split():
+        term = "".join(char for char in raw if char.isalnum() or "\u4e00" <= char <= "\u9fff")
+        if not term or term in seen:
+            continue
+        if term in GENERIC_QUERY_TERMS or term in QUERY_FACET_ALIASES or len(term) < 3:
+            continue
+        seen.add(term)
+        anchors.append(term)
+    return anchors
 
 
 def _looks_like_html(body: str, *, mime_type: str) -> bool:
@@ -267,6 +370,481 @@ def _extract_json_readable_text(body: str) -> str:
     lines: list[str] = []
     _flatten_json(payload, path="", lines=lines, depth=0)
     return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
+
+
+def _looks_like_scholarly_metadata(body: str, *, document: FetchedDocument, mime_type: str) -> bool:
+    source_kind = _document_source_kind(document)
+    if source_kind in SCHOLARLY_METADATA_SOURCE_KINDS:
+        return True
+    uri = document.uri.lower()
+    if any(
+        marker in uri
+        for marker in (
+            "export.arxiv.org/api/query",
+            "api.openalex.org/works",
+            "api.crossref.org/works",
+            "api.semanticscholar.org/graph/v1/paper/search",
+        )
+    ):
+        return True
+    prefix = body[:4096].lstrip().lower()
+    if "atom" in mime_type and "<feed" in prefix and ("arxiv" in prefix or "<entry" in prefix):
+        return True
+    if prefix.startswith("<feed") and ("arxiv.org" in prefix or "<entry" in prefix):
+        return True
+    if _looks_like_json(body, mime_type=mime_type):
+        return any(
+            marker in prefix
+            for marker in (
+                '"abstract_inverted_index"',
+                '"authorships"',
+                '"container-title"',
+                '"date-parts"',
+                '"externalids"',
+                '"is-referenced-by-count"',
+                '"paperid"',
+            )
+        )
+    return False
+
+
+def _extract_scholarly_metadata_readable_text(
+    body: str, *, document: FetchedDocument
+) -> tuple[str, str]:
+    uri = document.uri.lower()
+    prefix = body[:4096].lstrip().lower()
+    if "export.arxiv.org/api/query" in uri or prefix.startswith("<feed"):
+        text = _extract_arxiv_atom_readable_text(body)
+        if text:
+            return text, "arxiv_atom_readable_text"
+    if not _looks_like_json(body, mime_type=str(document.metadata.get("mime_type") or "").lower()):
+        return "", "scholarly_json_readable_text"
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return "", "scholarly_json_readable_text"
+    if "api.openalex.org/works" in uri or _looks_like_openalex_payload(payload):
+        text = _extract_openalex_readable_text(payload)
+        if text:
+            return text, "openalex_readable_text"
+    if "api.crossref.org/works" in uri or _looks_like_crossref_payload(payload):
+        text = _extract_crossref_readable_text(payload)
+        if text:
+            return text, "crossref_readable_text"
+    if "api.semanticscholar.org/graph/v1/paper/search" in uri or _looks_like_semantic_scholar_payload(payload):
+        text = _extract_semantic_scholar_readable_text(payload)
+        if text:
+            return text, "semantic_scholar_readable_text"
+    text = _extract_generic_scholarly_json_readable_text(payload)
+    return (text, "scholarly_json_readable_text") if text else ("", "scholarly_json_readable_text")
+
+
+def _extract_arxiv_atom_readable_text(body: str) -> str:
+    try:
+        root = ET.fromstring(body[:READABLE_TEXT_LIMIT])
+    except ET.ParseError:
+        return ""
+    entries = [_element for _element in root.iter() if _xml_local_name(_element.tag) == "entry"]
+    lines = [f"scholarly metadata records source=arXiv record_count={len(entries)}"]
+    for entry in entries[:SCHOLARLY_RECORD_LIMIT]:
+        title = _strip_markup(_xml_child_text(entry, "title"))
+        abstract = _strip_markup(_xml_child_text(entry, "summary"))
+        paper_id = _strip_markup(_xml_child_text(entry, "id"))
+        published = _strip_markup(_xml_child_text(entry, "published"))
+        updated = _strip_markup(_xml_child_text(entry, "updated"))
+        doi = _strip_markup(_xml_child_text(entry, "doi"))
+        authors = [
+            _strip_markup(_xml_child_text(author, "name"))
+            for author in entry
+            if _xml_local_name(author.tag) == "author"
+        ]
+        categories = [
+            str(category.attrib.get("term") or "").strip()
+            for category in entry
+            if _xml_local_name(category.tag) == "category" and str(category.attrib.get("term") or "").strip()
+        ]
+        lines.append(
+            _scholarly_record_line(
+                source="arXiv",
+                title=title,
+                abstract=abstract,
+                authors=authors,
+                year=_year_from_text(published or updated),
+                published=published,
+                identifier=paper_id,
+                doi=doi,
+                url=paper_id,
+                venue="arXiv",
+                concepts=categories,
+                citation_count=None,
+            )
+        )
+    return "\n".join(line for line in lines if line.strip())[:READABLE_TEXT_LIMIT]
+
+
+def _extract_openalex_readable_text(payload: object) -> str:
+    items = _payload_items(payload, collection_key="results")
+    lines = [f"scholarly metadata records source=OpenAlex record_count={len(items)}"]
+    for item in items[:SCHOLARLY_RECORD_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        title = _string_value(item.get("display_name") or item.get("title"))
+        abstract = _openalex_abstract(item.get("abstract_inverted_index"))
+        ids = item.get("ids") if isinstance(item.get("ids"), dict) else {}
+        primary_location = item.get("primary_location") if isinstance(item.get("primary_location"), dict) else {}
+        source = primary_location.get("source") if isinstance(primary_location.get("source"), dict) else {}
+        authors = _openalex_authors(item.get("authorships"))
+        concepts = [
+            _string_value(concept.get("display_name"))
+            for concept in (item.get("concepts") if isinstance(item.get("concepts"), list) else [])
+            if isinstance(concept, dict) and _string_value(concept.get("display_name"))
+        ]
+        lines.append(
+            _scholarly_record_line(
+                source="OpenAlex",
+                title=title,
+                abstract=abstract,
+                authors=authors,
+                year=_int_or_none(item.get("publication_year") or item.get("year")),
+                published=_string_value(item.get("publication_date")),
+                identifier=_string_value(item.get("id")),
+                doi=_string_value(item.get("doi") or ids.get("doi")),
+                url=_string_value(primary_location.get("landing_page_url") or item.get("doi") or item.get("id")),
+                venue=_openalex_venue(item, source=source),
+                concepts=concepts,
+                citation_count=_int_or_none(item.get("cited_by_count")),
+            )
+        )
+    return "\n".join(line for line in lines if line.strip())[:READABLE_TEXT_LIMIT]
+
+
+def _extract_crossref_readable_text(payload: object) -> str:
+    message = payload.get("message") if isinstance(payload, dict) else None
+    items = message.get("items") if isinstance(message, dict) and isinstance(message.get("items"), list) else []
+    if not items and isinstance(message, dict):
+        items = [message]
+    lines = [f"scholarly metadata records source=Crossref record_count={len(items)}"]
+    for item in items[:SCHOLARLY_RECORD_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        title = _first_text(item.get("title"))
+        abstract = _strip_markup(_string_value(item.get("abstract")))
+        authors = _crossref_authors(item.get("author"))
+        concepts = [_string_value(value) for value in item.get("subject", [])] if isinstance(item.get("subject"), list) else []
+        lines.append(
+            _scholarly_record_line(
+                source="Crossref",
+                title=title,
+                abstract=abstract,
+                authors=authors,
+                year=_crossref_year(item),
+                published=_crossref_published(item),
+                identifier=_string_value(item.get("DOI")),
+                doi=_string_value(item.get("DOI")),
+                url=_string_value(item.get("URL")),
+                venue=_first_text(item.get("container-title")) or _string_value(item.get("publisher")),
+                concepts=concepts,
+                citation_count=_int_or_none(item.get("is-referenced-by-count")),
+            )
+        )
+    return "\n".join(line for line in lines if line.strip())[:READABLE_TEXT_LIMIT]
+
+
+def _extract_semantic_scholar_readable_text(payload: object) -> str:
+    items = _payload_items(payload, collection_key="data")
+    lines = [f"scholarly metadata records source=SemanticScholar record_count={len(items)}"]
+    for item in items[:SCHOLARLY_RECORD_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        external_ids = item.get("externalIds") if isinstance(item.get("externalIds"), dict) else {}
+        open_access = item.get("openAccessPdf") if isinstance(item.get("openAccessPdf"), dict) else {}
+        concepts = [_string_value(value) for value in item.get("fieldsOfStudy", [])] if isinstance(item.get("fieldsOfStudy"), list) else []
+        lines.append(
+            _scholarly_record_line(
+                source="SemanticScholar",
+                title=_string_value(item.get("title")),
+                abstract=_string_value(item.get("abstract")),
+                authors=[
+                    _string_value(author.get("name"))
+                    for author in item.get("authors", [])
+                    if isinstance(author, dict) and _string_value(author.get("name"))
+                ],
+                year=_int_or_none(item.get("year")),
+                published=_string_value(item.get("publicationDate")),
+                identifier=_string_value(item.get("paperId") or external_ids.get("CorpusId")),
+                doi=_string_value(external_ids.get("DOI")),
+                url=_string_value(open_access.get("url") or item.get("url")),
+                venue=_string_value(item.get("venue")),
+                concepts=concepts,
+                citation_count=_int_or_none(item.get("citationCount")),
+            )
+        )
+    return "\n".join(line for line in lines if line.strip())[:READABLE_TEXT_LIMIT]
+
+
+def _extract_generic_scholarly_json_readable_text(payload: object) -> str:
+    items: list[object] = []
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        for key in ("results", "items", "data", "records", "works"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                items = value
+                break
+        if not items and any(key in payload for key in ("title", "abstract", "doi", "DOI")):
+            items = [payload]
+    if not items:
+        return ""
+    lines = [f"scholarly metadata records source=GenericScholarlyJSON record_count={len(items)}"]
+    for item in items[:SCHOLARLY_RECORD_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        title = _string_value(item.get("title") or item.get("display_name") or item.get("name"))
+        abstract = _string_value(item.get("abstract") or item.get("summary") or item.get("description"))
+        if not title and not abstract:
+            continue
+        lines.append(
+            _scholarly_record_line(
+                source="GenericScholarlyJSON",
+                title=title,
+                abstract=abstract,
+                authors=[],
+                year=_int_or_none(item.get("year") or item.get("publication_year")),
+                published=_string_value(item.get("published") or item.get("publication_date")),
+                identifier=_string_value(item.get("id") or item.get("paperId")),
+                doi=_string_value(item.get("doi") or item.get("DOI")),
+                url=_string_value(item.get("url") or item.get("URL")),
+                venue=_string_value(item.get("venue") or item.get("journal")),
+                concepts=[],
+                citation_count=_int_or_none(item.get("citationCount") or item.get("cited_by_count")),
+            )
+        )
+    return "\n".join(line for line in lines if line.strip())[:READABLE_TEXT_LIMIT]
+
+
+def _scholarly_record_line(
+    *,
+    source: str,
+    title: str,
+    abstract: str,
+    authors: list[str],
+    year: int | None,
+    published: str,
+    identifier: str,
+    doi: str,
+    url: str,
+    venue: str,
+    concepts: list[str],
+    citation_count: int | None,
+) -> str:
+    parts = [f"scholarly_work source={_structured_value(source)}"]
+    if title:
+        parts.append(f"title={_structured_long_value(title, limit=360)}")
+    if authors:
+        parts.append(f"authors={_structured_long_value('; '.join(authors[:8]), limit=360)}")
+    if year is not None:
+        parts.append(f"year={year}")
+    if published:
+        parts.append(f"published={_structured_value(published)}")
+    if venue:
+        parts.append(f"venue={_structured_value(venue)}")
+    if doi:
+        parts.append(f"doi={_structured_value(doi)}")
+    if identifier:
+        parts.append(f"id={_structured_value(identifier)}")
+    if url:
+        parts.append(f"url={_structured_long_value(url, limit=360)}")
+    if concepts:
+        parts.append(f"concepts={_structured_long_value('; '.join(concepts[:12]), limit=360)}")
+    if citation_count is not None:
+        parts.append(f"citation_count={citation_count}")
+    if abstract:
+        parts.append(f"abstract={_structured_long_value(abstract, limit=SCHOLARLY_ABSTRACT_LIMIT)}")
+    return _truncate_structured_line(" ".join(parts))
+
+
+def _looks_like_openalex_payload(payload: object) -> bool:
+    items = _payload_items(payload, collection_key="results")
+    return any(
+        isinstance(item, dict) and ("abstract_inverted_index" in item or "authorships" in item or "openalex" in str(item.get("id") or "").lower())
+        for item in items[:5]
+    )
+
+
+def _looks_like_crossref_payload(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    message = payload.get("message")
+    return isinstance(message, dict) and ("items" in message or "DOI" in message or "query" in message)
+
+
+def _looks_like_semantic_scholar_payload(payload: object) -> bool:
+    items = _payload_items(payload, collection_key="data")
+    return any(isinstance(item, dict) and ("paperId" in item or "externalIds" in item or "citationCount" in item) for item in items[:5])
+
+
+def _payload_items(payload: object, *, collection_key: str) -> list[object]:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        value = payload.get(collection_key)
+        if isinstance(value, list):
+            return value
+        if any(key in payload for key in ("title", "display_name", "abstract", "paperId", "DOI")):
+            return [payload]
+    return []
+
+
+def _openalex_abstract(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    words_by_position: dict[int, str] = {}
+    for word, positions in value.items():
+        if not isinstance(word, str) or not isinstance(positions, list):
+            continue
+        for position in positions:
+            if isinstance(position, int):
+                words_by_position[position] = word
+    if not words_by_position:
+        return ""
+    return _normalize_span(" ".join(words_by_position[index] for index in sorted(words_by_position)))
+
+
+def _openalex_authors(value: object) -> list[str]:
+    authors: list[str] = []
+    if not isinstance(value, list):
+        return authors
+    for item in value[:16]:
+        if not isinstance(item, dict):
+            continue
+        name = _string_value(item.get("raw_author_name"))
+        if not name:
+            author = item.get("author")
+            if isinstance(author, dict):
+                name = _string_value(author.get("display_name"))
+        if name:
+            authors.append(name)
+    return authors
+
+
+def _openalex_venue(item: dict, *, source: dict) -> str:
+    source_name = _string_value(source.get("display_name"))
+    if source_name:
+        return source_name
+    host_venue = item.get("host_venue")
+    if isinstance(host_venue, dict):
+        return _string_value(host_venue.get("display_name"))
+    return ""
+
+
+def _crossref_authors(value: object) -> list[str]:
+    authors: list[str] = []
+    if not isinstance(value, list):
+        return authors
+    for item in value[:16]:
+        if not isinstance(item, dict):
+            continue
+        name = " ".join(
+            part for part in (_string_value(item.get("given")), _string_value(item.get("family"))) if part
+        ).strip()
+        if name:
+            authors.append(name)
+    return authors
+
+
+def _crossref_year(item: dict) -> int | None:
+    for key in ("published-print", "published-online", "published", "issued", "created"):
+        value = item.get(key)
+        if not isinstance(value, dict):
+            continue
+        date_parts = value.get("date-parts")
+        if isinstance(date_parts, list) and date_parts and isinstance(date_parts[0], list) and date_parts[0]:
+            year = _int_or_none(date_parts[0][0])
+            if year is not None:
+                return year
+    return None
+
+
+def _crossref_published(item: dict) -> str:
+    for key in ("published-print", "published-online", "published", "issued", "created"):
+        value = item.get(key)
+        if not isinstance(value, dict):
+            continue
+        date_parts = value.get("date-parts")
+        if isinstance(date_parts, list) and date_parts and isinstance(date_parts[0], list):
+            return "-".join(str(part) for part in date_parts[0])
+    return ""
+
+
+def _document_source_kind(document: FetchedDocument) -> str:
+    metadata = document.metadata if isinstance(document.metadata, dict) else {}
+    source_metadata = metadata.get("source_metadata") if isinstance(metadata.get("source_metadata"), dict) else {}
+    for container in (source_metadata, metadata):
+        value = container.get("source_kind")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _xml_child_text(element: ET.Element, name: str) -> str:
+    for child in element:
+        if _xml_local_name(child.tag) == name:
+            return "".join(child.itertext())
+    return ""
+
+
+def _xml_local_name(tag: object) -> str:
+    text = str(tag)
+    if "}" in text:
+        return text.rsplit("}", 1)[-1]
+    return text
+
+
+def _first_text(value: object) -> str:
+    if isinstance(value, list):
+        for item in value:
+            text = _string_value(item)
+            if text:
+                return text
+        return ""
+    return _string_value(value)
+
+
+def _string_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _normalize_span(value)
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return ""
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _year_from_text(value: str) -> int | None:
+    match = re.search(r"\b(19|20)\d{2}\b", value)
+    return int(match.group(0)) if match else None
+
+
+def _strip_markup(value: str) -> str:
+    if not value:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", html.unescape(value))
+    return _normalize_span(text)
 
 
 def _looks_like_sec_companyfacts(body: str, *, document: FetchedDocument) -> bool:
@@ -498,6 +1076,13 @@ def _structured_value(value: object) -> str:
         return "null"
     text = str(value).strip()
     return _normalize_span(text)[:STRUCTURED_VALUE_LIMIT]
+
+
+def _structured_long_value(value: object, *, limit: int) -> str:
+    if value is None:
+        return ""
+    text = _normalize_span(str(value).strip())
+    return text[: max(0, limit)]
 
 
 def _truncate_structured_line(text: str) -> str:

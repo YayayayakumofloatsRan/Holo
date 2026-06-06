@@ -64,21 +64,62 @@ Observed result:
 - Fetches included arXiv abs, arXiv API, OpenAlex API, and Crossref API.
 - Report included `next_tool_actions`, `operator_critic`, and `research_graph`.
 
-## Remaining Quality Gap
+## Scholarly Metadata Extraction Pass
 
-Discovery expansion now reaches real scholarly metadata, but extraction over
-raw XML/JSON is still noisy. The next retrieval-quality pass should add
-source-specific scholarly metadata extraction:
+The follow-up pass closes the raw XML/JSON extraction gap for scholarly
+discovery sources without adding fixed-answer fixtures or domain-specific
+question tables.
 
-- arXiv Atom -> paper entries with title, authors, abstract, id, pdf URL
-- OpenAlex JSON -> work title, abstract/inverted index, DOI, OA PDF URL,
-  publication date, concepts, cited-by count
-- Crossref JSON -> title, DOI, publisher, date, container title, URL
-- Semantic Scholar JSON -> title, abstract, year, venue, external IDs, OA PDF
-- publisher result pages -> article links/DOI extraction before evidence gate
+Changes:
 
-That should reduce cases where JSON/XML boilerplate or unrelated API records
-become evidence spans.
+- `readable_document_text()` now detects scholarly metadata sources by safe
+  source metadata, known scholarly API hosts, and scholarly JSON/XML structure.
+- arXiv Atom feeds are converted into paper-level records with title, authors,
+  abstract, id, year, venue, category, and DOI fields when present.
+- OpenAlex works JSON is converted into work-level records with title,
+  reconstructed abstract from `abstract_inverted_index`, authors, DOI, venue,
+  publication date, concepts, and cited-by count.
+- Crossref works JSON is converted into bibliographic records with title, DOI,
+  publisher/container, date, URL, authors, subjects, and markup-stripped
+  abstract.
+- Semantic Scholar paper-search JSON is converted into paper records with
+  title, abstract, year, venue, authors, external IDs, citation count, and open
+  access PDF URL.
+- Scholarly metadata extraction uses structured-line ranking and topic-anchor
+  gating. Generic words such as `research`, `review`, `paper`, `frontier`, and
+  `open problem` are not enough to create evidence unless the line also matches
+  the user goal's core topic terms.
+- Header-only structured metadata, including empty arXiv feeds, no longer
+  creates evidence spans.
+- `RetrievalOperator` now carries safe `source_metadata` into
+  `FetchedDocument.metadata` so extraction can distinguish discovery-expanded
+  scholarly APIs while raw fetched bodies still stay in `ArtifactStore`.
+
+Observed live smoke after this pass:
+
+- Query: `hyperbolic dynamics frontier research open problems`
+- Profile: `academic_research`
+- Mode: live aggregate retrieval with source-directory crawl and discovered
+  search-host fetches enabled.
+- Result: `status=sufficient`
+- Fetches: 12
+- Candidate spans: 29
+- Evidence/citations: 2 / 2
+- Selected evidence came from arXiv paper content for the target topic; the
+  previous OpenAlex generic `research/review` neighbor-noise was not selected
+  as evidence.
+
+Remaining retrieval-quality work:
+
+- Deduplicate repeated citations to the same paper/span more aggressively.
+- Compile publisher search/result pages into article-level URLs and DOI
+  candidates instead of treating result pages as evidence surfaces.
+- Feed retrieval `next_tool_actions` into the mission/planner loop more
+  forcefully so a failed source family triggers a concrete acquisition switch,
+  not just a new keyword attempt.
+- Add behavior benchmarks that track source-family diversity, effective
+  document count, topic-anchor hit rate, final answer coverage, and citation
+  uniqueness across live tasks.
 
 ## Validation
 
@@ -94,8 +135,9 @@ become evidence spans.
 
 Result:
 
-- Targeted tests: `55 passed`
-- Kernel v3 tests: `715 passed`
+- Targeted tests before scholarly extraction: `55 passed`
+- Scholarly extraction targeted tests: `8 passed`
+- Kernel v3 tests after scholarly extraction: `721 passed`
 
 Full `tests/` still includes older stage/Windows/socket/environment tests that
 are outside the active kernel-v3 regression target in this WSL sandbox.
