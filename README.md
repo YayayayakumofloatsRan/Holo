@@ -175,10 +175,11 @@ Kernel v3 currently contains the infrastructure for:
   `system.environment`; this is model-visible context for response planning, not
   shell access, process inspection, or a time-tool alias;
 - system capability ABI validation. Time/date/clock intent aliases such as
-  `time_query` are normalized to the canonical `system_time` intent and force a
-  `system_answer` recipe when they carry `system.time`; generic system-state,
-  self-description, or capability-check packets are still downgraded to
-  semantic/direct answers if a live model incorrectly attaches `system.time`;
+  `time_query`, `system_time_query`, and `current_time_query` are normalized to
+  the canonical `system_time` intent and force a `system_answer` recipe when
+  they carry `system.time`; generic system-state, self-description, or
+  capability-check packets are still downgraded to semantic/direct answers if a
+  live model incorrectly attaches `system.time`;
 - semantic work plans that can expand one model-proposed capability into many
   ordered tool actions, including 10+ iteration workspace loops;
 - semantic research plans that can expand one model-proposed `retrieval.run`
@@ -188,9 +189,10 @@ Kernel v3 currently contains the infrastructure for:
 - run-level planned retrieval coverage: for multi-subtopic research, Holo
   tracks the latest retrieval report for each required host-planned
   `goal-plan-*` subgoal and refuses to finalize while a required subgoal
-  remains missing or insufficient. Opportunistic expansion payloads are still
-  visible in diagnostics and planner context, but a failed expansion does not
-  block a final answer once required evidence is sufficient;
+  remains missing or insufficient. Discovery expansions remain visible in the
+  research graph and diagnostics, but `next_tool_actions` are suppressed once
+  the retrieval report is sufficient so successful evidence does not keep
+  nudging the planner into redundant acquisition;
 - model-planner retrieval binding: if a model proposes `retrieval.run` without
   a `goal_id`, the host binds it to the next incomplete required planned
   retrieval subgoal. The model can focus on query/source/strategy while the

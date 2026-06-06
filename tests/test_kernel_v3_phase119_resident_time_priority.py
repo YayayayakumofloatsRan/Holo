@@ -50,6 +50,46 @@ def test_phase119_time_query_alias_routes_to_system_answer():
     assert graph["proposal"]["nodes"][0]["suggested_mode"] == "system_answer"
 
 
+def test_phase119_system_time_query_alias_keeps_system_time_capability():
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": {
+                "primary_intent": "system_time_query",
+                "suggested_mode": "semantic_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "system_time_query",
+                        "text": "read current system time",
+                        "sequence_index": 1,
+                        "required_capabilities": ["system.time"],
+                        "risk": "read",
+                        "status": "ready",
+                        "metadata": {"capability_args": {"system.time": {"timezone": "Asia/Shanghai"}}},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            }
+        },
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric).run(
+        "现在是几点？",
+        mode="auto",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    assert result.mode == "system_answer"
+    assert [record.data["name"] for record in journal.records(task_id=result.task_id, kind="action")] == ["system.time"]
+
+
 def test_phase119_queue_claims_highest_priority_first(tmp_path: Path):
     clock = _MutableClock(1_000)
     queue = ResidentQueue(tmp_path / "resident.sqlite", clock_ms=clock)

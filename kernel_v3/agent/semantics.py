@@ -61,6 +61,8 @@ _HOST_BOUNDARY_RULES = (
 
 _INTENT_KIND_ALIASES = {
     "time_query": "system_time",
+    "system_time_query": "system_time",
+    "current_time_query": "system_time",
     "current_time": "system_time",
     "current_date": "system_time",
     "date_query": "system_time",

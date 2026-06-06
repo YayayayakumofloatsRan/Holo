@@ -645,12 +645,16 @@ class RetrievalOperator:
             decision.to_dict(),
             action_ref=action_ref,
         )
-        next_tool_actions = build_next_tool_actions(
-            goal=goal,
-            failure_attribution=failure_attribution,
-            source_rejections=source_rejections,
-            expansion_actions=expansion_actions,
-            fetch_summaries=fetch_summaries,
+        next_tool_actions = (
+            []
+            if decision.sufficient
+            else build_next_tool_actions(
+                goal=goal,
+                failure_attribution=failure_attribution,
+                source_rejections=source_rejections,
+                expansion_actions=expansion_actions,
+                fetch_summaries=fetch_summaries,
+            )
         )
         research_graph = build_research_graph(
             goal=goal,
@@ -1359,6 +1363,7 @@ def _failure_attribution(
 
 def _next_strategy_hint(primary_failure_mode: str) -> str:
     return {
+        "none": "finalize_if_requirements_covered",
         "query_plan_empty": "create_non_empty_query_plan",
         "search_no_sources": "diversify_query_or_switch_search_provider",
         "ranking_no_sources": "relax_ranking_or_change_source_family",

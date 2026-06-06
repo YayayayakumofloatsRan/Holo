@@ -394,11 +394,14 @@ def test_phase115_discovery_expansion_turns_arxiv_search_into_fetchable_document
     assert expansion["expanded_source_count"] >= 1
     assert any("export.arxiv.org/api/query" in record.data["uri"] for record in fetches)
     assert report.diagnostics["discovery_expanded_source_count"] >= 1
-    assert any(action["action"] == "query_arxiv_api" for action in report.diagnostics["next_tool_actions"])
+    assert report.status == "sufficient"
+    assert report.diagnostics["next_tool_actions"] == []
     graph = report.diagnostics["research_graph"]
     assert graph["diagnostics"]["expansion_count"] >= 1
     assert graph["diagnostics"]["document_count"] >= 1
-    assert critic["next_tool_actions"]
+    assert graph["diagnostics"]["next_tool_action_count"] == 0
+    assert critic["next_strategy_hint"] == "finalize_if_requirements_covered"
+    assert critic["next_tool_actions"] == []
 
 
 def test_phase115_retrieval_behavior_benchmark_reports_live_run_metrics_without_fixed_answer():

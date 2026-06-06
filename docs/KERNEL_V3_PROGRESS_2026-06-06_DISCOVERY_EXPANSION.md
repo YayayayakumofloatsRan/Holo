@@ -64,6 +64,45 @@ Observed result:
 - Fetches included arXiv abs, arXiv API, OpenAlex API, and Crossref API.
 - Report included `next_tool_actions`, `operator_critic`, and `research_graph`.
 
+## Biomimetic Live Validation Follow-up
+
+A later live validation pass exercised Holo as a working agent rather than a
+fixed-answer test fixture:
+
+- System-time question: the first live run exposed a real model-intent alias
+  mismatch. DeepSeek returned `system_time_query`; without normalization Holo
+  routed to `semantic_answer`, did not call `system.time`, and the model
+  claimed a tool source it had not used. `system_time_query` and
+  `current_time_query` now normalize to `system_time`, and the live retest
+  returned the host `system.time` observation with `mode=system_answer`.
+- Resident reminder/priority: a high-priority reminder message was claimed
+  before a lower-priority background message, created an active schedule, and
+  wrote a ready outbox acknowledgement.
+- Safe workspace professional task: using a synthetic non-private workspace
+  document, Holo routed to `workspace_answer`, read the file, produced
+  workspace evidence/citation, and summarized component responsibilities plus a
+  concrete operator-visibility weak point.
+- Technical public research task: a live DeepSeek API documentation task ran
+  four retrieval loops, produced 18 search attempts, 15 successful fetches, 12
+  evidence/citation items, and a structured cited answer. The benchmark showed
+  useful completion, but also a high repeated-fetch-source rate, which remains
+  a retrieval-quality metric to improve.
+- Academic frontier task: a live Anosov-flow task reached a cited report from
+  scholarly sources without falling back to dictionary/encyclopedia pages. The
+  run used 8 distinct queries, 24 fetch attempts, 20 successful fetches, 14
+  evidence/citation items, and zero query/fetch-source repetition in the
+  benchmark.
+
+The pass also tightened retrieval termination semantics: when
+`EvidenceEvaluationDecision.sufficient` is true, `RetrievalOperator` no longer
+publishes `next_tool_actions` from discovery expansion or fetch warnings. Those
+actions remain available only for insufficient reports, where they are needed
+for strategy shifts such as arXiv API expansion, OpenAlex/Crossref/Semantic
+Scholar queries, alternate source families, or diversified acquisition plans.
+This keeps successful research runs from feeding redundant "continue
+acquisition" signals back into the agent loop while preserving failure-driven
+replanning.
+
 ## Scholarly Metadata Extraction Pass
 
 The follow-up pass closes the raw XML/JSON extraction gap for scholarly

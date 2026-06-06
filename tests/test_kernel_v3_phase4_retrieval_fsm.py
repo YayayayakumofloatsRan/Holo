@@ -59,6 +59,10 @@ def test_phase4_retrieval_fsm_journals_all_steps_and_keeps_raw_body_in_artifact_
         "retrieval_report",
     ]
     assert report.status == "sufficient"
+    assert report.diagnostics["next_tool_actions"] == []
+    critic = journal.records(task_id="task-1", kind="retrieval_operator_critic")[-1].data
+    assert critic["next_strategy_hint"] == "finalize_if_requirements_covered"
+    assert critic["next_tool_actions"] == []
     assert report.artifact_refs
     artifact_id = report.artifact_refs[0]
     assert artifacts.read_blob(artifact_id).endswith(RAW_ONLY_SENTINEL)
