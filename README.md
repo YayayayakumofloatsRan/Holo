@@ -385,7 +385,9 @@ Kernel v3 currently contains the infrastructure for:
   failure reports so models do not hallucinate that network, finance research,
   or tools are unavailable when the host already attempted them. It contains
   only refs, previews, counters, provider ids, and diagnostics, never raw fetched
-  bodies or secrets;
+  bodies or secrets. Completed, needs-user-input, and failed task exits now
+  journal a terminal `host_situation`, and trace output renders a concise host
+  situation summary for operator review;
 - dynamic planner retries for planned retrieval subgoals: semantic task plans
   can declare multiple `goal-plan-*` retrieval subgoals, and
   `agent_replan_hints` reports incomplete subgoal ids even when the latest

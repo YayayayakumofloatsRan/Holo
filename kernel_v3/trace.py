@@ -30,6 +30,8 @@ class TraceRenderer:
                 f"{record.run_id} {record.step_id or '-'} {record.kind} {ref_text} "
                 f"state_delta={_safe_trace_value(record.state_delta)}"
             )
+            if record.kind == "host_situation":
+                lines.extend(self._host_situation_lines(record))
             if verbose:
                 lines.extend(self._verbose_lines(record))
         return "\n".join(lines)
@@ -258,6 +260,31 @@ class TraceRenderer:
             f"{run} {step} {kind} proposal={data.get('proposal_id')} memory={data.get('memory_id')} "
             f"status={data.get('approval_status') or data.get('reason') or data.get('status')} "
             f"source={data.get('source_record_ref')}"
+        ]
+
+    def _host_situation_lines(self, record) -> list[str]:
+        data = record.data
+        task = data.get("task") if isinstance(data.get("task"), dict) else {}
+        retrieval = data.get("retrieval") if isinstance(data.get("retrieval"), dict) else {}
+        activity = data.get("recent_activity") if isinstance(data.get("recent_activity"), dict) else {}
+        failure = data.get("failure") if isinstance(data.get("failure"), dict) else {}
+        permissions = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
+        limits = permissions.get("limits") if isinstance(permissions.get("limits"), dict) else {}
+        return [
+            f"  host_situation phase={_safe_trace_text(record.state_delta.get('host_situation'))} "
+            f"mode={_safe_trace_text(task.get('mode'))} citations_required={task.get('citations_required')} "
+            f"profile={_safe_trace_text(permissions.get('permission_profile'))}",
+            f"  host_retrieval configured={retrieval.get('configured')} live_search={retrieval.get('live_search_available')} "
+            f"live_fetch={retrieval.get('live_fetch_available')} network_budget={retrieval.get('network_budget_available')} "
+            f"max_fetches={retrieval.get('max_network_fetches') or limits.get('max_network_fetches')}",
+            f"  host_activity actions={_trace_list(activity.get('attempted_actions'))} "
+            f"retrieval_runs={activity.get('retrieval_runs', 0)} searches={activity.get('search_attempts', 0)} "
+            f"fetches={activity.get('successful_fetches', 0)}/{activity.get('fetch_attempts', 0)} "
+            f"latest_retrieval={_safe_trace_text(activity.get('latest_retrieval_status'))}",
+            f"  host_failure diagnosis={_safe_trace_text(failure.get('diagnosis'))} "
+            f"reason={_safe_trace_text(failure.get('reason'))} "
+            f"next={_safe_trace_text(failure.get('next_possible_action'))} "
+            f"processor_error={_preview(_safe_trace_text(activity.get('latest_processor_error')), 120)}",
         ]
 
     def _verbose_lines(self, record) -> list[str]:

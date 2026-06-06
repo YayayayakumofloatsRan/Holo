@@ -18,6 +18,14 @@ defaults. They should read the host packet.
   when the agent returns a failure report.
 - Added `AgentRuntimeResult.host_situation` so mission, chat, resident, and
   post-run supervision can inspect the same state after success or failure.
+- Completed, `needs_user_input`, and failed task exits now journal a terminal
+  `host_situation` record. Failure reports reuse the same packet instead of
+  rebuilding a divergent copy after journaling.
+- `TraceRenderer.render_task()` now renders concise host situation summary
+  lines for operator review: task mode, permission profile, retrieval
+  availability, live search/fetch flags, budget, recent retrieval/fetch counts,
+  latest retrieval status, failure diagnosis, next action, and latest redacted
+  processor error preview.
 - Added compact processor-result summaries to `HostSituation.recent_activity`,
   including task type, provider, model, status, duration, and redacted error
   preview. This lets user-visible failure reports distinguish model/API
@@ -53,6 +61,9 @@ The packet includes refs, counters, provider ids, compact observations, limits,
 and diagnostics. It must not include raw fetched bodies, secrets, API keys, or
 private reasoning.
 
+Trace rendering is also a public operational trace, not hidden chain of
+thought. It shows host-derived facts and diagnostics only.
+
 ## Why This Matters
 
 Recent live runs showed Holo could attempt live retrieval and still tell the
@@ -80,6 +91,13 @@ Targeted regression:
 
 ```bash
 .venv/bin/python -m pytest -q tests/test_kernel_v3_phase120_host_situation.py
+```
+
+Full kernel-v3 regression after terminal host-situation trace rendering:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+# 737 passed
 ```
 
 Broader smoke used during implementation:

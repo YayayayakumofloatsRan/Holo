@@ -8,6 +8,7 @@ from kernel_v3.contracts import ToolManifest
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.adapters import _synthesizer_prompt
 from kernel_v3.retrieval.contracts import RetrievalReport
+from kernel_v3.trace import TraceRenderer
 
 
 def test_phase120_host_situation_distinguishes_live_retrieval_from_quality_failure() -> None:
@@ -223,6 +224,25 @@ def test_phase120_agent_runtime_context_result_and_failure_journal_host_situatio
     assert result.failure_report["host_situation"]["schema"] == "holo.kernel_v3.host_situation.v1"
     assert failure_records[-1].data["host_situation"]["schema"] == "holo.kernel_v3.host_situation.v1"
     assert host_records[-1].data["schema"] == "holo.kernel_v3.host_situation.v1"
+
+
+def test_phase120_agent_runtime_journals_completed_host_situation() -> None:
+    journal = JournalStore.in_memory()
+
+    result = AgentRuntime(journal=journal).run("你是谁？", mode="direct")
+
+    host_records = journal.records(task_id=result.task_id, kind="host_situation")
+    assert result.status == "completed"
+    assert result.host_situation["schema"] == "holo.kernel_v3.host_situation.v1"
+    assert host_records[-1].state_delta["host_situation"] == "completed"
+    assert host_records[-1].data["task"]["mode"] == "direct_answer"
+    assert host_records[-1].record_id in result.trace_refs
+
+    trace = TraceRenderer(journal).render_task(result.task_id)
+    assert "host_situation phase=completed" in trace
+    assert "mode=direct_answer" in trace
+    assert "host_retrieval configured=" in trace
+    assert "host_failure diagnosis=" in trace
 
 
 def _retrieval_recipe() -> TaskRecipe:

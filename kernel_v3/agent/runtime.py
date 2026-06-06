@@ -453,7 +453,7 @@ class AgentRuntime:
                     final_answer=None,
                     failure_report=failure.to_dict(),
                     trace_refs=_trace_refs(self.journal, result.task_id),
-                    host_situation=self._host_situation(result.task_id, result.run_id, recipe=recipe),
+                    host_situation=dict(failure.host_situation),
                 )
             if recipe.mode == "retrieval_answer" and _latest_action_is_no_planned_action(self.journal, result.task_id, result.run_id):
                 planned_missing = _planned_retrieval_missing_evidence(self.journal, result.task_id, result.run_id, recipe)
@@ -482,8 +482,14 @@ class AgentRuntime:
                     final_answer=None,
                     failure_report=failure.to_dict(),
                     trace_refs=_trace_refs(self.journal, result.task_id),
-                    host_situation=self._host_situation(result.task_id, result.run_id, recipe=recipe),
+                    host_situation=dict(failure.host_situation),
                 )
+            host_situation = self._append_host_situation_record(
+                result.task_id,
+                result.run_id,
+                recipe=recipe,
+                phase="needs_user_input",
+            )
             return AgentRuntimeResult(
                 status="needs_user_input",
                 task_id=result.task_id,
@@ -493,7 +499,7 @@ class AgentRuntime:
                 final_answer=None,
                 failure_report=None,
                 trace_refs=_trace_refs(self.journal, result.task_id),
-                host_situation=self._host_situation(result.task_id, result.run_id, recipe=recipe),
+                host_situation=host_situation,
             )
         final_answer, failure = self._finalize(
             result.task_id,
@@ -504,6 +510,11 @@ class AgentRuntime:
             synthesizer_mode=synthesizer_mode,
         )
         status = "completed" if final_answer is not None else "failed"
+        host_situation = (
+            self._append_host_situation_record(result.task_id, result.run_id, recipe=recipe, phase="completed")
+            if final_answer is not None
+            else dict(failure.host_situation) if failure is not None else self._host_situation(result.task_id, result.run_id, recipe=recipe)
+        )
         return AgentRuntimeResult(
             status=status,
             task_id=result.task_id,
@@ -513,7 +524,7 @@ class AgentRuntime:
             final_answer=final_answer.to_dict() if final_answer is not None else None,
             failure_report=failure.to_dict() if failure is not None else None,
             trace_refs=_trace_refs(self.journal, result.task_id),
-            host_situation=self._host_situation(result.task_id, result.run_id, recipe=recipe),
+            host_situation=host_situation,
         )
 
     def _registry(self, recipe: TaskRecipe, goal: str) -> ToolRegistry:
@@ -1241,25 +1252,15 @@ class AgentRuntime:
             run_id=run_id,
             trace_refs=_trace_refs(self.journal, task_id),
         )
-        host_situation = self._host_situation(
+        host_situation = self._append_host_situation_record(
             task_id,
             run_id,
             recipe=recipe,
             tool_manifests=tool_manifests,
             failure_report=failure.to_dict(),
+            phase="failure",
         )
         failure = replace(failure, host_situation=host_situation)
-        self.journal.append(
-            task_id=task_id,
-            run_id=run_id,
-            step_id=None,
-            kind="host_situation",
-            data=redact_journal_data(host_situation),
-            state_delta={
-                "host_situation": "failure",
-                "host_situation_schema": host_situation.get("schema"),
-            },
-        )
         self.journal.append(
             task_id=task_id,
             run_id=run_id,
@@ -1269,6 +1270,36 @@ class AgentRuntime:
             state_delta={"agent_final_answer": "failed", "reason": reason},
         )
         return failure
+
+    def _append_host_situation_record(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe | None,
+        phase: str,
+        tool_manifests: list[ToolManifest] | None = None,
+        failure_report: JsonObject | None = None,
+    ) -> JsonObject:
+        host_situation = self._host_situation(
+            task_id,
+            run_id,
+            recipe=recipe,
+            tool_manifests=tool_manifests,
+            failure_report=failure_report,
+        )
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="host_situation",
+            data=redact_journal_data(host_situation),
+            state_delta={
+                "host_situation": phase,
+                "host_situation_schema": host_situation.get("schema"),
+            },
+        )
+        return host_situation
 
     def _host_situation(
         self,
