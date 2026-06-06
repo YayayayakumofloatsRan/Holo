@@ -94,7 +94,9 @@ feedback and discovery-only fallback hardening are tracked in
 retrieval campaign and live-smoke pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-05_DEEP_RETRIEVAL_SYSTEM.md`. The WorkMethod
 layer and strategy-shift handoff are tracked in
-`docs/KERNEL_V3_PROGRESS_2026-06-05_WORKMETHOD_LAYER.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-05_WORKMETHOD_LAYER.md`. The 2026-06-06
+discovery-expansion and retrieval benchmark pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-06_DISCOVERY_EXPANSION.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -156,7 +158,9 @@ Kernel v3 currently contains the infrastructure for:
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file
-  search/read and without shell execution;
+  search/read and without shell execution. User-facing workspace observations
+  hide Holo internal state surfaces such as `.state`, `.codex`, `.agents`,
+  `.holo-v3-*`, SQLite indexes, and cache directories;
 - workspace write flows with manifest validation and journal redaction of raw
   file bodies;
 - non-workspace system-state flows such as `system.time`, where the model
@@ -199,6 +203,17 @@ Kernel v3 currently contains the infrastructure for:
   action binding, executes those model-chosen queries first, disables fixed host
   query axes by default, and keeps host supervision focused on validation,
   dedupe, budget, policy, evidence, and termination;
+- discovery expansion inside the retrieval operator. Academic/source-directory
+  discovery pages such as arXiv, OpenAlex, Crossref, Semantic Scholar, Springer,
+  and Cambridge are compiled into concrete fetchable document/API candidates
+  before ranking/fetching. Reports now expose `next_tool_actions`, an
+  `operator_critic`, and a compact research graph of query -> source family ->
+  discovery page -> document -> evidence -> citation;
+- retrieval behavior benchmarking through `holo-v3 retrieval-benchmark
+  <task_id>`, which summarizes live-run loop counts, query repetition, fetch
+  success rate, evidence/citation counts, final answer length, failure mode,
+  next tool actions, and research-graph coverage without asserting fixed
+  answers;
 - model-planner dynamic loops that recompile context, re-call
   `planner.propose`, journal plan revisions, and continue for 10+ bounded
   iterations when evaluator feedback says more work remains;

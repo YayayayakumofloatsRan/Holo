@@ -1,5 +1,6 @@
 from kernel_v3.retrieval.contracts import (
     CitationItem,
+    DiscoveryExpansion,
     EvidenceEvaluationDecision,
     EvidenceItem,
     ExtractedSpan,
@@ -8,7 +9,9 @@ from kernel_v3.retrieval.contracts import (
     QueryPlan,
     RankedSource,
     RankSources,
+    ResearchGraph,
     RetrievalReport,
+    RetrievalNextAction,
     RetrievalProviderCapability,
     RetrievalProviderInspection,
     SearchAttempt,
@@ -17,6 +20,7 @@ from kernel_v3.retrieval.contracts import (
 )
 from kernel_v3.retrieval.composite import AdaptiveSearchProvider, AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
 from kernel_v3.retrieval.arxiv_provider import ArxivApiSearchProvider
+from kernel_v3.retrieval.benchmark import retrieval_behavior_benchmark
 from kernel_v3.retrieval.corpus_provider import CorpusFetchProvider, CorpusSearchProvider
 from kernel_v3.retrieval.crawl_provider import BoundedCrawlSearchProvider, DirectUrlSearchProvider, SourceDirectorySearchProvider
 from kernel_v3.retrieval.fiscaldata_provider import FiscalDataSearchProvider
@@ -60,6 +64,7 @@ __all__ = [
     "ArxivApiSearchProvider",
     "BoundedCrawlSearchProvider",
     "DirectUrlSearchProvider",
+    "DiscoveryExpansion",
     "EvidenceEvaluationDecision",
     "EvidenceItem",
     "ExtractedSpan",
@@ -84,7 +89,9 @@ __all__ = [
     "QueryCampaign",
     "RankedSource",
     "RankSources",
+    "ResearchGraph",
     "ResearchSourceQuerySearchProvider",
+    "RetrievalNextAction",
     "RetrievalOperator",
     "RetrievalProviderCapability",
     "RetrievalProviderInspection",
@@ -105,6 +112,7 @@ __all__ = [
     "provider_capability",
     "query_signature",
     "register_retrieval_tool",
+    "retrieval_behavior_benchmark",
     "supervise_retrieval_payload",
     "supported_web_search_engines",
 ]

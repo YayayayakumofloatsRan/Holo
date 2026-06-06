@@ -5,12 +5,17 @@ from kernel_v3.processors.contracts import JsonSchema
 
 WORKMETHOD_FRAME_SCHEMA = JsonSchema(
     name="workmethod.frame",
-    required={
+    required={},
+    optional={
         "work_frame": "dict",
         "work_method": "dict",
         "thread_working_set": "dict",
+        "frame": "dict",
+        "method": "dict",
+        "working_set": "dict",
+        "thread_memory": "dict",
+        "diagnostics": "dict",
     },
-    optional={"diagnostics": "dict"},
 )
 
 
@@ -70,7 +75,43 @@ Do not ask the user just because the task is broad. Ask only when a critical
 target, permission, private boundary, or required output destination is missing.
 Do not encode finance/math/physics as fixed scripts. If the task is research,
 describe a general research method and let the planner choose concrete actions.
-Do not include private chain-of-thought; provide concise public work state."""
+Do not include private chain-of-thought; provide concise public work state.
+
+Return this exact top-level shape; fill the values from the current task:
+{
+  "work_frame": {
+    "user_goal": "...",
+    "inferred_goal": "...",
+    "work_type": "direct_answer|research|workspace|write|chat",
+    "difficulty": "low|medium|high",
+    "risk_level": "low|medium|high",
+    "expected_output": {"format": "...", "detail": "...", "language": "..."},
+    "done_criteria": ["..."],
+    "tool_needs": ["..."],
+    "memory_needs": ["..."],
+    "assumptions": ["..."]
+  },
+  "work_method": {
+    "method_name": "...",
+    "first_moves": ["..."],
+    "evidence_strategy": ["..."],
+    "failure_moves": ["..."],
+    "stop_policy": ["..."],
+    "user_interaction_policy": ["..."],
+    "notes": ["..."]
+  },
+  "thread_working_set": {
+    "active_goal": "...",
+    "current_method": "...",
+    "successful_findings": [],
+    "failed_attempts": [],
+    "open_gaps": [],
+    "user_preferences": {},
+    "next_intent": null,
+    "trace_refs": []
+  },
+  "diagnostics": {"confidence": 0.0}
+}"""
 
 
 WORKMETHOD_GAP_PROMPT_CONTRACT = """Return one JSON object matching workmethod.gap.

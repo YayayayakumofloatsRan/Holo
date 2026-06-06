@@ -16,15 +16,21 @@ from kernel_v3.interaction import guard_user_visible_text
 WORKSPACE_PREVIEW_CHARS = 240
 WORKSPACE_SEARCH_MAX_MATCHES = 20
 WORKSPACE_SEARCH_SKIP_DIRS = {
+    ".agents",
+    ".codex",
     ".git",
+    ".holo-v3",
     ".holo_runtime",
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".state",
     ".venv",
     "__pycache__",
     "node_modules",
 }
+WORKSPACE_INTERNAL_FILE_PREFIXES = (".holo-v3-",)
+WORKSPACE_INTERNAL_FILE_SUFFIXES = (".sqlite", ".sqlite3")
 WORKSPACE_LIST_MAX_ENTRIES = 200
 
 
@@ -613,6 +619,8 @@ def _fake_workspace_search(files: dict[str, str], *, artifact_store: ArtifactSto
         matches = []
         artifacts: list[ArtifactRef] = []
         for path, text in files.items():
+            if _skip_workspace_path(Path(path.strip("/"))):
+                continue
             if query.lower() not in text.lower() and query.lower() not in path.lower():
                 continue
             artifact = _workspace_search_artifact(
@@ -632,7 +640,7 @@ def _fake_workspace_search(files: dict[str, str], *, artifact_store: ArtifactSto
 def _fake_file_read(files: dict[str, str], *, artifact_store: ArtifactStore | None) -> ToolExecutor:
     def execute(action: CandidateAction) -> Observation:
         path = str(action.payload.get("path", ""))
-        if path not in files:
+        if _skip_workspace_path(Path(path.strip("/"))) or path not in files:
             return _tool_observation(action, "failed", {"path": path, "error": "file_not_found"})
         text = files[path]
         artifact = _workspace_payload_artifact(
@@ -770,7 +778,7 @@ class _Workspace:
     def read(self, action: CandidateAction) -> ToolResult:
         rel = str(action.payload.get("path", ""))
         path = self._resolve(rel)
-        if path is None or not path.is_file():
+        if path is None or _skip_workspace_path(path.relative_to(self.root)) or not path.is_file():
             return _tool_result(action, "failed", {"path": rel, "error": "file_not_found"})
         text = path.read_text(encoding="utf-8")
         artifact = _workspace_payload_artifact(
@@ -1034,6 +1042,8 @@ def _fake_workspace_entries(files: dict[str, str], rel: str, *, limit: int) -> l
     seen: dict[str, JsonObject] = {}
     for path, text in files.items():
         path = path.strip("/")
+        if _skip_workspace_path(Path(path)):
+            continue
         if normalized and not (path == normalized or path.startswith(normalized + "/")):
             continue
         remainder = path[len(normalized):].lstrip("/") if normalized else path
@@ -1050,7 +1060,15 @@ def _fake_workspace_entries(files: dict[str, str], rel: str, *, limit: int) -> l
 
 
 def _skip_workspace_path(path: Path) -> bool:
-    return any(part in WORKSPACE_SEARCH_SKIP_DIRS for part in path.parts)
+    parts = path.parts
+    if any(part in WORKSPACE_SEARCH_SKIP_DIRS for part in parts):
+        return True
+    name = parts[-1] if parts else ""
+    if any(name.startswith(prefix) for prefix in WORKSPACE_INTERNAL_FILE_PREFIXES):
+        return True
+    if any(name.endswith(suffix) for suffix in WORKSPACE_INTERNAL_FILE_SUFFIXES):
+        return True
+    return False
 
 
 def _unsafe_workspace_path_value(path: str) -> bool:

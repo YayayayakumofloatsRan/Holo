@@ -114,7 +114,11 @@ class HttpFetchProvider:
             source.uri,
             allowed_schemes=self.allowed_schemes,
             allowed_hosts=self.allowed_hosts,
-            allow_all_hosts=self.allow_all_hosts or self._allows_discovered_search_host(source),
+            allow_all_hosts=(
+                self.allow_all_hosts
+                or self._allows_discovered_search_host(source)
+                or self._allows_discovery_expansion_host(source)
+            ),
         )
         if validation.get("status") != "ok":
             return FetchResponse(status="failed", body="", diagnostics=validation)
@@ -181,13 +185,28 @@ class HttpFetchProvider:
             and metadata.get("search_result_fetch_allowed") is True
         )
 
+    def _allows_discovery_expansion_host(self, source: SearchSource) -> bool:
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
+        if metadata.get("discovery_expanded") is not True:
+            return False
+        allowed_hosts = _normalize_hosts(_string_list(metadata.get("fetch_allowed_hosts")))
+        if not allowed_hosts:
+            return False
+        host = urllib.parse.urlparse(source.uri).hostname or ""
+        return host.lower() in allowed_hosts
+
     def _source_discovery_diagnostics(self, source: SearchSource) -> JsonObject:
-        if not self._allows_discovered_search_host(source):
-            return {}
-        return {
-            "host_allowed_by": "web_search_result",
-            "source_provider": source.provider,
-        }
+        if self._allows_discovery_expansion_host(source):
+            return {
+                "host_allowed_by": "discovery_expansion",
+                "source_provider": source.provider,
+            }
+        if self._allows_discovered_search_host(source):
+            return {
+                "host_allowed_by": "web_search_result",
+                "source_provider": source.provider,
+            }
+        return {}
 
 
 class JsonHttpSearchProvider:
@@ -389,6 +408,12 @@ def _normalize_hosts(hosts: list[str]) -> set[str]:
         if host:
             normalized.add(host)
     return normalized
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item.strip()]
 
 
 def _normalize_host(value: str) -> str:

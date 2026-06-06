@@ -74,6 +74,7 @@ from kernel_v3.retrieval import (
     UnconfiguredFetchProvider,
     UnconfiguredSearchProvider,
     inspect_retrieval_providers,
+    retrieval_behavior_benchmark,
 )
 from kernel_v3.retrieval.live_config import (
     LIVE_ALLOW_ALL_HOSTS_ENV,
@@ -566,6 +567,8 @@ def main(argv: list[str] | None = None) -> int:
 
     retrieval_trace_parser = sub.add_parser("retrieval-trace")
     retrieval_trace_parser.add_argument("task_id")
+    retrieval_benchmark_parser = sub.add_parser("retrieval-benchmark")
+    retrieval_benchmark_parser.add_argument("task_id")
 
     memory_trace_parser = sub.add_parser("memory-trace")
     memory_trace_parser.add_argument("task_id")
@@ -927,6 +930,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "retrieval-trace":
         print(TraceRenderer(journal).render_retrieval_trace(args.task_id))
+        return 0
+
+    if args.command == "retrieval-benchmark":
+        print(json.dumps(retrieval_behavior_benchmark(journal, args.task_id), ensure_ascii=False, sort_keys=True))
         return 0
 
     if args.command == "memory-trace":

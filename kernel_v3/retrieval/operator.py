@@ -17,6 +17,7 @@ from kernel_v3.research.source_policy import (
 )
 from kernel_v3.retrieval.citations import citation_from_evidence
 from kernel_v3.retrieval.contracts import (
+    DiscoveryExpansion,
     EvidenceEvaluationDecision,
     EvidenceItem,
     FetchedDocument,
@@ -30,6 +31,11 @@ from kernel_v3.retrieval.contracts import (
     SearchSource,
 )
 from kernel_v3.retrieval.evidence_compaction import EvidenceCandidate, compact_evidence_candidates
+from kernel_v3.retrieval.discovery import (
+    build_next_tool_actions,
+    build_research_graph,
+    expand_discovery_sources,
+)
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator, is_discovery_goal, qualify_evidence_candidate
 from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
@@ -198,6 +204,36 @@ class RetrievalOperator:
                 f"{step_id_prefix}-search-{index}",
                 "retrieval_search_attempt",
                 attempt.to_dict(),
+                action_ref=action_ref,
+            )
+
+        discovery_expansions: list[DiscoveryExpansion] = []
+        expansion_actions = []
+        expanded_sources, discovery_expansions, expansion_actions = expand_discovery_sources(
+            goal=goal,
+            sources=_dedupe_sources(sources),
+            research_profile=research_profile,
+            max_candidates=min(max(1, goal.max_sources * 8), 256),
+        )
+        if expanded_sources:
+            sources.extend(expanded_sources)
+        if discovery_expansions:
+            _append(
+                journal,
+                task_id,
+                run_id,
+                f"{step_id_prefix}-discovery-expansion",
+                "retrieval_discovery_expansion",
+                {
+                    "goal_id": goal.goal_id,
+                    "expanded_source_count": len(expanded_sources),
+                    "expansion_count": len(discovery_expansions),
+                    "expansions": [item.to_dict() for item in discovery_expansions[:64]],
+                    "diagnostics": {
+                        "truncated": len(discovery_expansions) > 64,
+                        "next_tool_action_count": len(expansion_actions),
+                    },
+                },
                 action_ref=action_ref,
             )
 
@@ -609,6 +645,49 @@ class RetrievalOperator:
             decision.to_dict(),
             action_ref=action_ref,
         )
+        next_tool_actions = build_next_tool_actions(
+            goal=goal,
+            failure_attribution=failure_attribution,
+            source_rejections=source_rejections,
+            expansion_actions=expansion_actions,
+            fetch_summaries=fetch_summaries,
+        )
+        research_graph = build_research_graph(
+            goal=goal,
+            queries=queries,
+            sources=_dedupe_sources(sources),
+            ranked=ranked_all,
+            discovery_expansions=discovery_expansions,
+            documents=documents,
+            evidence=evidence,
+            citations=citations,
+            next_tool_actions=next_tool_actions,
+        )
+        operator_critic = {
+            "goal_id": goal.goal_id,
+            "decision_status": decision.status,
+            "sufficient": decision.sufficient,
+            "primary_failure_mode": failure_attribution.get("primary_failure_mode"),
+            "next_strategy_hint": failure_attribution.get("next_strategy_hint"),
+            "next_tool_actions": [action.to_dict() for action in next_tool_actions],
+            "research_graph_summary": research_graph.diagnostics,
+            "diagnostics": {
+                "source_rejection_reasons": _count_by_key(source_rejections, "reason"),
+                "fetch_failure_reasons": _count_by_key(
+                    [item for item in fetch_summaries if item.get("reason")],
+                    "reason",
+                ),
+            },
+        }
+        _append(
+            journal,
+            task_id,
+            run_id,
+            f"{step_id_prefix}-operator-critic",
+            "retrieval_operator_critic",
+            operator_critic,
+            action_ref=action_ref,
+        )
         report = RetrievalReport(
             report_id=f"report-{goal.goal_id}",
             goal_id=goal.goal_id,
@@ -638,6 +717,11 @@ class RetrievalOperator:
                 "fetch_attempt_count": len(fetch_attempt_ids),
                 "fetch_summaries": fetch_summaries[-16:],
                 "failure_attribution": failure_attribution,
+                "next_tool_actions": [action.to_dict() for action in next_tool_actions],
+                "research_graph": research_graph.to_dict(),
+                "operator_critic": operator_critic,
+                "discovery_expansion_count": len(discovery_expansions),
+                "discovery_expanded_source_count": len(expanded_sources),
                 "source_rejection_count": len(source_rejections),
                 "source_rejection_reasons": _count_by_key(source_rejections, "reason"),
                 "candidate_span_count": len(spans),

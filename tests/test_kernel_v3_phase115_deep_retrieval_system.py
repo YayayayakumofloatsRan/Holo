@@ -3,7 +3,7 @@ import json
 from kernel_v3.agent.contracts import AgentRuntimeResult
 from kernel_v3.agent.runtime import _bind_model_action_to_recipe, task_recipe
 from kernel_v3.cli import _research_metadata
-from kernel_v3.contracts import CandidateAction, ContextBundle
+from kernel_v3.contracts import CandidateAction, ContextBundle, PolicyDecision
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.mission.contracts import MissionState
@@ -11,10 +11,12 @@ from kernel_v3.mission.supervisor import MissionSupervisor
 from kernel_v3.processors.generation import adapt_generation_parameters
 from kernel_v3.processors.routing import DEEPSEEK_V4_FLASH, DEEPSEEK_V4_PRO
 from kernel_v3.research import ACADEMIC_RESEARCH_PROFILE_ID, FINANCE_FUNDAMENTALS_PROFILE_ID, profile_by_id
-from kernel_v3.retrieval import FakeFetchProvider, RetrievalOperator
+from kernel_v3.retrieval import FakeFetchProvider, FetchResponse, RetrievalOperator
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 from kernel_v3.retrieval.live_config import LiveRetrievalConfig
+from kernel_v3.retrieval.benchmark import retrieval_behavior_benchmark
 from kernel_v3.retrieval.query_campaign import build_query_campaign
+from kernel_v3.tools import ToolRegistry
 
 
 def test_phase115_query_campaign_diversifies_entity_research_without_case_fixture():
@@ -332,6 +334,187 @@ def test_phase115_fetch_queue_skips_discovery_sources_before_applying_source_lim
     assert ranking["diagnostics"]["rejected_ranked_source_count"] >= 1
 
 
+def test_phase115_discovery_expansion_turns_arxiv_search_into_fetchable_document_candidate():
+    query = "hyperbolic dynamics frontier research open problems"
+    journal = JournalStore.in_memory()
+    artifacts = ArtifactStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=_ListSearchProvider(
+            [
+                SearchSource(
+                    source_id="arxiv-discovery",
+                    uri="https://arxiv.org/search/?query=hyperbolic+dynamics&searchtype=all",
+                    title="arXiv search for hyperbolic dynamics",
+                    snippet="arXiv search entry point for recent scholarly preprints and survey papers.",
+                    provider="fixture",
+                    metadata={
+                        "research_profile": ACADEMIC_RESEARCH_PROFILE_ID,
+                        "source_family": "scholarly_preprint",
+                        "authority_level": "primary",
+                        "source_kind": "scholarly_search",
+                    },
+                )
+            ]
+        ),
+        fetch_provider=_PrefixFetchProvider(
+            "https://export.arxiv.org/api/query?",
+            (
+                "<feed><entry><title>Recent advances in hyperbolic dynamics</title>"
+                "<summary>This paper surveys hyperbolic dynamics, frontier research, "
+                "open problems, recent papers, and scholarly literature.</summary>"
+                "<id>https://arxiv.org/abs/2601.00001</id></entry></feed>"
+            ),
+            mime_type="application/atom+xml",
+        ),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-arxiv-expansion",
+            query=query,
+            max_queries=1,
+            max_sources=4,
+            max_fetches=4,
+            max_spans_per_document=3,
+            metadata={
+                "research_profile": ACADEMIC_RESEARCH_PROFILE_ID,
+                "research_task_kind": "frontier_research",
+            },
+        ),
+        journal=journal,
+        artifact_store=artifacts,
+        task_id="task-arxiv-expansion",
+        run_id="run-arxiv-expansion",
+    )
+
+    expansion = journal.records(task_id="task-arxiv-expansion", kind="retrieval_discovery_expansion")[0].data
+    fetches = journal.records(task_id="task-arxiv-expansion", kind="retrieval_fetch_attempt")
+    critic = journal.records(task_id="task-arxiv-expansion", kind="retrieval_operator_critic")[-1].data
+
+    assert expansion["expanded_source_count"] >= 1
+    assert any("export.arxiv.org/api/query" in record.data["uri"] for record in fetches)
+    assert report.diagnostics["discovery_expanded_source_count"] >= 1
+    assert any(action["action"] == "query_arxiv_api" for action in report.diagnostics["next_tool_actions"])
+    graph = report.diagnostics["research_graph"]
+    assert graph["diagnostics"]["expansion_count"] >= 1
+    assert graph["diagnostics"]["document_count"] >= 1
+    assert critic["next_tool_actions"]
+
+
+def test_phase115_retrieval_behavior_benchmark_reports_live_run_metrics_without_fixed_answer():
+    journal = JournalStore.in_memory()
+    for index, query in enumerate(["alpha", "alpha", "beta"], start=1):
+        journal.append(
+            task_id="task-benchmark",
+            run_id="run-benchmark",
+            step_id=f"step-search-{index}",
+            kind="retrieval_search_attempt",
+            data={"query": query, "status": "ok", "sources": []},
+        )
+    for index, status in enumerate(["ok", "failed"], start=1):
+        journal.append(
+            task_id="task-benchmark",
+            run_id="run-benchmark",
+            step_id=f"step-fetch-{index}",
+            kind="retrieval_fetch_attempt",
+            data={"fetch_id": f"fetch-{index}", "source_id": f"source-{index}", "status": status},
+        )
+    journal.append(
+        task_id="task-benchmark",
+        run_id="run-benchmark",
+        step_id="step-evidence",
+        kind="retrieval_evidence",
+        data={"evidence_id": "ev-1"},
+    )
+    journal.append(
+        task_id="task-benchmark",
+        run_id="run-benchmark",
+        step_id="step-citation",
+        kind="retrieval_citation",
+        data={"citation_id": "cite-1"},
+    )
+    journal.append(
+        task_id="task-benchmark",
+        run_id="run-benchmark",
+        step_id="step-report",
+        kind="retrieval_report",
+        data={
+            "status": "insufficient_evidence",
+            "diagnostics": {
+                "failure_attribution": {
+                    "primary_failure_mode": "coverage_gap",
+                    "next_strategy_hint": "target_missing_facets_with_new_queries",
+                },
+                "next_tool_actions": [{"action": "diversify_acquisition_plan"}],
+                "research_graph": {"diagnostics": {"document_count": 1}},
+            },
+        },
+    )
+
+    benchmark = retrieval_behavior_benchmark(journal, "task-benchmark")
+
+    assert benchmark["schema"] == "holo.kernel_v3.retrieval_behavior_benchmark.v1"
+    assert benchmark["status"] == "retrieval_insufficient_evidence"
+    assert benchmark["query_count"] == 3
+    assert benchmark["unique_query_count"] == 2
+    assert benchmark["query_repetition_rate"] > 0
+    assert benchmark["fetch_success_rate"] == 0.5
+    assert benchmark["latest_failure_mode"] == "coverage_gap"
+    assert benchmark["latest_next_tool_actions"][0]["action"] == "diversify_acquisition_plan"
+
+
+def test_phase115_workspace_observation_hides_holo_internal_state(tmp_path):
+    (tmp_path / ".state").mkdir()
+    (tmp_path / ".state" / "thread.jsonl").write_text("internal", encoding="utf-8")
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "notes.md").write_text("internal", encoding="utf-8")
+    (tmp_path / ".holo-v3-journal.jsonl").write_text("internal", encoding="utf-8")
+    (tmp_path / "visible.txt").write_text("public workspace note", encoding="utf-8")
+    registry = ToolRegistry.with_permissioned_workspace(
+        root=tmp_path,
+        artifact_store=ArtifactStore.in_memory(),
+    )
+
+    list_action = CandidateAction(
+        action_id="act-list",
+        kind="tool",
+        name="workspace.list",
+        description="list",
+        payload={"path": "."},
+        reasons=[],
+        score=1.0,
+        side_effect_class="read",
+    )
+    search_action = CandidateAction(
+        action_id="act-search",
+        kind="tool",
+        name="workspace.search",
+        description="search",
+        payload={"query": "internal"},
+        reasons=[],
+        score=1.0,
+        side_effect_class="read",
+    )
+    read_action = CandidateAction(
+        action_id="act-read-hidden",
+        kind="tool",
+        name="file.read",
+        description="read",
+        payload={"path": ".state/thread.jsonl"},
+        reasons=[],
+        score=1.0,
+        side_effect_class="read",
+    )
+    listing = registry.execute_with_artifacts(list_action, policy_decision=_allowed_decision(list_action)).observation
+    search = registry.execute_with_artifacts(search_action, policy_decision=_allowed_decision(search_action)).observation
+    read_hidden = registry.execute_with_artifacts(read_action, policy_decision=_allowed_decision(read_action)).observation
+
+    listed_paths = {entry["path"] for entry in listing.content["entries"]}
+    assert listed_paths == {"visible.txt"}
+    assert search.content["matches"] == []
+    assert read_hidden.status == "failed"
+
+
 class _ListSearchProvider:
     provider_id = "list_search"
     live_network = False
@@ -344,3 +527,32 @@ class _ListSearchProvider:
 
     def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
         return list(self.sources)
+
+
+class _PrefixFetchProvider:
+    provider_id = "prefix_fetch"
+    live_network = False
+    default_enabled = True
+    profile_aware = False
+    supported_research_profiles: list[str] = []
+
+    def __init__(self, prefix: str, body: str, *, mime_type: str = "text/plain") -> None:
+        self.prefix = prefix
+        self.body = body
+        self.mime_type = mime_type
+
+    def fetch(self, source: SearchSource) -> FetchResponse:
+        if source.uri.startswith(self.prefix):
+            return FetchResponse(status="ok", body=self.body, mime_type=self.mime_type)
+        return FetchResponse(status="failed", body="", diagnostics={"reason": "unexpected_uri", "uri": source.uri})
+
+
+def _allowed_decision(action: CandidateAction) -> PolicyDecision:
+    return PolicyDecision(
+        decision_id=f"policy-{action.action_id}",
+        run_id="run-test",
+        action_id=action.action_id,
+        allowed=True,
+        reason="allowed",
+        constraints={"permission": "test", "tool_name": action.name, "side_effect_class": action.side_effect_class},
+    )

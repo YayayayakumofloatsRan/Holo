@@ -37,6 +37,39 @@ class SearchSource(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class RetrievalNextAction(Contract):
+    action_id: str
+    action: str
+    tool_hint: str
+    source_id: str | None = None
+    uri: str | None = None
+    reason: str
+    payload_hint: JsonObject = field(default_factory=dict)
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class DiscoveryExpansion(Contract):
+    expansion_id: str
+    goal_id: str
+    source_id: str
+    uri: str
+    status: str
+    candidate_sources: list[JsonObject]
+    next_tool_actions: list[JsonObject]
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResearchGraph(Contract):
+    graph_id: str
+    goal_id: str
+    nodes: list[JsonObject]
+    edges: list[JsonObject]
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class RetrievalProviderCapability(Contract):
     provider_id: str
     provider_kind: str

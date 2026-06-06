@@ -55,6 +55,7 @@ def test_phase4_retrieval_fsm_journals_all_steps_and_keeps_raw_body_in_artifact_
         "retrieval_evidence",
         "retrieval_citation",
         "retrieval_evaluation_decision",
+        "retrieval_operator_critic",
         "retrieval_report",
     ]
     assert report.status == "sufficient"

@@ -139,6 +139,62 @@ def test_phase117_model_workmethod_packet_overrides_method_shape_without_fixed_a
     assert journal.records(task_id="task-wm", kind="processor_result")
 
 
+def test_phase117_workmethod_accepts_alias_sections_with_shape_diagnostics() -> None:
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "workmethod.frame": {
+                "frame": {
+                    "work_type": "research",
+                    "difficulty": "medium",
+                    "risk_level": "low",
+                    "done_criteria": ["answer with sources"],
+                },
+                "method": {
+                    "method_name": "alias_method",
+                    "first_moves": ["inspect context"],
+                    "evidence_strategy": ["cite known observations"],
+                    "failure_moves": ["change source family"],
+                    "stop_policy": ["stop when done criteria are covered"],
+                    "user_interaction_policy": ["ask only for missing target"],
+                },
+                "working_set": {
+                    "active_goal": "alias goal",
+                    "current_method": "alias_method",
+                    "successful_findings": [],
+                    "failed_attempts": [],
+                    "open_gaps": [],
+                    "user_preferences": {},
+                    "next_intent": None,
+                    "trace_refs": [],
+                },
+            }
+        },
+        journal=journal,
+    )
+    goal = "做一个研究任务"
+    intake = analyze_goal(goal)
+    task_graph = task_graph_from_semantic(intake)
+    task_plan = build_task_execution_plan(task_graph, validate_task_graph(task_graph))
+    profile = infer_answer_profile(goal, semantic_intake=intake, task_plan=task_plan, response_language="zh")
+
+    state = WorkMethodSupervisor(processor_fabric=fabric, mode="model").frame_task(
+        goal=goal,
+        thread_id="thread-alias-workmethod",
+        semantic_intake=intake,
+        task_plan=task_plan,
+        answer_profile=profile,
+        execution_metadata={},
+        task_id="task-wm-alias",
+        run_id="run-wm-alias",
+    )
+
+    assert state.source == "model"
+    assert state.method["method_name"] == "alias_method"
+    assert state.diagnostics["model_status"] == "ok"
+    assert set(state.diagnostics["accepted_alias_sections"]) == {"frame", "method", "working_set"}
+
+
 def test_phase117_agent_runtime_journals_workmethod_and_context_receives_it() -> None:
     journal = JournalStore.in_memory()
     runtime = AgentRuntime(journal=journal, artifact_store=ArtifactStore.in_memory())

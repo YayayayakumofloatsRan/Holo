@@ -246,10 +246,42 @@ def _rule_gap_assessment(
 
 
 def _state_from_model(data: JsonObject, *, fallback: WorkMethodState) -> WorkMethodState:
-    frame = _merge_dict(fallback.frame, _json_object(data.get("work_frame")))
-    method = _merge_dict(fallback.method, _json_object(data.get("work_method")))
-    working = _merge_dict(fallback.thread_working_set, _json_object(data.get("thread_working_set")))
+    raw_frame = _json_object(data.get("work_frame")) or _json_object(data.get("frame"))
+    raw_method = _json_object(data.get("work_method")) or _json_object(data.get("method"))
+    raw_working = (
+        _json_object(data.get("thread_working_set"))
+        or _json_object(data.get("working_set"))
+        or _json_object(data.get("thread_memory"))
+    )
     diagnostics = _merge_dict(fallback.diagnostics, _json_object(data.get("diagnostics")))
+    if not raw_frame or not raw_method or not raw_working:
+        diagnostics["model_status"] = "shape_fallback"
+        diagnostics["missing_sections"] = [
+            section
+            for section, value in (
+                ("work_frame", raw_frame),
+                ("work_method", raw_method),
+                ("thread_working_set", raw_working),
+            )
+            if not value
+        ]
+        return WorkMethodState(
+            state_id=fallback.state_id,
+            frame=fallback.frame,
+            method=fallback.method,
+            thread_working_set=fallback.thread_working_set,
+            source="rule_fallback_after_model_shape_error",
+            diagnostics=redact_journal_data(diagnostics),
+        )
+    frame = _merge_dict(fallback.frame, raw_frame)
+    method = _merge_dict(fallback.method, raw_method)
+    working = _merge_dict(fallback.thread_working_set, raw_working)
+    if "work_frame" not in data or "work_method" not in data or "thread_working_set" not in data:
+        diagnostics["accepted_alias_sections"] = [
+            key
+            for key in ("frame", "method", "working_set", "thread_memory")
+            if isinstance(data.get(key), dict)
+        ]
     diagnostics["model_status"] = "ok"
     return WorkMethodState(
         state_id=str(data.get("state_id") or fallback.state_id),

@@ -463,8 +463,10 @@ def test_phase111_academic_discovery_sources_are_not_final_evidence(tmp_path: Pa
     )
 
     assert report.status == "insufficient_evidence"
-    assert report.diagnostics["fetch_attempt_count"] == 0
+    assert report.diagnostics["fetch_attempt_count"] == 1
     assert report.diagnostics["source_rejection_reasons"]["source_discovery_only_for_research_profile"] == 1
+    assert report.diagnostics["discovery_expanded_source_count"] >= 1
+    assert any(action["action"] == "query_arxiv_api" for action in report.diagnostics["next_tool_actions"])
     assert report.diagnostics["evidence_count"] == 0
     assert report.diagnostics["citation_count"] == 0
 

@@ -46,6 +46,27 @@ def test_phase90_http_fetch_provider_fails_closed_without_allowed_host() -> None
     assert "https://example.com/report" not in dumped
 
 
+def test_phase90_http_fetch_provider_allows_host_bounded_discovery_expansion() -> None:
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"arxiv api metadata"))
+    provider = HttpFetchProvider(enabled=True, transport=transport)
+
+    response = provider.fetch(
+        _source(
+            "https://export.arxiv.org/api/query?search_query=all%3Ahyperbolic",
+            provider="discovery_expansion",
+            metadata={
+                "discovery_expanded": True,
+                "fetch_allowed_hosts": ["export.arxiv.org"],
+                "source_kind": "scholarly_preprint",
+            },
+        )
+    )
+
+    assert response.status == "ok"
+    assert response.body == "arxiv api metadata"
+    assert response.diagnostics["host_allowed_by"] == "discovery_expansion"
+
+
 def test_phase90_http_fetch_provider_fails_closed_when_disabled() -> None:
     transport = _Transport()
     provider = HttpFetchProvider(allowed_hosts=["example.com"], transport=transport)
@@ -470,13 +491,14 @@ def test_phase90_json_http_search_provider_requires_configured_api_key(monkeypat
     assert "DEEPSEEK_API_KEY" not in dumped
 
 
-def _source(uri: str) -> SearchSource:
+def _source(uri: str, *, provider: str = "live_http_search", metadata: dict | None = None) -> SearchSource:
     return SearchSource(
         source_id="src-http",
         uri=uri,
         title="HTTP source",
         snippet="HTTP source snippet",
-        provider="live_http_search",
+        provider=provider,
+        metadata=dict(metadata or {}),
     )
 
 
