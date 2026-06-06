@@ -4273,6 +4273,25 @@ def _compact_trace_item_for_prompt(value: JsonObject) -> JsonObject:
             "rejected_evidence_count": value.get("rejected_evidence_count"),
             "preview": _text_preview(value.get("preview"), limit=220),
         }
+    if kind == "host_situation":
+        return {
+            "record_ref": value.get("record_ref"),
+            "kind": kind,
+            "phase": value.get("phase"),
+            "task_mode": value.get("task_mode"),
+            "citations_required": value.get("citations_required"),
+            "retrieval_configured": value.get("retrieval_configured"),
+            "live_search_available": value.get("live_search_available"),
+            "live_fetch_available": value.get("live_fetch_available"),
+            "retrieval_runs": value.get("retrieval_runs"),
+            "search_attempts": value.get("search_attempts"),
+            "fetch_attempts": value.get("fetch_attempts"),
+            "successful_fetches": value.get("successful_fetches"),
+            "latest_retrieval_status": value.get("latest_retrieval_status"),
+            "failure_diagnosis": value.get("failure_diagnosis"),
+            "failure_reason": value.get("failure_reason"),
+            "next_possible_action": value.get("next_possible_action"),
+        }
     return _compact_simple_dict(value, limit=10)
 
 

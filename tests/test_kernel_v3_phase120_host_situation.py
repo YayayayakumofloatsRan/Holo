@@ -3,9 +3,12 @@ import json
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import TaskRecipe
 from kernel_v3.agent.host_situation import build_host_situation
+from kernel_v3.agent.runtime import _compact_thread_rag_context_for_prompt
+from kernel_v3.chat.runtime import _recent_task_trace_context
 from kernel_v3.chat.runtime import _failure_answer_text
 from kernel_v3.contracts import ToolManifest
 from kernel_v3.journal import JournalStore
+from kernel_v3.mission.thread_rag import ThreadWorkingMemoryProvider
 from kernel_v3.processors.adapters import _synthesizer_prompt
 from kernel_v3.retrieval.contracts import RetrievalReport
 from kernel_v3.trace import TraceRenderer
@@ -243,6 +246,62 @@ def test_phase120_agent_runtime_journals_completed_host_situation() -> None:
     assert "mode=direct_answer" in trace
     assert "host_retrieval configured=" in trace
     assert "host_failure diagnosis=" in trace
+
+
+def test_phase120_thread_memory_carries_host_situation_into_next_prompt_context() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-host-context",
+        run_id="run-1",
+        step_id=None,
+        kind="host_situation",
+        data={
+            "schema": "holo.kernel_v3.host_situation.v1",
+            "task": {
+                "task_id": "task-host-context",
+                "run_id": "run-1",
+                "thread_id": "thread-host-context",
+                "mode": "retrieval_answer",
+                "citations_required": True,
+            },
+            "retrieval": {
+                "configured": True,
+                "live_search_available": True,
+                "live_fetch_available": True,
+                "network_budget_available": True,
+            },
+            "recent_activity": {
+                "retrieval_runs": 3,
+                "search_attempts": 9,
+                "fetch_attempts": 12,
+                "successful_fetches": 8,
+                "latest_retrieval_status": "insufficient_evidence",
+            },
+            "failure": {
+                "diagnosis": "evidence_extraction_or_coverage_issue",
+                "reason": "planned_retrieval_subgoals_incomplete",
+                "next_possible_action": "change_search_strategy",
+            },
+        },
+        state_delta={"host_situation": "failure"},
+    )
+
+    thread_memory = ThreadWorkingMemoryProvider().compile(
+        journal,
+        thread_id="thread-host-context",
+        task_id="task-host-context",
+    )
+    prompt_context = _compact_thread_rag_context_for_prompt(thread_memory)
+    chat_trace = _recent_task_trace_context(journal, "task-host-context", limit=8)
+
+    rag_host_items = [item for item in thread_memory["recent_task_trace"] if item["kind"] == "host_situation"]
+    prompt_host_items = [item for item in prompt_context["recent_task_trace"] if item["kind"] == "host_situation"]
+    chat_host_items = [item for item in chat_trace if item["kind"] == "host_situation"]
+    assert rag_host_items[-1]["failure_diagnosis"] == "evidence_extraction_or_coverage_issue"
+    assert rag_host_items[-1]["retrieval_runs"] == 3
+    assert prompt_host_items[-1]["next_possible_action"] == "change_search_strategy"
+    assert prompt_host_items[-1]["live_search_available"] is True
+    assert chat_host_items[-1]["failure_reason"] == "planned_retrieval_subgoals_incomplete"
 
 
 def _retrieval_recipe() -> TaskRecipe:

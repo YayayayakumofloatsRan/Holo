@@ -98,6 +98,7 @@ def _task_trace(journal: JournalStore, task_id: str | None, *, limit: int) -> li
         "observation",
         "retrieval_report",
         "feedback",
+        "host_situation",
         "termination_decision",
         "agent_failure_report",
         "agent_final_answer",
@@ -163,6 +164,8 @@ def _compact_trace(record: LedgerRecord) -> JsonObject:
         return _compact_retrieval_report(record)
     if record.kind == "feedback":
         return _compact_feedback(record)
+    if record.kind == "host_situation":
+        return _compact_host_situation(record)
     if record.kind == "termination_decision":
         return _compact_termination(record)
     if record.kind == "agent_failure_report":
@@ -288,6 +291,32 @@ def _compact_feedback(record: LedgerRecord) -> JsonObject:
         "status": record.data.get("status"),
         "stop_reason": record.data.get("stop_reason"),
         "missing_evidence": _string_list(record.data.get("missing_evidence")),
+    }
+
+
+def _compact_host_situation(record: LedgerRecord) -> JsonObject:
+    data = record.data
+    task = data.get("task") if isinstance(data.get("task"), dict) else {}
+    retrieval = data.get("retrieval") if isinstance(data.get("retrieval"), dict) else {}
+    activity = data.get("recent_activity") if isinstance(data.get("recent_activity"), dict) else {}
+    failure = data.get("failure") if isinstance(data.get("failure"), dict) else {}
+    return {
+        "record_ref": record.record_id,
+        "kind": "host_situation",
+        "phase": record.state_delta.get("host_situation"),
+        "task_mode": task.get("mode"),
+        "citations_required": task.get("citations_required"),
+        "retrieval_configured": retrieval.get("configured"),
+        "live_search_available": retrieval.get("live_search_available"),
+        "live_fetch_available": retrieval.get("live_fetch_available"),
+        "retrieval_runs": activity.get("retrieval_runs"),
+        "search_attempts": activity.get("search_attempts"),
+        "fetch_attempts": activity.get("fetch_attempts"),
+        "successful_fetches": activity.get("successful_fetches"),
+        "latest_retrieval_status": activity.get("latest_retrieval_status"),
+        "failure_diagnosis": failure.get("diagnosis"),
+        "failure_reason": failure.get("reason"),
+        "next_possible_action": failure.get("next_possible_action"),
     }
 
 

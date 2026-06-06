@@ -2081,6 +2081,7 @@ def _recent_task_trace_context(journal: JournalStore, task_id: str | None, *, li
         "observation",
         "feedback",
         "guard",
+        "host_situation",
         "agent_failure_report",
         "agent_final_answer",
         "semantic_task_plan_final_answer",
@@ -2153,6 +2154,8 @@ def _compact_trace_record(record: LedgerRecord) -> JsonObject:
         )
     elif record.kind == "guard":
         base.update({"stop_reason": data.get("stop_reason"), "data": _compact_json(data, limit=160)})
+    elif record.kind == "host_situation":
+        base.update(_compact_host_situation_for_context(data))
     elif record.kind == "agent_failure_report":
         base.update(
             {
@@ -2169,6 +2172,30 @@ def _compact_trace_record(record: LedgerRecord) -> JsonObject:
             }
         )
     return base
+
+
+def _compact_host_situation_for_context(data: JsonObject) -> JsonObject:
+    task = data.get("task") if isinstance(data.get("task"), dict) else {}
+    retrieval = data.get("retrieval") if isinstance(data.get("retrieval"), dict) else {}
+    activity = data.get("recent_activity") if isinstance(data.get("recent_activity"), dict) else {}
+    failure = data.get("failure") if isinstance(data.get("failure"), dict) else {}
+    return {
+        "task_mode": task.get("mode"),
+        "citations_required": task.get("citations_required"),
+        "retrieval_configured": retrieval.get("configured"),
+        "live_search_available": retrieval.get("live_search_available"),
+        "live_fetch_available": retrieval.get("live_fetch_available"),
+        "network_budget_available": retrieval.get("network_budget_available"),
+        "retrieval_runs": activity.get("retrieval_runs"),
+        "search_attempts": activity.get("search_attempts"),
+        "fetch_attempts": activity.get("fetch_attempts"),
+        "successful_fetches": activity.get("successful_fetches"),
+        "latest_retrieval_status": activity.get("latest_retrieval_status"),
+        "latest_failure_reason": activity.get("latest_failure_reason"),
+        "failure_diagnosis": failure.get("diagnosis"),
+        "failure_reason": failure.get("reason"),
+        "next_possible_action": failure.get("next_possible_action"),
+    }
 
 
 def _compact_json(value, *, limit: int):

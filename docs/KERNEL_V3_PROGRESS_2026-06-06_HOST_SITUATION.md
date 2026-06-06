@@ -26,6 +26,11 @@ defaults. They should read the host packet.
   availability, live search/fetch flags, budget, recent retrieval/fetch counts,
   latest retrieval status, failure diagnosis, next action, and latest redacted
   processor error preview.
+- Thread-local working context and thread RAG now retain compact
+  `host_situation` trace items. Follow-up turns can carry the previous loop's
+  real capability state, retrieval attempt counts, failure diagnosis, and next
+  possible action into semantic/planner/evaluator packets instead of forcing the
+  model to infer them from scattered logs.
 - Added compact processor-result summaries to `HostSituation.recent_activity`,
   including task type, provider, model, status, duration, and redacted error
   preview. This lets user-visible failure reports distinguish model/API
@@ -97,7 +102,7 @@ Full kernel-v3 regression after terminal host-situation trace rendering:
 
 ```bash
 .venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
-# 737 passed
+# 738 passed
 ```
 
 Broader smoke used during implementation:
