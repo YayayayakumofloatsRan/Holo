@@ -213,6 +213,123 @@ class MemoryPipeline:
             rejected=[proposal_or_rejection],
         )
 
+    def propose_from_task_reflection(
+        self,
+        *,
+        root_goal: str,
+        outcome: str,
+        task_id: str,
+        run_id: str,
+        thread_id: str,
+        source_record_ref: str | None,
+        failure_report: JsonObject | None = None,
+        final_answer: JsonObject | None = None,
+        host_situation: JsonObject | None = None,
+        metadata: JsonObject | None = None,
+    ) -> MemoryPipelineResult:
+        reflection = _task_reflection_payload(
+            root_goal=root_goal,
+            outcome=outcome,
+            failure_report=failure_report,
+            final_answer=final_answer,
+            host_situation=host_situation,
+            metadata=metadata,
+        )
+        text = str(reflection.get("body") or "")
+        if not text:
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[])
+        if contains_secret_like_content(text):
+            rejection = self._reject_secret(
+                task_id=task_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                source_record_ref=source_record_ref,
+                text=text,
+            )
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[rejection])
+        candidate = ShadowCandidate(
+            candidate_id=stable_candidate_id(
+                {
+                    "source_kind": "task_reflection",
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "source_record_ref": source_record_ref,
+                    "text_hash": _hash_text(text),
+                    "dedupe_key": reflection["dedupe_key"],
+                }
+            ),
+            source_kind="task_reflection",
+            candidate_text=text,
+            normalized_topic=str(reflection["topic"]),
+            required_capabilities=["durable_memory:write"],
+            blocked_capabilities=[],
+            status="open",
+            expires_at_ms=None,
+            created_at_ms=self._now_ms(),
+            metadata={
+                "source_record_ref": source_record_ref,
+                "task_id": task_id,
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "source_kind": "task_reflection",
+                "memory_kind": "workflow_convention",
+                "title": reflection["title"],
+                "summary": reflection["summary"],
+                "body": text,
+                "dedupe_key": reflection["dedupe_key"],
+                "structured": reflection["structured"],
+                "confidence": reflection["confidence"],
+                "rationale": reflection["rationale"],
+                "review_nonblocking": True,
+                **dict(metadata or {}),
+            },
+        )
+        self.store.record_shadow_candidate(candidate)
+        self._journal_memory_record(
+            task_id=task_id,
+            run_id=run_id,
+            kind="memory_shadow_candidate",
+            data=shadow_candidate_event(candidate),
+            state_delta={"memory_candidate": candidate.status},
+        )
+        proposal_or_rejection = self._proposal_from_candidate(
+            candidate,
+            task_id=task_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            source_record_ref=source_record_ref,
+        )
+        if isinstance(proposal_or_rejection, MemoryProposal):
+            proposal = replace(
+                proposal_or_rejection,
+                rationale=str(reflection["rationale"]),
+                metadata={
+                    **dict(proposal_or_rejection.metadata),
+                    "source_kind": "task_reflection",
+                    "outcome": outcome,
+                    "failure_reason": reflection["structured"].get("failure_reason"),
+                    "next_possible_action": reflection["structured"].get("next_possible_action"),
+                    "review_nonblocking": True,
+                    **dict(metadata or {}),
+                },
+            )
+            self.store.record_proposal(proposal)
+            self._journal_memory_record(
+                task_id=task_id,
+                run_id=run_id,
+                kind="memory_proposal",
+                data=memory_proposal_event(proposal),
+                state_delta={"memory_proposal": proposal.approval_status},
+            )
+            return MemoryPipelineResult(shadow_candidates=[candidate], proposals=[proposal], committed_items=[], rejected=[])
+        return MemoryPipelineResult(
+            shadow_candidates=[candidate],
+            proposals=[],
+            committed_items=[],
+            rejected=[proposal_or_rejection],
+        )
+
     def approve_proposal(
         self,
         proposal_id: str,
@@ -464,7 +581,7 @@ class MemoryPipeline:
             candidate_id=candidate.candidate_id,
             operation="upsert",
             proposed_item=item.to_dict(),
-            rationale="explicit durable memory intent",
+            rationale=str(candidate.metadata.get("rationale") or "explicit durable memory intent"),
             source_task_id=task_id,
             source_run_id=run_id,
             source_thread_id=thread_id,
@@ -488,22 +605,29 @@ class MemoryPipeline:
         thread_id: str,
         source_record_ref: str | None,
     ) -> MemoryItem:
-        summary = _memory_summary(candidate.candidate_text)
+        metadata = dict(candidate.metadata)
+        summary = str(metadata.get("summary") or _memory_summary(candidate.candidate_text))[:240]
+        body = str(metadata.get("body") or candidate.candidate_text)
+        kind = str(metadata.get("memory_kind") or _memory_kind(candidate.candidate_text))
+        title = str(metadata.get("title") or _memory_title(candidate.candidate_text))[:120]
         scope = {"user_id": self.user_id, "project_id": self.project_id, "thread_id": thread_id}
-        dedupe_key = f"{_memory_kind(candidate.candidate_text)}:{candidate.normalized_topic}"
+        dedupe_key = str(metadata.get("dedupe_key") or f"{kind}:{candidate.normalized_topic}")
         timestamp = self._now_ms()
+        structured = {"source": candidate.source_kind, "topic": candidate.normalized_topic}
+        if isinstance(metadata.get("structured"), dict):
+            structured.update(dict(metadata["structured"]))
         return MemoryItem(
-            memory_id=stable_memory_id(kind=_memory_kind(candidate.candidate_text), scope=scope, dedupe_key=dedupe_key, summary=summary),
-            kind=_memory_kind(candidate.candidate_text),
-            title=_memory_title(candidate.candidate_text),
+            memory_id=stable_memory_id(kind=kind, scope=scope, dedupe_key=dedupe_key, summary=summary),
+            kind=kind,
+            title=title,
             summary=summary,
-            body=candidate.candidate_text,
-            structured={"source": candidate.source_kind, "topic": candidate.normalized_topic},
+            body=body,
+            structured=structured,
             scope=scope,
-            privacy_class="project_internal",
-            confidence=0.85,
-            ttl_policy="forever",
-            expires_at_ms=None,
+            privacy_class=str(metadata.get("privacy_class") or "project_internal"),
+            confidence=_confidence(metadata.get("confidence"), default=0.85),
+            ttl_policy=str(metadata.get("ttl_policy") or "forever"),
+            expires_at_ms=metadata.get("expires_at_ms") if isinstance(metadata.get("expires_at_ms"), int) else None,
             dedupe_key=dedupe_key,
             conflict_keys=[dedupe_key],
             provenance_refs=[source_record_ref] if source_record_ref else [],
@@ -517,6 +641,7 @@ class MemoryPipeline:
                 "source_task_id": task_id,
                 "source_run_id": run_id,
                 "source_kind": candidate.source_kind,
+                "review_nonblocking": metadata.get("review_nonblocking") is True,
             },
         )
 
@@ -651,6 +776,98 @@ def _existing_tombstone(store: MemoryStore, memory_id: str) -> MemoryTombstone |
         if tombstone.memory_id == memory_id:
             return tombstone
     return None
+
+
+def _task_reflection_payload(
+    *,
+    root_goal: str,
+    outcome: str,
+    failure_report: JsonObject | None,
+    final_answer: JsonObject | None,
+    host_situation: JsonObject | None,
+    metadata: JsonObject | None,
+) -> JsonObject:
+    failure = failure_report if isinstance(failure_report, dict) else {}
+    final = final_answer if isinstance(final_answer, dict) else {}
+    host = host_situation if isinstance(host_situation, dict) else {}
+    host_failure = host.get("failure") if isinstance(host.get("failure"), dict) else {}
+    reason = str(failure.get("reason") or host_failure.get("reason") or outcome)
+    next_action = str(failure.get("next_possible_action") or host_failure.get("next_possible_action") or "")
+    attempted_actions = _string_list(failure.get("attempted_actions"))[:10]
+    attempted_sources = _string_list(failure.get("attempted_sources"))[:10]
+    missing_evidence = _string_list(failure.get("missing_evidence"))[:12]
+    limitations = _string_list(final.get("limitations"))[:8]
+    goal_preview = _memory_summary(root_goal)[:320]
+    structured = {
+        "source": "task_reflection",
+        "outcome": outcome,
+        "failure_reason": reason if failure else None,
+        "next_possible_action": next_action or None,
+        "attempted_actions": attempted_actions,
+        "attempted_sources": attempted_sources,
+        "missing_evidence": missing_evidence,
+        "limitations": limitations,
+        "host_failure_diagnosis": host_failure.get("diagnosis"),
+        "host_retrieval_available": _host_retrieval_available(host),
+    }
+    text = "\n".join(
+        item
+        for item in [
+            "Holo task reflection.",
+            f"Goal: {goal_preview}" if goal_preview else "",
+            f"Outcome: {outcome}.",
+            f"Failure reason: {reason}." if failure else "",
+            f"Attempted actions: {', '.join(attempted_actions)}." if attempted_actions else "",
+            f"Attempted sources: {', '.join(attempted_sources)}." if attempted_sources else "",
+            f"Missing evidence: {', '.join(missing_evidence)}." if missing_evidence else "",
+            f"Next possible action: {next_action}." if next_action else "",
+            (
+                "Reusable lesson: when a similar task recurs, inspect prior failure mode and choose a materially "
+                "different acquisition, tool, source, or synthesis strategy before repeating the same action."
+            ),
+        ]
+        if item
+    )
+    topic_seed = {
+        "goal_hash": _hash_text(root_goal)[:12],
+        "outcome": outcome,
+        "reason": reason,
+        "next_action": next_action,
+        "metadata_kind": (metadata or {}).get("reflection_kind") if isinstance(metadata, dict) else None,
+    }
+    topic = "task-reflection-" + _hash_text(str(topic_seed))[:16]
+    return {
+        "topic": topic,
+        "title": _preview_text(f"Task reflection: {reason}", 120),
+        "summary": _preview_text(f"{outcome}: {goal_preview}; reason={reason}; next={next_action}", 240),
+        "body": text,
+        "dedupe_key": f"task_reflection:{topic}",
+        "structured": structured,
+        "confidence": 0.72 if failure else 0.78,
+        "rationale": "host-derived task reflection; keep pending for review before durable memory commit",
+    }
+
+
+def _host_retrieval_available(host: JsonObject) -> bool | None:
+    runtime = host.get("runtime_capabilities") if isinstance(host.get("runtime_capabilities"), dict) else {}
+    retrieval = runtime.get("retrieval") if isinstance(runtime.get("retrieval"), dict) else {}
+    value = retrieval.get("available_if_routed")
+    return value if isinstance(value, bool) else None
+
+
+def _confidence(value: object, *, default: float) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        result = default
+    return max(0.0, min(1.0, result))
+
+
+def _preview_text(text: str, limit: int) -> str:
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."
 
 
 def _hash_text(text: str) -> str:

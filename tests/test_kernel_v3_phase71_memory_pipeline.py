@@ -5,6 +5,7 @@ from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryPipeline, MemoryStore, stable_memory_id
+from kernel_v3.mission.thread_rag import ThreadWorkingMemoryProvider
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.trace import TraceRenderer
 
@@ -309,6 +310,71 @@ def test_phase71_secret_like_candidate_is_rejected_without_raw_payload_in_memory
     assert "candidate_hash=" in trace
     assert secret not in trace
     assert "sk_12345678901234567890" not in trace
+
+
+def test_phase71_task_reflection_creates_reviewable_nonblocking_learning_proposal():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+
+    result = pipeline.propose_from_task_reflection(
+        root_goal="调查 Apple 和 Oracle 的基本面并做对比",
+        outcome="failed",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-failure",
+        failure_report={
+            "reason": "retrieval_source_quality_insufficient",
+            "attempted_actions": ["retrieval.run", "retrieval.run"],
+            "attempted_sources": ["generic_web_search"],
+            "missing_evidence": ["Oracle fundamentals", "market valuation"],
+            "next_possible_action": "switch_to_authoritative_finance_sources",
+        },
+        host_situation={
+            "runtime_capabilities": {"retrieval": {"available_if_routed": True}},
+            "failure": {"diagnosis": "search_results_low_authority"},
+        },
+    )
+
+    assert len(result.shadow_candidates) == 1
+    assert len(result.proposals) == 1
+    proposal = result.proposals[0]
+    assert proposal.approval_status == "pending"
+    assert proposal.approval_policy == "needs_review"
+    assert proposal.metadata["source_kind"] == "task_reflection"
+    assert proposal.metadata["review_nonblocking"] is True
+    assert proposal.proposed_item["kind"] == "workflow_convention"
+    assert store.recall(query="Apple", scope={"thread_id": "thread-1"}).total == 0
+    record = journal.records(kind="memory_proposal")[-1]
+    assert record.data["review_nonblocking"] is True
+    thread_context = ThreadWorkingMemoryProvider().compile(journal, thread_id="thread-1", task_id="task-1")
+    assert thread_context["memory_learning"][0]["proposal_id"] == proposal.proposal_id
+    assert any(block["kind"] == "memory_learning_signal" for block in thread_context["attention_blocks"])
+
+
+def test_phase71_task_reflection_secret_like_text_is_rejected():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+
+    result = pipeline.propose_from_task_reflection(
+        root_goal="debug credentialed workflow",
+        outcome="failed",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-failure",
+        failure_report={
+            "reason": "tool_failed",
+            "missing_evidence": ["api_key=sk_12345678901234567890"],
+            "next_possible_action": "rotate_secret",
+        },
+    )
+
+    assert result.rejected[0]["reason"] == "memory_rejected_secret_like_content"
+    assert store.shadow_candidates() == []
+    assert store.proposals() == []
 
 
 def test_phase71_default_agent_runtime_does_not_write_memory_without_store():

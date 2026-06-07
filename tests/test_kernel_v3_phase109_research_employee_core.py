@@ -1,6 +1,8 @@
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.answer_profile import infer_answer_profile
 from kernel_v3.agent.contracts import AgentRuntimeResult, SemanticIntake
+from kernel_v3.agent.runtime import task_recipe
+from kernel_v3.chat.runtime import _pending_memory_proposals
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryStore
@@ -111,6 +113,42 @@ def test_phase109_detailed_research_final_creates_memory_proposal() -> None:
     assert proposals[0].approval_status == "pending"
     assert proposals[0].metadata["source_kind"] == "research_final_answer"
     assert journal.records(task_id=result.task_id, kind="memory_proposal")
+
+
+def test_phase109_failure_reflection_creates_nonblocking_memory_proposal() -> None:
+    journal = JournalStore.in_memory()
+    memory = MemoryStore.in_memory()
+    runtime = AgentRuntime(journal=journal, memory_store=memory)
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "thread_id": "thread-1",
+            "execution_metadata": {
+                "semantic_goal": {
+                    "root_goal": "调查 Apple 和 Oracle 的基本面并做对比",
+                }
+            },
+        },
+    )
+
+    failure = runtime._failure(
+        "task-1",
+        "run-1",
+        "retrieval_source_quality_insufficient",
+        missing_evidence=["Oracle fundamentals", "market valuation"],
+        next_action="switch_to_authoritative_finance_sources",
+        recipe=recipe,
+    )
+
+    assert failure.reason == "retrieval_source_quality_insufficient"
+    proposals = memory.proposals()
+    assert len(proposals) == 1
+    assert proposals[0].metadata["source_kind"] == "task_reflection"
+    assert proposals[0].metadata["review_nonblocking"] is True
+    assert memory.list_items() == []
+    proposal_record = journal.records(task_id="task-1", kind="memory_proposal")[-1]
+    assert proposal_record.data["review_nonblocking"] is True
+    assert _pending_memory_proposals(journal, task_id="task-1") == []
 
 
 def test_phase109_mission_supervisor_rejects_short_detailed_final_answer() -> None:

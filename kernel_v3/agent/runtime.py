@@ -1233,6 +1233,44 @@ class AgentRuntime:
                 state_delta={"memory_pipeline": "failed"},
             )
 
+    def _maybe_propose_task_reflection_memory(
+        self,
+        failure: FailureReport,
+        *,
+        recipe: TaskRecipe | None,
+        source_record_ref: str | None,
+    ) -> None:
+        if self.memory_pipeline is None or recipe is None:
+            return
+        if not _should_propose_failure_reflection(failure):
+            return
+        try:
+            self.memory_pipeline.propose_from_task_reflection(
+                root_goal=_root_goal_for_memory_reflection(self.journal, failure.task_id, recipe),
+                outcome="failed",
+                task_id=failure.task_id,
+                run_id=failure.run_id,
+                thread_id=_thread_id_metadata(recipe),
+                source_record_ref=source_record_ref,
+                failure_report=failure.to_dict(),
+                host_situation=failure.host_situation,
+                metadata={
+                    "reflection_kind": "failure_learning",
+                    "review_nonblocking": True,
+                    "recipe_id": recipe.recipe_id,
+                    "mode": recipe.mode,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime isolation
+            self.journal.append(
+                task_id=failure.task_id,
+                run_id=failure.run_id,
+                step_id=None,
+                kind="memory_pipeline_error",
+                data={"error_type": type(exc).__name__, "redaction": {"message": "omitted"}},
+                state_delta={"memory_pipeline": "failed"},
+            )
+
     def _failure(
         self,
         task_id: str,
@@ -1265,13 +1303,19 @@ class AgentRuntime:
             phase="failure",
         )
         failure = replace(failure, host_situation=host_situation)
-        self.journal.append(
+        record = self.journal.append(
             task_id=task_id,
             run_id=run_id,
             step_id=None,
             kind="agent_failure_report",
             data=redact_journal_data(failure.to_dict()),
             state_delta={"agent_final_answer": "failed", "reason": reason},
+        )
+        failure = replace(failure, trace_refs=[*failure.trace_refs, record.record_id])
+        self._maybe_propose_task_reflection_memory(
+            failure,
+            recipe=recipe,
+            source_record_ref=record.record_id,
         )
         return failure
 
@@ -4252,6 +4296,11 @@ def _compact_thread_rag_context_for_prompt(value: object) -> JsonObject:
         "evidence_refs": _string_list(value.get("evidence_refs"))[:16],
         "citation_refs": _string_list(value.get("citation_refs"))[:16],
         "failure_diagnostics": [_compact_failure_for_prompt(item) for item in list(value.get("failure_diagnostics") or [])[-3:] if isinstance(item, dict)],
+        "memory_learning": [
+            _compact_simple_dict(item, limit=10)
+            for item in list(value.get("memory_learning") or [])[-4:]
+            if isinstance(item, dict)
+        ],
     }
 
 
@@ -6233,6 +6282,44 @@ def _thread_id_from_recipe(recipe: TaskRecipe | None) -> str | None:
     if isinstance(execution, dict) and isinstance(execution.get("thread_id"), str):
         return str(execution["thread_id"])
     return None
+
+
+def _should_propose_failure_reflection(failure: FailureReport) -> bool:
+    if failure.user_help_needed:
+        return False
+    if failure.reason in {
+        "needs_user_input",
+        "clarification_required",
+        "missing_direct_answer",
+        "citations_required_but_missing",
+    }:
+        return False
+    if failure.reason.startswith("user_"):
+        return False
+    return bool(failure.attempted_actions or failure.missing_evidence or failure.next_possible_action)
+
+
+def _root_goal_for_memory_reflection(journal: JournalStore, task_id: str, recipe: TaskRecipe) -> str:
+    semantic_goal = _semantic_goal_metadata(recipe)
+    for key in ("root_goal", "goal", "current_input_preview"):
+        value = semantic_goal.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    research = _research_mission_metadata(recipe)
+    for key in ("root_goal", "goal", "user_goal"):
+        value = research.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    plan = _task_execution_plan_metadata(recipe)
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    for step in steps:
+        if isinstance(step, dict) and isinstance(step.get("goal"), str) and step["goal"].strip():
+            return str(step["goal"]).strip()
+    for record in reversed(journal.records(task_id=task_id, kind="task")):
+        text = record.data.get("input_text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return task_id
 
 
 def _agent_final_from_processor(processor_answer, *, task_id: str, run_id: str, trace_refs: list[str]) -> FinalAnswer:

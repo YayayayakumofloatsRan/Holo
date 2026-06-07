@@ -164,6 +164,12 @@ Kernel v3 currently contains the infrastructure for:
   memory proposal from the final answer, citation refs, evidence refs, and
   research mission metadata. The model still cannot commit durable memory
   directly;
+- non-blocking task-reflection memory proposals. When a task fails after real
+  attempts, the host can distill the root goal, failure mode, attempted actions,
+  missing evidence, next action, and host diagnostics into a reviewable
+  workflow-memory proposal. These learning proposals enter thread RAG/attention
+  context for later planner packets but do not block the next user turn and do
+  not auto-commit durable memory;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file

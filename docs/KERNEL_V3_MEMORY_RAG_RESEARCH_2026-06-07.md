@@ -226,3 +226,30 @@ This research pass supports three concrete kernel-v3 decisions:
 3. Model calls must receive enough host/runtime truth to reason well, but large
    audit payloads must stay in journal/artifacts and be referenced by ids,
    hashes, previews, and diagnostics.
+
+## 2026-06-07 Implementation Update: Task Reflection Memory
+
+This pass adds the first host-owned learning hook after task completion/failure:
+
+- `MemoryPipeline.propose_from_task_reflection()` accepts a compact task
+  reflection packet: root goal, outcome, failure reason, attempted actions,
+  attempted sources, missing evidence, next possible action, and host
+  diagnostics.
+- The resulting memory is a `workflow_convention` draft with provenance and a
+  pending `MemoryProposal`. It is explicitly `review_nonblocking`, so it can be
+  audited through memory admin without turning the chat thread into a pending
+  question.
+- `AgentRuntime._failure()` can call this hook for meaningful non-user-blocking
+  failures. Clarification, user-input, cancellation-like, and empty direct-answer
+  failures are not promoted.
+- `ThreadWorkingMemoryProvider` now includes compact `memory_learning` records
+  and an attention block for the latest learning signal. The planner/evaluator
+  packet can therefore see reusable lessons from recent runs without reading raw
+  logs or committed long-term memory bodies.
+- Projection still journals manifests only: ids, hashes, previews, status,
+  policy, and the `review_nonblocking` flag. Full memory bodies remain in
+  `MemoryStore`, and committed durable memory still requires host/user approval.
+
+This is not a fixed-response simulation shortcut. The host records task facts
+and failure diagnostics; future LLM packets use those facts as context and still
+decide their next action through the normal planner/evaluator loop.

@@ -2246,6 +2246,8 @@ def _pending_memory_proposals(journal: JournalStore, *, task_id: str) -> list[Le
     proposals: list[LedgerRecord] = []
     for record in journal.records(task_id=task_id, kind="memory_proposal"):
         if record.data.get("approval_status") == "pending":
+            if record.data.get("review_nonblocking") is True:
+                continue
             proposals.append(record)
     return proposals
 

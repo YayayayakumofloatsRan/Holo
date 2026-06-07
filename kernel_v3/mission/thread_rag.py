@@ -33,6 +33,7 @@ class ThreadWorkingMemoryProvider:
         evidence_refs = _recent_refs(journal, task_id=task_id, kind="retrieval_evidence", key="evidence_id")
         citation_refs = _recent_refs(journal, task_id=task_id, kind="retrieval_citation", key="citation_id")
         failure_diagnostics = _recent_failure_diagnostics(journal, task_id=task_id)
+        memory_learning = _recent_memory_learning(journal, task_id=task_id)
         task_trace = trace
         recent_results = [_compact_result(record, preview_chars=self.config.text_preview_chars) for record in results]
         payload = {
@@ -46,6 +47,7 @@ class ThreadWorkingMemoryProvider:
             "evidence_refs": evidence_refs,
             "citation_refs": citation_refs,
             "failure_diagnostics": failure_diagnostics,
+            "memory_learning": memory_learning,
         }
         payload["attention_blocks"] = _attention_blocks(
             recent_results=recent_results,
@@ -53,6 +55,7 @@ class ThreadWorkingMemoryProvider:
             evidence_refs=evidence_refs,
             citation_refs=citation_refs,
             failure_diagnostics=failure_diagnostics,
+            memory_learning=memory_learning,
         )
         payload["context_hash"] = _hash_payload(payload)
         return payload
@@ -130,6 +133,13 @@ def _recent_failure_diagnostics(journal: JournalStore, *, task_id: str | None) -
         return []
     records = journal.records(task_id=task_id, kind="agent_failure_report")[-4:]
     return [_compact_failure(record) for record in records]
+
+
+def _recent_memory_learning(journal: JournalStore, *, task_id: str | None) -> list[JsonObject]:
+    if not task_id:
+        return []
+    records = journal.records(task_id=task_id, kind="memory_proposal")[-6:]
+    return [_compact_memory_proposal(record) for record in records]
 
 
 def _compact_turn(record: LedgerRecord, *, preview_chars: int) -> JsonObject:
@@ -264,6 +274,23 @@ def _compact_failure(record: LedgerRecord) -> JsonObject:
     }
 
 
+def _compact_memory_proposal(record: LedgerRecord) -> JsonObject:
+    proposed = record.data.get("proposed_item") if isinstance(record.data.get("proposed_item"), dict) else {}
+    return {
+        "record_ref": record.record_id,
+        "kind": "memory_proposal",
+        "proposal_id": record.data.get("proposal_id"),
+        "approval_status": record.data.get("approval_status"),
+        "approval_policy": record.data.get("approval_policy"),
+        "review_nonblocking": record.data.get("review_nonblocking"),
+        "proposed_kind": proposed.get("kind"),
+        "summary_preview": _preview(str(proposed.get("summary_preview") or ""), 360),
+        "summary_hash": proposed.get("summary_hash"),
+        "source_thread_id": record.data.get("source_thread_id"),
+        "evidence_record_refs": _string_list(record.data.get("evidence_record_refs"))[:6],
+    }
+
+
 def _compact_final(record: LedgerRecord) -> JsonObject:
     return {
         "record_ref": record.record_id,
@@ -344,6 +371,7 @@ def _attention_blocks(
     evidence_refs: list[str],
     citation_refs: list[str],
     failure_diagnostics: list[JsonObject],
+    memory_learning: list[JsonObject],
 ) -> list[JsonObject]:
     blocks: list[JsonObject] = []
     if failure_diagnostics:
@@ -380,6 +408,22 @@ def _attention_blocks(
                 "priority": 0.9,
                 "summary": f"Current task has {len(evidence_refs)} evidence refs and {len(citation_refs)} citation refs.",
                 "refs": [*evidence_refs[:6], *citation_refs[:6]],
+            }
+        )
+    if memory_learning:
+        latest = memory_learning[-1]
+        blocks.append(
+            {
+                "block_id": f"attention-memory-learning-{latest.get('record_ref')}",
+                "kind": "memory_learning_signal",
+                "priority": 0.86,
+                "summary": _preview(
+                    f"Memory proposal {latest.get('proposal_id')} "
+                    f"status={latest.get('approval_status')} "
+                    f"kind={latest.get('proposed_kind')}: {latest.get('summary_preview')}",
+                    360,
+                ),
+                "refs": [str(latest.get("record_ref"))] if latest.get("record_ref") else [],
             }
         )
     if recent_task_trace:
