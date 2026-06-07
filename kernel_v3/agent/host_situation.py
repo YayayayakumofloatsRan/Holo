@@ -7,6 +7,29 @@ from kernel_v3.journal import JournalStore
 
 HOST_SITUATION_SCHEMA = "holo.kernel_v3.host_situation.v1"
 
+HOLO_SYSTEM_INFO = {
+    "name": "Holo Kernel v3",
+    "schema": "holo.kernel_v3.system_info.v1",
+    "role": "host_owned_single_agent_harness",
+    "operating_principle": "model_proposes_host_validates_executes_journals_verifies_and_stops",
+    "default_language": "zh",
+    "core_boundaries": [
+        "The model cannot directly execute tools.",
+        "The model cannot bypass PolicyGate.",
+        "The model cannot write durable memory directly.",
+        "The host owns tool execution, journaling, artifact storage, and termination.",
+        "Public traces show operational facts, not hidden chain-of-thought.",
+    ],
+    "capability_surfaces": [
+        "semantic planning and evaluation",
+        "answer synthesis",
+        "retrieval-grounded research when routed to retrieval mode",
+        "workspace read/write when routed to workspace mode and allowed by policy",
+        "system time when routed to system mode",
+        "durable memory recall/write pipeline when configured and approved",
+    ],
+}
+
 
 def build_host_situation(
     *,
@@ -38,6 +61,7 @@ def build_host_situation(
     )
     return {
         "schema": HOST_SITUATION_SCHEMA,
+        "holo_system": HOLO_SYSTEM_INFO,
         "task": task,
         "permissions": _permission_state(recipe=recipe),
         "tools": _tool_state(tool_manifests or [], recipe=recipe),

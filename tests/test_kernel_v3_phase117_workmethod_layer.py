@@ -286,3 +286,67 @@ def test_phase117_auto_generation_can_upshift_workmethod_only_for_hard_replan() 
     )
     assert replan["model"] == DEEPSEEK_V4_PRO
     assert replan["thinking"] == "enabled"
+
+
+def test_phase117_mission_supervisor_does_not_block_host_accepted_final_answer_with_model_gap() -> None:
+    journal = JournalStore.in_memory()
+    fabric = fake_fabric(
+        {
+            "mission.assess": {
+                "decision": "continue",
+                "coverage_score": 0.1,
+                "covered_requirements": [],
+                "missing_requirements": ["should_not_be_called"],
+                "unsupported_claims": [],
+                "next_directive": {"strategy": "should_not_be_called"},
+                "confidence": 0.1,
+                "reason_summary": "should_not_be_called",
+            },
+            "workmethod.gap": {
+                "covered": [],
+                "missing": ["should_not_be_called"],
+                "redundant_work": [],
+                "stale_context": [],
+                "wrong_strategy": [],
+                "should_continue": True,
+                "should_shift_strategy": True,
+                "should_finalize": False,
+                "reason": "should_not_be_called",
+            },
+        },
+        journal=journal,
+    )
+    mission = MissionSupervisor(
+        journal=journal,
+        processor_fabric=fabric,
+        assessor_mode="model",
+    ).start(root_goal="解释你的能力", thread_id="thread-final-skip", metadata={})
+    result = AgentRuntimeResult(
+        status="completed",
+        task_id="task-final-skip",
+        run_id="run-1",
+        mode="direct_answer",
+        recipe_id="recipe-direct-answer",
+        final_answer={
+            "answer": "我可以在主机控制下规划、调用工具、记录证据并给出回答。",
+            "citation_refs": [],
+            "used_evidence": [],
+            "limitations": [],
+            "confidence": 0.8,
+        },
+        failure_report=None,
+        trace_refs=[],
+    )
+
+    _updated, assessment = MissionSupervisor(
+        journal=journal,
+        processor_fabric=fabric,
+        assessor_mode="model",
+    ).assess(mission, result, index=1)
+
+    assert assessment.decision == "final_answer"
+    assert not [
+        record
+        for record in journal.records(task_id="task-final-skip", kind="processor_request")
+        if record.data.get("task_type") in {"mission.assess", "workmethod.gap"}
+    ]

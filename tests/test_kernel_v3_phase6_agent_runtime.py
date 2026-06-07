@@ -263,6 +263,29 @@ def test_phase6_model_planner_failure_returns_failure_report_not_user_prompt():
     assert _action_names(journal, result.task_id) == ["ask_user"]
 
 
+def test_phase6_model_planner_failure_in_retrieval_mode_is_not_misdiagnosed_as_missing_report():
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={"fake_malformed_json": FakeMalformedJsonProvider("not-json")},
+        router=ProcessorRouter(default_provider="fake_malformed_json", default_model="fake-malformed-json"),
+        journal=journal,
+    )
+
+    result = AgentRuntime(journal=journal, processor_fabric=fabric, artifact_store=ArtifactStore.in_memory()).run(
+        "search current finance evidence",
+        mode="retrieval",
+        planner_mode="model",
+        evaluator_mode="model",
+    )
+
+    assert result.status == "failed"
+    assert result.failure_report is not None
+    assert result.failure_report["reason"] == "model_planner_processor_failed"
+    assert result.failure_report["next_possible_action"] == "retry_model_planner_or_reduce_context"
+    assert "planner_action" in result.failure_report["missing_evidence"]
+    assert not journal.records(task_id=result.task_id, kind="retrieval_report")
+
+
 def test_phase6_trace_evidence_artifacts_and_retrieval_trace_render_complete_path():
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()

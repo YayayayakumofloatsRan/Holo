@@ -271,10 +271,13 @@ class ChatRuntime:
                 state=state,
                 continuable_plan=plan_record,
                 pending_plan=pending_plan_record,
-                host_situation=build_host_situation(
-                    journal=self.journal,
-                    task_id=state.active_task_id,
-                    thread_id=state.thread_id,
+                host_situation=_with_runtime_capabilities(
+                    build_host_situation(
+                        journal=self.journal,
+                        task_id=state.active_task_id,
+                        thread_id=state.thread_id,
+                    ),
+                    self.agent_runtime,
                 ),
             ),
             schema=CHAT_ROUTE_SCHEMA,
@@ -1223,10 +1226,29 @@ def _chat_route_prompt(
             "A bare confusion turn such as 'I do not understand' is not a summary request.",
             "For current thread, host, agent, or runtime state queries, use new_task unless the user used a slash command.",
             "Use new_task when the turn is a fresh request or when continuation is vague but no active or continuable task exists.",
+            "When host_situation.runtime_capabilities exposes retrieval available_if_routed and the user asks for current evidence-grounded research, route as new_task so the agent can select retrieval mode.",
             "The host will validate route feasibility against thread state before acting.",
         ],
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _with_runtime_capabilities(host_situation: JsonObject, agent_runtime: object) -> JsonObject:
+    result = dict(host_situation)
+    runtime_capabilities = getattr(agent_runtime, "runtime_capabilities", None)
+    if callable(runtime_capabilities):
+        capabilities = runtime_capabilities()
+        if isinstance(capabilities, dict):
+            result["runtime_capabilities"] = capabilities
+            rules = result.get("user_visible_rules")
+            if isinstance(rules, list):
+                rules.append(
+                    "Distinguish current task state from runtime_capabilities; route to the matching mode when the user asks for an available capability."
+                )
+                rules.append(
+                    "For capability or self-state turns, runtime_capabilities describe what Holo can do after routing; current task limits are not global limits."
+                )
+    return result
 
 
 def _route_plan_summary(plan_record: LedgerRecord | None) -> JsonObject | None:
@@ -2183,6 +2205,8 @@ def _compact_trace_record(record: LedgerRecord) -> JsonObject:
 def _compact_host_situation_for_context(data: JsonObject) -> JsonObject:
     task = data.get("task") if isinstance(data.get("task"), dict) else {}
     retrieval = data.get("retrieval") if isinstance(data.get("retrieval"), dict) else {}
+    runtime = data.get("runtime_capabilities") if isinstance(data.get("runtime_capabilities"), dict) else {}
+    runtime_retrieval = runtime.get("retrieval") if isinstance(runtime.get("retrieval"), dict) else {}
     activity = data.get("recent_activity") if isinstance(data.get("recent_activity"), dict) else {}
     failure = data.get("failure") if isinstance(data.get("failure"), dict) else {}
     return {
@@ -2192,6 +2216,10 @@ def _compact_host_situation_for_context(data: JsonObject) -> JsonObject:
         "live_search_available": retrieval.get("live_search_available"),
         "live_fetch_available": retrieval.get("live_fetch_available"),
         "network_budget_available": retrieval.get("network_budget_available"),
+        "runtime_retrieval_available_if_routed": runtime_retrieval.get("available_if_routed"),
+        "runtime_live_search_available": runtime_retrieval.get("live_search_available"),
+        "runtime_live_fetch_available": runtime_retrieval.get("live_fetch_available"),
+        "runtime_profile_aware_search_available": runtime_retrieval.get("profile_aware_search_available"),
         "retrieval_runs": activity.get("retrieval_runs"),
         "search_attempts": activity.get("search_attempts"),
         "fetch_attempts": activity.get("fetch_attempts"),

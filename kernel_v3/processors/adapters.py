@@ -243,7 +243,7 @@ def _synthesizer_prompt(
             "Do not say live retrieval, network access, or finance research is unavailable unless host_situation.retrieval or host_situation.failure says so.",
             "If host_situation says retrieval was attempted but evidence is insufficient, describe the real failure as search/fetch/extraction/citation/coverage quality instead of a permission problem.",
         ],
-        "retrieval_report": report.to_dict(),
+        "retrieval_report": _compact_retrieval_report_for_provider(report),
         "evidence": [_compact_evidence_for_provider(item, preview_chars=evidence_preview_chars) for item in evidence],
         "citations": [_compact_citation_for_provider(item, preview_chars=citation_preview_chars) for item in citations],
     }
@@ -263,9 +263,258 @@ def _compact_context(context: ContextBundle) -> JsonObject:
         "thread_key": context.thread_key,
         "event_ids": list(context.event_ids),
         "memory_refs": list(context.memory_refs),
-        "state": context.state,
+        "state": _compact_context_state_for_provider(context.state),
         "token_budget": context.token_budget,
     }
+
+
+def _compact_context_state_for_provider(state: JsonObject) -> JsonObject:
+    """Build a prompt-safe view of host state.
+
+    The journal and ContextPack keep the full audit payload. Processor calls need
+    the facts that affect the next decision, not every static catalog entry or a
+    full retrieval graph on every loop iteration.
+    """
+
+    result: JsonObject = {}
+    for key in (
+        "task_id",
+        "run_id",
+        "thread_id",
+        "input_text",
+        "context_pack_hash",
+    ):
+        if key in state:
+            result[key] = _compact_prompt_value(state[key])
+    result["host_situation"] = _compact_prompt_value(state.get("host_situation"))
+    result["agent_recipe"] = _compact_agent_recipe_for_provider(_json_object(state.get("agent_recipe")))
+    result["agent_runtime_directive"] = _compact_runtime_directive_for_provider(
+        _json_object(state.get("agent_runtime_directive"))
+    )
+    result["capability_catalog"] = _compact_capability_catalog_for_provider(
+        _json_object(state.get("capability_catalog"))
+    )
+    result["retrieval_capability_state"] = _compact_prompt_value(state.get("retrieval_capability_state"))
+    result["agent_retrieval_plan_state"] = _compact_prompt_value(state.get("agent_retrieval_plan_state"))
+    result["agent_replan_hints"] = _compact_replan_hints_for_provider(
+        _json_object(state.get("agent_replan_hints"))
+    )
+    result["mission_context"] = _compact_prompt_value(state.get("mission_context"))
+    result["thread_working_context"] = _compact_prompt_value(state.get("thread_working_context"))
+    result["thread_rag_context"] = _compact_prompt_value(state.get("thread_rag_context"))
+    result["answer_profile"] = _compact_prompt_value(state.get("answer_profile"))
+    result["research_mission"] = _compact_prompt_value(state.get("research_mission"))
+    result["workmethod"] = _compact_prompt_value(state.get("workmethod"))
+    result["sections"] = _compact_sections_for_provider(state.get("sections"))
+    result["source_refs"] = _string_list(state.get("source_refs"))[-16:]
+    result["memory_refs"] = _string_list(state.get("memory_refs"))[-16:]
+    result["budget"] = _compact_prompt_value(state.get("budget"))
+    result["semantic_goal"] = _compact_prompt_value(state.get("semantic_goal"))
+    result["semantic_state_profile_summary"] = _compact_prompt_value(
+        state.get("semantic_state_profile_summary")
+    )
+    result["semantic_state_profiles"] = _compact_list_for_provider(
+        state.get("semantic_state_profiles"),
+        limit=1,
+    )
+    result["semantic_state_space"] = _compact_state_space_for_provider(
+        _json_object(state.get("semantic_state_space"))
+    )
+    result["research_source_directory"] = _compact_research_source_directory_for_provider(
+        state.get("research_source_directory")
+    )
+    return {key: value for key, value in result.items() if value not in ({}, [], None)}
+
+
+def _compact_agent_recipe_for_provider(recipe: JsonObject) -> JsonObject:
+    metadata = _json_object(recipe.get("metadata"))
+    execution = _json_object(metadata.get("execution_metadata"))
+    return {
+        "recipe_id": recipe.get("recipe_id"),
+        "mode": recipe.get("mode"),
+        "allowed_tools": _string_list(recipe.get("allowed_tools"))[:16],
+        "permission_profile": recipe.get("permission_profile"),
+        "citations_required": recipe.get("citations_required"),
+        "finalizer": recipe.get("finalizer"),
+        "context_budget_mode": recipe.get("context_budget_mode"),
+        "limits": {
+            "max_steps": recipe.get("max_steps"),
+            "max_tool_calls": recipe.get("max_tool_calls"),
+            "max_network_fetches": recipe.get("max_network_fetches"),
+            "max_total_artifact_bytes": recipe.get("max_total_artifact_bytes"),
+        },
+        "metadata": {
+            "thread_id": metadata.get("thread_id"),
+            "allowed_permissions": _string_list(execution.get("allowed_permissions"))[:16],
+            "semantic_intake": _compact_prompt_value(metadata.get("semantic_intake")),
+            "task_execution_plan": _compact_prompt_value(metadata.get("task_execution_plan")),
+            "answer_profile": _compact_prompt_value(metadata.get("answer_profile")),
+            "research_mission": _compact_prompt_value(metadata.get("research_mission")),
+        },
+    }
+
+
+def _compact_runtime_directive_for_provider(directive: JsonObject) -> JsonObject:
+    return {
+        "mode": directive.get("mode"),
+        "required_first_action": _compact_prompt_value(directive.get("required_first_action")),
+        "required_outcome": _compact_prompt_value(directive.get("required_outcome")),
+        "allowed_tools": _string_list(directive.get("allowed_tools"))[:16],
+        "forbidden": _string_list(directive.get("forbidden"))[:16],
+        "allowed_non_tool_actions": _compact_list_for_provider(
+            directive.get("allowed_non_tool_actions"),
+            limit=4,
+        ),
+        "search_strategy_hint": _compact_prompt_value(directive.get("search_strategy_hint")),
+        "answer_profile": _compact_prompt_value(directive.get("answer_profile")),
+        "final_answer_contract": _compact_prompt_value(directive.get("final_answer_contract")),
+        "interaction_preferences": _compact_prompt_value(directive.get("interaction_preferences")),
+        "research_mission": _compact_prompt_value(directive.get("research_mission")),
+        "active_memory": _compact_prompt_value(directive.get("active_memory")),
+        "workmethod": _compact_prompt_value(directive.get("workmethod")),
+    }
+
+
+def _compact_capability_catalog_for_provider(catalog: JsonObject) -> JsonObject:
+    capabilities = catalog.get("capabilities") if isinstance(catalog.get("capabilities"), list) else []
+    allowed = set(_string_list(catalog.get("allowed_tools")))
+    relevant: list[JsonObject] = []
+    for item in capabilities:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "")
+        tool_name = str(item.get("tool_name") or "")
+        capability_id = str(item.get("capability_id") or "")
+        if status == "enabled" or tool_name in allowed or any(
+            marker in capability_id
+            for marker in ("retrieval", "finance", "memory", "workspace", "system")
+        ):
+            relevant.append(
+                {
+                    "capability_id": capability_id,
+                    "family": item.get("family"),
+                    "status": status,
+                    "tool_name": item.get("tool_name"),
+                    "side_effect_class": item.get("side_effect_class"),
+                    "permissions_required": _string_list(item.get("permissions_required"))[:8],
+                }
+            )
+        if len(relevant) >= 20:
+            break
+    return {
+        "version": catalog.get("version"),
+        "mode": catalog.get("mode"),
+        "allowed_tools": _string_list(catalog.get("allowed_tools"))[:16],
+        "executable_tools": _string_list(catalog.get("executable_tools"))[:16],
+        "family_keys": list(_json_object(catalog.get("families")).keys())[:24],
+        "capabilities": relevant,
+        "capability_count": len(capabilities),
+        "host_rule": catalog.get("host_rule"),
+    }
+
+
+def _compact_replan_hints_for_provider(hints: JsonObject) -> JsonObject:
+    retrieval = _json_object(hints.get("retrieval"))
+    compact = {
+        "status": hints.get("status"),
+        "recipe_mode": hints.get("recipe_mode"),
+        "iteration_index": hints.get("iteration_index"),
+        "latest_feedback": _compact_prompt_value(hints.get("latest_feedback")),
+        "latest_termination": _compact_prompt_value(hints.get("latest_termination")),
+        "latest_evidence_sufficiency": _compact_prompt_value(hints.get("latest_evidence_sufficiency")),
+        "avoid_repeating": _string_list(hints.get("avoid_repeating"))[-12:],
+        "suggested_next_action": hints.get("suggested_next_action"),
+    }
+    if retrieval:
+        compact["retrieval"] = {
+            "needs_replan": retrieval.get("needs_replan"),
+            "latest_report_status": retrieval.get("latest_report_status"),
+            "latest_report_reason": retrieval.get("latest_report_reason"),
+            "missing": _string_list(retrieval.get("missing"))[:24],
+            "incomplete_planned_goal_ids": _string_list(retrieval.get("incomplete_planned_goal_ids"))[:16],
+            "missing_query_facets": _string_list(retrieval.get("missing_query_facets"))[:16],
+            "missing_finance_facets": _string_list(retrieval.get("missing_finance_facets"))[:16],
+            "covered_query_facets": _string_list(retrieval.get("covered_query_facets"))[:16],
+            "covered_finance_facets": _string_list(retrieval.get("covered_finance_facets"))[:16],
+            "source_authority_requirement": retrieval.get("source_authority_requirement"),
+            "failure_attribution": _compact_prompt_value(retrieval.get("failure_attribution")),
+            "suggested_search_strategies": _string_list(retrieval.get("suggested_search_strategies"))[:12],
+            "suggested_query_hints": _string_list(retrieval.get("suggested_query_hints"))[:12],
+            "suggested_source_targets": _compact_list_for_provider(retrieval.get("suggested_source_targets"), limit=8),
+            "suggested_filing_documents": _compact_list_for_provider(retrieval.get("suggested_filing_documents"), limit=4),
+            "suggested_sec_structured_sources": _compact_list_for_provider(retrieval.get("suggested_sec_structured_sources"), limit=4),
+            "suggested_macro_series": _compact_list_for_provider(retrieval.get("suggested_macro_series"), limit=4),
+            "suggested_fiscaldata_endpoints": _compact_list_for_provider(retrieval.get("suggested_fiscaldata_endpoints"), limit=4),
+            "attempted_queries": _string_list(retrieval.get("attempted_queries"))[-16:],
+            "attempted_search_strategies": _string_list(retrieval.get("attempted_search_strategies"))[-12:],
+            "attempted_provider_ids": _string_list(retrieval.get("attempted_provider_ids"))[-16:],
+            "attempts": _compact_list_for_provider(retrieval.get("attempts"), limit=4),
+            "fetch_summary": _compact_prompt_value(retrieval.get("fetch_summary")),
+            "recent_fetches": _compact_list_for_provider(retrieval.get("recent_fetches"), limit=4),
+            "do_not_finalize_until": _string_list(retrieval.get("do_not_finalize_until"))[:12],
+        }
+    return compact
+
+
+def _compact_state_space_for_provider(space: JsonObject) -> JsonObject:
+    dimensions = space.get("state_dimensions") if isinstance(space.get("state_dimensions"), dict) else {}
+    families = space.get("families") if isinstance(space.get("families"), dict) else {}
+    task_domains = space.get("task_domains") if isinstance(space.get("task_domains"), dict) else {}
+    return {
+        "version": space.get("version"),
+        "modes": _string_list(space.get("modes"))[:16],
+        "family_keys": list(families.keys())[:24],
+        "task_domain_keys": list(task_domains.keys())[:24],
+        "state_dimension_keys": list(dimensions.keys())[:24],
+        "host_rule": space.get("host_rule"),
+    }
+
+
+def _compact_research_source_directory_for_provider(value: object) -> list[JsonObject]:
+    items = value if isinstance(value, list) else []
+    result: list[JsonObject] = []
+    for item in items[:6]:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "source_id": item.get("source_id"),
+                "title": item.get("title"),
+                "profile_id": item.get("profile_id"),
+                "source_family": item.get("source_family"),
+                "authority_level": item.get("authority_level"),
+                "base_url": item.get("base_url"),
+                "allowed_hosts": _string_list(item.get("allowed_hosts"))[:6],
+                "use_cases": _string_list(item.get("use_cases"))[:6],
+                "query_hints": _string_list(item.get("query_hints"))[:4],
+            }
+        )
+    return result
+
+
+def _compact_sections_for_provider(value: object) -> list[JsonObject]:
+    sections = value if isinstance(value, list) else []
+    useful_names = {
+        "user_event",
+        "active_task_state",
+        "recent_observations",
+        "artifact_references",
+        "memory_refs",
+        "citations",
+        "durable_memory",
+        "permission_state",
+    }
+    return [
+        _compact_prompt_value(item)
+        for item in sections[:10]
+        if isinstance(item, dict) and str(item.get("name") or "") in useful_names
+    ]
+
+
+def _compact_list_for_provider(value: object, *, limit: int) -> list[object]:
+    if not isinstance(value, list):
+        return []
+    return [_compact_prompt_value(item) for item in value[: max(0, limit)]]
 
 
 def _task_goal_from_report(report: RetrievalReport) -> str:
@@ -286,6 +535,90 @@ def _interaction_preferences_from_report(report: RetrievalReport) -> JsonObject:
     if isinstance(response_language, str) and response_language:
         return {"response_language": response_language}
     return {}
+
+
+def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObject:
+    diagnostics = report.diagnostics if isinstance(report.diagnostics, dict) else {}
+    evaluation = _json_object(diagnostics.get("evaluation_diagnostics"))
+    source_quality = _json_object(diagnostics.get("source_quality"))
+    graph = _json_object(diagnostics.get("research_graph"))
+    answer_profile = _json_object(diagnostics.get("answer_profile"))
+    research_mission = _json_object(diagnostics.get("research_mission"))
+    host_situation = _json_object(diagnostics.get("host_situation"))
+    return {
+        "report_id": report.report_id,
+        "goal_id": report.goal_id,
+        "status": report.status,
+        "query_plan_id": report.query_plan_id,
+        "search_attempt_count": len(report.search_attempt_ids),
+        "fetch_attempt_count": len(report.fetch_attempt_ids),
+        "evidence_count": len(report.evidence_ids),
+        "citation_count": len(report.citation_ids),
+        "evidence_ids": list(report.evidence_ids)[-24:],
+        "citation_ids": list(report.citation_ids)[-24:],
+        "artifact_refs": list(report.artifact_refs)[-16:],
+        "preview": _preview(report.preview, 720),
+        "diagnostics": {
+            "goal_query": diagnostics.get("goal_query"),
+            "task_goal": diagnostics.get("task_goal"),
+            "reason": diagnostics.get("reason"),
+            "source_quality": _compact_source_quality_for_provider(source_quality),
+            "evaluation": _compact_retrieval_evaluation_for_provider(evaluation),
+            "attempted_queries": _string_list(diagnostics.get("attempted_queries"))[-24:],
+            "attempted_provider_ids": _string_list(diagnostics.get("attempted_provider_ids"))[-24:],
+            "search_summary": _compact_list_for_provider(diagnostics.get("search_summaries"), limit=8),
+            "fetch_summary": _compact_list_for_provider(diagnostics.get("fetch_summaries"), limit=8),
+            "rejected_evidence_count": diagnostics.get("rejected_evidence_count"),
+            "rejected_evidence_reasons": _compact_prompt_value(diagnostics.get("rejected_evidence_reasons")),
+            "next_tool_actions": _compact_list_for_provider(diagnostics.get("next_tool_actions"), limit=8),
+            "research_graph_summary": {
+                "node_count": len(graph.get("nodes", [])) if isinstance(graph.get("nodes"), list) else 0,
+                "edge_count": len(graph.get("edges", [])) if isinstance(graph.get("edges"), list) else 0,
+                "diagnostics": _compact_prompt_value(graph.get("diagnostics")),
+            },
+            "answer_profile": {
+                "format": answer_profile.get("format"),
+                "detail_level": answer_profile.get("detail_level"),
+                "language": answer_profile.get("language"),
+                "target_sections": _string_list(answer_profile.get("target_sections"))[:16],
+                "minimum_coverage": _string_list(answer_profile.get("minimum_coverage"))[:16],
+            },
+            "research_mission": {
+                "mission_type": research_mission.get("mission_type"),
+                "required_facets": _string_list(research_mission.get("required_facets"))[:24],
+                "target_entities": _string_list(research_mission.get("target_entities"))[:12],
+            },
+            "host_situation": _compact_prompt_value(host_situation),
+        },
+    }
+
+
+def _compact_source_quality_for_provider(value: JsonObject) -> JsonObject:
+    return {
+        "authority_sufficient": value.get("authority_sufficient"),
+        "best_authority_score": value.get("best_authority_score"),
+        "primary_source_count": value.get("primary_source_count"),
+        "secondary_source_count": value.get("secondary_source_count"),
+        "weak_source_count": value.get("weak_source_count"),
+        "acceptable_source_count": value.get("acceptable_source_count"),
+        "source_families": _string_list(value.get("source_families"))[:12],
+        "issues": _string_list(value.get("issues"))[:12],
+    }
+
+
+def _compact_retrieval_evaluation_for_provider(value: JsonObject) -> JsonObject:
+    return {
+        "decision": value.get("decision"),
+        "sufficient": value.get("sufficient"),
+        "reason": value.get("reason"),
+        "missing_query_facets": _string_list(value.get("missing_query_facets"))[:16],
+        "covered_query_facets": _string_list(value.get("covered_query_facets"))[:16],
+        "missing_profile_facets": _string_list(value.get("missing_profile_facets"))[:16],
+        "covered_profile_facets": _string_list(value.get("covered_profile_facets"))[:16],
+        "missing_finance_facets": _string_list(value.get("missing_finance_facets"))[:16],
+        "covered_finance_facets": _string_list(value.get("covered_finance_facets"))[:16],
+        "failure_attribution": _compact_prompt_value(value.get("failure_attribution")),
+    }
 
 
 def _compact_observation_for_provider(observation: Observation) -> JsonObject:

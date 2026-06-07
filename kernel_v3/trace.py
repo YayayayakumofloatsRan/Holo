@@ -266,6 +266,8 @@ class TraceRenderer:
         data = record.data
         task = data.get("task") if isinstance(data.get("task"), dict) else {}
         retrieval = data.get("retrieval") if isinstance(data.get("retrieval"), dict) else {}
+        runtime = data.get("runtime_capabilities") if isinstance(data.get("runtime_capabilities"), dict) else {}
+        runtime_retrieval = runtime.get("retrieval") if isinstance(runtime.get("retrieval"), dict) else {}
         activity = data.get("recent_activity") if isinstance(data.get("recent_activity"), dict) else {}
         failure = data.get("failure") if isinstance(data.get("failure"), dict) else {}
         permissions = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
@@ -277,6 +279,9 @@ class TraceRenderer:
             f"  host_retrieval configured={retrieval.get('configured')} live_search={retrieval.get('live_search_available')} "
             f"live_fetch={retrieval.get('live_fetch_available')} network_budget={retrieval.get('network_budget_available')} "
             f"max_fetches={retrieval.get('max_network_fetches') or limits.get('max_network_fetches')}",
+            f"  runtime_retrieval available_if_routed={runtime_retrieval.get('available_if_routed')} "
+            f"live_search={runtime_retrieval.get('live_search_available')} live_fetch={runtime_retrieval.get('live_fetch_available')} "
+            f"profile_aware={runtime_retrieval.get('profile_aware_search_available')}",
             f"  host_activity actions={_trace_list(activity.get('attempted_actions'))} "
             f"retrieval_runs={activity.get('retrieval_runs', 0)} searches={activity.get('search_attempts', 0)} "
             f"fetches={activity.get('successful_fetches', 0)}/{activity.get('fetch_attempts', 0)} "

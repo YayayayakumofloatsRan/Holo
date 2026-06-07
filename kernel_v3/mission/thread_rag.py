@@ -312,6 +312,8 @@ def _compact_host_situation(record: LedgerRecord) -> JsonObject:
 def _compact_host_situation_data(data: JsonObject) -> JsonObject:
     task = data.get("task") if isinstance(data.get("task"), dict) else {}
     retrieval = data.get("retrieval") if isinstance(data.get("retrieval"), dict) else {}
+    runtime = data.get("runtime_capabilities") if isinstance(data.get("runtime_capabilities"), dict) else {}
+    runtime_retrieval = runtime.get("retrieval") if isinstance(runtime.get("retrieval"), dict) else {}
     activity = data.get("recent_activity") if isinstance(data.get("recent_activity"), dict) else {}
     failure = data.get("failure") if isinstance(data.get("failure"), dict) else {}
     return {
@@ -320,6 +322,10 @@ def _compact_host_situation_data(data: JsonObject) -> JsonObject:
         "retrieval_configured": retrieval.get("configured"),
         "live_search_available": retrieval.get("live_search_available"),
         "live_fetch_available": retrieval.get("live_fetch_available"),
+        "runtime_retrieval_available_if_routed": runtime_retrieval.get("available_if_routed"),
+        "runtime_live_search_available": runtime_retrieval.get("live_search_available"),
+        "runtime_live_fetch_available": runtime_retrieval.get("live_fetch_available"),
+        "runtime_profile_aware_search_available": runtime_retrieval.get("profile_aware_search_available"),
         "retrieval_runs": activity.get("retrieval_runs"),
         "search_attempts": activity.get("search_attempts"),
         "fetch_attempts": activity.get("fetch_attempts"),

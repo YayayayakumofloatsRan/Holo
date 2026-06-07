@@ -3,15 +3,22 @@ import json
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import TaskRecipe
 from kernel_v3.agent.host_situation import build_host_situation
+from kernel_v3.agent.runtime import _AgentContextCompiler
 from kernel_v3.agent.runtime import _compact_thread_rag_context_for_prompt
 from kernel_v3.chat import ChatRuntime
+from kernel_v3.chat.runtime import _with_runtime_capabilities
 from kernel_v3.chat.runtime import _recent_task_trace_context
 from kernel_v3.chat.runtime import _failure_answer_text
 from kernel_v3.contracts import ToolManifest
 from kernel_v3.journal import JournalStore
 from kernel_v3.mission.thread_rag import ThreadWorkingMemoryProvider
 from kernel_v3.processors.adapters import _synthesizer_prompt
+from kernel_v3.processors.adapters import _planner_prompt
 from kernel_v3.retrieval.contracts import RetrievalReport
+from kernel_v3.retrieval.operator import RetrievalOperator
+from kernel_v3.retrieval.providers import FakeFetchProvider, FakeSearchProvider
+from kernel_v3.session import TaskState
+from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
 
 
@@ -214,6 +221,52 @@ def test_phase120_synthesizer_prompt_carries_host_situation() -> None:
     assert any("host_situation" in item for item in payload["answer_requirements"])
 
 
+def test_phase120_synthesizer_prompt_compacts_large_retrieval_report() -> None:
+    report = RetrievalReport(
+        report_id="report-large",
+        goal_id="goal-large",
+        status="sufficient",
+        query_plan_id="plan-large",
+        search_attempt_ids=["search-1"],
+        fetch_attempt_ids=["fetch-1"],
+        evidence_ids=["ev-1"],
+        citation_ids=["cite-1"],
+        evaluation_id="eval-large",
+        artifact_refs=["artifact-1"],
+        preview="large report",
+        diagnostics={
+            "task_goal": "写一份详细研究报告",
+            "research_graph": {
+                "nodes": [
+                    {"id": f"node-{index}", "raw": "FULL_GRAPH_SHOULD_NOT_APPEAR " * 200}
+                    for index in range(80)
+                ],
+                "edges": [{"source": "a", "target": "b"} for _ in range(80)],
+            },
+            "search_summaries": [
+                {"query": "q", "raw": "SEARCH_RAW_SHOULD_BE_COMPACTED " * 200}
+                for _ in range(40)
+            ],
+            "fetch_summaries": [
+                {"uri": "https://example.com", "content": "FETCH_RAW_SHOULD_BE_COMPACTED " * 200}
+                for _ in range(40)
+            ],
+            "host_situation": {
+                "schema": "holo.kernel_v3.host_situation.v1",
+                "runtime_capabilities": {"retrieval": {"available_if_routed": True}},
+            },
+        },
+    )
+
+    prompt = _synthesizer_prompt(report, [], [])
+    payload = json.loads(prompt)
+
+    assert len(prompt) < 45_000
+    assert "FULL_GRAPH_SHOULD_NOT_APPEAR" not in prompt
+    assert payload["retrieval_report"]["diagnostics"]["research_graph_summary"]["node_count"] == 80
+    assert payload["retrieval_report"]["citation_ids"] == ["cite-1"]
+
+
 def test_phase120_agent_runtime_context_result_and_failure_journal_host_situation() -> None:
     journal = JournalStore.in_memory()
 
@@ -323,6 +376,80 @@ def test_phase120_chat_agent_result_persists_host_situation_for_thread_memory() 
     assert chat_records[-1].data["host_situation"]["schema"] == "holo.kernel_v3.host_situation.v1"
     assert recent_result_host["task_mode"] == "direct_answer"
     assert recent_result_host["retrieval_configured"] is False
+
+
+def test_phase120_initial_semantic_context_carries_runtime_retrieval_capabilities() -> None:
+    runtime = AgentRuntime(journal=JournalStore.in_memory(), retrieval_operator=_live_like_retrieval_operator())
+
+    situation = runtime._initial_host_situation(thread_id="thread-runtime-capability")
+
+    runtime_retrieval = situation["runtime_capabilities"]["retrieval"]
+    assert situation["holo_system"]["role"] == "host_owned_single_agent_harness"
+    assert situation["retrieval"]["configured"] is False
+    assert runtime_retrieval["available_if_routed"] is True
+    assert runtime_retrieval["live_search_available"] is True
+    assert runtime_retrieval["live_fetch_available"] is True
+    assert "runtime_capabilities" in " ".join(situation["user_visible_rules"])
+
+
+def test_phase120_chat_route_prompt_carries_runtime_capabilities() -> None:
+    journal = JournalStore.in_memory()
+    runtime = ChatRuntime(
+        journal=journal,
+        agent_runtime=AgentRuntime(journal=journal, retrieval_operator=_live_like_retrieval_operator()),
+        turn_router_mode="model",
+    )
+
+    # Exercise the same host packet helper used by chat.route without requiring a live fabric.
+    situation = _with_runtime_capabilities(
+        build_host_situation(journal=journal, thread_id="thread-route"),
+        runtime.agent_runtime,
+    )
+
+    assert situation["runtime_capabilities"]["retrieval"]["available_if_routed"] is True
+    assert situation["runtime_capabilities"]["retrieval"]["live_search_available"] is True
+    assert situation["runtime_capabilities"]["retrieval"]["profile_aware_search_available"] is True
+
+
+def test_phase120_agent_context_compiler_carries_runtime_capabilities() -> None:
+    journal = JournalStore.in_memory()
+    runtime = AgentRuntime(journal=journal, retrieval_operator=_live_like_retrieval_operator())
+    recipe = _semantic_recipe()
+    task = TaskState(
+        task_id="task-context-capability",
+        run_id="run-1",
+        thread_id="thread-context-capability",
+        input_text="你现在能做什么？",
+        status="running",
+        step_id="step-0",
+    )
+    compiler = _AgentContextCompiler(
+        recipe=recipe,
+        tool_manifests=ToolRegistry.with_builtin_respond().manifests(),
+        runtime_capabilities=runtime.runtime_capabilities(),
+    )
+
+    context = compiler.compile(task, journal)
+
+    host_situation = context.state["host_situation"]
+    assert host_situation["retrieval"]["configured"] is False
+    assert host_situation["runtime_capabilities"]["retrieval"]["available_if_routed"] is True
+    assert host_situation["runtime_capabilities"]["retrieval"]["live_search_available"] is True
+    assert "Holo Kernel v3" == host_situation["holo_system"]["name"]
+    prompt = _planner_prompt(context, None)
+    assert "runtime_capabilities" in prompt
+    assert len(prompt) < 80_000
+
+
+def _live_like_retrieval_operator() -> RetrievalOperator:
+    search = FakeSearchProvider({})
+    search.provider_id = "live_like_search"
+    search.live_network = True
+    search.profile_aware = True
+    fetch = FakeFetchProvider({})
+    fetch.provider_id = "live_like_fetch"
+    fetch.live_network = True
+    return RetrievalOperator(search_provider=search, fetch_provider=fetch)
 
 
 def _retrieval_recipe() -> TaskRecipe:

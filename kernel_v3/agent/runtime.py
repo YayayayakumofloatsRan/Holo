@@ -265,10 +265,7 @@ class AgentRuntime:
         execution_metadata = _with_interaction_preferences(execution_metadata, response_language=effective_language)
         execution_metadata = _with_host_situation_metadata(
             execution_metadata,
-            host_situation=build_host_situation(
-                journal=self.journal,
-                thread_id=thread_id,
-            ),
+            host_situation=self._initial_host_situation(thread_id=thread_id),
         )
         semantic_goal = _semantic_goal_for_execution(goal, execution_metadata)
         intake = self._semantic_intake(
@@ -384,6 +381,7 @@ class AgentRuntime:
                 recipe=recipe,
                 tool_manifests=registry.manifests(),
                 memory_store=self.memory_store,
+                runtime_capabilities=self.runtime_capabilities(),
             ),
             planner=planner,
             policy_gate=PolicyGate(
@@ -429,32 +427,10 @@ class AgentRuntime:
             source_record_ref=semantic_record.record_id,
         )
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
+        processor_failure = self._planner_processor_failure_result(result, recipe=recipe)
+        if processor_failure is not None:
+            return processor_failure
         if result.status == "needs_user_input":
-            if _latest_action_has_reason(self.journal, result.task_id, result.run_id, "processor_failed"):
-                failure = self._failure(
-                    result.task_id,
-                    result.run_id,
-                    "model_planner_processor_failed",
-                    missing_evidence=_ordered_unique(
-                        [
-                            *_missing_evidence(self.journal, result.task_id, result.run_id),
-                            "planner_action",
-                        ]
-                    ),
-                    next_action="retry_model_planner_or_reduce_context",
-                    recipe=recipe,
-                )
-                return AgentRuntimeResult(
-                    status="failed",
-                    task_id=result.task_id,
-                    run_id=result.run_id,
-                    mode=recipe.mode,
-                    recipe_id=recipe.recipe_id,
-                    final_answer=None,
-                    failure_report=failure.to_dict(),
-                    trace_refs=_trace_refs(self.journal, result.task_id),
-                    host_situation=dict(failure.host_situation),
-                )
             if recipe.mode == "retrieval_answer" and _latest_action_is_no_planned_action(self.journal, result.task_id, result.run_id):
                 planned_missing = _planned_retrieval_missing_evidence(self.journal, result.task_id, result.run_id, recipe)
                 failure = self._failure(
@@ -525,6 +501,34 @@ class AgentRuntime:
             failure_report=failure.to_dict() if failure is not None else None,
             trace_refs=_trace_refs(self.journal, result.task_id),
             host_situation=host_situation,
+        )
+
+    def _planner_processor_failure_result(self, result, *, recipe: TaskRecipe) -> AgentRuntimeResult | None:
+        if not _latest_action_has_reason(self.journal, result.task_id, result.run_id, "processor_failed"):
+            return None
+        failure = self._failure(
+            result.task_id,
+            result.run_id,
+            "model_planner_processor_failed",
+            missing_evidence=_ordered_unique(
+                [
+                    *_missing_evidence(self.journal, result.task_id, result.run_id),
+                    "planner_action",
+                ]
+            ),
+            next_action="retry_model_planner_or_reduce_context",
+            recipe=recipe,
+        )
+        return AgentRuntimeResult(
+            status="failed",
+            task_id=result.task_id,
+            run_id=result.run_id,
+            mode=recipe.mode,
+            recipe_id=recipe.recipe_id,
+            final_answer=None,
+            failure_report=failure.to_dict(),
+            trace_refs=_trace_refs(self.journal, result.task_id),
+            host_situation=dict(failure.host_situation),
         )
 
     def _registry(self, recipe: TaskRecipe, goal: str) -> ToolRegistry:
@@ -1310,7 +1314,7 @@ class AgentRuntime:
         tool_manifests: list[ToolManifest] | None = None,
         failure_report: JsonObject | None = None,
     ) -> JsonObject:
-        return build_host_situation(
+        situation = build_host_situation(
             journal=self.journal,
             task_id=task_id,
             run_id=run_id,
@@ -1319,15 +1323,81 @@ class AgentRuntime:
             failure_report=failure_report,
             thread_id=_thread_id_from_recipe(recipe),
         )
+        return self._with_runtime_capabilities(situation)
+
+    def _initial_host_situation(self, *, thread_id: str) -> JsonObject:
+        return self._with_runtime_capabilities(
+            build_host_situation(
+                journal=self.journal,
+                thread_id=thread_id,
+            )
+        )
+
+    def _with_runtime_capabilities(self, situation: JsonObject) -> JsonObject:
+        return _host_situation_with_runtime_capabilities(
+            situation,
+            runtime_capabilities=self.runtime_capabilities(),
+        )
+
+    def runtime_capabilities(self) -> JsonObject:
+        retrieval = _runtime_retrieval_capabilities(self.retrieval_operator)
+        return {
+            "schema": "holo.kernel_v3.runtime_capabilities.v1",
+            "retrieval": retrieval,
+            "memory": {
+                "durable_memory_store_configured": self.memory_store is not None,
+                "active_memory_recall_available": self.memory_store is not None,
+            },
+            "workspace": {
+                "workspace_root_configured": self.workspace_root is not None,
+                "workspace_files_configured": bool(self.workspace_files),
+            },
+            "system": {
+                "system_time_available": True,
+            },
+            "host_rule": (
+                "These are runtime-level capabilities available when the host routes a task to the matching mode. "
+                "They do not override the current recipe, PolicyGate, permissions, or budgets."
+            ),
+        }
+
+
+def _host_situation_with_runtime_capabilities(
+    situation: JsonObject,
+    *,
+    runtime_capabilities: JsonObject,
+) -> JsonObject:
+    result = dict(situation)
+    result["runtime_capabilities"] = dict(runtime_capabilities)
+    rules = result.get("user_visible_rules")
+    if isinstance(rules, list):
+        result["user_visible_rules"] = list(rules)
+        result["user_visible_rules"].append(
+            "Distinguish current_recipe tools from runtime_capabilities. "
+            "A direct-answer recipe may not execute retrieval, while a routed retrieval task may still have live retrieval available."
+        )
+        result["user_visible_rules"].append(
+            "For user-visible capability or self-state answers, report Holo's runtime capabilities first; "
+            "then mention current-step recipe limits only as current-step constraints."
+        )
+    return result
 
 
 class _AgentContextCompiler:
-    def __init__(self, *, recipe: TaskRecipe, tool_manifests: list[ToolManifest], memory_store: MemoryStore | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        recipe: TaskRecipe,
+        tool_manifests: list[ToolManifest],
+        memory_store: MemoryStore | None = None,
+        runtime_capabilities: JsonObject | None = None,
+    ) -> None:
         self.recipe = recipe
         self.tool_manifests = [
             manifest for manifest in tool_manifests if manifest.name in set(recipe.allowed_tools)
         ]
         self.memory_store = memory_store
+        self.runtime_capabilities = dict(runtime_capabilities or {})
         self.thread_memory = ThreadWorkingMemoryProvider()
 
     def compile(self, task: TaskState, journal: JournalStore) -> ContextBundle:
@@ -1399,6 +1469,11 @@ class _AgentContextCompiler:
             tool_manifests=self.tool_manifests,
             thread_id=task.thread_id,
         )
+        if self.runtime_capabilities:
+            host_situation = _host_situation_with_runtime_capabilities(
+                host_situation,
+                runtime_capabilities=self.runtime_capabilities,
+            )
         state = redact_journal_data(
             {
                 "task_id": task.task_id,
@@ -4283,6 +4358,10 @@ def _compact_trace_item_for_prompt(value: JsonObject) -> JsonObject:
             "retrieval_configured": value.get("retrieval_configured"),
             "live_search_available": value.get("live_search_available"),
             "live_fetch_available": value.get("live_fetch_available"),
+            "runtime_retrieval_available_if_routed": value.get("runtime_retrieval_available_if_routed"),
+            "runtime_live_search_available": value.get("runtime_live_search_available"),
+            "runtime_live_fetch_available": value.get("runtime_live_fetch_available"),
+            "runtime_profile_aware_search_available": value.get("runtime_profile_aware_search_available"),
             "retrieval_runs": value.get("retrieval_runs"),
             "search_attempts": value.get("search_attempts"),
             "fetch_attempts": value.get("fetch_attempts"),
@@ -4541,6 +4620,43 @@ def _provider_ids(items: list[JsonObject]) -> list[str]:
         if isinstance(nested, list):
             ids.extend(_provider_ids([entry for entry in nested if isinstance(entry, dict)]))
     return _ordered_unique(ids)
+
+
+def _runtime_retrieval_capabilities(operator: RetrievalOperator | None) -> JsonObject:
+    if operator is None:
+        return {
+            "available_if_routed": False,
+            "network_access": False,
+            "live_search_available": False,
+            "live_fetch_available": False,
+            "profile_aware_search_available": False,
+            "search_provider_ids": [],
+            "fetch_provider_ids": [],
+            "provider_summary": [],
+        }
+    capabilities = operator.provider_capabilities()
+    search = [item for item in capabilities if isinstance(item, dict) and item.get("provider_kind") == "search"]
+    fetch = [item for item in capabilities if isinstance(item, dict) and item.get("provider_kind") == "fetch"]
+    return {
+        "available_if_routed": True,
+        "network_access": bool(operator.network_access),
+        "live_search_available": any(bool(item.get("live_network")) for item in search),
+        "live_fetch_available": any(bool(item.get("live_network")) for item in fetch),
+        "profile_aware_search_available": any(bool(item.get("profile_aware")) for item in search),
+        "search_provider_ids": _provider_ids(search),
+        "fetch_provider_ids": _provider_ids(fetch),
+        "provider_summary": [
+            {
+                "provider_id": item.get("provider_id"),
+                "provider_kind": item.get("provider_kind"),
+                "live_network": bool(item.get("live_network")),
+                "profile_aware": bool(item.get("profile_aware")),
+                "authority": item.get("authority"),
+            }
+            for item in capabilities[:20]
+            if isinstance(item, dict)
+        ],
+    }
 
 
 def _research_profile_id(recipe: TaskRecipe) -> str | None:

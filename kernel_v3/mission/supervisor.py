@@ -86,15 +86,24 @@ class MissionSupervisor:
     def assess(self, mission: MissionState, result: AgentRuntimeResult, *, index: int) -> tuple[MissionState, MissionAssessment]:
         run_delta = collect_run_delta(self.journal, task_id=result.task_id, run_id=result.run_id)
         rule_assessment = self._rule_assessment(mission, result, run_delta=run_delta, index=index)
-        model_assessment = self._model_assessment(mission, result, run_delta=run_delta, rule_assessment=rule_assessment)
+        skip_post_final_model = _skip_post_final_model_assessment(result, rule_assessment)
+        model_assessment = (
+            None
+            if skip_post_final_model
+            else self._model_assessment(mission, result, run_delta=run_delta, rule_assessment=rule_assessment)
+        )
         assessment = _merge_model_assessment(rule_assessment, model_assessment)
         work_gap = WorkMethodSupervisor(
             processor_fabric=self.processor_fabric,
-            mode="model" if self.assessor_mode == "model" and self.processor_fabric is not None else "rule",
+            mode=(
+                "model"
+                if self.assessor_mode == "model" and self.processor_fabric is not None and not skip_post_final_model
+                else "rule"
+            ),
         ).assess_gap(
             root_goal=mission.root_goal,
-            run_delta=run_delta,
-            agent_result=result.to_dict(),
+            run_delta=_compact_run_delta_for_prompt(run_delta),
+            agent_result=_compact_agent_result_for_prompt(result),
             mission_assessment=assessment.to_dict(),
             workmethod=_latest_workmethod_state(self.journal, task_id=result.task_id, run_id=result.run_id),
             task_id=result.task_id,
@@ -268,10 +277,10 @@ class MissionSupervisor:
             return None
         payload = {
             "contract": MISSION_ASSESS_PROMPT_CONTRACT,
-            "mission_state": mission.to_dict(),
-            "agent_result": result.to_dict(),
-            "host_situation": dict(result.host_situation),
-            "run_delta": run_delta,
+            "mission_state": _compact_mission_state_for_prompt(mission),
+            "agent_result": _compact_agent_result_for_prompt(result),
+            "host_situation": _compact_host_situation_for_prompt(result.host_situation),
+            "run_delta": _compact_run_delta_for_prompt(run_delta),
             "host_rule_assessment": rule_assessment.to_dict(),
         }
         outcome = self.processor_fabric.run_json(
@@ -619,6 +628,208 @@ def _hard_block_reason(result: AgentRuntimeResult) -> str | None:
     if reason.startswith("missing_permissions"):
         return reason
     return None
+
+
+def _skip_post_final_model_assessment(result: AgentRuntimeResult, assessment: MissionAssessment) -> bool:
+    return (
+        assessment.decision == "final_answer"
+        and result.status == "completed"
+        and isinstance(result.final_answer, dict)
+        and bool(result.final_answer)
+    )
+
+
+def _compact_mission_state_for_prompt(mission: MissionState) -> JsonObject:
+    coverage = mission.coverage_map if isinstance(mission.coverage_map, dict) else {}
+    return {
+        "mission_id": mission.mission_id,
+        "thread_id": mission.thread_id,
+        "root_goal": mission.root_goal,
+        "status": mission.status,
+        "iteration_count": mission.iteration_count,
+        "active_task_id": mission.active_task_id,
+        "last_run_id": mission.last_run_id,
+        "requirements": [
+            {
+                "requirement_id": item.get("requirement_id"),
+                "text": item.get("text"),
+                "status": item.get("status"),
+                "missing_reason": item.get("missing_reason"),
+            }
+            for item in mission.requirements[:24]
+            if isinstance(item, dict)
+        ],
+        "coverage_map": {
+            "coverage_score": coverage.get("coverage_score"),
+            "missing_requirements": _string_list(coverage.get("missing_requirements"))[:24],
+            "evidence_refs": _string_list(coverage.get("evidence_refs"))[-24:],
+            "citation_refs": _string_list(coverage.get("citation_refs"))[-24:],
+        },
+        "attempted_strategies": list(mission.attempted_strategies)[-24:],
+        "open_gaps": list(mission.open_gaps)[:24],
+        "blocked_reasons": list(mission.blocked_reasons)[-12:],
+        "directive": _compact_prompt_value(mission.directive),
+        "metadata": {
+            "entrypoint": mission.metadata.get("entrypoint") if isinstance(mission.metadata, dict) else None,
+            "mode": mission.metadata.get("mode") if isinstance(mission.metadata, dict) else None,
+            "answer_profile": _compact_prompt_value(mission.metadata.get("answer_profile"))
+            if isinstance(mission.metadata, dict)
+            else {},
+            "research_mission": _compact_prompt_value(mission.metadata.get("research_mission"))
+            if isinstance(mission.metadata, dict)
+            else {},
+            "no_progress_count": mission.metadata.get("no_progress_count") if isinstance(mission.metadata, dict) else None,
+        },
+    }
+
+
+def _compact_agent_result_for_prompt(result: AgentRuntimeResult) -> JsonObject:
+    final_answer = result.final_answer if isinstance(result.final_answer, dict) else {}
+    failure = result.failure_report if isinstance(result.failure_report, dict) else {}
+    return {
+        "status": result.status,
+        "task_id": result.task_id,
+        "run_id": result.run_id,
+        "mode": result.mode,
+        "recipe_id": result.recipe_id,
+        "final_answer": {
+            "status": final_answer.get("status"),
+            "confidence": final_answer.get("confidence"),
+            "answer_preview": _compact_text(str(final_answer.get("answer") or ""), limit=1800),
+            "citation_refs": _string_list(final_answer.get("citation_refs"))[:24],
+            "used_evidence": _string_list(final_answer.get("used_evidence"))[:24],
+            "limitations": _string_list(final_answer.get("limitations"))[:16],
+            "error": final_answer.get("error"),
+        }
+        if final_answer
+        else None,
+        "failure_report": {
+            "reason": failure.get("reason"),
+            "missing_evidence": _string_list(failure.get("missing_evidence"))[:24],
+            "next_possible_action": failure.get("next_possible_action"),
+            "attempted_actions": _string_list(failure.get("attempted_actions"))[-24:],
+            "attempted_sources": _string_list(failure.get("attempted_sources"))[-24:],
+        }
+        if failure
+        else None,
+        "host_situation": _compact_host_situation_for_prompt(result.host_situation),
+        "trace_refs": list(result.trace_refs)[-24:],
+    }
+
+
+def _compact_run_delta_for_prompt(run_delta: JsonObject) -> JsonObject:
+    return {
+        "actions": _compact_list(run_delta.get("actions"), limit=12),
+        "observations": _compact_list(run_delta.get("observations"), limit=12),
+        "retrieval_reports": [_compact_retrieval_report_for_prompt(item) for item in _dict_items(run_delta.get("retrieval_reports"))[-8:]],
+        "evidence_refs": _string_list(run_delta.get("evidence_refs"))[-32:],
+        "citation_refs": _string_list(run_delta.get("citation_refs"))[-32:],
+        "artifact_refs": _string_list(run_delta.get("artifact_refs"))[-32:],
+        "final_answers": _compact_list(run_delta.get("final_answers"), limit=4),
+        "failure_reports": _compact_list(run_delta.get("failure_reports"), limit=4),
+        "attempted_queries": _ordered_unique(
+            [
+                query
+                for report in _dict_items(run_delta.get("retrieval_reports"))
+                for query in _string_list(report.get("attempted_queries"))
+            ]
+        )[-32:],
+    }
+
+
+def _compact_retrieval_report_for_prompt(report: JsonObject) -> JsonObject:
+    diagnostics = report.get("diagnostics") if isinstance(report.get("diagnostics"), dict) else {}
+    evaluation = diagnostics.get("evaluation_diagnostics") if isinstance(diagnostics.get("evaluation_diagnostics"), dict) else {}
+    source_quality = diagnostics.get("source_quality") if isinstance(diagnostics.get("source_quality"), dict) else {}
+    return {
+        "report_id": report.get("report_id"),
+        "goal_id": report.get("goal_id"),
+        "status": report.get("status"),
+        "preview": _compact_text(str(report.get("preview") or ""), limit=720),
+        "evidence_ids": _string_list(report.get("evidence_ids"))[-24:],
+        "citation_ids": _string_list(report.get("citation_ids"))[-24:],
+        "attempted_queries": _string_list(diagnostics.get("attempted_queries") or report.get("attempted_queries"))[-24:],
+        "reason": diagnostics.get("reason"),
+        "source_quality": {
+            "authority_sufficient": source_quality.get("authority_sufficient"),
+            "best_authority_score": source_quality.get("best_authority_score"),
+            "primary_source_count": source_quality.get("primary_source_count"),
+            "acceptable_source_count": source_quality.get("acceptable_source_count"),
+            "source_families": _string_list(source_quality.get("source_families"))[:12],
+        },
+        "evaluation": {
+            "missing_query_facets": _string_list(evaluation.get("missing_query_facets"))[:16],
+            "missing_profile_facets": _string_list(evaluation.get("missing_profile_facets"))[:16],
+            "missing_finance_facets": _string_list(evaluation.get("missing_finance_facets"))[:16],
+            "failure_attribution": _compact_prompt_value(evaluation.get("failure_attribution")),
+        },
+    }
+
+
+def _compact_host_situation_for_prompt(value: JsonObject) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    runtime = value.get("runtime_capabilities") if isinstance(value.get("runtime_capabilities"), dict) else {}
+    retrieval = value.get("retrieval") if isinstance(value.get("retrieval"), dict) else {}
+    failure = value.get("failure") if isinstance(value.get("failure"), dict) else {}
+    return {
+        "schema": value.get("schema"),
+        "holo_system": value.get("holo_system"),
+        "retrieval": {
+            "configured": retrieval.get("configured"),
+            "live_search_available": retrieval.get("live_search_available"),
+            "live_fetch_available": retrieval.get("live_fetch_available"),
+            "last_status": retrieval.get("last_status"),
+            "last_reason": retrieval.get("last_reason"),
+            "retrieval_runs": retrieval.get("retrieval_runs"),
+        },
+        "runtime_capabilities": {
+            "retrieval": runtime.get("retrieval") if isinstance(runtime.get("retrieval"), dict) else {},
+            "memory": runtime.get("memory") if isinstance(runtime.get("memory"), dict) else {},
+            "workspace": runtime.get("workspace") if isinstance(runtime.get("workspace"), dict) else {},
+            "system": runtime.get("system") if isinstance(runtime.get("system"), dict) else {},
+        },
+        "failure": {
+            "reason": failure.get("reason"),
+            "next_possible_action": failure.get("next_possible_action"),
+        },
+    }
+
+
+def _compact_prompt_value(value: object):
+    if isinstance(value, str):
+        return _compact_text(value, limit=720) if len(value) > 720 else value
+    if isinstance(value, list):
+        return [_compact_prompt_value(item) for item in value[:16]]
+    if isinstance(value, dict):
+        result: JsonObject = {}
+        for key, item in value.items():
+            if isinstance(item, str) and key in {"text", "quote", "body", "raw", "content", "answer"}:
+                result[f"{key}_preview"] = _compact_text(item, limit=720)
+                result[f"{key}_chars"] = len(item)
+                continue
+            result[key] = _compact_prompt_value(item)
+        return result
+    return value
+
+
+def _compact_list(value: object, *, limit: int) -> list[object]:
+    if not isinstance(value, list):
+        return []
+    return [_compact_prompt_value(item) for item in value[:limit]]
+
+
+def _dict_items(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _compact_text(text: str, *, limit: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."
 
 
 def _updated_requirement(item: JsonObject, assessment: MissionAssessment) -> JsonObject:

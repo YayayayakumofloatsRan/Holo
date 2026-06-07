@@ -100,6 +100,8 @@ discovery-expansion and retrieval benchmark pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-06_DISCOVERY_EXPANSION.md`. The current
 system-time/resident scheduling pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-06_RESIDENT_TIME_PRIORITY.md`. The current
+memory/RAG research and implementation target is summarized in
+`docs/KERNEL_V3_MEMORY_RAG_RESEARCH_2026-06-07.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
