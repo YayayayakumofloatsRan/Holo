@@ -131,19 +131,21 @@ class MemoryPipeline:
         source_record_ref: str | None,
         metadata: JsonObject | None = None,
     ) -> MemoryPipelineResult:
-        text = " ".join(str(answer_text or "").split())
-        if not text:
+        full_text = " ".join(str(answer_text or "").split())
+        if not full_text:
             return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[])
-        if contains_secret_like_content(text):
+        if contains_secret_like_content(full_text):
             rejection = self._reject_secret(
                 task_id=task_id,
                 run_id=run_id,
                 thread_id=thread_id,
                 source_record_ref=source_record_ref,
-                text=text,
+                text=full_text,
             )
             return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[rejection])
-        topic = _normalized_topic(text)
+        research_note = _research_result_payload(answer_text=full_text, metadata=metadata)
+        text = str(research_note["body"])
+        topic = str(research_note["topic"])
         candidate = ShadowCandidate(
             candidate_id=stable_candidate_id(
                 {
@@ -152,7 +154,7 @@ class MemoryPipeline:
                     "run_id": run_id,
                     "thread_id": thread_id,
                     "source_record_ref": source_record_ref,
-                    "text_hash": _hash_text(text),
+                    "text_hash": _hash_text(full_text),
                     "topic": topic,
                 }
             ),
@@ -169,6 +171,16 @@ class MemoryPipeline:
                 "task_id": task_id,
                 "run_id": run_id,
                 "thread_id": thread_id,
+                "source_kind": "research_final_answer",
+                "memory_kind": "research_note",
+                "title": research_note["title"],
+                "summary": research_note["summary"],
+                "body": text,
+                "dedupe_key": research_note["dedupe_key"],
+                "structured": research_note["structured"],
+                "confidence": research_note["confidence"],
+                "rationale": research_note["rationale"],
+                "review_nonblocking": True,
                 **dict(metadata or {}),
             },
         )
@@ -194,6 +206,7 @@ class MemoryPipeline:
                 metadata={
                     **dict(proposal_or_rejection.metadata),
                     "source_kind": "research_final_answer",
+                    "review_nonblocking": True,
                     **dict(metadata or {}),
                 },
             )
@@ -776,6 +789,167 @@ def _existing_tombstone(store: MemoryStore, memory_id: str) -> MemoryTombstone |
         if tombstone.memory_id == memory_id:
             return tombstone
     return None
+
+
+def _research_result_payload(*, answer_text: str, metadata: JsonObject | None) -> JsonObject:
+    metadata = dict(metadata or {})
+    research_mission = metadata.get("research_mission") if isinstance(metadata.get("research_mission"), dict) else {}
+    answer_profile = metadata.get("answer_profile") if isinstance(metadata.get("answer_profile"), dict) else {}
+    citation_refs = _string_list(metadata.get("citation_refs"))[:16]
+    used_evidence = _string_list(metadata.get("used_evidence"))[:16]
+    root_goal = _research_goal_from_metadata(research_mission) or _preview_text(answer_text, 160)
+    topic = "research-note-" + _hash_text(root_goal.lower())[:16]
+    summary = _research_summary(answer_text)
+    findings = _extract_research_findings(answer_text, limit=8)
+    limitations = _extract_research_limitations(answer_text, limit=6)
+    body = _research_note_body(
+        root_goal=root_goal,
+        summary=summary,
+        findings=findings,
+        limitations=limitations,
+        citation_refs=citation_refs,
+        used_evidence=used_evidence,
+    )
+    structured = {
+        "source": "research_final_answer",
+        "topic": topic,
+        "root_goal_preview": _preview_text(root_goal, 320),
+        "answer_chars": len(answer_text),
+        "profile_format": answer_profile.get("format"),
+        "detail_level": answer_profile.get("detail_level"),
+        "citation_refs": citation_refs,
+        "used_evidence": used_evidence,
+        "limitations": limitations,
+    }
+    return {
+        "topic": topic,
+        "title": _preview_text(f"Research note: {root_goal}", 120),
+        "summary": _preview_text(summary, 240),
+        "body": body,
+        "dedupe_key": f"research_note:{topic}",
+        "structured": structured,
+        "confidence": _confidence(metadata.get("confidence"), default=0.82),
+        "rationale": "research final answer distilled into a compact reviewable durable research note",
+    }
+
+
+def _research_goal_from_metadata(research_mission: JsonObject) -> str:
+    for key in ("root_goal", "goal", "user_goal", "query", "topic"):
+        value = research_mission.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _research_summary(text: str) -> str:
+    lines = [_clean_markdown_line(line) for line in text.splitlines()]
+    lines = [line for line in lines if line and not _looks_like_heading(line)]
+    if not lines:
+        return _preview_text(text, 360)
+    return _preview_text(" ".join(lines[:3]), 360)
+
+
+def _extract_research_findings(text: str, *, limit: int) -> list[str]:
+    findings: list[str] = []
+    for raw in text.splitlines():
+        line = _clean_markdown_line(raw)
+        if not line or _looks_like_heading(line):
+            continue
+        if _looks_like_limitation(line):
+            continue
+        if _looks_like_finding(line):
+            findings.append(_preview_text(line, 260))
+        elif len(findings) < max(2, limit // 2) and len(line) >= 32:
+            findings.append(_preview_text(line, 260))
+        if len(_ordered_unique(findings)) >= limit:
+            break
+    return _ordered_unique(findings)[:limit]
+
+
+def _extract_research_limitations(text: str, *, limit: int) -> list[str]:
+    limitations: list[str] = []
+    in_limitation_section = False
+    for raw in text.splitlines():
+        line = _clean_markdown_line(raw)
+        if not line:
+            continue
+        if _looks_like_limitation(line):
+            in_limitation_section = True
+            if not _looks_like_heading(line):
+                limitations.append(_preview_text(line, 240))
+            continue
+        if in_limitation_section:
+            if _looks_like_heading(line):
+                in_limitation_section = False
+                continue
+            limitations.append(_preview_text(line, 240))
+        if len(_ordered_unique(limitations)) >= limit:
+            break
+    return _ordered_unique(limitations)[:limit]
+
+
+def _research_note_body(
+    *,
+    root_goal: str,
+    summary: str,
+    findings: list[str],
+    limitations: list[str],
+    citation_refs: list[str],
+    used_evidence: list[str],
+) -> str:
+    lines = [
+        "Holo research memory note.",
+        f"Goal: {_preview_text(root_goal, 320)}",
+        f"Summary: {_preview_text(summary, 480)}",
+    ]
+    if findings:
+        lines.append("Key findings:")
+        lines.extend(f"- {item}" for item in findings[:8])
+    if limitations:
+        lines.append("Limitations:")
+        lines.extend(f"- {item}" for item in limitations[:6])
+    if citation_refs:
+        lines.append("Citation refs: " + ", ".join(citation_refs[:16]))
+    if used_evidence:
+        lines.append("Evidence refs: " + ", ".join(used_evidence[:16]))
+    return _preview_text("\n".join(lines), 2_400)
+
+
+def _clean_markdown_line(line: str) -> str:
+    text = line.strip()
+    text = re.sub(r"^[-*+]\s+", "", text)
+    text = re.sub(r"^\d+[.)]\s+", "", text)
+    text = text.strip("# ").strip()
+    text = text.replace("**", "").replace("__", "")
+    return " ".join(text.split())
+
+
+def _looks_like_heading(line: str) -> bool:
+    return len(line) <= 80 and not line.endswith(("。", ".", "；", ";", "：", ":")) and len(line.split()) <= 8
+
+
+def _looks_like_finding(line: str) -> bool:
+    lowered = line.lower()
+    return any(char.isdigit() for char in line) or "cite-" in lowered or "evidence-" in lowered or len(line) >= 72
+
+
+def _looks_like_limitation(line: str) -> bool:
+    lowered = line.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "limitation",
+            "limitations",
+            "missing",
+            "not available",
+            "insufficient",
+            "局限",
+            "缺失",
+            "不足",
+            "未提供",
+            "无法",
+        )
+    )
 
 
 def _task_reflection_payload(

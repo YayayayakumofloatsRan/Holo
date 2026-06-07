@@ -253,3 +253,21 @@ This pass adds the first host-owned learning hook after task completion/failure:
 This is not a fixed-response simulation shortcut. The host records task facts
 and failure diagnostics; future LLM packets use those facts as context and still
 decide their next action through the normal planner/evaluator loop.
+
+## 2026-06-07 Implementation Update: Compact Research Notes
+
+Research-result memory proposals now use a compact durable-memory shape instead
+of storing the whole final report as candidate text:
+
+- `MemoryPipeline.propose_from_research_result()` first checks the full final
+  answer for secret-like content, then distills it into a bounded
+  `research_note` draft.
+- The note preserves root goal, summary, key findings, limitations,
+  citation/evidence refs, answer profile, answer length, and provenance refs.
+- The long final answer remains in the normal journal/final-answer trace. It is
+  not copied wholesale into durable-memory body text.
+- The proposal is reviewable and `review_nonblocking`; it can inform later
+  planner context through thread RAG without interrupting the next user turn.
+
+This makes durable memory a working substrate for future research continuity,
+not a pile of long cached reports.

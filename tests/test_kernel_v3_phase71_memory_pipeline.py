@@ -377,6 +377,74 @@ def test_phase71_task_reflection_secret_like_text_is_rejected():
     assert store.proposals() == []
 
 
+def test_phase71_research_result_memory_is_compact_structured_and_nonblocking():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+    tail_marker = "RAW_RESEARCH_TAIL_MARKER_SHOULD_NOT_ENTER_MEMORY_NOTE"
+    answer = "\n".join(
+        [
+            "## 结论摘要",
+            "Apple 与 Oracle 的基本面对比需要分开看业务质量、利润、现金流、估值和风险。",
+            "Apple 2024 财年净利润约 969.95 亿美元，经营现金流约 1105.43 亿美元。",
+            "Oracle 的云基础设施增长很快，但估值和资本开支需要结合最新市场数据继续验证。",
+            "## 风险与局限",
+            "局限：估值指标和最新季度数据仍需继续补充。",
+            *[f"附录段落 {index}: 这部分是长报告正文，不应完整进入长期记忆候选。" for index in range(80)],
+            tail_marker,
+        ]
+    )
+
+    result = pipeline.propose_from_research_result(
+        answer_text=answer,
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-final",
+        metadata={
+            "research_mission": {"root_goal": "对比 Apple 和 Oracle 的基本面"},
+            "answer_profile": {"format": "detailed_report", "detail_level": "detailed"},
+            "citation_refs": ["cite-aapl", "cite-orcl"],
+            "used_evidence": ["ev-aapl", "ev-orcl"],
+        },
+    )
+
+    assert len(result.proposals) == 1
+    proposal = result.proposals[0]
+    assert proposal.metadata["source_kind"] == "research_final_answer"
+    assert proposal.metadata["review_nonblocking"] is True
+    item = proposal.proposed_item
+    assert item["kind"] == "research_note"
+    assert item["structured"]["citation_refs"] == ["cite-aapl", "cite-orcl"]
+    assert item["structured"]["used_evidence"] == ["ev-aapl", "ev-orcl"]
+    assert len(item["body"]) < len(answer) // 2
+    assert tail_marker not in item["body"]
+    assert store.recall(query="Oracle", scope={"thread_id": "thread-1"}).total == 0
+    record = journal.records(kind="memory_proposal")[-1]
+    assert record.data["review_nonblocking"] is True
+    assert record.data["proposed_item"]["kind"] == "research_note"
+
+
+def test_phase71_research_result_secret_like_full_text_is_rejected_even_if_tail_is_not_compacted():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+    answer = "研究结论：公开信息充足。\n" + "\n".join(f"普通附录 {index}" for index in range(80))
+    answer += "\napi_key=sk_12345678901234567890"
+
+    result = pipeline.propose_from_research_result(
+        answer_text=answer,
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-final",
+    )
+
+    assert result.rejected[0]["reason"] == "memory_rejected_secret_like_content"
+    assert store.shadow_candidates() == []
+    assert store.proposals() == []
+
+
 def test_phase71_default_agent_runtime_does_not_write_memory_without_store():
     journal = JournalStore.in_memory()
     runtime = AgentRuntime(journal=journal)

@@ -161,9 +161,10 @@ Kernel v3 currently contains the infrastructure for:
   answer shape. This is a packet contract, not keyword matching;
 - research-result memory proposals. When a strict research answer passes the
   quality gate and durable memory is configured, the host can create a pending
-  memory proposal from the final answer, citation refs, evidence refs, and
-  research mission metadata. The model still cannot commit durable memory
-  directly;
+  compact `research_note` proposal from the final answer, citation refs,
+  evidence refs, and research mission metadata. The proposal stores a bounded
+  summary, key findings, limitations, refs, and provenance rather than the full
+  report body. The model still cannot commit durable memory directly;
 - non-blocking task-reflection memory proposals. When a task fails after real
   attempts, the host can distill the root goal, failure mode, attempted actions,
   missing evidence, next action, and host diagnostics into a reviewable
