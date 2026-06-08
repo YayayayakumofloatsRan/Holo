@@ -215,10 +215,12 @@ Kernel v3 currently contains the infrastructure for:
 - active-memory recall as loop working memory. Safe `memory.recall`
   observations are compacted into
   `thread_rag_context.active_memory_recalls`, including recalled ids, scope
-  totals, summaries, structured summaries, provenance refs, and filtered
-  diagnostics. Later planner packets can use the recalled facts before trying
-  another recall, which keeps the loop from forgetting its own memory tool
-  results;
+  totals, summaries, structured summaries, provenance refs, filtered
+  diagnostics, and bounded match diagnostics that explain which terms, fields,
+  or structured slots made a memory relevant. Later planner packets can use
+  the recalled facts before trying another recall, and can distinguish a
+  generic background hit from an actionable self-iteration signal such as an
+  answer-quality gap or next-action hint;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file

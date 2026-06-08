@@ -50,7 +50,7 @@ def test_phase110_memory_recall_operator_reads_workspace_and_thread_scopes():
         description="recall active memory",
         score=1.0,
         payload={
-            "query": "branch language",
+            "query": "branch source_quality language",
             "scope_mode": "both",
             "limit": 10,
             "_host_context": {
@@ -74,6 +74,10 @@ def test_phase110_memory_recall_operator_reads_workspace_and_thread_scopes():
     assert structured["values"]["gaps"] == ["answer_min_chars:1200", "source_quality"]
     assert structured["values"]["next_possible_action"] == "repair final answer"
     assert "hash" in structured
+    match = results["workspace"]["items"][0]["match_diagnostics"]
+    assert "source_quality" in match["matched_terms"]
+    assert "structured" in match["matched_fields"]
+    assert "gaps" in match["structured_hit_keys"]
     assert [item["memory_id"] for item in results["thread"]["items"]] == [thread.memory_id]
     assert observation.content["combined"]["memory_ids"] == [workspace.memory_id, thread.memory_id]
     assert "query_hash" in observation.content
@@ -220,6 +224,7 @@ def test_phase110_agent_loop_can_actively_recall_memory_before_answering():
     assert recalled["memory_ids"] == ["mem-workspace-branch", "mem-thread-language"]
     assert recalled["scopes"]["workspace"]["items"][0]["summary"] == "Project default branch is kernel-v3."
     assert recalled["scopes"]["thread"]["items"][0]["summary"] == "This thread prefers concise Chinese answers."
+    assert recalled["scopes"]["workspace"]["items"][0]["match_diagnostics"]["match_score"] >= 1
     assert prompt_context["active_memory_recalls"][-1]["memory_ids"] == [
         "mem-workspace-branch",
         "mem-thread-language",
@@ -227,6 +232,10 @@ def test_phase110_agent_loop_can_actively_recall_memory_before_answering():
     assert (
         prompt_context["active_memory_recalls"][-1]["scopes"]["workspace"]["items"][0]["structured_summary"]["values"]["source"]
         == "answer_quality_check"
+    )
+    assert (
+        prompt_context["active_memory_recalls"][-1]["scopes"]["workspace"]["items"][0]["match_diagnostics"]["match_score"]
+        >= 1
     )
 
 

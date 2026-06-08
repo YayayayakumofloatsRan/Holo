@@ -397,6 +397,61 @@ Result:
 760 passed in 93.88s
 ```
 
+## Fix: Active Memory Recall Explains Why A Memory Matched
+
+After safe structured summaries were preserved through approved durable memory
+and active recall, the next weak link was planner usability: a recalled item
+could carry useful `structured_summary` slots, but the next loop still had to
+infer why that item appeared. This pass adds bounded recall match diagnostics:
+
+- `memory.recall` item previews now include `match_diagnostics` with matched
+  query terms, matched item fields, structured hit keys, and a small score;
+- diagnostics are computed from safe previews plus bounded `structured_summary`
+  projection, not from raw prompt-visible memory bodies;
+- fallback-ranked recall still records that the scope fell back from exact
+  query filtering;
+- thread RAG projects those diagnostics into
+  `thread_rag_context.active_memory_recalls`;
+- planner/evaluator prompt compaction preserves the bounded diagnostics, so the
+  model can distinguish a generic memory hit from an actionable self-iteration
+  signal such as `answer_quality_check.gaps`.
+
+This keeps decision authority model-led while improving the host packet quality:
+the host does not decide what to do from the diagnostic, but it gives the model
+a clearer, auditable reason for the recalled memory.
+
+Validation:
+
+```bash
+.venv/bin/python -m py_compile \
+  kernel_v3/memory/operator.py \
+  kernel_v3/mission/thread_rag.py \
+  kernel_v3/agent/runtime.py
+
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_phase110_active_memory_recall.py \
+  tests/test_kernel_v3_phase71_memory_pipeline.py \
+  tests/test_kernel_v3_phase72_memory_context_admin.py
+```
+
+Result:
+
+```text
+38 passed in 1.02s
+```
+
+The full kernel-v3 regression was then run after the match-diagnostics pass:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+760 passed in 73.91s (0:01:13)
+```
+
 Live smoke:
 
 ```bash

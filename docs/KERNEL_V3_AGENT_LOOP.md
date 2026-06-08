@@ -119,10 +119,14 @@ The packet never contains raw memory bodies and never grants write authority.
 
 `memory.recall` supports workspace/project scope, current-thread scope, or both.
 It returns memory ids, summaries, bounded body previews, scope, provenance refs,
-artifact refs, hashes, and diagnostics. It does not expose raw secret values,
-does not commit memory, and does not let the model modify memory state. Each
-recall is audited in `MemoryStore` through `memory_items_recalled`; the journal
-receives only the safe observation payload.
+artifact refs, hashes, and diagnostics. The safe observation also includes
+bounded match diagnostics: matched query terms, matched fields, structured-slot
+hit keys, and a small match score. These diagnostics are not a routing table;
+they explain why host recall considered an item relevant so the next model
+planner can use or ignore the memory deliberately. It does not expose raw
+secret values, does not commit memory, and does not let the model modify memory
+state. Each recall is audited in `MemoryStore` through `memory_items_recalled`;
+the journal receives only the safe observation payload.
 
 Committed memory items may include a bounded `structured_summary`. It exposes
 only selected safe slots such as `source`, `profile_format`, `gaps`,
@@ -145,7 +149,10 @@ In model mode the flow is still the normal host-owned loop:
 Successful `memory.recall` observations are also projected into thread RAG as
 `thread_rag_context.active_memory_recalls`. That packet carries recalled memory
 ids, per-scope totals, bounded summaries/body previews, provenance refs, and
-filtered diagnostics. Planner prompts are instructed to use these recalled refs
+filtered diagnostics. It also carries the match diagnostics above, so a planner
+can tell whether the recall was a generic context hit or an actionable
+self-iteration hit such as an answer-quality gap, failed-source pattern, or
+next-action hint. Planner prompts are instructed to use these recalled refs
 before proposing another recall; a second recall should only happen when the
 first one missed the needed scope or topic.
 

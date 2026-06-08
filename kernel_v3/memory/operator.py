@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 
 from kernel_v3.contracts import CandidateAction, JsonObject, Observation, ToolManifest
@@ -63,7 +64,7 @@ class MemoryRecallOperator:
             )
             if used_fallback:
                 fallback_scopes.append(label)
-            results[label] = _compact_recall_result(result.to_dict())
+            results[label] = _compact_recall_result(result.to_dict(), query=query, fallback_ranked=used_fallback)
 
         memory_ids = _ordered_unique(
             [
@@ -210,19 +211,24 @@ def _recall_scope(
     return fallback, True
 
 
-def _compact_recall_result(result: JsonObject) -> JsonObject:
+def _compact_recall_result(result: JsonObject, *, query: str | None, fallback_ranked: bool) -> JsonObject:
     return {
         "query_hash": _hash_text(str(result.get("query"))) if result.get("query") else None,
         "scope": _dict(result.get("scope")),
         "total": result.get("total", 0),
         "filtered": _dict(result.get("filtered")),
         "generated_at_ms": result.get("generated_at_ms"),
-        "items": [_compact_memory_item(item) for item in _list_of_dicts(result.get("items"))],
+        "diagnostics": {
+            "fallback_ranked_recall": fallback_ranked,
+            "match_query_hash": _hash_text(query) if query else None,
+        },
+        "items": [_compact_memory_item(item, query=query) for item in _list_of_dicts(result.get("items"))],
     }
 
 
-def _compact_memory_item(item: JsonObject) -> JsonObject:
+def _compact_memory_item(item: JsonObject, *, query: str | None = None) -> JsonObject:
     body = _string(item.get("body")) or ""
+    structured_summary = structured_memory_summary(_dict(item.get("structured")))
     payload = {
         "memory_id": item.get("memory_id"),
         "kind": item.get("kind"),
@@ -233,13 +239,45 @@ def _compact_memory_item(item: JsonObject) -> JsonObject:
         "scope": _dict(item.get("scope")),
         "privacy_class": item.get("privacy_class"),
         "confidence": item.get("confidence"),
-        "structured_summary": structured_memory_summary(_dict(item.get("structured"))),
+        "structured_summary": structured_summary,
+        "match_diagnostics": _memory_match_diagnostics(item, query=query, structured_summary=structured_summary),
         "provenance_refs": _string_list(item.get("provenance_refs")),
         "artifact_refs": _string_list(item.get("artifact_refs")),
         "updated_at_ms": item.get("updated_at_ms"),
         "last_accessed_ms": item.get("last_accessed_ms"),
     }
     return {key: value for key, value in payload.items() if value not in (None, [], {})}
+
+
+def _memory_match_diagnostics(item: JsonObject, *, query: str | None, structured_summary: JsonObject) -> JsonObject:
+    terms = _query_terms(query)
+    if not terms:
+        return {}
+    fields = {
+        "title": _string(item.get("title")) or "",
+        "summary": _string(item.get("summary")) or "",
+        "body": _string(item.get("body")) or "",
+        "dedupe_key": _string(item.get("dedupe_key")) or "",
+        "structured": _structured_match_text(structured_summary),
+    }
+    matched_fields: list[str] = []
+    matched_terms: list[str] = []
+    for field, text in fields.items():
+        lowered = text.lower()
+        field_terms = [term for term in terms if term in lowered]
+        if not field_terms:
+            continue
+        matched_fields.append(field)
+        matched_terms.extend(field_terms)
+    structured_keys = _structured_hit_keys(structured_summary, terms=terms)
+    if not matched_terms and not structured_keys:
+        return {}
+    return {
+        "matched_terms": _ordered_unique(matched_terms)[:12],
+        "matched_fields": _ordered_unique(matched_fields)[:8],
+        "structured_hit_keys": structured_keys[:12],
+        "match_score": len(_ordered_unique(matched_terms)) + len(structured_keys),
+    }
 
 
 def _scopes(*, scope_mode: str, user_id: str, project_id: str, thread_id: str) -> list[tuple[str, JsonObject]]:
@@ -278,6 +316,77 @@ def _scope_mode(value: object) -> str:
         "all": "all",
     }
     return aliases.get(normalized, normalized if normalized in _SCOPE_MODES else "both")
+
+
+_QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "for",
+    "how",
+    "in",
+    "is",
+    "of",
+    "please",
+    "should",
+    "the",
+    "to",
+    "use",
+    "what",
+    "you",
+    "your",
+}
+
+
+def _query_terms(value: str | None) -> list[str]:
+    if not value:
+        return []
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"[\w\u4e00-\u9fff]+", value.lower()):
+        for term in _expanded_query_terms(raw):
+            if not term or term in seen or term in _QUERY_STOPWORDS:
+                continue
+            seen.add(term)
+            terms.append(term)
+    return terms
+
+
+def _expanded_query_terms(term: str) -> list[str]:
+    if not re.search(r"[\u4e00-\u9fff]", term):
+        return [term]
+    expanded = [term]
+    if len(term) > 2:
+        expanded.extend(term[index : index + 2] for index in range(0, len(term) - 1))
+    return expanded
+
+
+def _structured_match_text(summary: JsonObject) -> str:
+    values = summary.get("values") if isinstance(summary.get("values"), dict) else {}
+    parts: list[str] = []
+    for key, value in values.items():
+        parts.append(str(key))
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value if isinstance(item, (str, int, float, bool)))
+        elif isinstance(value, (str, int, float, bool)):
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def _structured_hit_keys(summary: JsonObject, *, terms: list[str]) -> list[str]:
+    values = summary.get("values") if isinstance(summary.get("values"), dict) else {}
+    hits: list[str] = []
+    for key, value in values.items():
+        parts = [str(key)]
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value if isinstance(item, (str, int, float, bool)))
+        elif isinstance(value, (str, int, float, bool)):
+            parts.append(str(value))
+        text = " ".join(parts).lower()
+        if any(term in text for term in terms):
+            hits.append(str(key))
+    return _ordered_unique(hits)
 
 
 def _limit(value: object, *, default: int) -> int:

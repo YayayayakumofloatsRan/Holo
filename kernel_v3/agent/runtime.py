@@ -4888,6 +4888,7 @@ def _compact_memory_recall_scope_for_prompt(value: JsonObject) -> JsonObject:
                 "summary": _text_preview(item.get("summary"), limit=180),
                 "body_preview": _text_preview(item.get("body_preview"), limit=160),
                 "structured_summary": _compact_structured_summary_for_prompt(item.get("structured_summary")),
+                "match_diagnostics": _compact_memory_match_diagnostics_for_prompt(item.get("match_diagnostics")),
                 "privacy_class": item.get("privacy_class"),
                 "confidence": item.get("confidence"),
                 "provenance_refs": _string_list(item.get("provenance_refs"))[:4],
@@ -4908,6 +4909,17 @@ def _compact_structured_summary_for_prompt(value: object) -> JsonObject:
         "key_count": value.get("key_count"),
         "values": _compact_simple_dict(values, limit=16),
         "hash": value.get("hash"),
+    }
+
+
+def _compact_memory_match_diagnostics_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "matched_terms": _string_list(value.get("matched_terms"))[:12],
+        "matched_fields": _string_list(value.get("matched_fields"))[:8],
+        "structured_hit_keys": _string_list(value.get("structured_hit_keys"))[:12],
+        "match_score": value.get("match_score"),
     }
 
 
