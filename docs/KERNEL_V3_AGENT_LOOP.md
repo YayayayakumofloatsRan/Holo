@@ -159,6 +159,14 @@ repetitive progress, it may journal a `strategy_shift` and enrich the next
 The following planner call sees these hints through normal context and still
 must return a host-valid action packet.
 
+Thread RAG now keeps a separate `task_continuity` packet for planner/evaluator
+calls. It is compiled from journaled mission assessments/directives, feedback,
+retrieval reports, recent actions, evidence refs, citation refs, and failure
+diagnostics. The packet states the current objective, latest decision, coverage
+score, open requirements, avoid-repeat signatures, suggested actions, and stop
+conditions. It is a working note, not a controller: the model still proposes
+one action, and host policy still validates and executes it.
+
 ## Adaptive Processor Generation
 
 Live processor calls pass through a host-owned generation policy before the

@@ -353,3 +353,24 @@ planner/evaluator call:
 This closes a practical coupling gap: after a bad retrieval run or weak final
 answer, the next loop receives the host's compact lesson instead of seeing only
 scattered journal records.
+
+## 2026-06-08 Implementation Update: Task Continuity Packet
+
+Thread RAG now also exposes a `task_continuity` packet:
+
+- mission assessments, mission directives, work-gap signals, feedback,
+  retrieval reports, recent actions, evidence refs, and citation refs are
+  compacted into one journal-derived working note;
+- the packet carries current objective, latest mission/workloop decision,
+  coverage score, covered requirements, open requirements, next subgoal,
+  strategy, avoid-repeat signatures, suggested actions, and stop conditions;
+- planner and evaluator prompt contracts explicitly describe how to use the
+  packet: preserve the objective, reduce open gaps, avoid repeated work unless
+  the method changes, and finalize only when evidence and answer shape cover
+  the objective;
+- mission records now preserve their useful fields in `recent_task_trace`
+  instead of being reduced to `{record_ref, kind}`.
+
+This improves multi-loop coupling without adding a second controller. The LLM
+still decides the next semantic move, but it receives the same kind of compact
+project notebook a capable human researcher would maintain between attempts.

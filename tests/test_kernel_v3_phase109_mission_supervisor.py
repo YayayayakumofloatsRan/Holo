@@ -311,6 +311,130 @@ def test_phase109_thread_working_memory_exposes_attention_blocks():
     assert prompt_context["self_iteration"]["avoid_repeating_queries"] == ["weak repeated query"]
 
 
+def test_phase109_thread_working_memory_exposes_task_continuity_from_mission_records():
+    journal = JournalStore.in_memory()
+    task_id = "task-continuity"
+    journal.append(
+        task_id=task_id,
+        run_id="run-continuity",
+        step_id=None,
+        kind="chat_turn",
+        data={
+            "thread_id": "thread-continuity",
+            "turn_id": "turn-continuity-1",
+            "role": "user",
+            "text": "调查一个跨领域研究任务",
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id="run-continuity",
+        step_id="step-1",
+        kind="action",
+        data={
+            "action_id": "act-continuity-1",
+            "kind": "tool",
+            "name": "retrieval.run",
+            "side_effect_class": "network",
+            "payload": {"query": "weak repeated query"},
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id="run-continuity",
+        step_id="step-1",
+        kind="retrieval_report",
+        data={
+            "report_id": "report-continuity",
+            "status": "insufficient_evidence",
+            "diagnostics": {
+                "search_summaries": [{"query": "weak repeated query"}],
+                "missing_query_facets": ["frontier_sources"],
+            },
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id="run-continuity",
+        step_id="step-1",
+        kind="feedback",
+        data={
+            "status": "continue",
+            "missing_evidence": ["scholarly_source"],
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id="run-continuity",
+        step_id=None,
+        kind="mission_assessment",
+        data={
+            "assessment_id": "assess-continuity",
+            "mission_id": "mission-continuity",
+            "task_id": task_id,
+            "run_id": "run-continuity",
+            "decision": "continue",
+            "coverage_score": 0.34,
+            "covered_requirements": ["basic_definition"],
+            "missing_requirements": ["frontier_research", "source_diversity"],
+            "unsupported_claims": [],
+            "next_directive": None,
+            "confidence": 0.8,
+            "reason_summary": "Need a different source family and better frontier coverage.",
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id="run-continuity",
+        step_id=None,
+        kind="mission_directive",
+        data={
+            "directive_id": "directive-continuity",
+            "mission_id": "mission-continuity",
+            "root_goal": "调查一个跨领域研究任务",
+            "strategy": "switch_source_family",
+            "next_subgoal": "Find authoritative frontier research sources.",
+            "missing_requirements": ["frontier_research"],
+            "avoid_repeating": ["weak repeated query"],
+            "suggested_actions": [
+                {
+                    "kind": "tool",
+                    "name": "retrieval.run",
+                    "description": "Search scholarly indexes.",
+                    "payload": {"query": "frontier research scholarly index"},
+                }
+            ],
+            "stop_conditions": ["frontier source coverage is sufficient"],
+            "reason": "Prior query found weak coverage.",
+        },
+    )
+
+    context = ThreadWorkingMemoryProvider().compile(
+        journal,
+        thread_id="thread-continuity",
+        task_id=task_id,
+        mission_id="mission-continuity",
+    )
+    prompt_context = _compact_thread_rag_context_for_prompt(context)
+
+    mission_trace = [item for item in context["recent_task_trace"] if item["kind"] == "mission_assessment"]
+    directive_trace = [item for item in context["recent_task_trace"] if item["kind"] == "mission_directive"]
+    assert mission_trace[-1]["missing_requirements"] == ["frontier_research", "source_diversity"]
+    assert directive_trace[-1]["strategy"] == "switch_source_family"
+    assert context["task_continuity"]["current_objective"] == "调查一个跨领域研究任务"
+    assert context["task_continuity"]["latest_decision"] == "continue"
+    assert context["task_continuity"]["coverage_score"] == 0.34
+    assert "frontier_research" in context["task_continuity"]["open_requirements"]
+    assert "scholarly_source" in context["task_continuity"]["open_requirements"]
+    assert "weak repeated query" in context["task_continuity"]["avoid_repeating"]
+    assert context["task_continuity"]["suggested_actions"][0]["name"] == "retrieval.run"
+    assert prompt_context["task_continuity"]["strategy"] == "switch_source_family"
+    assert prompt_context["task_continuity"]["open_requirements"][:2] == [
+        "frontier_research",
+        "source_diversity",
+    ]
+
+
 def test_phase109_thread_rag_carries_nonblocking_learning_across_tasks_in_same_thread():
     journal = JournalStore.in_memory()
     store = MemoryStore.in_memory()

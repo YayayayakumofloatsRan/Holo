@@ -189,6 +189,12 @@ Kernel v3 currently contains the infrastructure for:
   `thread_rag_context.self_iteration`; prioritized `attention_blocks` are also
   preserved in processor prompt context, so the next loop sees what failed and
   what should materially change without reading raw journal blobs;
+- task-continuity context in planner/evaluator packets. Mission assessments,
+  mission directives, feedback, retrieval gaps, recent actions, evidence refs,
+  and citation refs are compacted into `thread_rag_context.task_continuity`,
+  so the next loop receives a journal-derived working note with the current
+  objective, open requirements, avoid-repeat signatures, suggested actions, and
+  stop conditions;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file

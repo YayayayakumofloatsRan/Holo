@@ -4491,6 +4491,7 @@ def _compact_thread_rag_context_for_prompt(value: object) -> JsonObject:
             for item in list(value.get("attention_blocks") or [])[:6]
             if isinstance(item, dict)
         ],
+        "task_continuity": _compact_task_continuity_for_prompt(value.get("task_continuity")),
         "self_iteration": _compact_self_iteration_for_prompt(value.get("self_iteration")),
         "memory_learning": [
             _compact_simple_dict(item, limit=10)
@@ -4523,6 +4524,38 @@ def _compact_self_iteration_for_prompt(value: object) -> JsonObject:
         "recommended_next_actions": _string_list(value.get("recommended_next_actions"))[:8],
         "learning_refs": _string_list(value.get("learning_refs"))[-8:],
         "host_rule": _text_preview(value.get("host_rule"), limit=360),
+    }
+
+
+def _compact_task_continuity_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "kind": value.get("kind") or "task_continuity_context",
+        "mission_id": value.get("mission_id"),
+        "current_objective": _text_preview(value.get("current_objective"), limit=520),
+        "latest_result_status": value.get("latest_result_status"),
+        "latest_decision": value.get("latest_decision"),
+        "coverage_score": value.get("coverage_score"),
+        "covered_requirements": _string_list(value.get("covered_requirements"))[:12],
+        "open_requirements": _string_list(value.get("open_requirements"))[:16],
+        "next_subgoal": _text_preview(value.get("next_subgoal"), limit=360),
+        "strategy": value.get("strategy"),
+        "avoid_repeating": _string_list(value.get("avoid_repeating"))[-16:],
+        "recent_actions": [
+            _compact_simple_dict(item, limit=4)
+            for item in list(value.get("recent_actions") or [])[-8:]
+            if isinstance(item, dict)
+        ],
+        "evidence_refs": _string_list(value.get("evidence_refs"))[:12],
+        "citation_refs": _string_list(value.get("citation_refs"))[:12],
+        "suggested_actions": [
+            _compact_simple_dict(item, limit=6)
+            for item in list(value.get("suggested_actions") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "stop_conditions": _string_list(value.get("stop_conditions"))[:8],
+        "host_rule": _text_preview(value.get("host_rule"), limit=420),
     }
 
 

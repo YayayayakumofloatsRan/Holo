@@ -42,12 +42,13 @@ class ThreadWorkingMemoryProvider:
         )
         task_trace = trace
         recent_results = [_compact_result(record, preview_chars=self.config.text_preview_chars) for record in results]
+        recent_turns = [_compact_turn(record, preview_chars=self.config.text_preview_chars) for record in turns]
         payload = {
             "kind": "thread_rag_context",
             "thread_id": thread_id,
             "task_id": task_id,
             "mission_id": mission_id,
-            "recent_turns": [_compact_turn(record, preview_chars=self.config.text_preview_chars) for record in turns],
+            "recent_turns": recent_turns,
             "recent_results": recent_results,
             "recent_task_trace": task_trace,
             "evidence_refs": evidence_refs,
@@ -62,6 +63,15 @@ class ThreadWorkingMemoryProvider:
             citation_refs=citation_refs,
             failure_diagnostics=failure_diagnostics,
             memory_learning=memory_learning,
+        )
+        payload["task_continuity"] = _task_continuity_context(
+            mission_id=mission_id,
+            recent_turns=recent_turns,
+            recent_results=recent_results,
+            recent_task_trace=task_trace,
+            evidence_refs=evidence_refs,
+            citation_refs=citation_refs,
+            failure_diagnostics=failure_diagnostics,
         )
         payload["self_iteration"] = _self_iteration_context(
             recent_results=recent_results,
@@ -122,6 +132,8 @@ def _task_trace(journal: JournalStore, task_id: str | None, *, limit: int) -> li
         "final_answer_quality_check",
         "mission_assessment",
         "mission_directive",
+        "work_gap_assessment",
+        "strategy_shift",
     }
     records = [record for record in journal.records(task_id=task_id) if record.kind in kinds]
     return [_compact_trace(record) for record in records[-limit:]]
@@ -212,6 +224,14 @@ def _compact_trace(record: LedgerRecord) -> JsonObject:
         return _compact_final(record)
     if record.kind == "final_answer_quality_check":
         return _compact_answer_quality(record)
+    if record.kind == "mission_assessment":
+        return _compact_mission_assessment(record)
+    if record.kind == "mission_directive":
+        return _compact_mission_directive(record)
+    if record.kind == "work_gap_assessment":
+        return _compact_work_gap(record)
+    if record.kind == "strategy_shift":
+        return _compact_strategy_shift(record)
     return {"record_ref": record.record_id, "kind": record.kind}
 
 
@@ -342,6 +362,92 @@ def _compact_answer_quality(record: LedgerRecord) -> JsonObject:
         "answer_chars": record.data.get("answer_chars"),
         "profile_format": profile.get("format"),
         "profile_domain": (profile.get("metadata") or {}).get("domain") if isinstance(profile.get("metadata"), dict) else None,
+    }
+
+
+def _compact_mission_assessment(record: LedgerRecord) -> JsonObject:
+    next_directive = record.data.get("next_directive") if isinstance(record.data.get("next_directive"), dict) else {}
+    return {
+        "record_ref": record.record_id,
+        "kind": "mission_assessment",
+        "mission_id": record.data.get("mission_id"),
+        "decision": record.data.get("decision"),
+        "coverage_score": record.data.get("coverage_score"),
+        "covered_requirements": _string_list(record.data.get("covered_requirements"))[:12],
+        "missing_requirements": _string_list(record.data.get("missing_requirements"))[:12],
+        "unsupported_claims": _string_list(record.data.get("unsupported_claims"))[:8],
+        "reason_summary": _preview(str(record.data.get("reason_summary") or ""), 420),
+        "next_directive": _compact_directive_payload(next_directive),
+    }
+
+
+def _compact_mission_directive(record: LedgerRecord) -> JsonObject:
+    return {
+        "record_ref": record.record_id,
+        "kind": "mission_directive",
+        **_compact_directive_payload(record.data),
+    }
+
+
+def _compact_directive_payload(data: JsonObject) -> JsonObject:
+    return {
+        "directive_id": data.get("directive_id"),
+        "mission_id": data.get("mission_id"),
+        "root_goal": _preview(str(data.get("root_goal") or ""), 480),
+        "strategy": data.get("strategy"),
+        "next_subgoal": _preview(str(data.get("next_subgoal") or ""), 360),
+        "missing_requirements": _string_list(data.get("missing_requirements"))[:12],
+        "avoid_repeating": _string_list(data.get("avoid_repeating"))[-12:],
+        "suggested_actions": [
+            _compact_suggested_action(item)
+            for item in list(data.get("suggested_actions") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "stop_conditions": _string_list(data.get("stop_conditions"))[:8],
+        "reason": _preview(str(data.get("reason") or ""), 420),
+    }
+
+
+def _compact_suggested_action(data: JsonObject) -> JsonObject:
+    return {
+        "kind": data.get("kind"),
+        "name": data.get("name"),
+        "description": _preview(str(data.get("description") or data.get("goal") or ""), 240),
+        "payload_hash": _hash_payload(data.get("payload", {})),
+    }
+
+
+def _compact_work_gap(record: LedgerRecord) -> JsonObject:
+    strategy_shift = record.data.get("strategy_shift") if isinstance(record.data.get("strategy_shift"), dict) else {}
+    return {
+        "record_ref": record.record_id,
+        "kind": "work_gap_assessment",
+        "should_continue": record.data.get("should_continue"),
+        "should_finalize": record.data.get("should_finalize"),
+        "should_shift_strategy": record.data.get("should_shift_strategy"),
+        "gap_summary": _preview(str(record.data.get("gap_summary") or ""), 420),
+        "missing_work": _string_list(record.data.get("missing_work"))[:12],
+        "strategy_shift": _compact_strategy_shift_payload(strategy_shift),
+    }
+
+
+def _compact_strategy_shift(record: LedgerRecord) -> JsonObject:
+    return {
+        "record_ref": record.record_id,
+        "kind": "strategy_shift",
+        **_compact_strategy_shift_payload(record.data),
+    }
+
+
+def _compact_strategy_shift_payload(data: JsonObject) -> JsonObject:
+    return {
+        "shift_kind": data.get("shift_kind") or data.get("kind"),
+        "reason": _preview(str(data.get("reason") or ""), 420),
+        "from_strategy": data.get("from_strategy"),
+        "to_strategy": data.get("to_strategy"),
+        "new_source_families": _string_list(data.get("new_source_families"))[:8],
+        "avoid_repeating": _string_list(data.get("avoid_repeating"))[-12:],
+        "suggested_queries": _string_list(data.get("suggested_queries"))[:12],
     }
 
 
@@ -501,6 +607,102 @@ def _attention_blocks(
             }
         )
     return sorted(blocks, key=lambda item: float(item.get("priority") or 0.0), reverse=True)[:6]
+
+
+def _task_continuity_context(
+    *,
+    mission_id: str | None,
+    recent_turns: list[JsonObject],
+    recent_results: list[JsonObject],
+    recent_task_trace: list[JsonObject],
+    evidence_refs: list[str],
+    citation_refs: list[str],
+    failure_diagnostics: list[JsonObject],
+) -> JsonObject:
+    assessments = [item for item in recent_task_trace if item.get("kind") == "mission_assessment"]
+    directives = [item for item in recent_task_trace if item.get("kind") == "mission_directive"]
+    feedback = [item for item in recent_task_trace if item.get("kind") == "feedback"]
+    retrieval_reports = [item for item in recent_task_trace if item.get("kind") == "retrieval_report"]
+    terminations = [item for item in recent_task_trace if item.get("kind") == "termination_decision"]
+    quality_checks = [
+        item
+        for item in recent_task_trace
+        if item.get("kind") == "final_answer_quality_check" and item.get("passed") is False
+    ]
+    actions = [item for item in recent_task_trace if item.get("kind") == "action"]
+    latest_directive = directives[-1] if directives else {}
+    latest_assessment = assessments[-1] if assessments else {}
+    latest_failure = failure_diagnostics[-1] if failure_diagnostics else {}
+    latest_result = recent_results[-1] if recent_results else {}
+    objective = (
+        latest_directive.get("root_goal")
+        or (latest_assessment.get("next_directive") or {}).get("root_goal")
+        or (recent_turns[-1].get("text_preview") if recent_turns else None)
+    )
+    open_requirements = _ordered_unique(
+        [
+            *_string_list(latest_assessment.get("missing_requirements")),
+            *_string_list(latest_directive.get("missing_requirements")),
+            *[
+                value
+                for item in feedback[-3:]
+                for value in _string_list(item.get("missing_evidence"))
+            ],
+            *_string_list(latest_failure.get("missing_evidence")),
+            *[
+                value
+                for item in retrieval_reports[-3:]
+                for value in [
+                    *_string_list(item.get("missing_query_facets")),
+                    *_string_list(item.get("missing_finance_facets")),
+                ]
+            ],
+            *[
+                value
+                for item in quality_checks[-2:]
+                for value in _string_list(item.get("gaps"))
+            ],
+        ]
+    )
+    avoid_repeating = _ordered_unique(
+        [
+            *_string_list(latest_directive.get("avoid_repeating")),
+            *[
+                query
+                for item in retrieval_reports[-4:]
+                for query in _string_list(item.get("attempted_queries"))
+            ],
+        ]
+    )
+    return {
+        "kind": "task_continuity_context",
+        "mission_id": mission_id or latest_directive.get("mission_id") or latest_assessment.get("mission_id"),
+        "current_objective": _preview(str(objective or ""), 480),
+        "latest_result_status": latest_result.get("status"),
+        "latest_decision": latest_assessment.get("decision") or (terminations[-1].get("decision") if terminations else None),
+        "coverage_score": latest_assessment.get("coverage_score"),
+        "covered_requirements": _string_list(latest_assessment.get("covered_requirements"))[:12],
+        "open_requirements": open_requirements[:16],
+        "next_subgoal": latest_directive.get("next_subgoal"),
+        "strategy": latest_directive.get("strategy"),
+        "avoid_repeating": avoid_repeating[-16:],
+        "recent_actions": [
+            {
+                "name": item.get("name"),
+                "payload_hash": item.get("payload_hash"),
+            }
+            for item in actions[-8:]
+        ],
+        "evidence_refs": evidence_refs[:12],
+        "citation_refs": citation_refs[:12],
+        "suggested_actions": list(latest_directive.get("suggested_actions") or [])[:6],
+        "stop_conditions": _string_list(latest_directive.get("stop_conditions"))[:8],
+        "host_rule": (
+            "Treat current_objective as the continuing task objective. Use open_requirements, "
+            "avoid_repeating, recent_actions, and suggested_actions to choose the next materially "
+            "different action. Finalize only when evidence and answer shape cover the objective."
+        ),
+    }
 
 
 def _self_iteration_context(

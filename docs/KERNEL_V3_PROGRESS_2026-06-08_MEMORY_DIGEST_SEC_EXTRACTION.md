@@ -126,6 +126,25 @@ receives the host's compact diagnosis of what just failed and what must change,
 instead of repeating the same search or treating a weak answer as an isolated
 event.
 
+## Fix: Mission Records Enter Task Continuity Memory
+
+Mission records are now first-class thread working-memory inputs:
+
+- `mission_assessment`, `mission_directive`, `work_gap_assessment`, and
+  `strategy_shift` records are compacted with useful fields instead of only
+  record refs;
+- `thread_rag_context.task_continuity` summarizes the current objective,
+  latest decision, coverage score, covered/open requirements, next subgoal,
+  strategy, avoid-repeat signatures, recent action payload hashes, evidence
+  refs, citation refs, suggested actions, and stop conditions;
+- planner/evaluator prompt contracts describe this packet as the
+  journal-derived working note for the task.
+
+The result is better coupling between repeated agent loops. When a mission
+continues, the next LLM call receives a compact map of what was already tried
+and what remains open, without giving the model direct control over execution
+or memory writes.
+
 ## Fix: Planner Provider Failure Is Not User Input
 
 When `planner.propose` fails because the processor provider fails, the fallback
@@ -175,6 +194,19 @@ Result:
 
 ```text
 757 passed in 122.65s
+```
+
+After the task-continuity packet pass, the full kernel-v3 regression was run
+again:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+758 passed in 95.52s
 ```
 
 Live smoke:

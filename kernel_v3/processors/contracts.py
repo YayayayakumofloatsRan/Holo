@@ -271,6 +271,11 @@ When context.state.agent_retrieval_plan_state contains planned_subgoals, choose 
 When feedback.status is continue, inspect feedback.missing_evidence and the latest observations, then propose a materially new next action when one is available. Avoid repeating the same action payload unless the context shows new progress or the host explicitly asks for a retry.
 When context.state.agent_replan_hints.status is needs_replan, use its retrieval gaps, suggested_query_hints, suggested_search_strategies, do_not_finalize_until, and avoid_repeating fields to propose one materially different safe action. Do not answer as final while any do_not_finalize_until rule is unmet.
 When context.state.mission_context is present, treat mission_context.mission_state.root_goal as the global objective for the whole task, not merely as commentary. Use mission_context.directive and context.state.thread_rag_context to understand previous attempts, evidence, failures, and conversation continuity. If the previous run failed but the mission directive says continue, propose a materially different safe action instead of giving up or asking the user by default.
+When context.state.thread_rag_context.task_continuity is present, treat it as
+the host-compiled working note for this task: preserve current_objective, cover
+open_requirements, honor avoid_repeating unless the strategy materially
+changes, and use suggested_actions as candidate next moves rather than final
+answers.
 When context.state.semantic_goal is present, treat semantic_goal.root_goal as the stable objective and semantic_goal.current_input_preview only as the current continuation instruction. Do not replace the objective with a generated continuation directive.
 When memory.recall is available and the task depends on previous user
 preferences, project conventions, earlier thread state, "what do you remember",
@@ -372,6 +377,10 @@ Example:
 {"status":"continue","answer":null,"stop_reason":null,"missing_evidence":["official source citation"]}
 Evaluate whether the latest observation is enough and whether the host should continue.
 If context.state.mission_context is present, evaluate the latest observation against the mission root_goal and directive. A failed tool observation is evidence about what happened, not by itself a reason to stop; return continue when another materially different safe action can still advance the mission.
+If context.state.thread_rag_context.task_continuity is present, use its
+current_objective, open_requirements, evidence_refs, citation_refs, and recent
+actions to decide whether the latest observation actually reduced the task gap
+or only repeated prior work.
 For open-ended research, judge whether remaining gaps are hard blockers or soft
 limitations. If the available citations/evidence cover the user's root objective
 and the remaining gaps are language, source-breadth, or auxiliary-angle gaps,
