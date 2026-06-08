@@ -63,6 +63,12 @@ class ThreadWorkingMemoryProvider:
             failure_diagnostics=failure_diagnostics,
             memory_learning=memory_learning,
         )
+        payload["self_iteration"] = _self_iteration_context(
+            recent_results=recent_results,
+            recent_task_trace=task_trace,
+            failure_diagnostics=failure_diagnostics,
+            memory_learning=memory_learning,
+        )
         payload["context_hash"] = _hash_payload(payload)
         return payload
 
@@ -495,6 +501,96 @@ def _attention_blocks(
             }
         )
     return sorted(blocks, key=lambda item: float(item.get("priority") or 0.0), reverse=True)[:6]
+
+
+def _self_iteration_context(
+    *,
+    recent_results: list[JsonObject],
+    recent_task_trace: list[JsonObject],
+    failure_diagnostics: list[JsonObject],
+    memory_learning: list[JsonObject],
+) -> JsonObject:
+    failed_quality = [
+        item
+        for item in recent_task_trace
+        if item.get("kind") == "final_answer_quality_check" and item.get("passed") is False
+    ]
+    retrieval_reports = [
+        item for item in recent_task_trace if item.get("kind") == "retrieval_report"
+    ]
+    latest_failure = failure_diagnostics[-1] if failure_diagnostics else {}
+    latest_quality = failed_quality[-1] if failed_quality else {}
+    quality_gaps = _ordered_unique(
+        [
+            *_string_list(latest_quality.get("gaps")),
+            *_string_list(latest_quality.get("prior_gaps")),
+        ]
+    )
+    attempted_queries = _ordered_unique(
+        [
+            query
+            for report in retrieval_reports[-4:]
+            for query in _string_list(report.get("attempted_queries"))
+        ]
+    )
+    source_actions = _ordered_unique(
+        [
+            str(report.get("source_quality", {}).get("recommended_next_source_action"))
+            for report in retrieval_reports[-4:]
+            if isinstance(report.get("source_quality"), dict)
+            and report.get("source_quality", {}).get("recommended_next_source_action")
+        ]
+    )
+    strategy_hints = _ordered_unique(
+        [
+            str(report.get("failure_attribution", {}).get("next_strategy_hint"))
+            for report in retrieval_reports[-4:]
+            if isinstance(report.get("failure_attribution"), dict)
+            and report.get("failure_attribution", {}).get("next_strategy_hint")
+        ]
+    )
+    next_actions = _ordered_unique(
+        [
+            *source_actions,
+            *strategy_hints,
+            *([str(latest_failure.get("next_possible_action"))] if latest_failure.get("next_possible_action") else []),
+            *(["repair_final_answer_quality"] if quality_gaps else []),
+        ]
+    )
+    learning_refs = _ordered_unique(
+        [
+            str(item.get("record_ref"))
+            for item in memory_learning[-4:]
+            if item.get("record_ref")
+        ]
+    )
+    completed = [
+        item for item in recent_results if item.get("status") == "completed"
+    ]
+    if latest_failure:
+        status = "recover_from_failure"
+    elif quality_gaps:
+        status = "repair_answer_quality"
+    elif memory_learning:
+        status = "apply_thread_learning"
+    elif completed:
+        status = "continue_from_recent_success"
+    else:
+        status = "no_prior_signal"
+    return {
+        "kind": "self_iteration_context",
+        "status": status,
+        "latest_failure_reason": latest_failure.get("reason"),
+        "latest_missing_evidence": _string_list(latest_failure.get("missing_evidence"))[:12],
+        "answer_quality_gaps": quality_gaps[:12],
+        "avoid_repeating_queries": attempted_queries[-12:],
+        "recommended_next_actions": next_actions[:8],
+        "learning_refs": learning_refs[-8:],
+        "host_rule": (
+            "Use this as working memory for the next action. Do not repeat avoid_repeating_queries "
+            "unless the new payload materially changes source family, tool path, or evidence target."
+        ),
+    }
 
 
 def _string_list(value: object) -> list[str]:

@@ -183,6 +183,12 @@ Kernel v3 currently contains the infrastructure for:
   tasks in the same thread are included in later thread RAG context, so the next
   planner packet can see prior failure lessons even before they are approved as
   committed durable memory. Other threads do not receive those proposals;
+- self-iteration context in planner/evaluator packets. Recent retrieval
+  failures, answer-quality gaps, avoid-repeat query signatures, recommended
+  next actions, and thread learning refs are compacted into
+  `thread_rag_context.self_iteration`; prioritized `attention_blocks` are also
+  preserved in processor prompt context, so the next loop sees what failed and
+  what should materially change without reading raw journal blobs;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file

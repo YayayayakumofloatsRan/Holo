@@ -181,6 +181,8 @@ def test_phase109_low_quality_finance_synthesis_retries_once_before_finalizing()
         task_id=result.task_id,
     )
     assert any(item["kind"] == "answer_quality_gap" for item in thread_context["attention_blocks"])
+    assert thread_context["self_iteration"]["answer_quality_gaps"]
+    assert "repair_final_answer_quality" in thread_context["self_iteration"]["recommended_next_actions"]
 
 
 def test_phase109_failure_reflection_creates_nonblocking_memory_proposal() -> None:

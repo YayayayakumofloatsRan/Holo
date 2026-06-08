@@ -2,6 +2,7 @@ import json
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import AgentRuntimeResult
+from kernel_v3.agent.runtime import _compact_thread_rag_context_for_prompt
 from kernel_v3.agent.workloop import WorkloopConfig
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import ProcessorRequest, ProcessorResult
@@ -276,14 +277,38 @@ def test_phase109_thread_working_memory_exposes_attention_blocks():
             "user_help_needed": False,
         },
     )
+    journal.append(
+        task_id=task_id,
+        run_id="run-attention",
+        step_id="step-1",
+        kind="retrieval_report",
+        data={
+            "report_id": "report-attention",
+            "status": "insufficient_evidence",
+            "goal_id": "goal-attention",
+            "preview": "search did not find authority evidence",
+            "diagnostics": {
+                "search_summaries": [{"query": "weak repeated query"}],
+                "source_quality": {"recommended_next_source_action": "switch_source_family"},
+            },
+        },
+    )
 
     context = ThreadWorkingMemoryProvider().compile(journal, thread_id="thread-attention", task_id=task_id)
     blocks = context["attention_blocks"]
+    prompt_context = _compact_thread_rag_context_for_prompt(context)
 
-    assert [block["kind"] for block in blocks] == ["recent_failure", "current_evidence", "latest_task_state"]
+    assert [block["kind"] for block in blocks[:2]] == ["recent_failure", "current_evidence"]
     assert blocks[0]["priority"] > blocks[1]["priority"]
     assert "ev-attention" in blocks[1]["refs"]
     assert "cite-attention" in blocks[1]["refs"]
+    assert context["self_iteration"]["status"] == "recover_from_failure"
+    assert context["self_iteration"]["latest_failure_reason"] == "missing_source"
+    assert context["self_iteration"]["avoid_repeating_queries"] == ["weak repeated query"]
+    assert context["self_iteration"]["recommended_next_actions"] == ["switch_source_family"]
+    assert prompt_context["attention_blocks"][0]["kind"] == "recent_failure"
+    assert prompt_context["self_iteration"]["status"] == "recover_from_failure"
+    assert prompt_context["self_iteration"]["avoid_repeating_queries"] == ["weak repeated query"]
 
 
 def test_phase109_thread_rag_carries_nonblocking_learning_across_tasks_in_same_thread():

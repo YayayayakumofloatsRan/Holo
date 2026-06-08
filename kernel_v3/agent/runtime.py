@@ -4486,11 +4486,43 @@ def _compact_thread_rag_context_for_prompt(value: object) -> JsonObject:
         "evidence_refs": _string_list(value.get("evidence_refs"))[:16],
         "citation_refs": _string_list(value.get("citation_refs"))[:16],
         "failure_diagnostics": [_compact_failure_for_prompt(item) for item in list(value.get("failure_diagnostics") or [])[-3:] if isinstance(item, dict)],
+        "attention_blocks": [
+            _compact_attention_block_for_prompt(item)
+            for item in list(value.get("attention_blocks") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "self_iteration": _compact_self_iteration_for_prompt(value.get("self_iteration")),
         "memory_learning": [
             _compact_simple_dict(item, limit=10)
             for item in list(value.get("memory_learning") or [])[-4:]
             if isinstance(item, dict)
         ],
+    }
+
+
+def _compact_attention_block_for_prompt(value: JsonObject) -> JsonObject:
+    return {
+        "block_id": value.get("block_id"),
+        "kind": value.get("kind"),
+        "priority": value.get("priority"),
+        "summary": _text_preview(value.get("summary"), limit=360),
+        "refs": _string_list(value.get("refs"))[:8],
+    }
+
+
+def _compact_self_iteration_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "kind": value.get("kind") or "self_iteration_context",
+        "status": value.get("status"),
+        "latest_failure_reason": value.get("latest_failure_reason"),
+        "latest_missing_evidence": _string_list(value.get("latest_missing_evidence"))[:12],
+        "answer_quality_gaps": _string_list(value.get("answer_quality_gaps"))[:12],
+        "avoid_repeating_queries": _string_list(value.get("avoid_repeating_queries"))[-12:],
+        "recommended_next_actions": _string_list(value.get("recommended_next_actions"))[:8],
+        "learning_refs": _string_list(value.get("learning_refs"))[-8:],
+        "host_rule": _text_preview(value.get("host_rule"), limit=360),
     }
 
 

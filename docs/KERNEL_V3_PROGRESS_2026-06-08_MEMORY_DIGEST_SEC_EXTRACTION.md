@@ -108,6 +108,24 @@ professional completion.
 This improves Holo's self-iteration path without allowing models to write
 durable memory directly.
 
+## Fix: Self-Iteration Context Enters Planner Packets
+
+Thread RAG now carries an explicit `self_iteration` packet:
+
+- recent retrieval failures contribute missing evidence, failed queries to
+  avoid, and recommended next tool-level actions;
+- failed strict answer quality checks contribute concrete repair gaps;
+- recent non-blocking learning proposals contribute reusable thread-local
+  lessons;
+- `attention_blocks`, which were already produced by
+  `ThreadWorkingMemoryProvider`, are now preserved by the processor prompt
+  compaction path alongside `self_iteration`.
+
+This is a coupling fix for long-running work. The next planner/evaluator call
+receives the host's compact diagnosis of what just failed and what must change,
+instead of repeating the same search or treating a weak answer as an isolated
+event.
+
 ## Fix: Planner Provider Failure Is Not User Input
 
 When `planner.propose` fails because the processor provider fails, the fallback
@@ -144,6 +162,19 @@ Result:
 
 ```text
 757 passed
+```
+
+After the self-iteration context pass, the full kernel-v3 regression was run
+again:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+757 passed in 122.65s
 ```
 
 Live smoke:
