@@ -452,6 +452,58 @@ Result:
 760 passed in 73.91s (0:01:13)
 ```
 
+## Fix: Active Recall Feeds Self-Iteration
+
+The previous pass made `memory.recall` explain why a memory item matched. This
+pass carries those recall signals into `thread_rag_context.self_iteration` so
+the next model packet can use memory as working feedback, not only as passive
+background.
+
+Added self-iteration fields:
+
+- `recalled_memory_ids`;
+- `recalled_structured_keys`;
+- `recalled_structured_hit_keys`;
+- `recalled_quality_gaps`;
+- `active_memory_recall_signals` with scope, memory id, source, quality gaps,
+  next-action hints, match terms, and match score.
+
+The host still does not decide the next action from these fields. They are
+bounded prompt context for the model planner/evaluator, while PolicyGate and
+the host workloop keep execution authority.
+
+Validation:
+
+```bash
+.venv/bin/python -m py_compile \
+  kernel_v3/mission/thread_rag.py \
+  kernel_v3/agent/runtime.py
+
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_phase110_active_memory_recall.py \
+  tests/test_kernel_v3_phase71_memory_pipeline.py \
+  tests/test_kernel_v3_phase109_mission_supervisor.py
+```
+
+Result:
+
+```text
+33 passed in 1.36s
+```
+
+The full kernel-v3 regression was then run after active recall was wired into
+self-iteration:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+760 passed in 77.08s (0:01:17)
+```
+
 Live smoke:
 
 ```bash

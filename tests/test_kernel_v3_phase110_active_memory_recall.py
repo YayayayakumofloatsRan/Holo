@@ -225,6 +225,15 @@ def test_phase110_agent_loop_can_actively_recall_memory_before_answering():
     assert recalled["scopes"]["workspace"]["items"][0]["summary"] == "Project default branch is kernel-v3."
     assert recalled["scopes"]["thread"]["items"][0]["summary"] == "This thread prefers concise Chinese answers."
     assert recalled["scopes"]["workspace"]["items"][0]["match_diagnostics"]["match_score"] >= 1
+    assert thread_context["self_iteration"]["status"] == "apply_recalled_memory"
+    assert thread_context["self_iteration"]["recalled_memory_ids"] == [
+        "mem-workspace-branch",
+        "mem-thread-language",
+    ]
+    assert "answer_min_chars:1200" in thread_context["self_iteration"]["recalled_quality_gaps"]
+    assert thread_context["self_iteration"]["active_memory_recall_signals"][0]["source"] == "answer_quality_check"
+    assert "gaps" in thread_context["self_iteration"]["recalled_structured_keys"]
+    assert "gaps" in thread_context["self_iteration"]["active_memory_recall_signals"][0]["structured_keys"]
     assert prompt_context["active_memory_recalls"][-1]["memory_ids"] == [
         "mem-workspace-branch",
         "mem-thread-language",
@@ -237,6 +246,10 @@ def test_phase110_agent_loop_can_actively_recall_memory_before_answering():
         prompt_context["active_memory_recalls"][-1]["scopes"]["workspace"]["items"][0]["match_diagnostics"]["match_score"]
         >= 1
     )
+    assert prompt_context["self_iteration"]["status"] == "apply_recalled_memory"
+    assert "answer_min_chars:1200" in prompt_context["self_iteration"]["recalled_quality_gaps"]
+    assert "gaps" in prompt_context["self_iteration"]["recalled_structured_keys"]
+    assert prompt_context["self_iteration"]["active_memory_recall_signals"][0]["source"] == "answer_quality_check"
 
 
 def test_phase110_model_planner_packet_includes_durable_memory_context():

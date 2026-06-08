@@ -194,7 +194,9 @@ Kernel v3 currently contains the infrastructure for:
 - self-iteration context in planner/evaluator packets. Recent retrieval
   failures, answer-quality gaps, avoid-repeat query signatures, recommended
   next actions, and thread learning refs are compacted into
-  `thread_rag_context.self_iteration`; prioritized `attention_blocks` are also
+  `thread_rag_context.self_iteration`; active `memory.recall` hits also become
+  self-iteration signals with recalled memory ids, available structured slots,
+  quality gaps, and next-action hints. Prioritized `attention_blocks` are also
   preserved in processor prompt context, so the next loop sees what failed and
   what should materially change without reading raw journal blobs;
 - task-continuity context in planner/evaluator packets. Mission assessments,

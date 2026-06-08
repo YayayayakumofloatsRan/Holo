@@ -43,6 +43,7 @@ class ThreadWorkingMemoryProvider:
         task_trace = trace
         recent_results = [_compact_result(record, preview_chars=self.config.text_preview_chars) for record in results]
         recent_turns = [_compact_turn(record, preview_chars=self.config.text_preview_chars) for record in turns]
+        active_memory_recalls = _active_memory_recalls(task_trace)
         payload = {
             "kind": "thread_rag_context",
             "thread_id": thread_id,
@@ -55,7 +56,7 @@ class ThreadWorkingMemoryProvider:
             "citation_refs": citation_refs,
             "failure_diagnostics": failure_diagnostics,
             "memory_learning": memory_learning,
-            "active_memory_recalls": _active_memory_recalls(task_trace),
+            "active_memory_recalls": active_memory_recalls,
         }
         payload["attention_blocks"] = _attention_blocks(
             recent_results=recent_results,
@@ -64,6 +65,7 @@ class ThreadWorkingMemoryProvider:
             citation_refs=citation_refs,
             failure_diagnostics=failure_diagnostics,
             memory_learning=memory_learning,
+            active_memory_recalls=active_memory_recalls,
         )
         payload["task_continuity"] = _task_continuity_context(
             mission_id=mission_id,
@@ -79,6 +81,7 @@ class ThreadWorkingMemoryProvider:
             recent_task_trace=task_trace,
             failure_diagnostics=failure_diagnostics,
             memory_learning=memory_learning,
+            active_memory_recalls=active_memory_recalls,
         )
         payload["context_hash"] = _hash_payload(payload)
         return payload
@@ -571,6 +574,7 @@ def _attention_blocks(
     citation_refs: list[str],
     failure_diagnostics: list[JsonObject],
     memory_learning: list[JsonObject],
+    active_memory_recalls: list[JsonObject],
 ) -> list[JsonObject]:
     blocks: list[JsonObject] = []
     if failure_diagnostics:
@@ -625,6 +629,30 @@ def _attention_blocks(
                 "refs": [str(latest.get("record_ref"))] if latest.get("record_ref") else [],
             }
         )
+    if active_memory_recalls:
+        latest_recall = active_memory_recalls[-1]
+        signals = _active_memory_recall_signals(active_memory_recalls)
+        memory_ids = _string_list(latest_recall.get("memory_ids"))[:6]
+        hit_keys = _ordered_unique(
+            [
+                key
+                for signal in signals[-8:]
+                for key in _string_list(signal.get("structured_hit_keys"))
+            ]
+        )[:6]
+        blocks.append(
+            {
+                "block_id": f"attention-memory-recall-{latest_recall.get('record_ref')}",
+                "kind": "active_memory_recall",
+                "priority": 0.84,
+                "summary": _preview(
+                    f"Active memory recall found {latest_recall.get('combined_total', 0)} items; "
+                    f"memory_ids={', '.join(memory_ids)}; structured_hits={', '.join(hit_keys)}",
+                    360,
+                ),
+                "refs": [str(latest_recall.get("record_ref"))] if latest_recall.get("record_ref") else [],
+            }
+        )
     quality_checks = [
         item
         for item in recent_task_trace
@@ -674,6 +702,53 @@ def _active_memory_recalls(recent_task_trace: list[JsonObject]) -> list[JsonObje
                 }
             )
     return recalls[-4:]
+
+
+def _active_memory_recall_signals(active_memory_recalls: list[JsonObject]) -> list[JsonObject]:
+    signals: list[JsonObject] = []
+    for recall in active_memory_recalls[-4:]:
+        scopes = recall.get("scopes") if isinstance(recall.get("scopes"), dict) else {}
+        for scope_label, scope in scopes.items():
+            if not isinstance(scope, dict):
+                continue
+            items = [item for item in list(scope.get("items") or [])[:6] if isinstance(item, dict)]
+            for item in items:
+                structured = item.get("structured_summary") if isinstance(item.get("structured_summary"), dict) else {}
+                values = structured.get("values") if isinstance(structured.get("values"), dict) else {}
+                match = item.get("match_diagnostics") if isinstance(item.get("match_diagnostics"), dict) else {}
+                next_actions = _memory_signal_next_actions(values)
+                quality_gaps = _string_list(values.get("gaps"))[:8]
+                structured_keys = [str(key) for key in list(values.keys())[:12]]
+                hit_keys = _string_list(match.get("structured_hit_keys"))[:8]
+                if not (next_actions or quality_gaps or hit_keys or item.get("memory_id")):
+                    continue
+                signals.append(
+                    {
+                        "record_ref": recall.get("record_ref"),
+                        "scope": str(scope_label),
+                        "memory_id": item.get("memory_id"),
+                        "kind": item.get("kind"),
+                        "source": values.get("source"),
+                        "quality_gaps": quality_gaps,
+                        "next_actions": next_actions[:6],
+                        "structured_keys": structured_keys,
+                        "structured_hit_keys": hit_keys,
+                        "matched_terms": _string_list(match.get("matched_terms"))[:8],
+                        "match_score": match.get("match_score"),
+                        "summary_preview": _preview(str(item.get("summary") or ""), 240),
+                    }
+                )
+    return signals[-12:]
+
+
+def _memory_signal_next_actions(values: JsonObject) -> list[str]:
+    result: list[str] = []
+    direct = values.get("next_possible_action")
+    if isinstance(direct, str) and direct.strip():
+        result.append(direct.strip())
+    for item in _string_list(values.get("next_possible_actions")):
+        result.append(item)
+    return _ordered_unique(result)
 
 
 def _task_continuity_context(
@@ -778,6 +853,7 @@ def _self_iteration_context(
     recent_task_trace: list[JsonObject],
     failure_diagnostics: list[JsonObject],
     memory_learning: list[JsonObject],
+    active_memory_recalls: list[JsonObject],
 ) -> JsonObject:
     failed_quality = [
         item
@@ -818,10 +894,47 @@ def _self_iteration_context(
             and report.get("failure_attribution", {}).get("next_strategy_hint")
         ]
     )
+    memory_recall_signals = _active_memory_recall_signals(active_memory_recalls)
+    recalled_memory_ids = _ordered_unique(
+        [
+            memory_id
+            for recall in active_memory_recalls[-4:]
+            for memory_id in _string_list(recall.get("memory_ids"))
+        ]
+    )
+    recalled_quality_gaps = _ordered_unique(
+        [
+            gap
+            for signal in memory_recall_signals
+            for gap in _string_list(signal.get("quality_gaps"))
+        ]
+    )
+    recalled_next_actions = _ordered_unique(
+        [
+            action
+            for signal in memory_recall_signals
+            for action in _string_list(signal.get("next_actions"))
+        ]
+    )
+    recalled_structured_hit_keys = _ordered_unique(
+        [
+            key
+            for signal in memory_recall_signals
+            for key in _string_list(signal.get("structured_hit_keys"))
+        ]
+    )
+    recalled_structured_keys = _ordered_unique(
+        [
+            key
+            for signal in memory_recall_signals
+            for key in _string_list(signal.get("structured_keys"))
+        ]
+    )
     next_actions = _ordered_unique(
         [
             *source_actions,
             *strategy_hints,
+            *recalled_next_actions,
             *([str(latest_failure.get("next_possible_action"))] if latest_failure.get("next_possible_action") else []),
             *(["repair_final_answer_quality"] if quality_gaps else []),
         ]
@@ -852,6 +965,8 @@ def _self_iteration_context(
         status = "repair_answer_quality"
     elif memory_learning:
         status = "apply_thread_learning"
+    elif memory_recall_signals:
+        status = "apply_recalled_memory"
     elif completed:
         status = "continue_from_recent_success"
     else:
@@ -862,12 +977,18 @@ def _self_iteration_context(
         "latest_failure_reason": latest_failure.get("reason"),
         "latest_missing_evidence": _string_list(latest_failure.get("missing_evidence"))[:12],
         "answer_quality_gaps": quality_gaps[:12],
+        "recalled_quality_gaps": recalled_quality_gaps[:12],
+        "recalled_memory_ids": recalled_memory_ids[-16:],
+        "recalled_structured_keys": recalled_structured_keys[:12],
+        "recalled_structured_hit_keys": recalled_structured_hit_keys[:12],
         "avoid_repeating_queries": attempted_queries[-12:],
         "recommended_next_actions": next_actions[:8],
         "learning_refs": learning_refs[-8:],
         "learning_signals": learning_signals[-4:],
+        "active_memory_recall_signals": memory_recall_signals[-4:],
         "host_rule": (
-            "Use this as working memory for the next action. Do not repeat avoid_repeating_queries "
+            "Use this as working memory for the next action. Apply recalled_memory_ids and "
+            "active_memory_recall_signals when relevant. Do not repeat avoid_repeating_queries "
             "unless the new payload materially changes source family, tool path, or evidence target."
         ),
     }

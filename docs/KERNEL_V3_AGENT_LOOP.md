@@ -156,6 +156,14 @@ next-action hint. Planner prompts are instructed to use these recalled refs
 before proposing another recall; a second recall should only happen when the
 first one missed the needed scope or topic.
 
+Active recall now also feeds `thread_rag_context.self_iteration`. The packet
+includes recalled memory ids, available structured keys, structured hit keys,
+recalled quality gaps, and recalled next-action hints. This is deliberately
+advisory: the model still chooses the next action, while the host still
+validates and executes it. The purpose is to make memory useful as working
+feedback across loop iterations instead of leaving it as passive background
+text.
+
 The workloop counts successful memory recall as progress, but it does not
 finalize a direct/semantic task from the recall observation alone. A
 direct/semantic finalization needs either an explicit final answer in evaluator

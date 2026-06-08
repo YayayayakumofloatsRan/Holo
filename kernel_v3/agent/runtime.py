@@ -4667,12 +4667,21 @@ def _compact_self_iteration_for_prompt(value: object) -> JsonObject:
         "latest_failure_reason": value.get("latest_failure_reason"),
         "latest_missing_evidence": _string_list(value.get("latest_missing_evidence"))[:12],
         "answer_quality_gaps": _string_list(value.get("answer_quality_gaps"))[:12],
+        "recalled_quality_gaps": _string_list(value.get("recalled_quality_gaps"))[:12],
+        "recalled_memory_ids": _string_list(value.get("recalled_memory_ids"))[-16:],
+        "recalled_structured_keys": _string_list(value.get("recalled_structured_keys"))[:12],
+        "recalled_structured_hit_keys": _string_list(value.get("recalled_structured_hit_keys"))[:12],
         "avoid_repeating_queries": _string_list(value.get("avoid_repeating_queries"))[-12:],
         "recommended_next_actions": _string_list(value.get("recommended_next_actions"))[:8],
         "learning_refs": _string_list(value.get("learning_refs"))[-8:],
         "learning_signals": [
             _compact_memory_learning_signal_for_prompt(item)
             for item in list(value.get("learning_signals") or [])[-4:]
+            if isinstance(item, dict)
+        ],
+        "active_memory_recall_signals": [
+            _compact_active_memory_recall_signal_for_prompt(item)
+            for item in list(value.get("active_memory_recall_signals") or [])[-4:]
             if isinstance(item, dict)
         ],
         "host_rule": _text_preview(value.get("host_rule"), limit=360),
@@ -4701,6 +4710,23 @@ def _compact_memory_learning_signal_for_prompt(value: JsonObject) -> JsonObject:
         "proposal_id": value.get("proposal_id"),
         "source_kind": value.get("source_kind"),
         "quality_gaps": _string_list(value.get("quality_gaps"))[:8],
+        "summary_preview": _text_preview(value.get("summary_preview"), limit=240),
+    }
+
+
+def _compact_active_memory_recall_signal_for_prompt(value: JsonObject) -> JsonObject:
+    return {
+        "record_ref": value.get("record_ref"),
+        "scope": value.get("scope"),
+        "memory_id": value.get("memory_id"),
+        "kind": value.get("kind"),
+        "source": value.get("source"),
+        "quality_gaps": _string_list(value.get("quality_gaps"))[:8],
+        "next_actions": _string_list(value.get("next_actions"))[:6],
+        "structured_keys": _string_list(value.get("structured_keys"))[:12],
+        "structured_hit_keys": _string_list(value.get("structured_hit_keys"))[:8],
+        "matched_terms": _string_list(value.get("matched_terms"))[:8],
+        "match_score": value.get("match_score"),
         "summary_preview": _text_preview(value.get("summary_preview"), limit=240),
     }
 
