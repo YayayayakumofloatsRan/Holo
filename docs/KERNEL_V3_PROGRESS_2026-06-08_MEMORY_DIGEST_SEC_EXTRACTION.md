@@ -175,6 +175,23 @@ only a string preview:
 This improves multi-step memory continuity without giving the model write
 authority over durable memory.
 
+## Fix: Answer Quality Gaps Become Reviewable Learning
+
+Strict final-answer quality checks now feed the memory learning path:
+
+- `MemoryPipeline.propose_from_answer_quality_check()` creates a pending,
+  non-blocking `workflow_convention` proposal from host-derived quality gaps;
+- `AgentRuntime` invokes it when a quality check fails, using the quality-check
+  journal record as provenance;
+- the memory proposal stores the answer profile, gaps, attempt, prior gaps,
+  citation/evidence refs, answer length, and repair directive, not the raw
+  failed answer body;
+- memory proposal journal manifests now expose safe `source_kind` and
+  `quality_gaps`, so thread RAG can carry this self-iteration signal forward.
+
+The model still cannot write durable memory directly. These records stay
+pending/review-first until approved.
+
 ## Fix: Planner Provider Failure Is Not User Input
 
 When `planner.propose` fails because the processor provider fails, the fallback
@@ -263,6 +280,34 @@ Result:
 
 ```text
 759 passed in 95.09s
+```
+
+After the answer-quality learning proposal pass, targeted memory/runtime tests
+were run:
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_phase71_memory_pipeline.py \
+  tests/test_kernel_v3_phase109_research_employee_core.py \
+  tests/test_kernel_v3_phase110_active_memory_recall.py
+```
+
+Result:
+
+```text
+31 passed in 1.31s
+```
+
+The full kernel-v3 regression was then run again:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+760 passed in 91.54s
 ```
 
 Live smoke:

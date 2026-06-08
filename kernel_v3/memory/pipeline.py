@@ -343,6 +343,128 @@ class MemoryPipeline:
             rejected=[proposal_or_rejection],
         )
 
+    def propose_from_answer_quality_check(
+        self,
+        *,
+        root_goal: str,
+        task_id: str,
+        run_id: str,
+        thread_id: str,
+        source_record_ref: str | None,
+        answer_profile: JsonObject | None,
+        gaps: list[str],
+        attempt: str,
+        prior_gaps: list[str] | None = None,
+        answer_chars: int | None = None,
+        citation_refs: list[str] | None = None,
+        used_evidence: list[str] | None = None,
+        metadata: JsonObject | None = None,
+    ) -> MemoryPipelineResult:
+        payload = _answer_quality_learning_payload(
+            root_goal=root_goal,
+            answer_profile=answer_profile,
+            gaps=gaps,
+            attempt=attempt,
+            prior_gaps=prior_gaps,
+            answer_chars=answer_chars,
+            citation_refs=citation_refs,
+            used_evidence=used_evidence,
+            metadata=metadata,
+        )
+        text = str(payload.get("body") or "")
+        if not text:
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[])
+        if contains_secret_like_content(text):
+            rejection = self._reject_secret(
+                task_id=task_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                source_record_ref=source_record_ref,
+                text=text,
+            )
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[rejection])
+        candidate = ShadowCandidate(
+            candidate_id=stable_candidate_id(
+                {
+                    "source_kind": "answer_quality_check",
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "source_record_ref": source_record_ref,
+                    "text_hash": _hash_text(text),
+                    "dedupe_key": payload["dedupe_key"],
+                }
+            ),
+            source_kind="answer_quality_check",
+            candidate_text=text,
+            normalized_topic=str(payload["topic"]),
+            required_capabilities=["durable_memory:write"],
+            blocked_capabilities=[],
+            status="open",
+            expires_at_ms=None,
+            created_at_ms=self._now_ms(),
+            metadata={
+                "source_record_ref": source_record_ref,
+                "task_id": task_id,
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "source_kind": "answer_quality_check",
+                "memory_kind": "workflow_convention",
+                "title": payload["title"],
+                "summary": payload["summary"],
+                "body": text,
+                "dedupe_key": payload["dedupe_key"],
+                "structured": payload["structured"],
+                "confidence": payload["confidence"],
+                "rationale": payload["rationale"],
+                "review_nonblocking": True,
+                **dict(metadata or {}),
+            },
+        )
+        self.store.record_shadow_candidate(candidate)
+        self._journal_memory_record(
+            task_id=task_id,
+            run_id=run_id,
+            kind="memory_shadow_candidate",
+            data=shadow_candidate_event(candidate),
+            state_delta={"memory_candidate": candidate.status},
+        )
+        proposal_or_rejection = self._proposal_from_candidate(
+            candidate,
+            task_id=task_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            source_record_ref=source_record_ref,
+        )
+        if isinstance(proposal_or_rejection, MemoryProposal):
+            proposal = replace(
+                proposal_or_rejection,
+                rationale=str(payload["rationale"]),
+                metadata={
+                    **dict(proposal_or_rejection.metadata),
+                    "source_kind": "answer_quality_check",
+                    "review_nonblocking": True,
+                    "quality_gaps": _string_list(payload["structured"].get("gaps")),
+                    "attempt": attempt,
+                    **dict(metadata or {}),
+                },
+            )
+            self.store.record_proposal(proposal)
+            self._journal_memory_record(
+                task_id=task_id,
+                run_id=run_id,
+                kind="memory_proposal",
+                data=memory_proposal_event(proposal),
+                state_delta={"memory_proposal": proposal.approval_status},
+            )
+            return MemoryPipelineResult(shadow_candidates=[candidate], proposals=[proposal], committed_items=[], rejected=[])
+        return MemoryPipelineResult(
+            shadow_candidates=[candidate],
+            proposals=[],
+            committed_items=[],
+            rejected=[proposal_or_rejection],
+        )
+
     def propose_thread_learning_digest(
         self,
         *,
@@ -945,6 +1067,83 @@ def _research_result_payload(*, answer_text: str, metadata: JsonObject | None) -
     }
 
 
+def _answer_quality_learning_payload(
+    *,
+    root_goal: str,
+    answer_profile: JsonObject | None,
+    gaps: list[str],
+    attempt: str,
+    prior_gaps: list[str] | None,
+    answer_chars: int | None,
+    citation_refs: list[str] | None,
+    used_evidence: list[str] | None,
+    metadata: JsonObject | None,
+) -> JsonObject:
+    gap_list = _ordered_unique([str(item) for item in gaps if str(item).strip()])
+    if not gap_list:
+        return {}
+    profile = dict(answer_profile or {})
+    profile_format = str(profile.get("format") or "answer")
+    detail_level = str(profile.get("detail_level") or "")
+    target_sections = _string_list(profile.get("target_sections"))[:12]
+    coverage = _string_list(profile.get("minimum_coverage"))[:12]
+    citation_list = _string_list(citation_refs)[:16]
+    evidence_list = _string_list(used_evidence)[:16]
+    goal_preview = _preview_text(root_goal, 320)
+    topic_seed = {
+        "goal_hash": _hash_text(root_goal)[:12],
+        "profile_format": profile_format,
+        "detail_level": detail_level,
+        "gaps": gap_list,
+        "attempt": attempt,
+        "metadata_kind": (metadata or {}).get("reflection_kind") if isinstance(metadata, dict) else None,
+    }
+    topic = "answer-quality-" + _hash_text(str(topic_seed))[:16]
+    next_action = "repair final answer to satisfy the declared answer_profile before returning it to the user"
+    body_lines = [
+        "Holo answer quality learning signal.",
+        f"Goal: {goal_preview}" if goal_preview else "",
+        f"Profile: format={profile_format}, detail={detail_level}.",
+        f"Attempt: {attempt}.",
+        f"Observed gaps: {', '.join(gap_list)}.",
+        f"Prior gaps: {', '.join(_string_list(prior_gaps)[:12])}." if prior_gaps else "",
+        f"Answer chars: {answer_chars}." if isinstance(answer_chars, int) else "",
+        f"Target sections: {', '.join(target_sections)}." if target_sections else "",
+        f"Minimum coverage: {', '.join(coverage)}." if coverage else "",
+        f"Citation refs present: {len(citation_list)}.",
+        f"Evidence refs present: {len(evidence_list)}.",
+        f"Reusable lesson: {next_action}.",
+    ]
+    summary = _preview_text(
+        f"Answer quality gap for {profile_format}: {', '.join(gap_list)}; goal={goal_preview}",
+        240,
+    )
+    structured = {
+        "source": "answer_quality_check",
+        "profile_format": profile_format,
+        "detail_level": detail_level,
+        "gaps": gap_list,
+        "prior_gaps": _string_list(prior_gaps)[:12],
+        "attempt": attempt,
+        "answer_chars": answer_chars if isinstance(answer_chars, int) else None,
+        "target_sections": target_sections,
+        "minimum_coverage": coverage,
+        "citation_refs": citation_list,
+        "used_evidence": evidence_list,
+        "next_possible_action": next_action,
+    }
+    return {
+        "topic": topic,
+        "title": _preview_text(f"Answer quality learning: {profile_format}", 120),
+        "summary": summary,
+        "body": _preview_text("\n".join(item for item in body_lines if item), 2_400),
+        "dedupe_key": f"answer_quality:{topic}",
+        "structured": structured,
+        "confidence": 0.74,
+        "rationale": "host-derived answer quality gap; keep pending for review before durable memory commit",
+    }
+
+
 def _thread_learning_source_proposals(
     proposals: list[MemoryProposal],
     *,
@@ -1033,6 +1232,7 @@ def _learning_entry_from_proposal(proposal: MemoryProposal) -> JsonObject:
         "summary": _preview_text(summary, 260),
         "failure_reason": structured.get("failure_reason"),
         "next_possible_action": structured.get("next_possible_action") or proposal.metadata.get("next_possible_action"),
+        "quality_gaps": _string_list(structured.get("gaps"))[:12] or _string_list(proposal.metadata.get("quality_gaps"))[:12],
         "citation_refs": _string_list(structured.get("citation_refs"))[:8],
         "used_evidence": _string_list(structured.get("used_evidence"))[:8],
     }

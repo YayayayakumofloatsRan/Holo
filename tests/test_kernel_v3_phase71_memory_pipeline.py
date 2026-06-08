@@ -349,8 +349,10 @@ def test_phase71_task_reflection_creates_reviewable_nonblocking_learning_proposa
     assert store.recall(query="Apple", scope={"thread_id": "thread-1"}).total == 0
     record = journal.records(kind="memory_proposal")[-1]
     assert record.data["review_nonblocking"] is True
+    assert record.data["source_kind"] == "task_reflection"
     thread_context = ThreadWorkingMemoryProvider().compile(journal, thread_id="thread-1", task_id="task-1")
     assert thread_context["memory_learning"][0]["proposal_id"] == proposal.proposal_id
+    assert thread_context["memory_learning"][0]["source_kind"] == "task_reflection"
     assert any(block["kind"] == "memory_learning_signal" for block in thread_context["attention_blocks"])
 
 
@@ -376,6 +378,59 @@ def test_phase71_task_reflection_secret_like_text_is_rejected():
     assert result.rejected[0]["reason"] == "memory_rejected_secret_like_content"
     assert store.shadow_candidates() == []
     assert store.proposals() == []
+
+
+def test_phase71_answer_quality_check_creates_reviewable_learning_proposal_without_raw_answer():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+
+    result = pipeline.propose_from_answer_quality_check(
+        root_goal="调查 AAPL 的基本面并写详细报告",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-quality",
+        answer_profile={
+            "format": "detailed_report",
+            "detail_level": "detailed",
+            "target_sections": ["结论摘要", "财务表现", "风险与局限"],
+            "minimum_coverage": ["financial_performance", "valuation", "source_quality"],
+        },
+        gaps=["answer_min_chars:1200", "answer_min_sections:5", "source_quality"],
+        attempt="initial",
+        answer_chars=128,
+        citation_refs=["cite-a"],
+        used_evidence=["ev-a"],
+    )
+
+    assert len(result.shadow_candidates) == 1
+    assert len(result.proposals) == 1
+    proposal = result.proposals[0]
+    assert proposal.metadata["source_kind"] == "answer_quality_check"
+    assert proposal.metadata["review_nonblocking"] is True
+    assert proposal.proposed_item["kind"] == "workflow_convention"
+    structured = proposal.proposed_item["structured"]
+    assert structured["source"] == "answer_quality_check"
+    assert structured["profile_format"] == "detailed_report"
+    assert structured["gaps"] == ["answer_min_chars:1200", "answer_min_sections:5", "source_quality"]
+    assert structured["answer_chars"] == 128
+    assert "repair final answer" in structured["next_possible_action"]
+    assert store.recall(query="answer quality", scope={"thread_id": "thread-1"}).total == 0
+    dumped = json.dumps([record.to_dict() for record in journal.records()], ensure_ascii=False)
+    assert "full failed answer" not in dumped
+    record = journal.records(kind="memory_proposal")[-1]
+    assert record.data["review_nonblocking"] is True
+    assert record.data["source_kind"] == "answer_quality_check"
+    assert record.data["quality_gaps"] == ["answer_min_chars:1200", "answer_min_sections:5", "source_quality"]
+    thread_context = ThreadWorkingMemoryProvider().compile(journal, thread_id="thread-1", task_id="task-1")
+    assert thread_context["memory_learning"][0]["proposal_id"] == proposal.proposal_id
+    assert thread_context["memory_learning"][0]["source_kind"] == "answer_quality_check"
+    assert thread_context["memory_learning"][0]["quality_gaps"] == [
+        "answer_min_chars:1200",
+        "answer_min_sections:5",
+        "source_quality",
+    ]
 
 
 def test_phase71_research_result_memory_is_compact_structured_and_nonblocking():

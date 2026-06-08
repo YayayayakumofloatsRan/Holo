@@ -16,6 +16,7 @@ SEC_URL = "https://www.sec.gov/Archives/edgar/data/320193/aapl-20240928.htm"
 
 def test_phase109_detailed_research_short_synthesis_is_not_finalized() -> None:
     journal = JournalStore.in_memory()
+    memory = MemoryStore.in_memory()
     fabric = fake_fabric(
         {
             "semantic.intake": _finance_detail_intake("去调查一下 AAPL 的基本面信息，写详细报告"),
@@ -34,6 +35,7 @@ def test_phase109_detailed_research_short_synthesis_is_not_finalized() -> None:
         artifact_store=ArtifactStore.in_memory(),
         processor_fabric=fabric,
         retrieval_operator=_operator(),
+        memory_store=memory,
     )
 
     result = runtime.run(
@@ -50,6 +52,20 @@ def test_phase109_detailed_research_short_synthesis_is_not_finalized() -> None:
     quality = journal.records(task_id=result.task_id, kind="final_answer_quality_check")[-1].data
     assert quality["passed"] is False
     assert quality["answer_profile"]["format"] == "detailed_report"
+    proposals = memory.proposals()
+    quality_proposals = [proposal for proposal in proposals if proposal.metadata.get("source_kind") == "answer_quality_check"]
+    assert quality_proposals
+    assert quality_proposals[0].metadata["review_nonblocking"] is True
+    assert quality_proposals[0].proposed_item["structured"]["gaps"]
+    assert memory.list_items() == []
+    thread_context = ThreadWorkingMemoryProvider().compile(
+        journal,
+        thread_id="local:default",
+        task_id=result.task_id,
+    )
+    learning_kinds = {item.get("source_kind") for item in thread_context["memory_learning"]}
+    assert "answer_quality_check" in learning_kinds
+    assert _pending_memory_proposals(journal, task_id=result.task_id) == []
 
 
 def test_phase109_answer_profile_preserves_explicit_detailed_report_shape() -> None:

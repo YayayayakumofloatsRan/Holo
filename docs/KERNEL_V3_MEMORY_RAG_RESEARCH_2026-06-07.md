@@ -417,3 +417,24 @@ after the tool step:
 This closes an important loop-coupling gap: active memory is now both a tool
 result and a short-term working-memory packet for the next agent step, while
 remaining read-only and host-audited.
+
+## 2026-06-08 Implementation Update: Answer Quality Learning Proposals
+
+Final-answer quality gaps now have a durable-memory promotion path:
+
+- `MemoryPipeline.propose_from_answer_quality_check()` creates a pending,
+  non-blocking learning proposal from host-derived quality-check gaps.
+- The proposal stores answer profile, gap list, attempt, prior gaps, answer
+  length, citation refs, evidence refs, and a generic repair directive. It does
+  not store the raw failed answer body.
+- `AgentRuntime._append_final_quality_check()` calls this path when a strict
+  answer profile fails, then lets the normal task/failure flow continue.
+- `memory_proposal` journal manifests expose safe `source_kind` and
+  `quality_gaps`, so thread RAG can distinguish answer-quality learning from
+  task-failure or research-result learning.
+- The learning remains review-first. The model cannot commit it; approval still
+  goes through `MemoryPipeline.approve_proposal()`.
+
+This moves Holo closer to self-iteration: repeated short, under-covered, or
+poorly structured research answers can become inspectable learning signals
+without weakening host ownership or privacy boundaries.

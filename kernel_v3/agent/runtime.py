@@ -1265,7 +1265,7 @@ class AgentRuntime:
         profile = _answer_profile_metadata(recipe)
         if not profile:
             return
-        self.journal.append(
+        record = self.journal.append(
             task_id=answer.task_id,
             run_id=answer.run_id,
             step_id=None,
@@ -1284,6 +1284,15 @@ class AgentRuntime:
             ),
             state_delta={"final_answer_quality": "passed" if not gaps else "insufficient"},
         )
+        if gaps:
+            self._maybe_propose_answer_quality_memory(
+                answer,
+                recipe=recipe,
+                gaps=gaps,
+                attempt=attempt,
+                prior_gaps=prior_gaps,
+                source_record_ref=record.record_id,
+            )
 
     def _append_final_quality_repair_failed(
         self,
@@ -1339,6 +1348,57 @@ class AgentRuntime:
                     run_id=answer.run_id,
                     thread_id=thread_id,
                     source_record_ref=answer.trace_refs[-1] if answer.trace_refs else None,
+                )
+        except Exception as exc:  # pragma: no cover - defensive runtime isolation
+            self.journal.append(
+                task_id=answer.task_id,
+                run_id=answer.run_id,
+                step_id=None,
+                kind="memory_pipeline_error",
+                data={"error_type": type(exc).__name__, "redaction": {"message": "omitted"}},
+                state_delta={"memory_pipeline": "failed"},
+            )
+
+    def _maybe_propose_answer_quality_memory(
+        self,
+        answer: FinalAnswer,
+        *,
+        recipe: TaskRecipe,
+        gaps: list[str],
+        attempt: str,
+        prior_gaps: list[str] | None,
+        source_record_ref: str | None,
+    ) -> None:
+        if self.memory_pipeline is None or not gaps:
+            return
+        thread_id = _thread_id_metadata(recipe)
+        try:
+            result = self.memory_pipeline.propose_from_answer_quality_check(
+                root_goal=_root_goal_for_memory_reflection(self.journal, answer.task_id, recipe),
+                task_id=answer.task_id,
+                run_id=answer.run_id,
+                thread_id=thread_id,
+                source_record_ref=source_record_ref,
+                answer_profile=_answer_profile_metadata(recipe),
+                gaps=list(gaps),
+                attempt=attempt,
+                prior_gaps=list(prior_gaps or []),
+                answer_chars=len(answer.answer),
+                citation_refs=list(answer.citation_refs),
+                used_evidence=list(answer.used_evidence),
+                metadata={
+                    "reflection_kind": "answer_quality_learning",
+                    "review_nonblocking": True,
+                    "recipe_id": recipe.recipe_id,
+                    "mode": recipe.mode,
+                },
+            )
+            if result.proposals:
+                self._maybe_propose_thread_learning_digest(
+                    task_id=answer.task_id,
+                    run_id=answer.run_id,
+                    thread_id=thread_id,
+                    source_record_ref=source_record_ref,
                 )
         except Exception as exc:  # pragma: no cover - defensive runtime isolation
             self.journal.append(

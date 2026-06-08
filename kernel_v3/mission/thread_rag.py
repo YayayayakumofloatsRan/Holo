@@ -377,6 +377,8 @@ def _compact_memory_proposal(record: LedgerRecord) -> JsonObject:
         "approval_status": record.data.get("approval_status"),
         "approval_policy": record.data.get("approval_policy"),
         "review_nonblocking": record.data.get("review_nonblocking"),
+        "source_kind": record.data.get("source_kind"),
+        "quality_gaps": _string_list(record.data.get("quality_gaps"))[:12],
         "proposed_kind": proposed.get("kind"),
         "summary_preview": _preview(str(proposed.get("summary_preview") or ""), 360),
         "summary_hash": proposed.get("summary_hash"),

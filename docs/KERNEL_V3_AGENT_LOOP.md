@@ -148,6 +148,21 @@ finalize a direct/semantic task from the recall observation alone. A
 direct/semantic finalization needs either an explicit final answer in evaluator
 feedback or a successful user-facing `respond` observation.
 
+## Answer Quality Learning
+
+Strict answer profiles are host-enforced. When a model synthesis misses the
+declared profile, the host writes `final_answer_quality_check` with concrete
+gaps and may retry synthesis once. If durable memory is configured, those gaps
+also become a pending, non-blocking memory proposal through
+`MemoryPipeline.propose_from_answer_quality_check()`.
+
+The proposal stores only safe learning structure: answer profile fields, gap
+ids, attempt/prior gaps, answer length, citation refs, evidence refs, and a
+repair directive. It does not store the raw failed answer body, and it is not
+committed until explicitly approved. Thread RAG receives the safe
+`source_kind=answer_quality_check` and `quality_gaps` manifest fields so later
+planner packets can avoid repeating the same answer-shape failure.
+
 ## WorkMethod Layer
 
 The agent loop now carries a compact WorkMethod packet in planner/evaluator

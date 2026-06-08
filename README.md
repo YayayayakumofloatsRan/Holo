@@ -167,6 +167,12 @@ Kernel v3 currently contains the infrastructure for:
   pass with concrete gaps before the host returns
   `final_answer_quality_insufficient`; failed quality checks also enter thread
   RAG as `answer_quality_gap` attention blocks;
+- answer-quality learning proposals. When the host rejects or repairs a final
+  answer because it misses the declared answer profile, the quality-check gap
+  can become a non-blocking, reviewable memory proposal. The proposal stores
+  only the profile, gap list, evidence/citation refs, answer length, and repair
+  directive, not the raw failed answer; it remains pending until explicitly
+  approved;
 - research-result memory proposals. When a strict research answer passes the
   quality gate and durable memory is configured, the host can create a pending
   compact `research_note` proposal from the final answer, citation refs,
