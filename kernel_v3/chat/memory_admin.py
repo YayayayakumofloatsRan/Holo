@@ -80,12 +80,28 @@ def memory_proposals_command_result(payload: JsonObject) -> JsonObject:
 def memory_proposal_command_preview(proposal: JsonObject) -> JsonObject:
     proposed_item = proposal.get("proposed_item")
     proposed_item = proposed_item if isinstance(proposed_item, dict) else {}
+    metadata = proposal.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    source_proposal_ids = proposal.get("source_proposal_ids")
+    if not isinstance(source_proposal_ids, list):
+        source_proposal_ids = metadata.get("source_proposal_ids")
+    source_proposal_ids = [item for item in source_proposal_ids if isinstance(item, str)] if isinstance(source_proposal_ids, list) else []
+    source_proposal_count = proposal.get("source_proposal_count")
+    if source_proposal_count is None:
+        source_proposal_count = metadata.get("source_proposal_count")
+    review_nonblocking = proposal.get("review_nonblocking")
+    if not isinstance(review_nonblocking, bool):
+        review_nonblocking = metadata.get("review_nonblocking") is True
     return {
         "proposal_id": proposal.get("proposal_id"),
         "candidate_id": proposal.get("candidate_id"),
         "operation": proposal.get("operation"),
         "approval_policy": proposal.get("approval_policy"),
         "approval_status": proposal.get("approval_status"),
+        "review_nonblocking": review_nonblocking,
+        "source_kind": metadata.get("source_kind"),
+        "source_proposal_ids": source_proposal_ids[:16],
+        "source_proposal_count": source_proposal_count,
         "confidence": proposal.get("confidence"),
         "source_task_id": proposal.get("source_task_id"),
         "source_run_id": proposal.get("source_run_id"),

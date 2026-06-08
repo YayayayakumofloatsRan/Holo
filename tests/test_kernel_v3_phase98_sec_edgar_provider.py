@@ -7,12 +7,17 @@ from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import (
     DirectUrlSearchProvider,
     FakeFetchProvider,
+    FakeSearchProvider,
     FallbackSearchProvider,
+    FetchedDocument,
     QueryPlan,
     RetrievalOperator,
     SearchGoal,
+    SearchSource,
     SecEdgarSearchProvider,
 )
+from kernel_v3.retrieval.evaluate import EvidenceEvaluator
+from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.rank import rank_sources
 
 
@@ -63,6 +68,107 @@ def test_phase98_sec_companyfacts_ranks_before_submissions_for_finance_evidence(
     ranked_kinds = [item.metadata["source_kind"] for item in ranked]
 
     assert ranked_kinds.index("sec_companyfacts_json") < ranked_kinds.index("sec_submissions_json")
+
+
+def test_phase98_sec_companyfacts_extracts_latest_annual_metric_summary_before_old_facts():
+    goal = SearchGoal(
+        goal_id="goal-sec-companyfacts-extract",
+        query="AAPL CIK 320193 companyfacts revenue net income eps",
+        max_spans_per_document=2,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-companyfacts",
+        goal_id=goal.goal_id,
+        source_id="source-sec-companyfacts",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+        title="SEC companyfacts JSON for CIK 0000320193",
+        artifact_id="artifact-sec-companyfacts",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_apple_companyfacts_json())
+
+    assert spans
+    first = spans[0].text
+    assert "SEC companyfacts annual financial summary" in first
+    assert "fy=2024" in first
+    assert "metric=revenue" in first
+    assert "value=391035000000" in first
+    assert "metric=net income" in first
+    assert "value=93736000000" in first
+    assert "metric=diluted earnings per share" in first
+    assert "value=6.08" in first
+    assert "fy=2017" not in first
+
+
+def test_phase98_sec_companyfacts_compaction_selects_requested_income_metrics_over_newer_balance_sheet_noise():
+    source = SearchSource(
+        source_id="src-sec-companyfacts-aapl",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+        title="SEC companyfacts JSON for CIK 0000320193",
+        snippet="Official SEC XBRL companyfacts for Apple Inc.",
+        provider="fake_search",
+        metadata={
+            "source_family": "structured_regulatory_data",
+            "source_kind": "sec_companyfacts_json",
+        },
+    )
+    journal = JournalStore.in_memory()
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider({"AAPL CIK 320193 companyfacts revenue net income eps": [source]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                source.uri: {
+                    "status": "ok",
+                    "body": _apple_companyfacts_json(),
+                    "mime_type": "application/json",
+                }
+            }
+        ),
+        evaluator=EvidenceEvaluator(),
+    )
+
+    report = operator.run(
+        SearchGoal(
+            goal_id="goal-sec-companyfacts-income",
+            query="AAPL CIK 320193 companyfacts revenue net income eps",
+            max_sources=1,
+            max_fetches=1,
+            max_spans_per_document=4,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_task_kind": "finance_fundamentals",
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-sec-companyfacts-income",
+        run_id="run-1",
+    )
+
+    assert report.status == "sufficient"
+    evidence_rows = [record.data for record in journal.records(task_id="task-sec-companyfacts-income", kind="retrieval_evidence")]
+    assert evidence_rows
+    selected_text = " ".join(row["text"] for row in evidence_rows)
+    assert "fy=2024" in selected_text
+    assert "metric=revenue" in selected_text
+    assert "value=391035000000" in selected_text
+    assert "metric=net income" in selected_text
+    assert "value=93736000000" in selected_text
+    assert "metric=diluted earnings per share" in selected_text
+    assert "value=6.08" in selected_text
+    assert "fy=2026" not in selected_text
+    diagnostics = report.diagnostics["evidence_compaction"]
+    assert "revenue" in diagnostics["selected_facets"]
+    assert "net_income" in diagnostics["selected_facets"]
+    assert "eps" in diagnostics["selected_facets"]
 
 
 def test_phase98_sec_edgar_provider_builds_archive_document_sources_from_accession_metadata():
@@ -662,4 +768,29 @@ def _plan() -> QueryPlan:
         queries=["test"],
         max_sources=5,
         max_fetches=3,
+    )
+
+
+def _apple_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"Apple Inc.",'
+        '"cik":320193,'
+        '"facts":{"us-gaap":{'
+        '"Revenues":{"label":"Revenues","units":{"USD":['
+        '{"val":229234000000,"fy":2017,"fp":"FY","form":"10-K","filed":"2017-11-03","end":"2017-09-30","accn":"0000320193-17-000070"},'
+        '{"val":391035000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-11-01","end":"2024-09-28","accn":"0000320193-24-000123"}'
+        "]}},"
+        '"NetIncomeLoss":{"label":"Net income","units":{"USD":['
+        '{"val":48351000000,"fy":2017,"fp":"FY","form":"10-K","filed":"2017-11-03","end":"2017-09-30","accn":"0000320193-17-000070"},'
+        '{"val":93736000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-11-01","end":"2024-09-28","accn":"0000320193-24-000123"}'
+        "]}},"
+        '"EarningsPerShareDiluted":{"label":"Diluted earnings per share","units":{"USD/shares":['
+        '{"val":9.21,"fy":2017,"fp":"FY","form":"10-K","filed":"2017-11-03","end":"2017-09-30","accn":"0000320193-17-000070"},'
+        '{"val":6.08,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-11-01","end":"2024-09-28","accn":"0000320193-24-000123"}'
+        "]}},"
+        '"Assets":{"label":"Assets","units":{"USD":['
+        '{"val":371082000000,"fy":2026,"fp":"Q2","form":"10-Q","filed":"2026-05-01","end":"2026-03-28","frame":"CY2026Q1I","accn":"0000320193-26-000013"}'
+        "]}}"
+        "}}}"
     )

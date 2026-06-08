@@ -788,8 +788,43 @@ class AgentRuntime:
                 recipe=recipe,
             )
         final = _agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))
-        quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe)
-        self._append_final_quality_check(final, recipe=recipe, gaps=quality_gaps)
+        quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe) if synthesizer_mode == "model" else []
+        self._append_final_quality_check(final, recipe=recipe, gaps=quality_gaps, attempt="initial")
+        if quality_gaps and synthesizer_mode == "model":
+            repaired = self._synthesize(
+                task_id,
+                run_id,
+                report=report,
+                evidence=evidence,
+                citations=citations,
+                synthesizer_mode=synthesizer_mode,
+                retry_instruction=_answer_quality_retry_instruction(quality_gaps, recipe=recipe),
+            )
+            if repaired.status == "ok" and repaired.answer is not None:
+                repaired_final = _agent_final_from_processor(
+                    repaired,
+                    task_id=task_id,
+                    run_id=run_id,
+                    trace_refs=_trace_refs(self.journal, task_id),
+                )
+                repaired_gaps = self._final_answer_quality_gaps(repaired_final, recipe=recipe)
+                self._append_final_quality_check(
+                    repaired_final,
+                    recipe=recipe,
+                    gaps=repaired_gaps,
+                    attempt="quality_repair",
+                    prior_gaps=quality_gaps,
+                )
+                final = repaired_final
+                quality_gaps = repaired_gaps
+            else:
+                self._append_final_quality_repair_failed(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    gaps=quality_gaps,
+                    error=repaired.error if hasattr(repaired, "error") else "synthesis_failed",
+                )
         if quality_gaps:
             return None, self._failure(
                 task_id,
@@ -856,8 +891,43 @@ class AgentRuntime:
         if synthesized.status != "ok" or synthesized.answer is None:
             return None, self._failure(task_id, run_id, synthesized.error or "synthesis_failed", next_action="read_more_files", recipe=recipe)
         final = _agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))
-        quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe)
-        self._append_final_quality_check(final, recipe=recipe, gaps=quality_gaps)
+        quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe) if synthesizer_mode == "model" else []
+        self._append_final_quality_check(final, recipe=recipe, gaps=quality_gaps, attempt="initial")
+        if quality_gaps and synthesizer_mode == "model":
+            repaired = self._synthesize(
+                task_id,
+                run_id,
+                report=report,
+                evidence=evidence,
+                citations=citations,
+                synthesizer_mode=synthesizer_mode,
+                retry_instruction=_answer_quality_retry_instruction(quality_gaps, recipe=recipe),
+            )
+            if repaired.status == "ok" and repaired.answer is not None:
+                repaired_final = _agent_final_from_processor(
+                    repaired,
+                    task_id=task_id,
+                    run_id=run_id,
+                    trace_refs=_trace_refs(self.journal, task_id),
+                )
+                repaired_gaps = self._final_answer_quality_gaps(repaired_final, recipe=recipe)
+                self._append_final_quality_check(
+                    repaired_final,
+                    recipe=recipe,
+                    gaps=repaired_gaps,
+                    attempt="quality_repair",
+                    prior_gaps=quality_gaps,
+                )
+                final = repaired_final
+                quality_gaps = repaired_gaps
+            else:
+                self._append_final_quality_repair_failed(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    gaps=quality_gaps,
+                    error=repaired.error if hasattr(repaired, "error") else "synthesis_failed",
+                )
         if quality_gaps:
             return None, self._failure(
                 task_id,
@@ -952,6 +1022,7 @@ class AgentRuntime:
         evidence: list[EvidenceItem],
         citations: list[CitationItem],
         synthesizer_mode: str,
+        retry_instruction: str | None = None,
     ):
         if synthesizer_mode == "model":
             if self.processor_fabric is None:
@@ -963,6 +1034,7 @@ class AgentRuntime:
                 report=report,
                 evidence=evidence,
                 citations=citations,
+                retry_instruction=retry_instruction,
             )
         answer = _grounded_answer(report=report, evidence=evidence, citations=citations)
         report_limitations = _string_list(report.diagnostics.get("limitations")) if isinstance(report.diagnostics, dict) else []
@@ -1181,7 +1253,15 @@ class AgentRuntime:
                 gaps.append("required_source_url_citation_missing")
         return gaps
 
-    def _append_final_quality_check(self, answer: FinalAnswer, *, recipe: TaskRecipe, gaps: list[str]) -> None:
+    def _append_final_quality_check(
+        self,
+        answer: FinalAnswer,
+        *,
+        recipe: TaskRecipe,
+        gaps: list[str],
+        attempt: str = "initial",
+        prior_gaps: list[str] | None = None,
+    ) -> None:
         profile = _answer_profile_metadata(recipe)
         if not profile:
             return
@@ -1198,9 +1278,38 @@ class AgentRuntime:
                     "answer_chars": len(answer.answer),
                     "citation_refs": list(answer.citation_refs),
                     "used_evidence": list(answer.used_evidence),
+                    "attempt": attempt,
+                    "prior_gaps": list(prior_gaps or []),
                 }
             ),
             state_delta={"final_answer_quality": "passed" if not gaps else "insufficient"},
+        )
+
+    def _append_final_quality_repair_failed(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe,
+        gaps: list[str],
+        error: str | None,
+    ) -> None:
+        profile = _answer_profile_metadata(recipe)
+        if not profile:
+            return
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="final_answer_quality_repair_failed",
+            data=redact_journal_data(
+                {
+                    "answer_profile": profile,
+                    "gaps": list(gaps),
+                    "error": error or "synthesis_failed",
+                }
+            ),
+            state_delta={"final_answer_quality_repair": "failed"},
         )
 
     def _maybe_propose_research_memory(self, answer: FinalAnswer, *, recipe: TaskRecipe) -> None:
@@ -1209,12 +1318,13 @@ class AgentRuntime:
         profile = answer_profile_from_dict(_answer_profile_metadata(recipe))
         if profile is None or profile.format not in {"detailed_report", "deep_report", "memo"}:
             return
+        thread_id = _thread_id_metadata(recipe)
         try:
-            self.memory_pipeline.propose_from_research_result(
+            result = self.memory_pipeline.propose_from_research_result(
                 answer_text=answer.answer,
                 task_id=answer.task_id,
                 run_id=answer.run_id,
-                thread_id=_thread_id_metadata(recipe),
+                thread_id=thread_id,
                 source_record_ref=answer.trace_refs[-1] if answer.trace_refs else None,
                 metadata={
                     "answer_profile": profile.to_dict(),
@@ -1223,6 +1333,13 @@ class AgentRuntime:
                     "used_evidence": list(answer.used_evidence),
                 },
             )
+            if result.proposals:
+                self._maybe_propose_thread_learning_digest(
+                    task_id=answer.task_id,
+                    run_id=answer.run_id,
+                    thread_id=thread_id,
+                    source_record_ref=answer.trace_refs[-1] if answer.trace_refs else None,
+                )
         except Exception as exc:  # pragma: no cover - defensive runtime isolation
             self.journal.append(
                 task_id=answer.task_id,
@@ -1244,13 +1361,14 @@ class AgentRuntime:
             return
         if not _should_propose_failure_reflection(failure):
             return
+        thread_id = _thread_id_metadata(recipe)
         try:
-            self.memory_pipeline.propose_from_task_reflection(
+            result = self.memory_pipeline.propose_from_task_reflection(
                 root_goal=_root_goal_for_memory_reflection(self.journal, failure.task_id, recipe),
                 outcome="failed",
                 task_id=failure.task_id,
                 run_id=failure.run_id,
-                thread_id=_thread_id_metadata(recipe),
+                thread_id=thread_id,
                 source_record_ref=source_record_ref,
                 failure_report=failure.to_dict(),
                 host_situation=failure.host_situation,
@@ -1261,10 +1379,44 @@ class AgentRuntime:
                     "mode": recipe.mode,
                 },
             )
+            if result.proposals:
+                self._maybe_propose_thread_learning_digest(
+                    task_id=failure.task_id,
+                    run_id=failure.run_id,
+                    thread_id=thread_id,
+                    source_record_ref=source_record_ref,
+                )
         except Exception as exc:  # pragma: no cover - defensive runtime isolation
             self.journal.append(
                 task_id=failure.task_id,
                 run_id=failure.run_id,
+                step_id=None,
+                kind="memory_pipeline_error",
+                data={"error_type": type(exc).__name__, "redaction": {"message": "omitted"}},
+                state_delta={"memory_pipeline": "failed"},
+            )
+
+    def _maybe_propose_thread_learning_digest(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        thread_id: str,
+        source_record_ref: str | None,
+    ) -> None:
+        if self.memory_pipeline is None:
+            return
+        try:
+            self.memory_pipeline.propose_thread_learning_digest(
+                thread_id=thread_id,
+                task_id=task_id,
+                run_id=run_id,
+                source_record_ref=source_record_ref,
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime isolation
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
                 step_id=None,
                 kind="memory_pipeline_error",
                 data={"error_type": type(exc).__name__, "redaction": {"message": "omitted"}},
@@ -4031,6 +4183,44 @@ def _final_answer_contract(answer_profile: JsonObject) -> JsonObject:
         "citation_density": answer_profile.get("citation_density"),
         "host_rule": "Do not finalize detailed/deep research until this output contract is satisfied.",
     }
+
+
+def _answer_quality_retry_instruction(gaps: list[str], *, recipe: TaskRecipe) -> str:
+    answer_profile = _answer_profile_metadata(recipe)
+    payload = {
+        "repair_reason": "final_answer_quality_insufficient",
+        "quality_gaps": list(gaps),
+        "answer_profile": _final_answer_contract(answer_profile),
+        "root_goal": _root_goal_from_recipe(recipe),
+        "instructions": [
+            "Rewrite the final answer as a complete user-visible answer, not a diagnostic fragment.",
+            "Satisfy answer_profile.target_sections and answer_profile.minimum_coverage.",
+            "Do not omit unsupported required coverage; include a clear limitation for each unsupported part.",
+            "Use only provided evidence ids and citation ids.",
+            "If the task is finance research, separate source-backed metrics, business analysis, valuation/market data, risks, and evidence limitations.",
+            "Do not claim retrieval/network/finance tools are unavailable unless host_situation explicitly says so.",
+            "Avoid generic agreement, apology, or flattery. Start with the substantive answer.",
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _root_goal_from_recipe(recipe: TaskRecipe) -> str:
+    research_mission = _research_mission_metadata(recipe)
+    for key in ("root_goal", "goal", "task_goal"):
+        value = research_mission.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    semantic_goal = _semantic_goal_metadata(recipe)
+    for key in ("root_goal", "goal", "input_text"):
+        value = semantic_goal.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    semantic = _semantic_intake_metadata(recipe)
+    value = semantic.get("goal")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return str(recipe.metadata.get("goal") or recipe.mode)
 
 
 def _thread_rag_context_metadata(recipe: TaskRecipe) -> JsonObject:

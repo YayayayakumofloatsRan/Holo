@@ -32,9 +32,12 @@ def compact_evidence_candidates(
     effective_limit = _positive_int(policy.get("max_items"), default=limit)
     effective_limit = max(1, min(limit, effective_limit))
     per_source_limit = _positive_int(policy.get("per_source_limit"), default=effective_limit)
-    unique_candidates = _dedupe_candidates(candidates)
     required_facets = profile_evidence_facets(goal=goal, research_profile=research_profile)
-    ordered = sorted(unique_candidates, key=_candidate_sort_key)
+    unique_candidates = _dedupe_candidates(candidates, required_facets=required_facets)
+    ordered = sorted(
+        unique_candidates,
+        key=lambda candidate: _candidate_sort_key(candidate, required_facets=required_facets),
+    )
 
     selected: list[EvidenceCandidate] = []
     selected_ids: set[str] = set()
@@ -84,12 +87,15 @@ def compact_evidence_candidates(
     return selected, rejected, diagnostics
 
 
-def _dedupe_candidates(candidates: list[EvidenceCandidate]) -> list[EvidenceCandidate]:
+def _dedupe_candidates(candidates: list[EvidenceCandidate], *, required_facets: list[str]) -> list[EvidenceCandidate]:
     best_by_hash: dict[str, EvidenceCandidate] = {}
     for candidate in candidates:
         key = _text_hash(candidate.evidence.text)
         existing = best_by_hash.get(key)
-        if existing is None or _candidate_sort_key(candidate) < _candidate_sort_key(existing):
+        if existing is None or _candidate_sort_key(
+            candidate,
+            required_facets=required_facets,
+        ) < _candidate_sort_key(existing, required_facets=required_facets):
             best_by_hash[key] = candidate
     return list(best_by_hash.values())
 
@@ -123,14 +129,25 @@ def _select_candidate(
     source_counts[candidate.evidence.source_id] = source_counts.get(candidate.evidence.source_id, 0) + 1
 
 
-def _candidate_sort_key(candidate: EvidenceCandidate) -> tuple[float, float, float, int, str]:
+def _candidate_sort_key(
+    candidate: EvidenceCandidate,
+    *,
+    required_facets: list[str],
+) -> tuple[float, float, float, float, float, float, int, str]:
     evidence = candidate.evidence
     qualification = evidence.diagnostics.get("qualification")
     facets = _candidate_facets(candidate)
     authority = _authority_score(evidence)
     numeric_bonus = 0.2 if isinstance(qualification, dict) and qualification.get("profile_numeric_fact_present") else 0.0
+    required_specific = _specific_required_facets(required_facets)
+    specific_overlap = len(set(facets).intersection(required_specific))
+    metric_density = _metric_density(evidence.text)
+    structured_summary_bonus = 1.0 if _looks_like_structured_finance_summary(evidence.text) else 0.0
     return (
         -authority,
+        -float(specific_overlap),
+        -structured_summary_bonus,
+        -float(metric_density),
         -(float(evidence.score) + numeric_bonus),
         -float(len(facets)),
         len(evidence.text),
@@ -157,6 +174,23 @@ def _authority_score(evidence: EvidenceItem) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _specific_required_facets(required_facets: list[str]) -> set[str]:
+    broad = {"official_financial_statement", "financial_metric", "scholarly_work", "bibliographic_metadata"}
+    return {facet for facet in required_facets if facet not in broad}
+
+
+def _metric_density(text: str) -> int:
+    normalized = text.lower()
+    return normalized.count("metric=") + normalized.count("concept=")
+
+
+def _looks_like_structured_finance_summary(text: str) -> bool:
+    normalized = text.lower()
+    return "sec companyfacts annual financial summary" in normalized or (
+        "period=annual" in normalized and "metric=" in normalized and "value=" in normalized
+    )
 
 
 def _selected_facets(selected: list[EvidenceCandidate]) -> list[str]:

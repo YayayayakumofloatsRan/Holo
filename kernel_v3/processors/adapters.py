@@ -133,17 +133,22 @@ class Synthesizer:
         evidence: list[EvidenceItem],
         citations: list[CitationItem],
         task_id: str | None = None,
+        retry_instruction: str | None = None,
     ) -> FinalAnswer:
         outcome = self.fabric.run_json(
             task_type="synthesizer.answer",
             task_id=task_id,
             run_id=run_id,
             context_id=context_id,
-            prompt=_synthesizer_prompt(report, evidence, citations),
+            prompt=_synthesizer_prompt(report, evidence, citations, retry_instruction=retry_instruction),
             schema=SYNTHESIZER_SCHEMA,
             provider=self.provider,
             model=self.model,
-            parameters={"adapter": "Synthesizer", "retrieval_report_id": report.report_id},
+            parameters={
+                "adapter": "Synthesizer",
+                "retrieval_report_id": report.report_id,
+                **({"retry_reason": "answer_quality"} if retry_instruction else {}),
+            },
         )
         if outcome.parsed is None:
             return FinalAnswer(
@@ -778,11 +783,11 @@ def _final_answer_from_json(
 def _planner_fallback(run_id: str, reason: str) -> CandidateAction:
     return CandidateAction(
         action_id=f"act-{run_id}-planner-fallback",
-        kind="ask_user",
+        kind="respond",
         name=None,
         description="model planner fallback",
         score=0.0,
-        payload={"question": f"Planner could not produce a safe action: {reason}"},
+        payload={"text": f"Planner could not produce a safe action: {reason}"},
         reasons=[reason],
         side_effect_class="none",
     )

@@ -392,6 +392,9 @@ Only cite provided citation ids. Do not invent sources.
 If the prompt contains required_citation_refs and that array is non-empty, citation_refs must include at least one of those exact ids.
 Answer every explicit question or subtask in the provided task_goal when evidence supports it.
 If evidence does not support part of the task_goal, state that limit in limitations instead of omitting the part.
+If retry_instruction is present, treat it as a required repair directive. Correct every listed
+quality gap or explicitly explain the unsupported part in limitations while still satisfying
+the requested report structure.
 If the prompt contains answer_profile, treat it as the output contract. For detailed_report,
 deep_report, or memo formats, write a sectioned answer covering target_sections and
 minimum_coverage. Do not collapse a requested detailed report into a short bullet

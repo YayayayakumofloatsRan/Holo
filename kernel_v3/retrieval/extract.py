@@ -88,6 +88,7 @@ SEC_COMPANYFACTS_CONCEPTS = (
     ("StockholdersEquity", "shareholders equity"),
     ("EarningsPerShareDiluted", "diluted earnings per share"),
 )
+SEC_COMPANYFACTS_SUMMARY_YEARS = 4
 SEC_COMPANYFACTS_FORMS = {"10-K", "10-Q", "20-F", "40-F"}
 HTML_BLOCK_TAGS = {
     "article",
@@ -873,6 +874,7 @@ def _extract_sec_companyfacts_readable_text(body: str) -> str:
             f"SEC companyfacts official financial statements entityName={entity_name} cik={cik} source=SEC_XBRL_companyfacts"
         )
     ]
+    lines.extend(_companyfacts_annual_summary_lines(facts, entity_name=entity_name, cik=cik))
     for taxonomy_name in ("us-gaap", "ifrs-full", "dei"):
         taxonomy = facts.get(taxonomy_name)
         if not isinstance(taxonomy, dict):
@@ -908,6 +910,135 @@ def _extract_sec_companyfacts_readable_text(body: str) -> str:
     return "\n".join(lines)[:READABLE_TEXT_LIMIT]
 
 
+def _companyfacts_annual_summary_lines(facts: dict, *, entity_name: str, cik: str) -> list[str]:
+    groups: dict[tuple[int, str], dict[str, object]] = {}
+    for taxonomy_name in ("us-gaap", "ifrs-full"):
+        taxonomy = facts.get(taxonomy_name)
+        if not isinstance(taxonomy, dict):
+            continue
+        for concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+            item = taxonomy.get(concept)
+            if not isinstance(item, dict):
+                continue
+            units = item.get("units")
+            if not isinstance(units, dict):
+                continue
+            label = _structured_value(item.get("label") or concept)
+            for unit, records in units.items():
+                if not isinstance(records, list):
+                    continue
+                for record in _recent_companyfacts_records(records):
+                    if not isinstance(record, dict) or _companyfacts_period_rank(record) < 3:
+                        continue
+                    year = _companyfacts_year(record)
+                    if year is None:
+                        continue
+                    key = (year, str(record.get("end") or ""))
+                    group = groups.setdefault(
+                        key,
+                        {
+                            "year": year,
+                            "end": str(record.get("end") or ""),
+                            "filed": str(record.get("filed") or ""),
+                            "form": str(record.get("form") or ""),
+                            "metrics": {},
+                        },
+                    )
+                    if str(record.get("filed") or "") > str(group.get("filed") or ""):
+                        group["filed"] = str(record.get("filed") or "")
+                    if not group.get("form") and record.get("form"):
+                        group["form"] = str(record.get("form") or "")
+                    metrics = group.get("metrics")
+                    if not isinstance(metrics, dict):
+                        continue
+                    existing = metrics.get(metric)
+                    candidate = {
+                        "concept": concept,
+                        "metric": metric,
+                        "label": label,
+                        "unit": _structured_value(unit),
+                        "val": record.get("val"),
+                        "fy": record.get("fy"),
+                        "fp": record.get("fp"),
+                        "form": record.get("form"),
+                        "filed": record.get("filed"),
+                        "end": record.get("end"),
+                        "frame": record.get("frame"),
+                        "accn": record.get("accn"),
+                        "taxonomy": taxonomy_name,
+                    }
+                    if existing is None or _companyfacts_record_prefer(candidate, existing):
+                        metrics[metric] = candidate
+    ordered = sorted(
+        groups.values(),
+        key=lambda group: (int(group.get("year") or 0), str(group.get("filed") or ""), str(group.get("end") or "")),
+        reverse=True,
+    )
+    lines = []
+    for group in ordered[:SEC_COMPANYFACTS_SUMMARY_YEARS]:
+        metrics = group.get("metrics") if isinstance(group.get("metrics"), dict) else {}
+        metric_parts = []
+        emitted_metrics: set[str] = set()
+        for _concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+            if metric in emitted_metrics:
+                continue
+            entry = metrics.get(metric)
+            if not isinstance(entry, dict):
+                continue
+            emitted_metrics.add(metric)
+            metric_parts.append(_companyfacts_summary_metric_part(entry, metric=metric))
+        if not metric_parts:
+            continue
+        lines.append(
+            _truncate_structured_line(
+                " ".join(
+                    [
+                        f"SEC companyfacts annual financial summary entityName={entity_name}",
+                        f"cik={cik}",
+                        f"fy={_structured_value(group.get('year'))}",
+                        f"period=annual",
+                        f"form={_structured_value(group.get('form'))}",
+                        f"filed={_structured_value(group.get('filed'))}",
+                        f"end={_structured_value(group.get('end'))}",
+                        "facts=" + " ; ".join(metric_parts),
+                    ]
+                )
+            )
+        )
+    return lines
+
+
+def _companyfacts_summary_metric_part(entry: dict, *, metric: str) -> str:
+    parts = [
+        f"metric={_structured_value(metric)}",
+        f"concept={_structured_value(entry.get('concept'))}",
+    ]
+    value = entry.get("val")
+    if value is not None and value != "":
+        parts.append(f"value={_structured_value(value)}")
+        parts.append(f"val={_structured_value(value)}")
+    for key in ("unit", "fy", "fp", "form", "filed", "end", "frame", "accn"):
+        value = entry.get(key)
+        if value is None or value == "":
+            continue
+        parts.append(f"{key}={_structured_value(value)}")
+    return " ".join(parts)
+
+
+def _companyfacts_record_prefer(candidate: dict, existing: object) -> bool:
+    if not isinstance(existing, dict):
+        return True
+    return (
+        str(candidate.get("form") or "").upper().replace(" ", "") in {"10-K", "20-F", "40-F"},
+        str(candidate.get("filed") or ""),
+        str(candidate.get("end") or ""),
+    ) > (
+        str(existing.get("form") or "").upper().replace(" ", "") in {"10-K", "20-F", "40-F"},
+        str(existing.get("filed") or ""),
+        str(existing.get("end") or ""),
+    )
+
+
 def _recent_companyfacts_records(records: list[object]) -> list[object]:
     filtered = [
         record
@@ -932,8 +1063,7 @@ def _recent_companyfacts_records(records: list[object]) -> list[object]:
 def _companyfacts_period_rank(record: dict) -> int:
     form = str(record.get("form") or "").upper().replace(" ", "")
     fp = str(record.get("fp") or "").upper().replace(" ", "")
-    frame = str(record.get("frame") or "").upper()
-    if form in {"10-K", "20-F", "40-F"} or fp == "FY" or frame.endswith("I"):
+    if form in {"10-K", "20-F", "40-F"} or fp == "FY":
         return 3
     if form == "10-Q" or fp.startswith("Q"):
         return 2
@@ -947,6 +1077,23 @@ def _companyfacts_period_label(record: dict) -> str:
     if rank == 2:
         return "quarterly"
     return "period"
+
+
+def _companyfacts_year(record: dict) -> int | None:
+    if _companyfacts_duration_days(record) >= 250:
+        end_year = _year_from_text(str(record.get("end") or ""))
+        if end_year is not None:
+            return end_year
+    end_year = _year_from_text(str(record.get("end") or ""))
+    if end_year is not None:
+        return end_year
+    frame_year = _year_from_text(str(record.get("frame") or ""))
+    if frame_year is not None:
+        return frame_year
+    fy = record.get("fy")
+    if isinstance(fy, int) and 1900 <= fy <= 2100:
+        return fy
+    return None
 
 
 def _companyfacts_duration_days(record: dict) -> int:

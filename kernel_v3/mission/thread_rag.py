@@ -76,6 +76,7 @@ def collect_run_delta(journal: JournalStore, *, task_id: str, run_id: str) -> Js
     citations = [record for record in records if record.kind == "retrieval_citation"]
     failures = [record for record in records if record.kind == "agent_failure_report"]
     finals = [record for record in records if record.kind == "agent_final_answer"]
+    quality_checks = [record for record in records if record.kind == "final_answer_quality_check"]
     terminations = [record for record in records if record.kind == "termination_decision"]
     feedback = [record for record in records if record.kind == "feedback"]
     return {
@@ -88,6 +89,7 @@ def collect_run_delta(journal: JournalStore, *, task_id: str, run_id: str) -> Js
         "citation_refs": _record_refs(citations, key="citation_id"),
         "failure_reports": [_compact_failure(record) for record in failures[-2:]],
         "final_answers": [_compact_final(record) for record in finals[-2:]],
+        "answer_quality_checks": [_compact_answer_quality(record) for record in quality_checks[-4:]],
         "termination_decisions": [_compact_termination(record) for record in terminations[-4:]],
         "feedback": [_compact_feedback(record) for record in feedback[-4:]],
         "record_refs": [record.record_id for record in records],
@@ -111,6 +113,7 @@ def _task_trace(journal: JournalStore, task_id: str | None, *, limit: int) -> li
         "termination_decision",
         "agent_failure_report",
         "agent_final_answer",
+        "final_answer_quality_check",
         "mission_assessment",
         "mission_directive",
     }
@@ -201,6 +204,8 @@ def _compact_trace(record: LedgerRecord) -> JsonObject:
         return _compact_failure(record)
     if record.kind == "agent_final_answer":
         return _compact_final(record)
+    if record.kind == "final_answer_quality_check":
+        return _compact_answer_quality(record)
     return {"record_ref": record.record_id, "kind": record.kind}
 
 
@@ -316,6 +321,21 @@ def _compact_final(record: LedgerRecord) -> JsonObject:
         "used_evidence": _string_list(record.data.get("used_evidence")),
         "confidence": record.data.get("confidence"),
         "answer_preview": _preview(str(record.data.get("answer") or ""), 480),
+    }
+
+
+def _compact_answer_quality(record: LedgerRecord) -> JsonObject:
+    profile = record.data.get("answer_profile") if isinstance(record.data.get("answer_profile"), dict) else {}
+    return {
+        "record_ref": record.record_id,
+        "kind": "final_answer_quality_check",
+        "passed": record.data.get("passed"),
+        "attempt": record.data.get("attempt"),
+        "gaps": _string_list(record.data.get("gaps"))[:12],
+        "prior_gaps": _string_list(record.data.get("prior_gaps"))[:12],
+        "answer_chars": record.data.get("answer_chars"),
+        "profile_format": profile.get("format"),
+        "profile_domain": (profile.get("metadata") or {}).get("domain") if isinstance(profile.get("metadata"), dict) else None,
     }
 
 
@@ -441,6 +461,26 @@ def _attention_blocks(
                     360,
                 ),
                 "refs": [str(latest.get("record_ref"))] if latest.get("record_ref") else [],
+            }
+        )
+    quality_checks = [
+        item
+        for item in recent_task_trace
+        if item.get("kind") == "final_answer_quality_check" and item.get("passed") is False
+    ]
+    if quality_checks:
+        latest_quality = quality_checks[-1]
+        gaps = _string_list(latest_quality.get("gaps"))
+        blocks.append(
+            {
+                "block_id": f"attention-answer-quality-{latest_quality.get('record_ref')}",
+                "kind": "answer_quality_gap",
+                "priority": 0.92,
+                "summary": _preview(
+                    f"Last final answer quality check failed; gaps={', '.join(gaps[:6])}",
+                    360,
+                ),
+                "refs": [str(latest_quality.get("record_ref"))] if latest_quality.get("record_ref") else [],
             }
         )
     if recent_task_trace:

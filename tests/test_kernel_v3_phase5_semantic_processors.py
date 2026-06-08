@@ -217,7 +217,7 @@ def test_phase5_malformed_planner_json_is_rejected_and_journaled_without_crashin
     assert result.status == "needs_user_input"
     action = journal.records(task_id=result.task_id, kind="action")[0]
     processor_result = journal.records(task_id=result.task_id, kind="processor_result")[0]
-    assert action.data["kind"] == "ask_user"
+    assert action.data["kind"] == "respond"
     assert action.data["reasons"] == ["processor_failed"]
     assert processor_result.data["status"] == "failed"
     assert processor_result.data["error"]

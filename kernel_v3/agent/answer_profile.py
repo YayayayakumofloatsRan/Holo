@@ -33,7 +33,12 @@ def infer_answer_profile(
     format_name, detail_level = explicit_shape or _default_shape(domain=domain, capabilities=capabilities)
     sections = _target_sections(format_name=format_name, domain=domain)
     min_chars, min_sections = _minimum_shape(detail_level, format_name=format_name)
-    quality_gate = "strict" if strict_shape is not None and format_name in {"detailed_report", "deep_report", "memo"} else "advisory"
+    quality_gate = _default_quality_gate(
+        domain=domain,
+        format_name=format_name,
+        strict_shape=strict_shape,
+        capabilities=capabilities,
+    )
     profile_id = "answer-profile-" + _short_hash(
         {
             "goal": text[:512],
@@ -307,7 +312,14 @@ def _target_sections(*, format_name: str, domain: str) -> list[str]:
 
 def _minimum_coverage(*, domain: str, format_name: str) -> list[str]:
     if domain == "finance":
-        return ["business_overview", "financial_performance", "cash_flow_or_balance_sheet", "valuation_or_market_data", "risks_or_limitations"]
+        return [
+            "business_overview",
+            "financial_performance",
+            "cash_flow_or_balance_sheet",
+            "valuation_or_market_data",
+            "risks_or_limitations",
+            "source_quality",
+        ]
     if domain == "policy":
         return ["policy_source", "issuing_body", "timeline", "impact_path", "uncertainty"]
     if domain == "academic":
@@ -348,6 +360,7 @@ def _coverage_gaps(answer: str, *, profile: AnswerProfile) -> list[str]:
             "cash_flow_or_balance_sheet": ("现金流", "资产", "负债", "cash flow", "assets", "liabilities", "balance sheet"),
             "valuation_or_market_data": ("估值", "市值", "股价", "市盈率", "valuation", "market cap", "p/e", "pe ratio"),
             "risks_or_limitations": ("风险", "局限", "不确定", "risk", "limitation", "uncertain"),
+            "source_quality": ("来源", "证据", "引用", "sec", "edgar", "companyfacts", "annual report", "10-k", "evidence", "source"),
         }
     elif domain == "policy":
         checks = {
@@ -397,6 +410,27 @@ def _section_count(answer: str) -> int:
 
 def _profile_requires_quality_gate(profile: AnswerProfile) -> bool:
     return str(profile.metadata.get("quality_gate") or "") == "strict"
+
+
+def _default_quality_gate(
+    *,
+    domain: str,
+    format_name: str,
+    strict_shape: tuple[str, str] | None,
+    capabilities: set[str],
+) -> str:
+    if format_name not in {"detailed_report", "deep_report", "memo"}:
+        return "advisory"
+    if strict_shape is not None:
+        return "strict"
+    if domain in {"finance", "academic", "policy"}:
+        return "strict"
+    if any(
+        capability.startswith(("finance.", "academic.", "policy.", "technical.research"))
+        for capability in capabilities
+    ):
+        return "strict"
+    return "advisory"
 
 
 def _valid_quality_gate(value: object, *, format_name: str, detail_level: str) -> str:

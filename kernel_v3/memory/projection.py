@@ -42,6 +42,8 @@ def memory_proposal_event(proposal: MemoryProposal) -> JsonObject:
         "approval_policy": proposal.approval_policy,
         "approval_status": proposal.approval_status,
         "review_nonblocking": proposal.metadata.get("review_nonblocking") is True,
+        "source_proposal_ids": _string_list(proposal.metadata.get("source_proposal_ids"))[:16],
+        "source_proposal_count": proposal.metadata.get("source_proposal_count"),
         "confidence": proposal.confidence,
         "created_at_ms": proposal.created_at_ms,
         "decided_at_ms": proposal.decided_at_ms,

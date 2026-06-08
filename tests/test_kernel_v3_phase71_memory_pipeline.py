@@ -3,6 +3,7 @@ from pathlib import Path
 
 from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.agent.runtime import AgentRuntime
+from kernel_v3.chat.memory_admin import memory_proposal_command_preview
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryPipeline, MemoryStore, stable_memory_id
 from kernel_v3.mission.thread_rag import ThreadWorkingMemoryProvider
@@ -443,6 +444,112 @@ def test_phase71_research_result_secret_like_full_text_is_rejected_even_if_tail_
     assert result.rejected[0]["reason"] == "memory_rejected_secret_like_content"
     assert store.shadow_candidates() == []
     assert store.proposals() == []
+
+
+def test_phase71_thread_learning_digest_consolidates_pending_nonblocking_proposals_without_commit():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+    reflection = pipeline.propose_from_task_reflection(
+        root_goal="对比 Apple 和 Oracle 基本面",
+        outcome="failed",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-failure",
+        failure_report={
+            "reason": "retrieval_source_quality_insufficient",
+            "attempted_actions": ["retrieval.run"],
+            "missing_evidence": ["Oracle fundamentals"],
+            "next_possible_action": "switch_source_family_and_fetch_official_filings",
+        },
+    )
+    research = pipeline.propose_from_research_result(
+        answer_text="\n".join(
+            [
+                "## 结论摘要",
+                "Apple 和 Oracle 的对比需要补齐业务、财务、估值和风险。",
+                "局限：Oracle 的最新官方材料仍未覆盖。",
+            ]
+        ),
+        task_id="task-2",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-final",
+        metadata={
+            "research_mission": {"root_goal": "对比 Apple 和 Oracle 基本面"},
+            "citation_refs": ["cite-a"],
+            "used_evidence": ["ev-a"],
+        },
+    )
+
+    digest = pipeline.propose_thread_learning_digest(
+        thread_id="thread-1",
+        task_id="task-3",
+        run_id="run-1",
+        source_record_ref="ledger-digest",
+    )
+
+    source_ids = [reflection.proposals[0].proposal_id, research.proposals[0].proposal_id]
+    assert len(digest.shadow_candidates) == 1
+    assert len(digest.proposals) == 1
+    proposal = digest.proposals[0]
+    assert proposal.approval_status == "pending"
+    assert proposal.metadata["source_kind"] == "thread_learning_digest"
+    assert proposal.metadata["review_nonblocking"] is True
+    assert proposal.metadata["source_proposal_ids"] == source_ids
+    assert proposal.metadata["source_proposal_count"] == 2
+    assert proposal.proposed_item["kind"] == "thread_learning_digest"
+    assert proposal.proposed_item["structured"]["source_proposal_ids"] == source_ids
+    assert proposal.proposed_item["structured"]["entry_count"] == 2
+    assert store.recall(query="Oracle", scope={"thread_id": "thread-1"}).total == 0
+    record = journal.records(kind="memory_proposal")[-1]
+    assert record.data["review_nonblocking"] is True
+    assert record.data["source_proposal_ids"] == source_ids
+    assert record.data["source_proposal_count"] == 2
+    preview = memory_proposal_command_preview(proposal.to_dict())
+    assert preview["review_nonblocking"] is True
+    assert preview["source_kind"] == "thread_learning_digest"
+    assert preview["source_proposal_ids"] == source_ids
+    assert preview["source_proposal_count"] == 2
+
+
+def test_phase71_thread_learning_digest_requires_multiple_sources_in_same_thread():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    pipeline = MemoryPipeline(store=store, journal=journal, clock_ms=_clock())
+    pipeline.propose_from_task_reflection(
+        root_goal="thread one failed retrieval",
+        outcome="failed",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        source_record_ref="ledger-thread-1",
+        failure_report={"reason": "source_quality_low", "next_possible_action": "try_authoritative_sources"},
+    )
+    pipeline.propose_from_task_reflection(
+        root_goal="thread two failed retrieval",
+        outcome="failed",
+        task_id="task-2",
+        run_id="run-1",
+        thread_id="thread-2",
+        source_record_ref="ledger-thread-2",
+        failure_report={"reason": "fetch_blocked", "next_possible_action": "try_direct_url"},
+    )
+
+    digest = pipeline.propose_thread_learning_digest(
+        thread_id="thread-1",
+        task_id="task-3",
+        run_id="run-1",
+        source_record_ref="ledger-digest",
+    )
+
+    assert digest.proposals == []
+    assert digest.shadow_candidates == []
+    assert all(
+        proposal.metadata.get("source_kind") != "thread_learning_digest"
+        for proposal in store.proposals()
+    )
 
 
 def test_phase71_default_agent_runtime_does_not_write_memory_without_store():

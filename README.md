@@ -101,7 +101,9 @@ discovery-expansion and retrieval benchmark pass is tracked in
 system-time/resident scheduling pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-06_RESIDENT_TIME_PRIORITY.md`. The current
 memory/RAG research and implementation target is summarized in
-`docs/KERNEL_V3_MEMORY_RAG_RESEARCH_2026-06-07.md`. The current
+`docs/KERNEL_V3_MEMORY_RAG_RESEARCH_2026-06-07.md`. The 2026-06-08 memory
+digest and SEC companyfacts extraction pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-08_MEMORY_DIGEST_SEC_EXTRACTION.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -159,6 +161,12 @@ Kernel v3 currently contains the infrastructure for:
   exposes it to planner/synthesizer context, journals final-answer quality
   checks, and blocks only strict-profile outputs that do not meet the declared
   answer shape. This is a packet contract, not keyword matching;
+- strict research-answer repair. Finance, academic, and policy research reports
+  default to strict answer quality when they resolve to detailed/deep reports.
+  A low-quality model synthesis gets one structured `synthesizer.answer` repair
+  pass with concrete gaps before the host returns
+  `final_answer_quality_insufficient`; failed quality checks also enter thread
+  RAG as `answer_quality_gap` attention blocks;
 - research-result memory proposals. When a strict research answer passes the
   quality gate and durable memory is configured, the host can create a pending
   compact `research_note` proposal from the final answer, citation refs,
@@ -310,12 +318,16 @@ Kernel v3 currently contains the infrastructure for:
   evidence until a future OCR tool is configured;
 - structured JSON/CSV retrieval extraction for financial databases such as SEC
   companyfacts, FRED, and Treasury/FiscalData-style responses: raw payloads
-  remain artifacts. SEC companyfacts JSON is projected into compact metric
-  rows such as concept, unit, value, annual/quarterly period, fiscal period,
-  form, filing date, and accession number before evidence ranking. Annual
-  filings are preferred for annual/fundamental queries while quarterly facts
-  remain available for recent-period coverage; generic JSON/CSV still uses
-  bounded readable projections;
+  remain artifacts. SEC companyfacts JSON is projected into compact annual
+  summary rows plus metric rows such as concept, metric, unit, value,
+  annual/quarterly period, fiscal period, form, filing date, and accession
+  number before evidence ranking. The annual summary rows group the latest
+  revenue, net income, EPS, cash-flow, balance-sheet, and related concepts by
+  fiscal year so financial answers are not forced to infer a report from
+  scattered old XBRL facts. Annual filings are preferred for
+  annual/fundamental queries while quarterly facts remain available for
+  recent-period coverage; generic JSON/CSV still uses bounded readable
+  projections;
 - finance/technical research profiles can be inferred from structured semantic
   domains as well as explicit capability names. This keeps a model packet like
   `domain=finance_fundamentals` connected to the finance source policy even if

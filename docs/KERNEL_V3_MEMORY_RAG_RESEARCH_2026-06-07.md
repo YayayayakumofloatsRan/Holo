@@ -291,3 +291,43 @@ the same thread:
 This gives Holo a short-horizon self-iteration channel: it can see what the host
 already learned from prior attempts in the same conversation without weakening
 the durable-memory approval boundary.
+
+## 2026-06-08 Implementation Update: Thread Learning Digest
+
+Thread learning can now be consolidated into a reviewable digest proposal:
+
+- `MemoryPipeline.propose_thread_learning_digest()` collects recent pending
+  non-blocking learning proposals in the same thread and creates a compact
+  `thread_learning_digest` draft.
+- The digest records `source_proposal_ids`, `source_proposal_count`,
+  source kinds, summaries, and reusable next actions. This keeps the learning
+  graph audit-friendly instead of turning several scattered proposals into a
+  hidden blob.
+- `AgentRuntime` invokes the digest hook after meaningful failure-learning or
+  research-result proposals. The hook is isolated and non-fatal; pipeline
+  errors are journaled as `memory_pipeline_error` and do not break user-facing
+  task completion.
+- Digest proposals remain pending, non-blocking memory proposals. They are not
+  committed durable memory and do not appear in `MemoryStore.recall()` until an
+  operator/user approval path commits them.
+
+This is the next step from passive thread RAG toward active working memory:
+Holo can now carry compact lessons across tasks while preserving provenance and
+approval boundaries.
+
+## 2026-06-08 Implementation Update: Answer Quality as Working Memory
+
+Final-answer quality is now part of the loop memory surface:
+
+- `final_answer_quality_check` records are included in `collect_run_delta()`;
+- `ThreadWorkingMemoryProvider` includes compact quality-check traces and an
+  `answer_quality_gap` attention block when a final answer failed the profile
+  contract;
+- `AgentRuntime` can retry model synthesis once with a structured quality
+  repair directive before returning `final_answer_quality_insufficient`;
+- if the repair still fails, the normal task-reflection memory pipeline can
+  create a non-blocking learning proposal with the quality gaps and next action.
+
+This is important for long-running work. A research agent should not merely
+remember final answers; it should remember why a prior answer was rejected and
+what kind of stronger evidence, structure, or synthesis is needed next.

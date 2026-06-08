@@ -260,7 +260,7 @@ def test_phase6_model_planner_failure_returns_failure_report_not_user_prompt():
     assert result.failure_report["user_help_needed"] is False
     assert result.failure_report["next_possible_action"] == "retry_model_planner_or_reduce_context"
     assert "planner_action" in result.failure_report["missing_evidence"]
-    assert _action_names(journal, result.task_id) == ["ask_user"]
+    assert _action_names(journal, result.task_id) == ["respond"]
 
 
 def test_phase6_model_planner_failure_in_retrieval_mode_is_not_misdiagnosed_as_missing_report():

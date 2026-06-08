@@ -343,6 +343,118 @@ class MemoryPipeline:
             rejected=[proposal_or_rejection],
         )
 
+    def propose_thread_learning_digest(
+        self,
+        *,
+        thread_id: str,
+        task_id: str,
+        run_id: str,
+        source_record_ref: str | None = None,
+        min_source_proposals: int = 2,
+        max_source_proposals: int = 8,
+    ) -> MemoryPipelineResult:
+        source_proposals = _thread_learning_source_proposals(
+            self.store.proposals(),
+            thread_id=thread_id,
+            limit=max_source_proposals,
+        )
+        if len(source_proposals) < max(1, min_source_proposals):
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[])
+        digest = _thread_learning_digest_payload(source_proposals, thread_id=thread_id)
+        text = str(digest.get("body") or "")
+        if not text:
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[])
+        if contains_secret_like_content(text):
+            rejection = self._reject_secret(
+                task_id=task_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                source_record_ref=source_record_ref,
+                text=text,
+            )
+            return MemoryPipelineResult(shadow_candidates=[], proposals=[], committed_items=[], rejected=[rejection])
+        source_ids = _string_list(digest.get("source_proposal_ids"))
+        candidate = ShadowCandidate(
+            candidate_id=stable_candidate_id(
+                {
+                    "source_kind": "thread_learning_digest",
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "source_record_ref": source_record_ref,
+                    "source_proposal_ids": source_ids,
+                    "text_hash": _hash_text(text),
+                }
+            ),
+            source_kind="thread_learning_digest",
+            candidate_text=text,
+            normalized_topic=str(digest["topic"]),
+            required_capabilities=["durable_memory:write"],
+            blocked_capabilities=[],
+            status="open",
+            expires_at_ms=None,
+            created_at_ms=self._now_ms(),
+            metadata={
+                "source_record_ref": source_record_ref,
+                "task_id": task_id,
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "source_kind": "thread_learning_digest",
+                "memory_kind": "thread_learning_digest",
+                "title": digest["title"],
+                "summary": digest["summary"],
+                "body": text,
+                "dedupe_key": digest["dedupe_key"],
+                "structured": digest["structured"],
+                "confidence": digest["confidence"],
+                "rationale": digest["rationale"],
+                "review_nonblocking": True,
+                "source_proposal_ids": source_ids,
+            },
+        )
+        self.store.record_shadow_candidate(candidate)
+        self._journal_memory_record(
+            task_id=task_id,
+            run_id=run_id,
+            kind="memory_shadow_candidate",
+            data=shadow_candidate_event(candidate),
+            state_delta={"memory_candidate": candidate.status},
+        )
+        proposal_or_rejection = self._proposal_from_candidate(
+            candidate,
+            task_id=task_id,
+            run_id=run_id,
+            thread_id=thread_id,
+            source_record_ref=source_record_ref,
+        )
+        if isinstance(proposal_or_rejection, MemoryProposal):
+            proposal = replace(
+                proposal_or_rejection,
+                rationale=str(digest["rationale"]),
+                metadata={
+                    **dict(proposal_or_rejection.metadata),
+                    "source_kind": "thread_learning_digest",
+                    "review_nonblocking": True,
+                    "source_proposal_ids": source_ids,
+                    "source_proposal_count": len(source_ids),
+                },
+            )
+            self.store.record_proposal(proposal)
+            self._journal_memory_record(
+                task_id=task_id,
+                run_id=run_id,
+                kind="memory_proposal",
+                data=memory_proposal_event(proposal),
+                state_delta={"memory_proposal": proposal.approval_status},
+            )
+            return MemoryPipelineResult(shadow_candidates=[candidate], proposals=[proposal], committed_items=[], rejected=[])
+        return MemoryPipelineResult(
+            shadow_candidates=[candidate],
+            proposals=[],
+            committed_items=[],
+            rejected=[proposal_or_rejection],
+        )
+
     def approve_proposal(
         self,
         proposal_id: str,
@@ -830,6 +942,99 @@ def _research_result_payload(*, answer_text: str, metadata: JsonObject | None) -
         "structured": structured,
         "confidence": _confidence(metadata.get("confidence"), default=0.82),
         "rationale": "research final answer distilled into a compact reviewable durable research note",
+    }
+
+
+def _thread_learning_source_proposals(
+    proposals: list[MemoryProposal],
+    *,
+    thread_id: str,
+    limit: int,
+) -> list[MemoryProposal]:
+    selected: list[MemoryProposal] = []
+    for proposal in proposals:
+        if proposal.source_thread_id != thread_id:
+            continue
+        if proposal.approval_status != "pending":
+            continue
+        if proposal.metadata.get("review_nonblocking") is not True:
+            continue
+        if proposal.metadata.get("source_kind") == "thread_learning_digest":
+            continue
+        selected.append(proposal)
+    return selected[-max(1, limit) :]
+
+
+def _thread_learning_digest_payload(proposals: list[MemoryProposal], *, thread_id: str) -> JsonObject:
+    source_ids = [proposal.proposal_id for proposal in proposals]
+    entries = [_learning_entry_from_proposal(proposal) for proposal in proposals]
+    summaries = [entry["summary"] for entry in entries if entry.get("summary")]
+    next_actions = _ordered_unique(
+        [
+            str(entry.get("next_possible_action"))
+            for entry in entries
+            if isinstance(entry.get("next_possible_action"), str) and entry.get("next_possible_action")
+        ]
+    )
+    source_kinds = _ordered_unique(
+        [
+            str(entry.get("source_kind"))
+            for entry in entries
+            if isinstance(entry.get("source_kind"), str) and entry.get("source_kind")
+        ]
+    )
+    topic = "thread-learning-" + _hash_text(thread_id + ":" + "|".join(source_ids))[:16]
+    summary = _preview_text(
+        "Thread learning digest: " + "; ".join(summaries[:4]),
+        240,
+    )
+    lines = [
+        "Holo thread learning digest.",
+        f"Thread: {thread_id}",
+        f"Source proposals: {', '.join(source_ids)}",
+        f"Source kinds: {', '.join(source_kinds)}" if source_kinds else "",
+        "Observed learning signals:",
+        *[f"- {entry['summary']}" for entry in entries if entry.get("summary")],
+    ]
+    if next_actions:
+        lines.extend(["Potential next actions:", *[f"- {item}" for item in next_actions[:6]]])
+    body = _preview_text("\n".join(item for item in lines if item), 2_400)
+    structured = {
+        "source": "thread_learning_digest",
+        "thread_id": thread_id,
+        "source_proposal_ids": source_ids,
+        "source_kinds": source_kinds,
+        "next_possible_actions": next_actions[:8],
+        "entry_count": len(entries),
+        "entries": entries[:8],
+    }
+    return {
+        "topic": topic,
+        "title": _preview_text(f"Thread learning digest: {thread_id}", 120),
+        "summary": summary,
+        "body": body,
+        "dedupe_key": f"thread_learning_digest:{topic}",
+        "structured": structured,
+        "confidence": min(0.9, 0.65 + len(entries) * 0.04),
+        "rationale": "host-consolidated thread learning proposal assembled from pending nonblocking memory proposals",
+        "source_proposal_ids": source_ids,
+    }
+
+
+def _learning_entry_from_proposal(proposal: MemoryProposal) -> JsonObject:
+    proposed = proposal.proposed_item if isinstance(proposal.proposed_item, dict) else {}
+    structured = proposed.get("structured") if isinstance(proposed.get("structured"), dict) else {}
+    summary = str(proposed.get("summary") or "")
+    return {
+        "proposal_id": proposal.proposal_id,
+        "memory_id": proposed.get("memory_id"),
+        "kind": proposed.get("kind"),
+        "source_kind": proposal.metadata.get("source_kind") or proposed.get("kind"),
+        "summary": _preview_text(summary, 260),
+        "failure_reason": structured.get("failure_reason"),
+        "next_possible_action": structured.get("next_possible_action") or proposal.metadata.get("next_possible_action"),
+        "citation_refs": _string_list(structured.get("citation_refs"))[:8],
+        "used_evidence": _string_list(structured.get("used_evidence"))[:8],
     }
 
 

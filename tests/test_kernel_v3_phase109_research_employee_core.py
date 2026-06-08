@@ -6,7 +6,7 @@ from kernel_v3.chat.runtime import _pending_memory_proposals
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryStore
-from kernel_v3.mission import MissionSupervisor
+from kernel_v3.mission import MissionSupervisor, ThreadWorkingMemoryProvider, collect_run_delta
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.retrieval import DirectUrlSearchProvider, FakeFetchProvider, RetrievalOperator
 
@@ -65,6 +65,16 @@ def test_phase109_answer_profile_preserves_explicit_detailed_report_shape() -> N
     assert "证据质量与局限" in profile.target_sections or "风险与局限" in profile.target_sections
 
 
+def test_phase109_finance_research_defaults_to_strict_answer_quality_gate() -> None:
+    goal = "去调查一下 AAPL 的基本面信息"
+    profile = infer_answer_profile(goal, semantic_intake=_semantic_intake_contract(goal), response_language="zh")
+
+    assert profile.format == "detailed_report"
+    assert profile.metadata["domain"] == "finance"
+    assert profile.metadata["quality_gate"] == "strict"
+    assert "source_quality" in profile.minimum_coverage
+
+
 def test_phase109_answer_profile_preserves_explicit_brief_shape() -> None:
     profile = infer_answer_profile("简短说明什么是双曲动力学", response_language="zh")
 
@@ -113,6 +123,64 @@ def test_phase109_detailed_research_final_creates_memory_proposal() -> None:
     assert proposals[0].approval_status == "pending"
     assert proposals[0].metadata["source_kind"] == "research_final_answer"
     assert journal.records(task_id=result.task_id, kind="memory_proposal")
+
+
+def test_phase109_low_quality_finance_synthesis_retries_once_before_finalizing() -> None:
+    journal = JournalStore.in_memory()
+    answer = _long_finance_answer()
+    fabric = fake_fabric(
+        {
+            "semantic.intake": _finance_detail_intake("去调查一下 AAPL 的基本面信息"),
+            "synthesizer.answer": [
+                {
+                    "answer": "AAPL 有营收。",
+                    "citation_refs": ["cite-evidence-span-doc-goal-plan-1-1-1-1"],
+                    "confidence": 0.7,
+                    "limitations": [],
+                    "used_evidence": ["evidence-span-doc-goal-plan-1-1-1-1"],
+                },
+                {
+                    "answer": answer,
+                    "citation_refs": ["cite-evidence-span-doc-goal-plan-1-1-1-1"],
+                    "confidence": 0.86,
+                    "limitations": ["部分估值指标只来自当前提供证据，仍需继续跟踪。"],
+                    "used_evidence": ["evidence-span-doc-goal-plan-1-1-1-1"],
+                },
+            ],
+        },
+        journal=journal,
+    )
+    runtime = AgentRuntime(
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        processor_fabric=fabric,
+        retrieval_operator=_operator(),
+    )
+
+    result = runtime.run(
+        "去调查一下 AAPL 的基本面信息",
+        mode="auto",
+        semantic_mode="model",
+        synthesizer_mode="model",
+    )
+
+    assert result.status == "completed"
+    quality_records = journal.records(task_id=result.task_id, kind="final_answer_quality_check")
+    assert len(quality_records) >= 2
+    assert quality_records[-2].data["attempt"] == "initial"
+    assert quality_records[-2].data["passed"] is False
+    assert quality_records[-1].data["attempt"] == "quality_repair"
+    assert quality_records[-1].data["passed"] is True
+    assert quality_records[-1].data["prior_gaps"]
+    assert len(result.final_answer["answer"]) >= 1200
+    delta = collect_run_delta(journal, task_id=result.task_id, run_id=result.run_id)
+    assert delta["answer_quality_checks"][-1]["passed"] is True
+    thread_context = ThreadWorkingMemoryProvider().compile(
+        journal,
+        thread_id="local:default",
+        task_id=result.task_id,
+    )
+    assert any(item["kind"] == "answer_quality_gap" for item in thread_context["attention_blocks"])
 
 
 def test_phase109_failure_reflection_creates_nonblocking_memory_proposal() -> None:
