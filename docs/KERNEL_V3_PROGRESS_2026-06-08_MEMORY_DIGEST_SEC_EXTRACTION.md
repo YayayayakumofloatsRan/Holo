@@ -192,6 +192,17 @@ Strict final-answer quality checks now feed the memory learning path:
 The model still cannot write durable memory directly. These records stay
 pending/review-first until approved.
 
+## Fix: Learning Signals Survive Prompt Compaction
+
+Thread RAG prompt compaction now keeps learning records structured:
+
+- `memory_learning` entries preserve proposal id, source kind, quality gaps,
+  proposed kind, summary preview, and evidence refs;
+- `self_iteration.learning_signals` carries compact proposal/source/gap
+  information alongside failure and retry hints;
+- answer-quality learning therefore reaches the next planner/evaluator packet
+  as a typed signal rather than a lossy generic dict preview.
+
 ## Fix: Planner Provider Failure Is Not User Input
 
 When `planner.propose` fails because the processor provider fails, the fallback
@@ -308,6 +319,34 @@ Result:
 
 ```text
 760 passed in 91.54s
+```
+
+After preserving learning signals through prompt compaction, targeted tests
+were run:
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_phase71_memory_pipeline.py \
+  tests/test_kernel_v3_phase109_mission_supervisor.py \
+  tests/test_kernel_v3_phase109_research_employee_core.py
+```
+
+Result:
+
+```text
+38 passed in 1.30s
+```
+
+The full kernel-v3 regression was then run again:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+760 passed in 82.58s
 ```
 
 Live smoke:

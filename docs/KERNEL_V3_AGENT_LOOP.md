@@ -163,6 +163,13 @@ committed until explicitly approved. Thread RAG receives the safe
 `source_kind=answer_quality_check` and `quality_gaps` manifest fields so later
 planner packets can avoid repeating the same answer-shape failure.
 
+These learning signals are preserved through prompt compaction. Both
+`thread_rag_context.memory_learning` and
+`thread_rag_context.self_iteration.learning_signals` carry the proposal id,
+source kind, quality gaps, and bounded summary preview. This keeps the next
+LLM packet aware of the prior answer-quality failure without exposing the full
+failed answer body.
+
 ## WorkMethod Layer
 
 The agent loop now carries a compact WorkMethod packet in planner/evaluator

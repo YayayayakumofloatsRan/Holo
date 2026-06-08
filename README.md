@@ -172,7 +172,9 @@ Kernel v3 currently contains the infrastructure for:
   can become a non-blocking, reviewable memory proposal. The proposal stores
   only the profile, gap list, evidence/citation refs, answer length, and repair
   directive, not the raw failed answer; it remains pending until explicitly
-  approved;
+  approved. Thread RAG and processor prompt compaction preserve
+  `source_kind=answer_quality_check` and `quality_gaps`, so later planner calls
+  see the self-iteration signal instead of a generic memory preview;
 - research-result memory proposals. When a strict research answer passes the
   quality gate and durable memory is configured, the host can create a pending
   compact `research_note` proposal from the final answer, citation refs,

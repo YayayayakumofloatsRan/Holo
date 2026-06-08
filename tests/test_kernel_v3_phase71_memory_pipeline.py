@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from kernel_v3.agent.contracts import SemanticIntake
-from kernel_v3.agent.runtime import AgentRuntime
+from kernel_v3.agent.runtime import AgentRuntime, _compact_thread_rag_context_for_prompt
 from kernel_v3.chat.memory_admin import memory_proposal_command_preview
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryPipeline, MemoryStore, stable_memory_id
@@ -427,6 +427,19 @@ def test_phase71_answer_quality_check_creates_reviewable_learning_proposal_witho
     assert thread_context["memory_learning"][0]["proposal_id"] == proposal.proposal_id
     assert thread_context["memory_learning"][0]["source_kind"] == "answer_quality_check"
     assert thread_context["memory_learning"][0]["quality_gaps"] == [
+        "answer_min_chars:1200",
+        "answer_min_sections:5",
+        "source_quality",
+    ]
+    prompt_context = _compact_thread_rag_context_for_prompt(thread_context)
+    assert prompt_context["memory_learning"][0]["source_kind"] == "answer_quality_check"
+    assert prompt_context["memory_learning"][0]["quality_gaps"] == [
+        "answer_min_chars:1200",
+        "answer_min_sections:5",
+        "source_quality",
+    ]
+    assert prompt_context["self_iteration"]["learning_signals"][0]["source_kind"] == "answer_quality_check"
+    assert prompt_context["self_iteration"]["learning_signals"][0]["quality_gaps"] == [
         "answer_min_chars:1200",
         "answer_min_sections:5",
         "source_quality",

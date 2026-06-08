@@ -4640,7 +4640,7 @@ def _compact_thread_rag_context_for_prompt(value: object) -> JsonObject:
         "task_continuity": _compact_task_continuity_for_prompt(value.get("task_continuity")),
         "self_iteration": _compact_self_iteration_for_prompt(value.get("self_iteration")),
         "memory_learning": [
-            _compact_simple_dict(item, limit=10)
+            _compact_memory_learning_for_prompt(item)
             for item in list(value.get("memory_learning") or [])[-4:]
             if isinstance(item, dict)
         ],
@@ -4669,7 +4669,38 @@ def _compact_self_iteration_for_prompt(value: object) -> JsonObject:
         "avoid_repeating_queries": _string_list(value.get("avoid_repeating_queries"))[-12:],
         "recommended_next_actions": _string_list(value.get("recommended_next_actions"))[:8],
         "learning_refs": _string_list(value.get("learning_refs"))[-8:],
+        "learning_signals": [
+            _compact_memory_learning_signal_for_prompt(item)
+            for item in list(value.get("learning_signals") or [])[-4:]
+            if isinstance(item, dict)
+        ],
         "host_rule": _text_preview(value.get("host_rule"), limit=360),
+    }
+
+
+def _compact_memory_learning_for_prompt(value: JsonObject) -> JsonObject:
+    return {
+        "record_ref": value.get("record_ref"),
+        "proposal_id": value.get("proposal_id"),
+        "approval_status": value.get("approval_status"),
+        "approval_policy": value.get("approval_policy"),
+        "review_nonblocking": value.get("review_nonblocking"),
+        "source_kind": value.get("source_kind"),
+        "proposed_kind": value.get("proposed_kind"),
+        "quality_gaps": _string_list(value.get("quality_gaps"))[:12],
+        "summary_preview": _text_preview(value.get("summary_preview"), limit=360),
+        "summary_hash": value.get("summary_hash"),
+        "evidence_record_refs": _string_list(value.get("evidence_record_refs"))[:6],
+    }
+
+
+def _compact_memory_learning_signal_for_prompt(value: JsonObject) -> JsonObject:
+    return {
+        "record_ref": value.get("record_ref"),
+        "proposal_id": value.get("proposal_id"),
+        "source_kind": value.get("source_kind"),
+        "quality_gaps": _string_list(value.get("quality_gaps"))[:8],
+        "summary_preview": _text_preview(value.get("summary_preview"), limit=240),
     }
 
 

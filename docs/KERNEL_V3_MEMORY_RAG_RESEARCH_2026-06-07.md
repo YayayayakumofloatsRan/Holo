@@ -438,3 +438,12 @@ Final-answer quality gaps now have a durable-memory promotion path:
 This moves Holo closer to self-iteration: repeated short, under-covered, or
 poorly structured research answers can become inspectable learning signals
 without weakening host ownership or privacy boundaries.
+
+The prompt boundary now preserves those learning signals explicitly:
+
+- `thread_rag_context.memory_learning` is compacted with source kind,
+  proposal id, quality gaps, evidence refs, and bounded summary preview.
+- `thread_rag_context.self_iteration.learning_signals` carries the same
+  high-value fields for the next action decision.
+- This avoids losing answer-quality learning during context budget
+  compaction, while still keeping proposals pending/review-first.

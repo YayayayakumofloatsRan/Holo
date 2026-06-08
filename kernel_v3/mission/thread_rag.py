@@ -831,6 +831,16 @@ def _self_iteration_context(
             if item.get("record_ref")
         ]
     )
+    learning_signals = [
+        {
+            "record_ref": item.get("record_ref"),
+            "proposal_id": item.get("proposal_id"),
+            "source_kind": item.get("source_kind"),
+            "quality_gaps": _string_list(item.get("quality_gaps"))[:8],
+            "summary_preview": _preview(str(item.get("summary_preview") or ""), 240),
+        }
+        for item in memory_learning[-4:]
+    ]
     completed = [
         item for item in recent_results if item.get("status") == "completed"
     ]
@@ -853,6 +863,7 @@ def _self_iteration_context(
         "avoid_repeating_queries": attempted_queries[-12:],
         "recommended_next_actions": next_actions[:8],
         "learning_refs": learning_refs[-8:],
+        "learning_signals": learning_signals[-4:],
         "host_rule": (
             "Use this as working memory for the next action. Do not repeat avoid_repeating_queries "
             "unless the new payload materially changes source family, tool path, or evidence target."
