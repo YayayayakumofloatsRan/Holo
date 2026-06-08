@@ -12,6 +12,7 @@ class ThreadRagConfig:
     recent_turn_limit: int = 12
     recent_result_limit: int = 8
     recent_trace_limit: int = 24
+    recent_memory_learning_limit: int = 8
     text_preview_chars: int = 640
 
 
@@ -33,7 +34,12 @@ class ThreadWorkingMemoryProvider:
         evidence_refs = _recent_refs(journal, task_id=task_id, kind="retrieval_evidence", key="evidence_id")
         citation_refs = _recent_refs(journal, task_id=task_id, kind="retrieval_citation", key="citation_id")
         failure_diagnostics = _recent_failure_diagnostics(journal, task_id=task_id)
-        memory_learning = _recent_memory_learning(journal, task_id=task_id)
+        memory_learning = _recent_memory_learning(
+            journal,
+            thread_id=thread_id,
+            task_id=task_id,
+            limit=self.config.recent_memory_learning_limit,
+        )
         task_trace = trace
         recent_results = [_compact_result(record, preview_chars=self.config.text_preview_chars) for record in results]
         payload = {
@@ -135,11 +141,22 @@ def _recent_failure_diagnostics(journal: JournalStore, *, task_id: str | None) -
     return [_compact_failure(record) for record in records]
 
 
-def _recent_memory_learning(journal: JournalStore, *, task_id: str | None) -> list[JsonObject]:
-    if not task_id:
-        return []
-    records = journal.records(task_id=task_id, kind="memory_proposal")[-6:]
-    return [_compact_memory_proposal(record) for record in records]
+def _recent_memory_learning(
+    journal: JournalStore,
+    *,
+    thread_id: str,
+    task_id: str | None,
+    limit: int,
+) -> list[JsonObject]:
+    records: list[LedgerRecord] = []
+    for record in journal.records(kind="memory_proposal"):
+        if record.data.get("review_nonblocking") is not True:
+            continue
+        same_task = bool(task_id and record.task_id == task_id)
+        same_thread = record.data.get("source_thread_id") == thread_id
+        if same_task or same_thread:
+            records.append(record)
+    return [_compact_memory_proposal(record) for record in records[-max(1, limit) :]]
 
 
 def _compact_turn(record: LedgerRecord, *, preview_chars: int) -> JsonObject:

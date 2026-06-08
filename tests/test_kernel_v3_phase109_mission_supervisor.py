@@ -6,6 +6,7 @@ from kernel_v3.agent.workloop import WorkloopConfig
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
+from kernel_v3.memory import MemoryPipeline, MemoryStore
 from kernel_v3.mission import MissionRuntime, ThreadWorkingMemoryProvider
 from kernel_v3.processors import ProcessorFabric, ProcessorRouter
 from kernel_v3.processors.contracts import MISSION_ASSESS_SCHEMA
@@ -283,6 +284,43 @@ def test_phase109_thread_working_memory_exposes_attention_blocks():
     assert blocks[0]["priority"] > blocks[1]["priority"]
     assert "ev-attention" in blocks[1]["refs"]
     assert "cite-attention" in blocks[1]["refs"]
+
+
+def test_phase109_thread_rag_carries_nonblocking_learning_across_tasks_in_same_thread():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory()
+    pipeline = MemoryPipeline(store=store, journal=journal)
+    result = pipeline.propose_from_task_reflection(
+        root_goal="调查一个来源质量不稳定的目标",
+        outcome="failed",
+        task_id="task-old",
+        run_id="run-old",
+        thread_id="thread-learning",
+        source_record_ref="ledger-old-failure",
+        failure_report={
+            "reason": "retrieval_source_quality_insufficient",
+            "attempted_actions": ["retrieval.run"],
+            "missing_evidence": ["authoritative source"],
+            "next_possible_action": "switch_source_family",
+        },
+    )
+
+    same_thread = ThreadWorkingMemoryProvider().compile(
+        journal,
+        thread_id="thread-learning",
+        task_id="task-new",
+    )
+    other_thread = ThreadWorkingMemoryProvider().compile(
+        journal,
+        thread_id="thread-other",
+        task_id="task-new",
+    )
+
+    assert same_thread["memory_learning"][0]["proposal_id"] == result.proposals[0].proposal_id
+    assert same_thread["memory_learning"][0]["review_nonblocking"] is True
+    assert any(block["kind"] == "memory_learning_signal" for block in same_thread["attention_blocks"])
+    assert other_thread["memory_learning"] == []
+    assert store.recall(query="source quality", scope={"thread_id": "thread-learning"}).total == 0
 
 
 class _CapturingProvider:

@@ -271,3 +271,23 @@ of storing the whole final report as candidate text:
 
 This makes durable memory a working substrate for future research continuity,
 not a pile of long cached reports.
+
+## 2026-06-08 Implementation Update: Thread Learning Carryover
+
+Thread RAG now carries recent non-blocking learning proposals across tasks in
+the same thread:
+
+- `ThreadWorkingMemoryProvider` collects `memory_proposal` records where
+  `review_nonblocking=true` and `source_thread_id` matches the current thread,
+  even when the current task id is different.
+- These records appear in `thread_rag_context.memory_learning` and as a
+  `memory_learning_signal` attention block for later planner/evaluator packets.
+- This is deliberately scoped to the thread and does not make the proposal a
+  committed durable memory item. `MemoryStore.recall()` still returns only
+  approved active memory.
+- Explicit user memory-write proposals that require review are not treated as
+  background learning carryover.
+
+This gives Holo a short-horizon self-iteration channel: it can see what the host
+already learned from prior attempts in the same conversation without weakening
+the durable-memory approval boundary.

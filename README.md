@@ -171,6 +171,10 @@ Kernel v3 currently contains the infrastructure for:
   workflow-memory proposal. These learning proposals enter thread RAG/attention
   context for later planner packets but do not block the next user turn and do
   not auto-commit durable memory;
+- thread-scoped learning carryover. Non-blocking learning proposals from recent
+  tasks in the same thread are included in later thread RAG context, so the next
+  planner packet can see prior failure lessons even before they are approved as
+  committed durable memory. Other threads do not receive those proposals;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file
