@@ -20,6 +20,12 @@ def test_phase110_memory_recall_operator_reads_workspace_and_thread_scopes():
         summary="Project default branch is kernel-v3.",
         body="Use kernel-v3 for Holo harness work unless the user says otherwise.",
         scope={"user_id": "local:user", "project_id": "holo-kernel-v3"},
+        structured={
+            "source": "answer_quality_check",
+            "profile_format": "detailed_report",
+            "gaps": ["answer_min_chars:1200", "source_quality"],
+            "next_possible_action": "repair final answer",
+        },
     )
     thread = _memory_item(
         memory_id="mem-thread-language",
@@ -63,6 +69,11 @@ def test_phase110_memory_recall_operator_reads_workspace_and_thread_scopes():
     assert observation.status == "ok"
     results = observation.content["results"]
     assert [item["memory_id"] for item in results["workspace"]["items"]] == [workspace.memory_id]
+    structured = results["workspace"]["items"][0]["structured_summary"]
+    assert structured["values"]["source"] == "answer_quality_check"
+    assert structured["values"]["gaps"] == ["answer_min_chars:1200", "source_quality"]
+    assert structured["values"]["next_possible_action"] == "repair final answer"
+    assert "hash" in structured
     assert [item["memory_id"] for item in results["thread"]["items"]] == [thread.memory_id]
     assert observation.content["combined"]["memory_ids"] == [workspace.memory_id, thread.memory_id]
     assert "query_hash" in observation.content
@@ -80,6 +91,11 @@ def test_phase110_agent_loop_can_actively_recall_memory_before_answering():
             summary="Project default branch is kernel-v3.",
             body="Use kernel-v3 for Holo harness work.",
             scope={"user_id": "local:user", "project_id": "holo-kernel-v3"},
+            structured={
+                "source": "answer_quality_check",
+                "profile_format": "detailed_report",
+                "gaps": ["answer_min_chars:1200"],
+            },
         )
     )
     store.commit(
@@ -208,6 +224,10 @@ def test_phase110_agent_loop_can_actively_recall_memory_before_answering():
         "mem-workspace-branch",
         "mem-thread-language",
     ]
+    assert (
+        prompt_context["active_memory_recalls"][-1]["scopes"]["workspace"]["items"][0]["structured_summary"]["values"]["source"]
+        == "answer_quality_check"
+    )
 
 
 def test_phase110_model_planner_packet_includes_durable_memory_context():
@@ -332,14 +352,14 @@ def _clock():
     return tick
 
 
-def _memory_item(*, memory_id: str, summary: str, body: str, scope: dict[str, object]) -> MemoryItem:
+def _memory_item(*, memory_id: str, summary: str, body: str, scope: dict[str, object], structured: dict[str, object] | None = None) -> MemoryItem:
     return MemoryItem(
         memory_id=memory_id,
         kind="project_fact",
         title=summary[:60],
         summary=summary,
         body=body,
-        structured={},
+        structured=dict(structured or {}),
         scope=scope,
         privacy_class="project_internal",
         confidence=0.9,

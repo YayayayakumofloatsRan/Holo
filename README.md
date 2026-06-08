@@ -208,13 +208,17 @@ Kernel v3 currently contains the infrastructure for:
   thread view totals, memory ids, top safe summaries, and an active-recall hint.
   This lets the model use already paged memory or propose `memory.recall`
   when the snapshot is too sparse, without exposing raw bodies or granting
-  memory-write authority;
+  memory-write authority. Approved memory can also expose a bounded
+  `structured_summary` with safe slot values, such as answer-quality gaps or
+  next-action hints, while keeping the original structured payload hashed and
+  bounded;
 - active-memory recall as loop working memory. Safe `memory.recall`
   observations are compacted into
   `thread_rag_context.active_memory_recalls`, including recalled ids, scope
-  totals, summaries, provenance refs, and filtered diagnostics. Later planner
-  packets can use the recalled facts before trying another recall, which keeps
-  the loop from forgetting its own memory tool results;
+  totals, summaries, structured summaries, provenance refs, and filtered
+  diagnostics. Later planner packets can use the recalled facts before trying
+  another recall, which keeps the loop from forgetting its own memory tool
+  results;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file

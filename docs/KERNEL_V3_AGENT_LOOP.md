@@ -124,6 +124,12 @@ does not commit memory, and does not let the model modify memory state. Each
 recall is audited in `MemoryStore` through `memory_items_recalled`; the journal
 receives only the safe observation payload.
 
+Committed memory items may include a bounded `structured_summary`. It exposes
+only selected safe slots such as `source`, `profile_format`, `gaps`,
+`next_possible_action`, citation/evidence refs, and related counts. The original
+structured payload remains hashed/bounded and raw memory bodies remain absent
+from passive context and active recall observations.
+
 In model mode the flow is still the normal host-owned loop:
 
 1. semantic intake may mark the task with `durable_memory.search` or

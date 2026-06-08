@@ -297,6 +297,7 @@ def _compact_memory_recall_scope(result: JsonObject) -> JsonObject:
                 "title": _preview(str(item.get("title") or ""), 120),
                 "summary": _preview(str(item.get("summary") or ""), 220),
                 "body_preview": _preview(str(item.get("body_preview") or ""), 180),
+                "structured_summary": item.get("structured_summary") if isinstance(item.get("structured_summary"), dict) else {},
                 "privacy_class": item.get("privacy_class"),
                 "confidence": item.get("confidence"),
                 "provenance_refs": _string_list(item.get("provenance_refs"))[:4],

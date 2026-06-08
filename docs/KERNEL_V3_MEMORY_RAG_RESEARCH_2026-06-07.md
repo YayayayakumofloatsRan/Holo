@@ -447,3 +447,13 @@ The prompt boundary now preserves those learning signals explicitly:
   high-value fields for the next action decision.
 - This avoids losing answer-quality learning during context budget
   compaction, while still keeping proposals pending/review-first.
+
+Approved durable memory now preserves the same shape through a bounded
+`structured_summary`:
+
+- passive `durable_memory` context includes safe structured slots when a
+  committed item has meaningful structure;
+- active `memory.recall` observations include the same structured summary;
+- prompt compaction preserves those slots for planner/evaluator packets;
+- source-only or otherwise low-information structures are omitted to protect
+  context budget.

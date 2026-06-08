@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from kernel_v3.contracts import CandidateAction, JsonObject, Observation, ToolManifest
 from kernel_v3.journal import JournalStore
+from kernel_v3.memory.structured import structured_memory_summary
 from kernel_v3.memory.store import MEMORY_RECALL_LIMIT_CAP, MemoryStore
 from kernel_v3.tools import ToolRegistry
 
@@ -232,6 +233,7 @@ def _compact_memory_item(item: JsonObject) -> JsonObject:
         "scope": _dict(item.get("scope")),
         "privacy_class": item.get("privacy_class"),
         "confidence": item.get("confidence"),
+        "structured_summary": structured_memory_summary(_dict(item.get("structured"))),
         "provenance_refs": _string_list(item.get("provenance_refs")),
         "artifact_refs": _string_list(item.get("artifact_refs")),
         "updated_at_ms": item.get("updated_at_ms"),

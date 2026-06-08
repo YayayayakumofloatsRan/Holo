@@ -14,7 +14,16 @@ from kernel_v3.session import TaskState
 
 def test_phase72_context_injects_durable_memory_as_separate_section():
     store = MemoryStore.in_memory(clock_ms=_clock())
-    item = _memory_item(summary="偏好中文短答", thread_id="thread-1")
+    item = _memory_item(
+        summary="偏好中文短答",
+        thread_id="thread-1",
+        structured={
+            "source": "answer_quality_check",
+            "profile_format": "detailed_report",
+            "gaps": ["answer_min_chars:1200", "source_quality"],
+            "next_possible_action": "repair final answer",
+        },
+    )
     store.commit(item)
     task = _task(thread_id="thread-1")
 
@@ -27,11 +36,15 @@ def test_phase72_context_injects_durable_memory_as_separate_section():
     durable = next(section for section in pack.sections if section["name"] == "durable_memory")
     assert durable["items"][0]["memory_id"] == item.memory_id
     assert durable["items"][0]["summary"] == "偏好中文短答"
+    assert durable["items"][0]["structured_summary"]["values"]["source"] == "answer_quality_check"
+    assert durable["items"][0]["structured_summary"]["values"]["gaps"] == ["answer_min_chars:1200", "source_quality"]
     assert "body" not in durable["items"][0]
     assert durable["context"]["kind"] == "durable_memory_context"
     assert durable["context"]["combined_memory_ids"] == [item.memory_id]
     assert durable["context"]["views"]["thread"]["memory_ids"] == [item.memory_id]
     assert durable["context"]["top_items"][0]["summary"] == "偏好中文短答"
+    assert durable["context"]["top_items"][0]["structured_summary"]["values"]["source"] == "answer_quality_check"
+    assert durable["context"]["top_items"][0]["structured_summary"]["values"]["next_possible_action"] == "repair final answer"
     assert "body" not in durable["context"]["top_items"][0]
     assert item.memory_id in pack.source_refs
     assert "ledger-source" in pack.source_refs
@@ -417,6 +430,7 @@ def _memory_item(
     project_id: str = "holo-kernel-v3",
     expires_at_ms: int | None = None,
     privacy_class: str = "project_internal",
+    structured: dict[str, object] | None = None,
 ) -> MemoryItem:
     scope = {"user_id": user_id, "project_id": project_id, "thread_id": thread_id}
     dedupe_key = f"user_preference:{summary}"
@@ -426,7 +440,7 @@ def _memory_item(
         title=summary,
         summary=summary,
         body=f"body should not be injected: {summary}",
-        structured={"source": "test"},
+        structured=dict(structured or {"source": "test"}),
         scope=scope,
         privacy_class=privacy_class,
         confidence=0.9,

@@ -203,6 +203,19 @@ Thread RAG prompt compaction now keeps learning records structured:
 - answer-quality learning therefore reaches the next planner/evaluator packet
   as a typed signal rather than a lossy generic dict preview.
 
+## Fix: Approved Memory Keeps Safe Structured Slots
+
+Committed durable memory and active recall now preserve bounded structured
+signals:
+
+- passive `durable_memory` context exposes `structured_summary` only when the
+  item has meaningful safe slots, such as quality gaps or next-action hints;
+- active `memory.recall` returns the same structured summary and thread RAG
+  carries it into `active_memory_recalls`;
+- processor prompt compaction preserves the structured summary hash and safe
+  slot values;
+- source-only structures are omitted to avoid context-budget bloat.
+
 ## Fix: Planner Provider Failure Is Not User Input
 
 When `planner.propose` fails because the processor provider fails, the fallback
@@ -347,6 +360,41 @@ Result:
 
 ```text
 760 passed in 82.58s
+```
+
+After adding safe structured summaries for approved memory and active recall,
+targeted memory/context tests were run:
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_phase72_memory_context_admin.py \
+  tests/test_kernel_v3_phase110_active_memory_recall.py \
+  tests/test_kernel_v3_phase71_memory_pipeline.py
+```
+
+Result:
+
+```text
+38 passed in 1.19s
+```
+
+After extracting the structured-summary projection into
+`kernel_v3.memory.structured`, the targeted tests were run again:
+
+```text
+38 passed in 1.56s
+```
+
+The full kernel-v3 regression was then run again:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+760 passed in 93.88s
 ```
 
 Live smoke:

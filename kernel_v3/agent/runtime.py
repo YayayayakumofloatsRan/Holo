@@ -4605,6 +4605,7 @@ def _compact_durable_memory_item_for_prompt(value: JsonObject) -> JsonObject:
         "kind": value.get("kind"),
         "title": _text_preview(value.get("title"), limit=120),
         "summary": _text_preview(value.get("summary"), limit=240),
+        "structured_summary": _compact_structured_summary_for_prompt(value.get("structured_summary")),
         "privacy_class": value.get("privacy_class"),
         "confidence": value.get("confidence"),
         "payload_hash": value.get("payload_hash"),
@@ -4886,6 +4887,7 @@ def _compact_memory_recall_scope_for_prompt(value: JsonObject) -> JsonObject:
                 "kind": item.get("kind"),
                 "summary": _text_preview(item.get("summary"), limit=180),
                 "body_preview": _text_preview(item.get("body_preview"), limit=160),
+                "structured_summary": _compact_structured_summary_for_prompt(item.get("structured_summary")),
                 "privacy_class": item.get("privacy_class"),
                 "confidence": item.get("confidence"),
                 "provenance_refs": _string_list(item.get("provenance_refs"))[:4],
@@ -4894,6 +4896,18 @@ def _compact_memory_recall_scope_for_prompt(value: JsonObject) -> JsonObject:
             if isinstance(item, dict)
         ],
         "filtered": _compact_simple_dict(value.get("filtered"), limit=6),
+    }
+
+
+def _compact_structured_summary_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    values = value.get("values") if isinstance(value.get("values"), dict) else {}
+    return {
+        "keys": _string_list(value.get("keys"))[:24],
+        "key_count": value.get("key_count"),
+        "values": _compact_simple_dict(values, limit=16),
+        "hash": value.get("hash"),
     }
 
 

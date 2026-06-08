@@ -11,6 +11,7 @@ from kernel_v3.context.validator import deterministic_hash
 from kernel_v3.contracts import ContextBundle, JsonObject
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryStore
+from kernel_v3.memory.structured import structured_memory_summary
 from kernel_v3.session import TaskState
 
 
@@ -827,7 +828,10 @@ def _durable_memory_view_context(view: JsonObject) -> JsonObject:
 
 
 def _durable_memory_item_context(item: JsonObject) -> JsonObject:
-    return {
+    structured_summary = item.get("structured_summary") if isinstance(item.get("structured_summary"), dict) else {}
+    if not structured_summary:
+        structured_summary = structured_memory_summary(item.get("structured") if isinstance(item.get("structured"), dict) else {})
+    payload = {
         "memory_id": item.get("memory_id"),
         "kind": item.get("kind"),
         "title": _compact_text(str(item.get("title") or ""), limit=72),
@@ -837,6 +841,9 @@ def _durable_memory_item_context(item: JsonObject) -> JsonObject:
         "payload_hash": item.get("payload_hash"),
         "provenance_refs": list(item.get("provenance_refs", []))[:2] if isinstance(item.get("provenance_refs"), list) else [],
     }
+    if structured_summary:
+        payload["structured_summary"] = structured_summary
+    return payload
 
 
 def _durable_memory_context_budget_view(context: JsonObject) -> JsonObject:
@@ -873,7 +880,8 @@ def _compact_durable_memory_item(item: JsonObject) -> JsonObject:
         "state": item.get("state"),
         "updated_at_ms": item.get("updated_at_ms"),
     }
-    return {
+    structured_summary = structured_memory_summary(item.get("structured") if isinstance(item.get("structured"), dict) else {})
+    payload = {
         "memory_id": item.get("memory_id"),
         "kind": item.get("kind"),
         "title": _compact_text(str(item.get("title", "")), limit=96),
@@ -886,6 +894,9 @@ def _compact_durable_memory_item(item: JsonObject) -> JsonObject:
         "artifact_refs": list(item.get("artifact_refs", [])) if isinstance(item.get("artifact_refs"), list) else [],
         "payload_hash": deterministic_hash(stable_payload),
     }
+    if structured_summary:
+        payload["structured_summary"] = structured_summary
+    return payload
 
 
 def _compact_tool_brief(brief: JsonObject) -> JsonObject:
