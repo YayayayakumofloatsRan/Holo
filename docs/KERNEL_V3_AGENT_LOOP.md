@@ -136,6 +136,13 @@ In model mode the flow is still the normal host-owned loop:
 6. the observation re-enters evaluator/workloop;
 7. the next planner step can respond or continue based on the recalled memory.
 
+Successful `memory.recall` observations are also projected into thread RAG as
+`thread_rag_context.active_memory_recalls`. That packet carries recalled memory
+ids, per-scope totals, bounded summaries/body previews, provenance refs, and
+filtered diagnostics. Planner prompts are instructed to use these recalled refs
+before proposing another recall; a second recall should only happen when the
+first one missed the needed scope or topic.
+
 The workloop counts successful memory recall as progress, but it does not
 finalize a direct/semantic task from the recall observation alone. A
 direct/semantic finalization needs either an explicit final answer in evaluator

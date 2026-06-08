@@ -55,6 +55,7 @@ class ThreadWorkingMemoryProvider:
             "citation_refs": citation_refs,
             "failure_diagnostics": failure_diagnostics,
             "memory_learning": memory_learning,
+            "active_memory_recalls": _active_memory_recalls(task_trace),
         }
         payload["attention_blocks"] = _attention_blocks(
             recent_results=recent_results,
@@ -251,13 +252,58 @@ def _compact_action(record: LedgerRecord) -> JsonObject:
 
 def _compact_observation(record: LedgerRecord) -> JsonObject:
     content = record.data.get("content")
-    return {
+    compacted = {
         "record_ref": record.record_id,
         "kind": "observation",
         "source": record.data.get("source"),
         "status": record.data.get("status"),
         "content_preview": _preview(str(content), 360),
         "content_hash": _hash_payload(content),
+    }
+    if record.data.get("source") == "tool:memory.recall" and isinstance(content, dict):
+        compacted["memory_recall"] = _compact_memory_recall_content(content)
+    return compacted
+
+
+def _compact_memory_recall_content(content: JsonObject) -> JsonObject:
+    combined = content.get("combined") if isinstance(content.get("combined"), dict) else {}
+    results = content.get("results") if isinstance(content.get("results"), dict) else {}
+    diagnostics = content.get("diagnostics") if isinstance(content.get("diagnostics"), dict) else {}
+    return {
+        "query_hash": content.get("query_hash"),
+        "query_preview": _preview(str(content.get("query_preview") or ""), 180),
+        "scope_mode": content.get("scope_mode"),
+        "limit_per_scope": content.get("limit_per_scope"),
+        "combined_total": combined.get("total", 0),
+        "memory_ids": _string_list(combined.get("memory_ids"))[:16],
+        "fallback_ranked_scopes": _string_list(diagnostics.get("fallback_ranked_scopes"))[:8],
+        "scopes": {
+            str(label): _compact_memory_recall_scope(result)
+            for label, result in list(results.items())[:4]
+            if isinstance(result, dict)
+        },
+    }
+
+
+def _compact_memory_recall_scope(result: JsonObject) -> JsonObject:
+    items = [item for item in list(result.get("items") or [])[:6] if isinstance(item, dict)]
+    return {
+        "total": result.get("total", len(items)),
+        "memory_ids": [str(item.get("memory_id")) for item in items if item.get("memory_id")],
+        "items": [
+            {
+                "memory_id": item.get("memory_id"),
+                "kind": item.get("kind"),
+                "title": _preview(str(item.get("title") or ""), 120),
+                "summary": _preview(str(item.get("summary") or ""), 220),
+                "body_preview": _preview(str(item.get("body_preview") or ""), 180),
+                "privacy_class": item.get("privacy_class"),
+                "confidence": item.get("confidence"),
+                "provenance_refs": _string_list(item.get("provenance_refs"))[:4],
+            }
+            for item in items
+        ],
+        "filtered": dict(result.get("filtered", {})) if isinstance(result.get("filtered"), dict) else {},
     }
 
 
@@ -607,6 +653,23 @@ def _attention_blocks(
             }
         )
     return sorted(blocks, key=lambda item: float(item.get("priority") or 0.0), reverse=True)[:6]
+
+
+def _active_memory_recalls(recent_task_trace: list[JsonObject]) -> list[JsonObject]:
+    recalls = []
+    for item in recent_task_trace:
+        if item.get("kind") != "observation" or item.get("source") != "tool:memory.recall":
+            continue
+        recall = item.get("memory_recall")
+        if isinstance(recall, dict):
+            recalls.append(
+                {
+                    "record_ref": item.get("record_ref"),
+                    "status": item.get("status"),
+                    **recall,
+                }
+            )
+    return recalls[-4:]
 
 
 def _task_continuity_context(

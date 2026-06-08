@@ -159,6 +159,22 @@ Durable memory is now exposed to model calls as a compact working packet:
 The packet is intentionally small and budget-aware. Tight context budgets keep
 ids/counts/boundary information instead of duplicating raw memory bodies.
 
+## Fix: Active Memory Recall Enters Thread Working Memory
+
+`memory.recall` observations now become structured working memory instead of
+only a string preview:
+
+- `ThreadWorkingMemoryProvider` stores compact recall packets under
+  `thread_rag_context.active_memory_recalls`;
+- each packet includes safe memory ids, scope totals, summaries, bounded body
+  previews, provenance refs, query hash, and filtered diagnostics;
+- `AgentRuntime` preserves the same packet in planner/evaluator prompt context;
+- planner instructions tell the model to use existing active recalls before
+  proposing another recall for the same scope/topic.
+
+This improves multi-step memory continuity without giving the model write
+authority over durable memory.
+
 ## Fix: Planner Provider Failure Is Not User Input
 
 When `planner.propose` fails because the processor provider fails, the fallback
@@ -234,6 +250,19 @@ Result:
 
 ```text
 759 passed in 78.29s
+```
+
+After the active-memory recall working-context pass, the full kernel-v3
+regression was run again:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+759 passed in 95.09s
 ```
 
 Live smoke:

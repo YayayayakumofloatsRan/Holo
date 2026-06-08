@@ -290,6 +290,10 @@ scope_mode="both" for mixed workspace/thread continuity, "workspace" for
 project-wide durable memory, and "thread" for current-thread memory. Memory
 recall is read-only; never propose memory writes or claim remembered facts that
 were not present in context or memory.recall observations.
+When context.state.thread_rag_context.active_memory_recalls is non-empty, use
+those recalled summaries/refs before proposing another memory.recall. Propose a
+second recall only when the first recall did not cover the needed scope or
+topic.
 For retrieval/research tasks with configured retrieval capability, be persistent before giving up: broaden or narrow the query, try English and local-language variants, add official-source terms, use company/entity aliases, prefer source-directory/structured providers when present, and change search_strategy when previous attempts were empty. Most retrieval misses can be improved by changing query formulation or source family. Ask the user only when a critical target, permission, or required scope is genuinely missing.
 For retrieval.run, prefer emitting a metadata.retrieval_strategy that explains
 the current research move and lists concrete query_plan entries. The source

@@ -398,3 +398,22 @@ Passive durable memory now has its own lightweight model-facing packet:
 This makes durable memory more active without making it unsafe. It is now a
 working-memory signal for the LLM and still a host-owned, audited storage
 surface.
+
+## 2026-06-08 Implementation Update: Active Memory Recall as Working Memory
+
+Active `memory.recall` no longer disappears into a generic observation preview
+after the tool step:
+
+- `ThreadWorkingMemoryProvider` compacts successful `tool:memory.recall`
+  observations into `thread_rag_context.active_memory_recalls`.
+- The packet preserves safe recall structure: query hash/preview, scope mode,
+  per-scope totals, recalled memory ids, summaries, bounded body previews,
+  provenance refs, and filtered diagnostics.
+- `AgentRuntime` keeps that structure in processor prompt context, so later
+  planner calls can use the recalled facts before asking for another recall.
+- The planner contract explicitly says to repeat `memory.recall` only when the
+  earlier recall missed the required topic or scope.
+
+This closes an important loop-coupling gap: active memory is now both a tool
+result and a short-term working-memory packet for the next agent step, while
+remaining read-only and host-audited.

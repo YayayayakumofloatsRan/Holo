@@ -201,6 +201,12 @@ Kernel v3 currently contains the infrastructure for:
   This lets the model use already paged memory or propose `memory.recall`
   when the snapshot is too sparse, without exposing raw bodies or granting
   memory-write authority;
+- active-memory recall as loop working memory. Safe `memory.recall`
+  observations are compacted into
+  `thread_rag_context.active_memory_recalls`, including recalled ids, scope
+  totals, summaries, provenance refs, and filtered diagnostics. Later planner
+  packets can use the recalled facts before trying another recall, which keeps
+  the loop from forgetting its own memory tool results;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file

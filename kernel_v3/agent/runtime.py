@@ -4567,6 +4567,11 @@ def _compact_thread_rag_context_for_prompt(value: object) -> JsonObject:
         "evidence_refs": _string_list(value.get("evidence_refs"))[:16],
         "citation_refs": _string_list(value.get("citation_refs"))[:16],
         "failure_diagnostics": [_compact_failure_for_prompt(item) for item in list(value.get("failure_diagnostics") or [])[-3:] if isinstance(item, dict)],
+        "active_memory_recalls": [
+            _compact_memory_recall_trace_for_prompt(item)
+            for item in list(value.get("active_memory_recalls") or [])[-4:]
+            if isinstance(item, dict)
+        ],
         "attention_blocks": [
             _compact_attention_block_for_prompt(item)
             for item in list(value.get("attention_blocks") or [])[:6]
@@ -4704,13 +4709,16 @@ def _compact_thread_working_context_for_prompt(value: object) -> JsonObject:
 def _compact_trace_item_for_prompt(value: JsonObject) -> JsonObject:
     kind = value.get("kind")
     if kind == "observation":
-        return {
+        result = {
             "record_ref": value.get("record_ref"),
             "kind": kind,
             "source": value.get("source"),
             "status": value.get("status"),
             "content_preview": _text_preview(value.get("content_preview"), limit=220),
         }
+        if value.get("source") == "tool:memory.recall":
+            result["memory_recall"] = _compact_memory_recall_trace_for_prompt(value.get("memory_recall"))
+        return result
     if kind == "action":
         return {
             "record_ref": value.get("record_ref"),
@@ -4757,6 +4765,45 @@ def _compact_trace_item_for_prompt(value: JsonObject) -> JsonObject:
             "next_possible_action": value.get("next_possible_action"),
         }
     return _compact_simple_dict(value, limit=10)
+
+
+def _compact_memory_recall_trace_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    scopes = value.get("scopes") if isinstance(value.get("scopes"), dict) else {}
+    return {
+        "query_hash": value.get("query_hash"),
+        "scope_mode": value.get("scope_mode"),
+        "combined_total": value.get("combined_total"),
+        "memory_ids": _string_list(value.get("memory_ids"))[:16],
+        "fallback_ranked_scopes": _string_list(value.get("fallback_ranked_scopes"))[:8],
+        "scopes": {
+            str(label): _compact_memory_recall_scope_for_prompt(scope)
+            for label, scope in list(scopes.items())[:4]
+            if isinstance(scope, dict)
+        },
+    }
+
+
+def _compact_memory_recall_scope_for_prompt(value: JsonObject) -> JsonObject:
+    return {
+        "total": value.get("total"),
+        "memory_ids": _string_list(value.get("memory_ids"))[:12],
+        "items": [
+            {
+                "memory_id": item.get("memory_id"),
+                "kind": item.get("kind"),
+                "summary": _text_preview(item.get("summary"), limit=180),
+                "body_preview": _text_preview(item.get("body_preview"), limit=160),
+                "privacy_class": item.get("privacy_class"),
+                "confidence": item.get("confidence"),
+                "provenance_refs": _string_list(item.get("provenance_refs"))[:4],
+            }
+            for item in list(value.get("items") or [])[:4]
+            if isinstance(item, dict)
+        ],
+        "filtered": _compact_simple_dict(value.get("filtered"), limit=6),
+    }
 
 
 def _compact_failure_for_prompt(value: JsonObject) -> JsonObject:

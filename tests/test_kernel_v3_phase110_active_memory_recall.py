@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.runtime import _compact_thread_rag_context_for_prompt
 from kernel_v3.contracts import CandidateAction, ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryStore
 from kernel_v3.memory.operator import MemoryRecallOperator
+from kernel_v3.mission import ThreadWorkingMemoryProvider
 from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
 from kernel_v3.processors.usage import usage_from_text
 
@@ -191,6 +193,21 @@ def test_phase110_agent_loop_can_actively_recall_memory_before_answering():
     ]
     progress = [record.data["progress_type"] for record in journal.records(task_id=result.task_id, kind="progress_assessment")]
     assert "new_memory_recall" in progress
+    thread_context = ThreadWorkingMemoryProvider().compile(
+        journal,
+        thread_id="thread-memory",
+        task_id=result.task_id,
+    )
+    recalled = thread_context["active_memory_recalls"][-1]
+    prompt_context = _compact_thread_rag_context_for_prompt(thread_context)
+    assert recalled["combined_total"] == 2
+    assert recalled["memory_ids"] == ["mem-workspace-branch", "mem-thread-language"]
+    assert recalled["scopes"]["workspace"]["items"][0]["summary"] == "Project default branch is kernel-v3."
+    assert recalled["scopes"]["thread"]["items"][0]["summary"] == "This thread prefers concise Chinese answers."
+    assert prompt_context["active_memory_recalls"][-1]["memory_ids"] == [
+        "mem-workspace-branch",
+        "mem-thread-language",
+    ]
 
 
 def test_phase110_model_planner_packet_includes_durable_memory_context():
