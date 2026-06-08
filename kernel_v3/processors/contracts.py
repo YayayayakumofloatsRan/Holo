@@ -276,6 +276,11 @@ the host-compiled working note for this task: preserve current_objective, cover
 open_requirements, honor avoid_repeating unless the strategy materially
 changes, and use suggested_actions as candidate next moves rather than final
 answers.
+When context.state.durable_memory_context is present, treat it as the passive
+scoped memory snapshot already paged into this run. Use its top_items and view
+totals when they cover the task; if prior knowledge is needed but the snapshot
+is sparse, propose memory.recall when that tool is available. Never treat this
+snapshot as permission to write, edit, delete, or expose sensitive memory.
 When context.state.semantic_goal is present, treat semantic_goal.root_goal as the stable objective and semantic_goal.current_input_preview only as the current continuation instruction. Do not replace the objective with a generated continuation directive.
 When memory.recall is available and the task depends on previous user
 preferences, project conventions, earlier thread state, "what do you remember",

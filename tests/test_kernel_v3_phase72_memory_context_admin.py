@@ -28,6 +28,11 @@ def test_phase72_context_injects_durable_memory_as_separate_section():
     assert durable["items"][0]["memory_id"] == item.memory_id
     assert durable["items"][0]["summary"] == "偏好中文短答"
     assert "body" not in durable["items"][0]
+    assert durable["context"]["kind"] == "durable_memory_context"
+    assert durable["context"]["combined_memory_ids"] == [item.memory_id]
+    assert durable["context"]["views"]["thread"]["memory_ids"] == [item.memory_id]
+    assert durable["context"]["top_items"][0]["summary"] == "偏好中文短答"
+    assert "body" not in durable["context"]["top_items"][0]
     assert item.memory_id in pack.source_refs
     assert "ledger-source" in pack.source_refs
 
@@ -86,6 +91,10 @@ def test_phase72_context_injects_project_and_thread_memory_views_together():
     assert durable["views"]["thread"]["items"][0]["memory_id"] == thread_item.memory_id
     assert durable["combined"]["memory_ids"] == [project_item.memory_id, thread_item.memory_id]
     assert [item["memory_id"] for item in durable["items"]] == [project_item.memory_id, thread_item.memory_id]
+    assert durable["context"]["view_totals"] == {"project": 1, "thread": 1}
+    assert durable["context"]["views"]["project"]["memory_ids"] == [project_item.memory_id]
+    assert durable["context"]["views"]["thread"]["memory_ids"] == [thread_item.memory_id]
+    assert durable["context"]["top_items"][0]["memory_id"] == project_item.memory_id
 
 
 def test_phase72_context_fallback_thread_memory_is_user_scoped():

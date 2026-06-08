@@ -110,6 +110,13 @@ propose an explicit tool step when the task depends on prior preferences,
 workspace/project conventions, current-thread continuity, or questions such as
 "what do you remember".
 
+Passive memory snapshots also expose `durable_memory_context` in processor
+packets. It summarizes project/thread view totals, memory ids, top safe
+summaries, and the host boundary for the already paged memory. This gives the
+planner a clear working-memory index before it decides whether to answer from
+the snapshot or propose the read-only `memory.recall` tool for more recall.
+The packet never contains raw memory bodies and never grants write authority.
+
 `memory.recall` supports workspace/project scope, current-thread scope, or both.
 It returns memory ids, summaries, bounded body previews, scope, provenance refs,
 artifact refs, hashes, and diagnostics. It does not expose raw secret values,

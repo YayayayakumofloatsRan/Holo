@@ -145,6 +145,20 @@ continues, the next LLM call receives a compact map of what was already tried
 and what remains open, without giving the model direct control over execution
 or memory writes.
 
+## Fix: Durable Memory Snapshot Becomes Planner Context
+
+Durable memory is now exposed to model calls as a compact working packet:
+
+- `ContextPackCompiler` adds `durable_memory.context` with combined memory ids,
+  project/thread view totals, top safe summaries, and a host boundary note;
+- `AgentRuntime` extracts it into `context.state.durable_memory_context`;
+- processor adapters pass that field directly into provider prompts;
+- planner instructions tell the model to use the snapshot when sufficient and
+  propose read-only `memory.recall` when more prior knowledge is needed.
+
+The packet is intentionally small and budget-aware. Tight context budgets keep
+ids/counts/boundary information instead of duplicating raw memory bodies.
+
 ## Fix: Planner Provider Failure Is Not User Input
 
 When `planner.propose` fails because the processor provider fails, the fallback
@@ -207,6 +221,19 @@ Result:
 
 ```text
 758 passed in 95.52s
+```
+
+After the durable-memory context packet pass, the full kernel-v3 regression was
+run again:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_*.py
+```
+
+Result:
+
+```text
+759 passed in 78.29s
 ```
 
 Live smoke:

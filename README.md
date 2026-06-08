@@ -195,6 +195,12 @@ Kernel v3 currently contains the infrastructure for:
   so the next loop receives a journal-derived working note with the current
   objective, open requirements, avoid-repeat signatures, suggested actions, and
   stop conditions;
+- durable-memory context in processor packets. Passive committed memory
+  snapshots now include a lightweight `durable_memory_context` with project and
+  thread view totals, memory ids, top safe summaries, and an active-recall hint.
+  This lets the model use already paged memory or propose `memory.recall`
+  when the snapshot is too sparse, without exposing raw bodies or granting
+  memory-write authority;
 - direct, retrieval-grounded, workspace-grounded, clarification, and failure
   flows;
 - workspace directory listing through `workspace.list`, separate from file

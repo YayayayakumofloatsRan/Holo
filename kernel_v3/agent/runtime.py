@@ -1710,6 +1710,7 @@ class _AgentContextCompiler:
                 "mission_context": mission_context,
                 "thread_working_context": _thread_working_context_metadata(self.recipe),
                 "thread_rag_context": thread_rag_context,
+                "durable_memory_context": _durable_memory_context_from_sections(pack.sections),
                 "answer_profile": _answer_profile_metadata(self.recipe),
                 "research_mission": _research_mission_metadata(self.recipe),
                 "context_pack_hash": pack.payload_hash,
@@ -4228,6 +4229,33 @@ def _thread_rag_context_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _durable_memory_context_from_sections(sections: object) -> JsonObject:
+    if not isinstance(sections, list):
+        return {}
+    for section in sections:
+        if not isinstance(section, dict) or section.get("name") != "durable_memory":
+            continue
+        context = section.get("context")
+        if isinstance(context, dict):
+            return _compact_durable_memory_context_for_prompt(context)
+        return _compact_durable_memory_section_for_prompt(section)
+    return {}
+
+
+def _compact_durable_memory_section_for_prompt(section: JsonObject) -> JsonObject:
+    items = [item for item in list(section.get("items") or [])[:8] if isinstance(item, dict)]
+    return _compact_durable_memory_context_for_prompt(
+        {
+            "kind": "durable_memory_context",
+            "enabled": True,
+            "total": section.get("total", len(items)),
+            "combined_memory_ids": (section.get("combined") or {}).get("memory_ids", []) if isinstance(section.get("combined"), dict) else [],
+            "top_items": items,
+            "views": section.get("views", {}),
+        }
+    )
+
+
 def _compact_agent_recipe_for_prompt(recipe: TaskRecipe) -> JsonObject:
     data = recipe.to_dict()
     metadata = dict(data.get("metadata")) if isinstance(data.get("metadata"), dict) else {}
@@ -4238,6 +4266,8 @@ def _compact_agent_recipe_for_prompt(recipe: TaskRecipe) -> JsonObject:
         execution["thread_rag_context"] = _compact_thread_rag_context_for_prompt(execution.get("thread_rag_context"))
     if "thread_working_context" in execution:
         execution["thread_working_context"] = _compact_thread_working_context_for_prompt(execution.get("thread_working_context"))
+    if "durable_memory_context" in execution:
+        execution["durable_memory_context"] = _compact_durable_memory_context_for_prompt(execution.get("durable_memory_context"))
     if "workmethod" in execution:
         execution["workmethod"] = _compact_workmethod_for_prompt(execution.get("workmethod"))
     metadata = {
@@ -4254,6 +4284,7 @@ def _compact_agent_recipe_for_prompt(recipe: TaskRecipe) -> JsonObject:
             "mission_context": execution.get("mission_context", {}),
             "thread_rag_context": execution.get("thread_rag_context", {}),
             "thread_working_context": execution.get("thread_working_context", {}),
+            "durable_memory_context": execution.get("durable_memory_context", {}),
             "workmethod": execution.get("workmethod", {}),
         },
     }
@@ -4468,6 +4499,56 @@ def _compact_mission_directive_for_prompt(value: object) -> JsonObject:
             if isinstance(item, dict)
         ],
         "strategy_shift": _compact_simple_dict(metadata.get("strategy_shift"), limit=12),
+    }
+
+
+def _compact_durable_memory_context_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "kind": value.get("kind") or "durable_memory_context",
+        "enabled": value.get("enabled"),
+        "total": value.get("total"),
+        "combined_memory_ids": _string_list(value.get("combined_memory_ids"))[:16],
+        "view_totals": _compact_simple_dict(value.get("view_totals"), limit=8),
+        "views": _compact_durable_memory_views_for_prompt(value.get("views")),
+        "top_items": [
+            _compact_durable_memory_item_for_prompt(item)
+            for item in list(value.get("top_items") or [])[:8]
+            if isinstance(item, dict)
+        ],
+        "active_recall_hint": _text_preview(value.get("active_recall_hint"), limit=360),
+        "host_boundary": _text_preview(value.get("host_boundary"), limit=360),
+    }
+
+
+def _compact_durable_memory_views_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for label, view in list(value.items())[:4]:
+        if not isinstance(view, dict):
+            continue
+        result[str(label)] = {
+            "label": view.get("label") or str(label),
+            "total": view.get("total"),
+            "memory_ids": _string_list(view.get("memory_ids"))[:12],
+            "kinds": _string_list(view.get("kinds"))[:8],
+            "filtered": _compact_simple_dict(view.get("filtered"), limit=6),
+        }
+    return result
+
+
+def _compact_durable_memory_item_for_prompt(value: JsonObject) -> JsonObject:
+    return {
+        "memory_id": value.get("memory_id"),
+        "kind": value.get("kind"),
+        "title": _text_preview(value.get("title"), limit=120),
+        "summary": _text_preview(value.get("summary"), limit=240),
+        "privacy_class": value.get("privacy_class"),
+        "confidence": value.get("confidence"),
+        "payload_hash": value.get("payload_hash"),
+        "provenance_refs": _string_list(value.get("provenance_refs"))[:4],
     }
 
 
@@ -4748,6 +4829,7 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
     for key in (
         "thread_working_context",
         "thread_rag_context",
+        "durable_memory_context",
         "mission_context",
         "answer_profile",
         "research_mission",
@@ -4765,6 +4847,8 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
                 context[key] = _compact_thread_rag_context_for_prompt(value)
             elif key == "thread_working_context":
                 context[key] = _compact_thread_working_context_for_prompt(value)
+            elif key == "durable_memory_context":
+                context[key] = _compact_durable_memory_context_for_prompt(value)
             else:
                 context[key] = dict(value)
     return context

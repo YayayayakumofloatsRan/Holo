@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+
 from kernel_v3.agent import AgentRuntime
-from kernel_v3.contracts import CandidateAction
+from kernel_v3.contracts import CandidateAction, ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryItem, MemoryStore
 from kernel_v3.memory.operator import MemoryRecallOperator
 from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
+from kernel_v3.processors.usage import usage_from_text
 
 
 def test_phase110_memory_recall_operator_reads_workspace_and_thread_scopes():
@@ -190,6 +193,118 @@ def test_phase110_agent_loop_can_actively_recall_memory_before_answering():
     assert "new_memory_recall" in progress
 
 
+def test_phase110_model_planner_packet_includes_durable_memory_context():
+    journal = JournalStore.in_memory()
+    store = MemoryStore.in_memory(clock_ms=_clock())
+    store.commit(
+        _memory_item(
+            memory_id="mem-project-primary-sources",
+            summary="Research reports should prefer primary sources.",
+            body="Prefer filings, official docs, and primary sources when researching.",
+            scope={"user_id": "local:user", "project_id": "holo-kernel-v3"},
+        )
+    )
+    provider = _CapturingProvider(
+        {
+            "semantic.intake": {
+                "primary_intent": "semantic_answer",
+                "suggested_mode": "semantic_answer",
+                "compound": False,
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "answer",
+                        "text": "怎么做调研？",
+                        "sequence_index": 1,
+                        "required_capabilities": [],
+                        "risk": "none",
+                        "status": "ready",
+                        "metadata": {},
+                    }
+                ],
+                "blocked_capabilities": [],
+                "warnings": [],
+                "response_hint": None,
+                "clarification_question": None,
+            },
+            "planner.propose": {
+                "action_id": "act-answer",
+                "kind": "respond",
+                "name": None,
+                "description": "answer from context",
+                "payload": {"text": "做调研时应优先使用一手来源。"},
+                "score": 0.9,
+                "reasons": ["durable memory context is sufficient"],
+                "side_effect_class": "none",
+            },
+            "workmethod.frame": {
+                "work_frame": {
+                    "user_goal": "怎么做调研？",
+                    "inferred_goal": "说明调研工作方法",
+                    "work_type": "direct_answer",
+                    "difficulty": "medium",
+                    "risk_level": "low",
+                    "expected_output": {"format": "answer", "detail": "concise", "language": "zh"},
+                    "done_criteria": ["use relevant memory", "answer clearly"],
+                    "tool_needs": [],
+                    "memory_needs": ["project research preference"],
+                    "assumptions": [],
+                },
+                "work_method": {
+                    "method_name": "memory_grounded_direct_answer",
+                    "first_moves": ["use paged durable memory when sufficient"],
+                    "evidence_strategy": ["do not invent memory not in context"],
+                    "failure_moves": ["use memory.recall if context is sparse"],
+                    "stop_policy": ["stop after clear answer"],
+                    "user_interaction_policy": ["do not ask user for non-critical detail"],
+                    "notes": [],
+                },
+                "thread_working_set": {
+                    "active_goal": "怎么做调研？",
+                    "current_method": "memory_grounded_direct_answer",
+                    "successful_findings": [],
+                    "failed_attempts": [],
+                    "open_gaps": [],
+                    "user_preferences": {},
+                    "next_intent": None,
+                    "trace_refs": [],
+                },
+            },
+            "evaluator.assess": {
+                "status": "final_answer_ready",
+                "answer": "做调研时应优先使用一手来源。",
+                "stop_reason": "completed",
+                "missing_evidence": [],
+            },
+        }
+    )
+    fabric = ProcessorFabric(
+        providers={"capture": provider},
+        router=ProcessorRouter(default_provider="capture", default_model="capture-model"),
+        journal=journal,
+    )
+    runtime = AgentRuntime(journal=journal, processor_fabric=fabric, memory_store=store)
+
+    result = runtime.run(
+        "怎么做调研？",
+        thread_id="thread-memory-context",
+        mode="auto",
+        planner_mode="model",
+        evaluator_mode="model",
+        semantic_mode="model",
+    )
+
+    assert result.status == "completed"
+    planner_prompt = next(prompt for task_type, prompt in provider.prompts if task_type == "planner.propose")
+    payload = json.loads(planner_prompt)
+    memory_context = payload["context"]["state"]["durable_memory_context"]
+    assert memory_context["enabled"] is True
+    assert memory_context["combined_memory_ids"] == ["mem-project-primary-sources"]
+    assert memory_context["views"]["project"]["total"] == 1
+    assert memory_context["top_items"][0]["summary"] == "Research reports should prefer primary sources."
+    assert "body" not in memory_context["top_items"][0]
+
+
 def _clock():
     current = {"value": 1000}
 
@@ -224,3 +339,26 @@ def _memory_item(*, memory_id: str, summary: str, body: str, scope: dict[str, ob
         last_accessed_ms=None,
         metadata={},
     )
+
+
+class _CapturingProvider:
+    name = "capture"
+    model = "capture-model"
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.prompts = []
+
+    def run(self, request: ProcessorRequest) -> ProcessorResult:
+        task_type = str(request.parameters.get("task_type"))
+        self.prompts.append((task_type, request.prompt))
+        payload = self.responses[task_type]
+        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return ProcessorResult(
+            result_id=f"result-{request.request_id}",
+            request_id=request.request_id,
+            status="ok",
+            output={"text": text, "provider": self.name, "model": self.model},
+            usage=usage_from_text(prompt=request.prompt, completion=text),
+            error=None,
+        )

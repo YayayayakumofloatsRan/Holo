@@ -307,6 +307,7 @@ def _compact_context_state_for_provider(state: JsonObject) -> JsonObject:
     result["mission_context"] = _compact_prompt_value(state.get("mission_context"))
     result["thread_working_context"] = _compact_prompt_value(state.get("thread_working_context"))
     result["thread_rag_context"] = _compact_prompt_value(state.get("thread_rag_context"))
+    result["durable_memory_context"] = _compact_prompt_value(state.get("durable_memory_context"))
     result["answer_profile"] = _compact_prompt_value(state.get("answer_profile"))
     result["research_mission"] = _compact_prompt_value(state.get("research_mission"))
     result["workmethod"] = _compact_prompt_value(state.get("workmethod"))

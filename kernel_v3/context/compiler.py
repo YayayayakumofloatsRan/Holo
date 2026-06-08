@@ -107,6 +107,7 @@ class ContextPackCompiler:
         durable_memory_enabled = self.durable_memory_store is not None
         durable_memory: JsonObject = {}
         durable_memory_items: list[JsonObject] = []
+        durable_memory_context: JsonObject = {}
         if durable_memory_enabled:
             durable_memory = _recall_durable_memory_views(
                 self.durable_memory_store,
@@ -123,6 +124,7 @@ class ContextPackCompiler:
                 for item in durable_memory.get("items", [])
                 if isinstance(item, dict)
             ]
+            durable_memory_context = _durable_memory_context(durable_memory, durable_memory_items)
         sections: list[JsonObject] = [
             {"name": "user_event", "records": [_compact_event(record.data) for record in event_records[-1:]]},
             {"name": "active_task_state", **_compact_task_state(task, target_step)},
@@ -152,6 +154,7 @@ class ContextPackCompiler:
                     "scope": durable_memory.get("scope", {}),
                     "views": durable_memory.get("views", {}),
                     "combined": durable_memory.get("combined", {}),
+                    "context": durable_memory_context,
                     "total": durable_memory.get("total", 0),
                     "filtered": durable_memory.get("filtered", {}),
                     "limit": durable_memory.get("limit", self.durable_memory_limit),
@@ -178,7 +181,10 @@ class ContextPackCompiler:
             "permission_state": {"permission": _compact_permission_state(self.permission_state)},
         }
         if durable_memory_enabled:
-            budget_views["durable_memory"] = {"items": [_durable_memory_budget_view(item) for item in durable_memory_items]}
+            budget_views["durable_memory"] = {
+                "items": [_durable_memory_budget_view(item) for item in durable_memory_items],
+                "context": _durable_memory_context_budget_view(durable_memory_context),
+            }
         redacted_sections, redactions = self.redactor.redact(sections)
         section_units, compacted_section_names = self._enforce_section_budgets(redacted_sections, budget_views)
         total_units = sum(section_units)
@@ -340,6 +346,9 @@ class ContextPackCompiler:
             items = section.get("items")
             if isinstance(items, list):
                 del items[1:]
+            context = section.get("context")
+            if isinstance(context, dict):
+                section["context"] = _durable_memory_context_budget_view(context)
         elif name == "citations":
             items = section.get("items")
             if isinstance(items, list):
@@ -369,6 +378,18 @@ class ContextPackCompiler:
                     if isinstance(item, dict):
                         item.pop("scope", None)
                         item["summary"] = _compact_text(str(item.get("summary", "")), limit=8)
+            context = section.get("context")
+            if isinstance(context, dict):
+                section["context"] = {
+                    "kind": context.get("kind"),
+                    "enabled": context.get("enabled"),
+                    "total": context.get("total"),
+                    "combined_memory_ids": list(context.get("combined_memory_ids", []))[:4]
+                    if isinstance(context.get("combined_memory_ids"), list)
+                    else [],
+                    "view_totals": dict(context.get("view_totals", {})) if isinstance(context.get("view_totals"), dict) else {},
+                    "host_boundary": "safe summaries and refs only",
+                }
         elif name == "citations":
             items = section.get("items")
             if isinstance(items, list):
@@ -763,6 +784,70 @@ def _durable_memory_view(result: JsonObject, *, label: str) -> JsonObject:
         "total": result.get("total", 0),
         "filtered": result.get("filtered", {}),
         "limit": result.get("limit", 0),
+    }
+
+
+def _durable_memory_context(result: JsonObject, items: list[JsonObject]) -> JsonObject:
+    views = result.get("views") if isinstance(result.get("views"), dict) else {}
+    view_contexts = {
+        str(label): _durable_memory_view_context(view)
+        for label, view in views.items()
+        if isinstance(view, dict)
+    }
+    return {
+        "kind": "durable_memory_context",
+        "enabled": True,
+        "total": result.get("total", len(items)),
+        "combined_memory_ids": [
+            str(memory_id)
+            for memory_id in list((result.get("combined") or {}).get("memory_ids") or [])[:16]
+            if memory_id
+        ] if isinstance(result.get("combined"), dict) else [str(item.get("memory_id")) for item in items[:16] if item.get("memory_id")],
+        "view_totals": {label: view.get("total", 0) for label, view in view_contexts.items()},
+        "views": view_contexts,
+        "top_items": [_durable_memory_item_context(item) for item in items[:3]],
+        "active_recall_hint": (
+            "Use paged memory summaries when they cover the task; otherwise propose memory.recall if available."
+        ),
+        "host_boundary": (
+            "Passive scoped memory snapshot; safe summaries and refs only; no memory writes."
+        ),
+    }
+
+
+def _durable_memory_view_context(view: JsonObject) -> JsonObject:
+    items = [item for item in view.get("items", []) if isinstance(item, dict)]
+    return {
+        "label": view.get("label"),
+        "total": view.get("total", len(items)),
+        "memory_ids": [str(item.get("memory_id")) for item in items[:12] if item.get("memory_id")],
+        "kinds": _ordered_unique([str(item.get("kind")) for item in items if item.get("kind")]),
+        "filtered": dict(view.get("filtered", {})) if isinstance(view.get("filtered"), dict) else {},
+    }
+
+
+def _durable_memory_item_context(item: JsonObject) -> JsonObject:
+    return {
+        "memory_id": item.get("memory_id"),
+        "kind": item.get("kind"),
+        "title": _compact_text(str(item.get("title") or ""), limit=72),
+        "summary": _compact_text(str(item.get("summary") or ""), limit=120),
+        "privacy_class": item.get("privacy_class"),
+        "confidence": item.get("confidence"),
+        "payload_hash": item.get("payload_hash"),
+        "provenance_refs": list(item.get("provenance_refs", []))[:2] if isinstance(item.get("provenance_refs"), list) else [],
+    }
+
+
+def _durable_memory_context_budget_view(context: JsonObject) -> JsonObject:
+    return {
+        "kind": context.get("kind"),
+        "enabled": context.get("enabled"),
+        "total": context.get("total"),
+        "combined_memory_ids": list(context.get("combined_memory_ids", []))[:8]
+        if isinstance(context.get("combined_memory_ids"), list)
+        else [],
+        "view_totals": dict(context.get("view_totals", {})) if isinstance(context.get("view_totals"), dict) else {},
     }
 
 

@@ -374,3 +374,27 @@ Thread RAG now also exposes a `task_continuity` packet:
 This improves multi-loop coupling without adding a second controller. The LLM
 still decides the next semantic move, but it receives the same kind of compact
 project notebook a capable human researcher would maintain between attempts.
+
+## 2026-06-08 Implementation Update: Durable Memory Context Packet
+
+Passive durable memory now has its own lightweight model-facing packet:
+
+- `ContextPackCompiler` still injects committed memory as a separate
+  `durable_memory` section with safe summaries, refs, hashes, project/thread
+  views, and no raw memory body text.
+- The same section now includes `context.kind=durable_memory_context`, a small
+  index containing combined memory ids, project/thread view totals, top safe
+  summaries, and a host boundary note.
+- `AgentRuntime` extracts that index into `context.state.durable_memory_context`
+  and processor adapters pass it directly to model providers, so the model does
+  not need to dig through generic section lists to understand available memory.
+- The planner contract explains the distinction: use paged memory when it
+  covers the task; propose read-only `memory.recall` when prior knowledge is
+  needed but the snapshot is sparse; never treat the snapshot as permission to
+  write, edit, delete, or reveal sensitive memory.
+- The packet is budget-aware. Under tight section budgets it degrades to ids,
+  counts, and the boundary note rather than forcing larger context windows.
+
+This makes durable memory more active without making it unsafe. It is now a
+working-memory signal for the LLM and still a host-owned, audited storage
+surface.
