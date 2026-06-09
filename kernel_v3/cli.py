@@ -10,6 +10,12 @@ from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
+from kernel_v3.bench import (
+    load_finance_benchmark_items,
+    run_finance_benchmark,
+    score_finance_prediction_file,
+    write_finance_benchmark_outputs,
+)
 from kernel_v3.capabilities import semantic_capability_catalog
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.chat.console import (
@@ -573,6 +579,50 @@ def main(argv: list[str] | None = None) -> int:
     retrieval_benchmark_parser = sub.add_parser("retrieval-benchmark")
     retrieval_benchmark_parser.add_argument("task_id")
 
+    bench_parser = sub.add_parser("bench")
+    bench_sub = bench_parser.add_subparsers(dest="bench_command", required=True)
+    finance_bench = bench_sub.add_parser("finance")
+    finance_bench.add_argument("--dataset", required=True)
+    finance_bench.add_argument("--predictions", default=None)
+    finance_bench.add_argument("--output", default=".state/kernel_v3/bench/finance/latest.jsonl")
+    finance_bench.add_argument("--summary-output", default=".state/kernel_v3/bench/finance/latest.summary.json")
+    finance_bench.add_argument("--limit", type=int, default=None)
+    finance_bench.add_argument("--offset", type=int, default=0)
+    finance_bench.add_argument("--thread-prefix", default="finance-bench")
+    finance_bench.add_argument(
+        "--question-prefix",
+        default="",
+        help="Optional instruction prepended to each benchmark question. Gold answers are never included.",
+    )
+    finance_bench.add_argument("--planner", choices=["fake", "model"], default="model")
+    finance_bench.add_argument("--evaluator", choices=["fake", "model"], default="model")
+    finance_bench.add_argument("--synthesizer", choices=["fake", "model"], default="model")
+    finance_bench.add_argument("--semantic-intake", choices=["fake", "model"], default="model")
+    finance_bench.add_argument("--turn-router", choices=["fake", "model"], default="model")
+    _add_online_model_arg(finance_bench)
+    finance_bench.add_argument(
+        "--offline",
+        dest="online",
+        action="store_false",
+        help="Score existing predictions or run deterministic diagnostics without live processors. Live runs are the benchmark default.",
+    )
+    finance_bench.set_defaults(online=True)
+    finance_bench.add_argument("--model", default=None)
+    finance_bench.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
+    finance_bench.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    finance_bench.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="high")
+    _add_generation_args(finance_bench)
+    _add_agent_loop_args(finance_bench)
+    _add_context_budget_args(finance_bench, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
+    _add_response_language_arg(finance_bench)
+    finance_bench.add_argument(
+        "--research-profile",
+        choices=RESEARCH_PROFILE_IDS,
+        default=FINANCE_FUNDAMENTALS_PROFILE_ID,
+    )
+    finance_bench.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
+    _add_live_retrieval_args(finance_bench)
+
     memory_trace_parser = sub.add_parser("memory-trace")
     memory_trace_parser.add_argument("task_id")
     resident_trace_parser = sub.add_parser("resident-trace")
@@ -941,6 +991,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "retrieval-benchmark":
         print(json.dumps(retrieval_behavior_benchmark(journal, args.task_id), ensure_ascii=False, sort_keys=True))
         return 0
+
+    if args.command == "bench":
+        payload = _bench_command(args, journal)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0 if payload.get("status") not in {"failed", "blocked", "error"} else 1
 
     if args.command == "memory-trace":
         print(TraceRenderer(journal).render_memory_trace(args.task_id))
@@ -1812,6 +1867,99 @@ def _explicit_memory_intake(text: str) -> SemanticIntake:
 def _resident_queue(args) -> ResidentQueue:
     db_path = Path(getattr(args, "resident_db", None) or "kernel_v3/.holo-v3-resident.sqlite")
     return ResidentQueue(db_path)
+
+
+def _bench_command(args, journal: JournalStore) -> dict[str, object]:
+    command = str(getattr(args, "bench_command", "") or "")
+    if command != "finance":
+        return {"status": "failed", "reason": "unknown_benchmark", "benchmark": command}
+    output_path = Path(args.output) if args.output else None
+    summary_path = Path(args.summary_output) if args.summary_output else None
+    if getattr(args, "predictions", None):
+        results = score_finance_prediction_file(
+            dataset_path=args.dataset,
+            predictions_path=args.predictions,
+            limit=args.limit,
+            offset=args.offset,
+        )
+        summary = write_finance_benchmark_outputs(
+            results,
+            output_path=output_path,
+            summary_path=summary_path,
+            journal=journal,
+        )
+        return {
+            "status": "ok",
+            "mode": "score_predictions",
+            "summary": summary.to_dict(),
+            "output": str(output_path) if output_path is not None else None,
+            "summary_output": str(summary_path) if summary_path is not None else None,
+        }
+
+    live_block = _chat_live_model_block(args)
+    if live_block is not None:
+        return {
+            **live_block,
+            "benchmark": "finance",
+            "message": "Finance benchmark live runs require the model stack. Use --predictions to score existing outputs.",
+        }
+    live_retrieval = _live_retrieval_config_for_args(args)
+    if isinstance(live_retrieval, dict):
+        return live_retrieval
+    artifact_store = _runtime_artifact_store(args)
+    research_corpus_store = _runtime_corpus_store(args)
+    runtime = _chat_runtime(
+        journal,
+        artifact_store=artifact_store,
+        memory_store=_memory_store(args, create_default=True),
+        research_corpus_store=research_corpus_store,
+        retrieval_operator=_build_live_retrieval_operator(
+            live_retrieval,
+            artifact_store=artifact_store,
+            corpus_store=research_corpus_store,
+        )
+        if live_retrieval is not None
+        else None,
+        thread_store=_thread_store(args, create_default=True),
+        live_model=_agent_uses_live_model(args),
+        model=args.model,
+        profile=args.profile,
+        thinking=_thinking_override(args.thinking),
+        reasoning_effort=args.reasoning_effort,
+        max_output_tokens=args.max_output_tokens,
+        temperature=args.temperature,
+        generation_mode=args.generation_mode,
+        latency_target=args.latency_target,
+        response_language=_response_language_for_args(args),
+        planner_mode=_processor_mode(args, "planner"),
+        evaluator_mode=_processor_mode(args, "evaluator"),
+        synthesizer_mode=_processor_mode(args, "synthesizer"),
+        semantic_mode=_processor_mode(args, "semantic_intake"),
+        turn_router_mode=_processor_mode(args, "turn_router"),
+        default_mode="retrieval",
+        execution_metadata=_runtime_execution_metadata(args),
+    )
+    items = load_finance_benchmark_items(args.dataset, limit=args.limit, offset=args.offset)
+    results = run_finance_benchmark(
+        items=items,
+        runtime=runtime,
+        thread_prefix=args.thread_prefix,
+        question_prefix=args.question_prefix,
+        journal=journal,
+    )
+    summary = write_finance_benchmark_outputs(
+        results,
+        output_path=output_path,
+        summary_path=summary_path,
+        journal=journal,
+    )
+    return {
+        "status": "ok",
+        "mode": "live_holo",
+        "summary": summary.to_dict(),
+        "output": str(output_path) if output_path is not None else None,
+        "summary_output": str(summary_path) if summary_path is not None else None,
+    }
 
 
 def _resident_command(args, journal: JournalStore) -> dict[str, object]:

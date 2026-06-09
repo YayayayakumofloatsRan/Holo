@@ -996,6 +996,32 @@ holo-v3 retrieval-providers --mode live-http \
   --live-crawl-max-source-directory-seeds 4
 ```
 
+Finance benchmark track:
+
+```bash
+HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \
+  --dataset data/finagent.jsonl \
+  --limit 10 \
+  --online \
+  --research-profile finance_fundamentals \
+  --research-depth deep \
+  --live-retrieval \
+  --live-search-strategy adaptive
+```
+
+The benchmark runner records one Holo run per question, writes JSONL item
+results plus a summary, and keeps benchmark gold answers out of model/tool
+prompts. Existing predictions can be scored without running Holo:
+
+```bash
+holo-v3 bench finance \
+  --dataset data/finagent.jsonl \
+  --predictions artifacts/finance_predictions.jsonl
+```
+
+See `docs/KERNEL_V3_FINANCE_BENCHMARK_TRACK.md` for the scoring schema and
+planned Finance Agent Benchmark / FinAgent / SECQUE / FinanceQA path.
+
 For multi-provider research, set:
 
 ```bash
