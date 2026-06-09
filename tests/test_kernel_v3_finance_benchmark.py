@@ -4,6 +4,7 @@ from pathlib import Path
 from kernel_v3 import cli
 from kernel_v3.bench import (
     FinanceBenchmarkItem,
+    convert_public_finance_benchmark,
     load_finance_benchmark_items,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
@@ -138,6 +139,103 @@ def test_finance_benchmark_runner_does_not_need_gold_during_agent_run() -> None:
     assert journal.records(kind="finance_benchmark_item_result")
 
 
+def test_public_finance_agent_benchmark_import_keeps_gold_out_of_prompt(tmp_path: Path) -> None:
+    source = tmp_path / "fab.csv"
+    output = tmp_path / "normalized.jsonl"
+    manifest = tmp_path / "manifest.json"
+    source.write_text(
+        "Question,Answer,Question Type,Expert time (mins),Rubric\n"
+        '"What was ExampleCo revenue?","$10 million",fact_extraction,5,"Must cite filing."\n',
+        encoding="utf-8",
+    )
+
+    summary = convert_public_finance_benchmark(
+        benchmark="finance_agent_benchmark",
+        input_path=source,
+        output_path=output,
+        manifest_path=manifest,
+    )
+    items = load_finance_benchmark_items(output)
+    runtime = _StaticChatRuntime(JournalStore.in_memory())
+
+    run_finance_benchmark(items=items, runtime=runtime)
+
+    assert summary.item_count == 1
+    assert items[0].source == "finance_agent_benchmark"
+    assert items[0].metadata["rubric"] == "Must cite filing."
+    assert "What was ExampleCo revenue?" in runtime.seen_prompts[0]
+    assert "$10 million" not in runtime.seen_prompts[0]
+    assert "Must cite filing." not in runtime.seen_prompts[0]
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert manifest_payload["prompt_policy"]["gold_answer_in_prompt"] is False
+
+
+def test_secque_import_uses_context_without_gold(tmp_path: Path) -> None:
+    source = tmp_path / "secque.jsonl"
+    output = tmp_path / "secque.normalized.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "id": "S1",
+                "question": "What was revenue?",
+                "answer": "$20 million",
+                "context": "Filing excerpt: revenue was reported in the income statement.",
+                "accession": "0000000000-24-000001",
+                "section": "Item 8",
+                "question_type": "fact",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    convert_public_finance_benchmark(benchmark="secque", input_path=source, output_path=output)
+    items = load_finance_benchmark_items(output)
+    runtime = _StaticChatRuntime(JournalStore.in_memory())
+
+    run_finance_benchmark(items=items, runtime=runtime)
+
+    prompt = runtime.seen_prompts[0]
+    assert "Filing excerpt: revenue was reported" in prompt
+    assert "$20 million" not in prompt
+    assert items[0].metadata["source_refs"][0]["accession"] == "0000000000-24-000001"
+
+
+def test_financeqa_import_never_prompts_reference_cot(tmp_path: Path) -> None:
+    source = tmp_path / "financeqa.json"
+    output = tmp_path / "financeqa.normalized.jsonl"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "question": "Why did margin improve?",
+                    "answer": "Because costs declined.",
+                    "context": "Management said costs declined.",
+                    "chain_of_thought": "Hidden reference reasoning that must not be prompted.",
+                    "question_type": "conceptual",
+                    "company": "ExampleCo",
+                    "file_link": "https://example.com/filing.pdf",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    convert_public_finance_benchmark(benchmark="financeqa", input_path=source, output_path=output)
+    items = load_finance_benchmark_items(output)
+    runtime = _StaticChatRuntime(JournalStore.in_memory())
+
+    run_finance_benchmark(items=items, runtime=runtime)
+
+    prompt = runtime.seen_prompts[0]
+    assert "Management said costs declined." in prompt
+    assert "Hidden reference reasoning" not in prompt
+    assert "Because costs declined" not in prompt
+    assert items[0].metadata["reference_reasoning_available"] is True
+
+
 def test_finance_benchmark_parallel_runner_isolates_and_orders_workers() -> None:
     seen: list[tuple[int, str, str]] = []
 
@@ -229,6 +327,39 @@ def test_finance_benchmark_cli_scores_prediction_file(tmp_path: Path) -> None:
     assert payload["passed_count"] == 1
     assert payload["numeric_accuracy"] == 1.0
     assert output.exists()
+
+
+def test_finance_benchmark_cli_imports_public_dataset(tmp_path: Path) -> None:
+    source = tmp_path / "finance_agent.csv"
+    output = tmp_path / "normalized.jsonl"
+    manifest = tmp_path / "manifest.json"
+    source.write_text(
+        "Question,Answer,Question Type,Rubric\n"
+        '"What was revenue?","$10 million",fact_extraction,"Score numeric value and citation."\n',
+        encoding="utf-8",
+    )
+
+    code = cli.main(
+        [
+            "bench",
+            "finance-import",
+            "--benchmark",
+            "finance_agent_benchmark",
+            "--input",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest-output",
+            str(manifest),
+        ]
+    )
+
+    assert code == 0
+    items = load_finance_benchmark_items(output)
+    assert len(items) == 1
+    assert items[0].question == "What was revenue?"
+    assert items[0].gold_answer == "$10 million"
+    assert json.loads(manifest.read_text(encoding="utf-8"))["benchmark"] == "finance_agent_benchmark"
 
 
 class _StaticChatRuntime:

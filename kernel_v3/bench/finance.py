@@ -554,6 +554,12 @@ def _item_from_record(record: JsonObject, *, index: int) -> FinanceBenchmarkItem
     if not question:
         raise ValueError(f"benchmark item {item_id} is missing a question")
     gold_answer = _optional_text(_first_present(record, "gold_answer", "answer", "expected_answer", "reference_answer", "gold"))
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    metadata["raw_keys"] = sorted(str(key) for key in record.keys())
+    for key in ("prompt_context", "rubric", "source_refs", "benchmark_homepage", "benchmark_dataset_url", "default_scoring"):
+        if key in record and key not in metadata:
+            metadata[key] = record[key]
     return FinanceBenchmarkItem(
         item_id=item_id,
         question=question,
@@ -566,7 +572,7 @@ def _item_from_record(record: JsonObject, *, index: int) -> FinanceBenchmarkItem
         required_tools=_string_list(_first_present(record, "required_tools", "tools", "tool_annotations")),
         category=_optional_text(_first_present(record, "type", "category", "task_type", "label")),
         source=_optional_text(_first_present(record, "source", "benchmark", "dataset")),
-        metadata={"raw_keys": sorted(str(key) for key in record.keys())},
+        metadata=metadata,
     )
 
 
@@ -579,10 +585,18 @@ def _prediction_map(records: list[JsonObject]) -> dict[str, JsonObject]:
 
 
 def _benchmark_prompt(item: FinanceBenchmarkItem, *, question_prefix: str) -> str:
+    parts: list[str] = []
     prefix = question_prefix.strip()
-    if not prefix:
-        return item.question
-    return f"{prefix}\n\n{item.question}"
+    if prefix:
+        parts.append(prefix)
+    context = item.metadata.get("prompt_context")
+    if isinstance(context, str) and context.strip():
+        parts.append(
+            "Benchmark-provided source context follows. Use it as evidence, but do not assume it is complete.\n\n"
+            f"{context.strip()}"
+        )
+    parts.append(item.question)
+    return "\n\n".join(parts)
 
 
 def _answer_from_chat_result(payload: ChatRuntimeResult) -> str:

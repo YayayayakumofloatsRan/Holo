@@ -1003,9 +1003,19 @@ holo-v3 retrieval-providers --mode live-http \
 
 Finance benchmark track:
 
+Normalize public benchmark exports before running or scoring them:
+
+```bash
+holo-v3 bench finance-import \
+  --benchmark finance_agent_benchmark \
+  --input data/raw/finance_agent_benchmark.csv \
+  --output .state/kernel_v3/bench/finance/finance_agent_benchmark.normalized.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/finance_agent_benchmark.manifest.json
+```
+
 ```bash
 HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \
-  --dataset data/finagent.jsonl \
+  --dataset .state/kernel_v3/bench/finance/finance_agent_benchmark.normalized.jsonl \
   --limit 10 \
   --online \
   --research-profile finance_fundamentals \
@@ -1016,7 +1026,10 @@ HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \
 
 The benchmark runner records one Holo run per question, writes JSONL item
 results plus a summary, and keeps benchmark gold answers out of model/tool
-prompts. Live benchmark runs are guarded by fetch-count, per-response byte,
+prompts. `bench finance-import` supports `finance_agent_benchmark`, `secque`,
+`financeqa`, and `finqa` local CSV/JSON/JSONL exports, preserving a provenance
+manifest while keeping gold answers, rubrics, and reference reasoning out of
+agent prompts. Live benchmark runs are guarded by fetch-count, per-response byte,
 process download-budget, and shared-cache controls; see
 `docs/KERNEL_V3_LIVE_BENCHMARK_COST_CONTROL.md` before running broad parallel
 live evaluations. Existing predictions can be scored without running Holo:

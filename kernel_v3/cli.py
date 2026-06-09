@@ -12,8 +12,10 @@ from typing import Callable
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.bench import (
+    PUBLIC_FINANCE_BENCHMARK_SPECS,
     FinanceBenchmarkItem,
     FinanceBenchmarkResult,
+    convert_public_finance_benchmark,
     finance_benchmark_run_id,
     load_finance_benchmark_items,
     run_finance_benchmark,
@@ -602,6 +604,22 @@ def main(argv: list[str] | None = None) -> int:
 
     bench_parser = sub.add_parser("bench")
     bench_sub = bench_parser.add_subparsers(dest="bench_command", required=True)
+    finance_import = bench_sub.add_parser("finance-import")
+    finance_import.add_argument(
+        "--benchmark",
+        required=True,
+        choices=sorted(PUBLIC_FINANCE_BENCHMARK_SPECS),
+        help="Public finance benchmark format to normalize into Kernel v3 benchmark JSONL.",
+    )
+    finance_import.add_argument("--input", required=True, help="Local CSV/JSON/JSONL export from the public benchmark.")
+    finance_import.add_argument("--output", required=True, help="Normalized Kernel v3 benchmark JSONL.")
+    finance_import.add_argument(
+        "--manifest-output",
+        default=None,
+        help="Optional provenance manifest recording source URL and prompt/gold handling policy.",
+    )
+    finance_import.add_argument("--limit", type=int, default=None)
+    finance_import.add_argument("--offset", type=int, default=0)
     finance_bench = bench_sub.add_parser("finance")
     finance_bench.add_argument("--dataset", required=True)
     finance_bench.add_argument("--predictions", default=None)
@@ -1906,6 +1924,24 @@ def _resident_queue(args) -> ResidentQueue:
 
 def _bench_command(args, journal: JournalStore) -> dict[str, object]:
     command = str(getattr(args, "bench_command", "") or "")
+    if command == "finance-import":
+        summary = convert_public_finance_benchmark(
+            benchmark=args.benchmark,
+            input_path=args.input,
+            output_path=args.output,
+            manifest_path=args.manifest_output,
+            limit=args.limit,
+            offset=args.offset,
+        )
+        journal.append(
+            task_id=None,
+            run_id="finance-benchmark-import",
+            step_id=None,
+            kind="finance_benchmark_import",
+            data=summary.to_dict(),
+            state_delta={"finance_benchmark_import_status": summary.status, "finance_benchmark_items": summary.item_count},
+        )
+        return {"status": "ok", "mode": "finance_import", "summary": summary.to_dict()}
     if command != "finance":
         return {"status": "failed", "reason": "unknown_benchmark", "benchmark": command}
     output_path = Path(args.output) if args.output else None

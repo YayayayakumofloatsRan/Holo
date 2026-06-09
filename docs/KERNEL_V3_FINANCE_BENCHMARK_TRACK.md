@@ -25,7 +25,43 @@ inserted into planner, evaluator, retrieval, memory, or synthesis prompts.
   style tool assumptions.
 - FinAgent Benchmark: SEC 10-K/10-Q grounded questions with gold answers, numeric values,
   tolerance, evidence excerpts, and required tool annotations.
-- SECQUE and FinanceQA can be added later as complementary suites.
+- SECQUE: SEC filing long-context questions with filing metadata and judge-oriented answer
+  references.
+- FinanceQA and FinQA: filing-context and numerical-reasoning suites for concept, assumption,
+  and calculation coverage.
+
+The local historical 40-item file is useful for fast iteration, but it is not enough for a
+defensible project report unless it is paired with a provenance manifest. Public benchmark
+imports are now the preferred path for reported scores.
+
+## Public Dataset Import
+
+Normalize a local CSV/JSON/JSONL export from a public benchmark into the Kernel v3 benchmark
+schema:
+
+```bash
+./holo-v3 bench finance-import \
+  --benchmark finance_agent_benchmark \
+  --input data/raw/finance_agent_benchmark.csv \
+  --output .state/kernel_v3/bench/finance/finance_agent_benchmark.normalized.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/finance_agent_benchmark.manifest.json
+```
+
+Supported import formats:
+
+- `finance_agent_benchmark`: HuggingFace-style fields such as `Question`, `Answer`,
+  `Question Type`, `Expert time (mins)`, and `Rubric`.
+- `secque`: question, answer/ground truth, SEC filing context/supporting data, accession,
+  page/item/section metadata.
+- `financeqa`: question, answer, filing context, question type, company, file link/name.
+- `finqa`: report text/table context, answer, and numerical-reasoning annotations.
+
+Import policy:
+
+- gold answers are scoring-only and are never inserted into the agent prompt;
+- rubrics and reference chain-of-thought/program annotations are scoring-only;
+- benchmark-provided filing/report context may be inserted into the prompt as evidence;
+- every import can write a manifest with source URL, prompt policy, item count, and warnings.
 
 ## CLI
 
@@ -78,7 +114,8 @@ The summary reports:
 
 ## Next Steps
 
-1. Add benchmark download/import helpers for HuggingFace-hosted datasets.
+1. Add optional authenticated download helpers for HuggingFace-hosted datasets, while keeping
+   import/scoring runnable from local exports.
 2. Add claim-level citation judge for answers whose gold target is not purely numeric.
 3. Add source-support scoring against benchmark evidence excerpts.
 4. Add a behavior graph view: question -> subgoal -> query -> source -> document -> evidence -> claim -> answer.
