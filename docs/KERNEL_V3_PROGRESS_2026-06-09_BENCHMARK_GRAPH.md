@@ -49,6 +49,20 @@ mode, citation coverage, token use, retrieval runs, fetches, query repetition,
 and final-answer length. This is meant for report/PPT diagnostics: it shows
 where capability breaks down instead of only reporting a pass rate.
 
+Benchmark reports render the same result file into project-ready Markdown,
+HTML, or JSON:
+
+```bash
+holo-v3 bench finance-report \
+  --results artifacts/finance_bench_results.jsonl \
+  --output finance_bench_report.md
+```
+
+The report includes score summary, status counts, failure modes, score reasons,
+weak-item table, and recommended next experiments. It is designed for the course
+project narrative: every headline metric remains tied to the exact benchmark
+result JSONL.
+
 ## Why It Matters
 
 This moves the project away from hand-picked transcripts and toward reproducible
@@ -65,15 +79,50 @@ benchmark evaluation:
 
 ```bash
 .venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_finance_benchmark_report.py \
   tests/test_kernel_v3_behavior_graph.py \
   tests/test_kernel_v3_finance_benchmark.py \
   tests/test_kernel_v3_finance_metric_intent.py
 ```
 
-Result: `24 passed`.
+Result: `28 passed`.
+
+## Current Live Benchmark Snapshot
+
+The current complete local live run is:
+
+```text
+.state/kernel_v3/bench/finance/run_kernelv3_live_0609_full40_v1.jsonl
+```
+
+Confirmed summary:
+
+- items: 40
+- scored: 40
+- passed: 28
+- failed: 12
+- pass rate: 70.0%
+- citation-present rate: 85.0%
+- numeric accuracy: 66.7%
+- average retrieval runs: 4.875
+- average query repetition: 18.4%
+- average final answer length: 1,801 chars
+
+Generated review artifacts:
+
+```text
+.state/kernel_v3/bench/finance/run_kernelv3_live_0609_full40_v1.report.md
+.state/kernel_v3/bench/finance/run_kernelv3_live_0609_full40_v1.dot
+```
+
+A fresh 2026-06-09 one-item live fast run was attempted with strict traffic
+budgets but timed out after five minutes before producing an item result. This
+is now a live benchmark finding: the single-item path needs latency work before
+it is suitable for fast iteration.
 
 ## Remaining Work
 
 - Run a fresh live public benchmark subset under explicit traffic budgets.
 - Add claim-level scoring and evidence-support scoring for rubric-heavy tasks.
+- Reduce live single-item benchmark latency while preserving evidence quality.
 - Add report/PPT-ready graph rendering presets, including DOT-to-image assets.

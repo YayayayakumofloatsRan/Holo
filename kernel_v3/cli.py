@@ -16,9 +16,11 @@ from kernel_v3.bench import (
     PUBLIC_FINANCE_BENCHMARK_SPECS,
     FinanceBenchmarkItem,
     FinanceBenchmarkResult,
+    build_finance_benchmark_report_from_path,
     convert_public_finance_benchmark,
     finance_benchmark_run_id,
     load_finance_benchmark_items,
+    render_finance_benchmark_report,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
     score_finance_prediction_file,
@@ -632,6 +634,13 @@ def main(argv: list[str] | None = None) -> int:
     finance_graph.add_argument("--format", choices=["json", "dot"], default="json")
     finance_graph.add_argument("--output", default=None)
     finance_graph.add_argument("--max-items", type=int, default=200)
+    finance_report = bench_sub.add_parser("finance-report")
+    finance_report.add_argument("--results", required=True, help="Finance benchmark result JSONL/JSON produced by bench finance.")
+    finance_report.add_argument("--benchmark-id", default="finance")
+    finance_report.add_argument("--title", default=None)
+    finance_report.add_argument("--format", choices=["markdown", "html", "json"], default="markdown")
+    finance_report.add_argument("--output", default=None)
+    finance_report.add_argument("--max-weak-items", type=int, default=20)
     finance_bench = bench_sub.add_parser("finance")
     finance_bench.add_argument("--dataset", required=True)
     finance_bench.add_argument("--predictions", default=None)
@@ -1996,6 +2005,31 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             "mode": "finance_graph",
             "schema": graph.schema,
             "diagnostics": graph.diagnostics,
+            "output": output,
+            "_stdout": stdout,
+        }
+    if command == "finance-report":
+        report = build_finance_benchmark_report_from_path(
+            args.results,
+            benchmark_id=args.benchmark_id,
+            title=args.title,
+            max_weak_items=args.max_weak_items,
+        )
+        rendered = render_finance_benchmark_report(report, output_format=args.format)
+        if args.output:
+            path = Path(args.output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(rendered, encoding="utf-8")
+            output = str(path)
+            stdout = None
+        else:
+            output = None
+            stdout = rendered
+        return {
+            "status": "ok",
+            "mode": "finance_report",
+            "schema": report.schema,
+            "summary": report.summary,
             "output": output,
             "_stdout": stdout,
         }

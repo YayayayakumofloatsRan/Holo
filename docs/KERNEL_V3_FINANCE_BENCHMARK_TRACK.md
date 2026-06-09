@@ -88,6 +88,19 @@ Score existing predictions without running Holo:
   --summary-output artifacts/finance_bench_summary.json
 ```
 
+Render benchmark artifacts for review:
+
+```bash
+./holo-v3 bench finance-report \
+  --results artifacts/finance_bench_results.jsonl \
+  --output artifacts/finance_bench_report.md
+
+./holo-v3 bench finance-graph \
+  --results artifacts/finance_bench_results.jsonl \
+  --format dot \
+  --output artifacts/finance_bench.dot
+```
+
 ## Result Schema
 
 Each item result records:
@@ -112,11 +125,18 @@ The summary reports:
 - average retrieval runs,
 - average query repetition rate.
 
+The report renderer turns item results into Markdown, HTML, or JSON with:
+
+- score and efficiency summary,
+- status, failure-mode, and score-reason breakdowns,
+- weakest items ranked by score, citations, trace cost, repetition, and answer length,
+- recommended next experiments.
+
 ## Next Steps
 
 1. Add optional authenticated download helpers for HuggingFace-hosted datasets, while keeping
    import/scoring runnable from local exports.
 2. Add claim-level citation judge for answers whose gold target is not purely numeric.
 3. Add source-support scoring against benchmark evidence excerpts.
-4. Add report/PPT-ready rendering presets for task and benchmark graphs.
+4. Add PPT-ready rendering presets for task and benchmark graphs.
 5. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo retrieval plus memory.
