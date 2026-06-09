@@ -1047,12 +1047,16 @@ Task behavior graphs can be exported for benchmark reports and debugging:
 ```bash
 holo-v3 behavior-graph <task_id> --format json
 holo-v3 behavior-graph <task_id> --format dot --output graph.dot
+holo-v3 bench finance-graph --results artifacts/finance_bench_results.jsonl --format dot --output finance_bench.dot
 ```
 
-The graph is journal-derived and links model requests/results, actions,
+The task graph is journal-derived and links model requests/results, actions,
 retrieval queries, sources, fetches, artifacts, documents, evidence, citations,
-feedback, and final answers or failure reports. It stores previews, refs,
-hashes, and diagnostics rather than raw fetched bodies.
+feedback, and final answers or failure reports. The benchmark graph summarizes
+many result rows by status, category, score reason, failure mode, citation
+coverage, token use, retrieval runs, fetches, repetition, and answer length. Both
+views store previews, refs, hashes, and diagnostics rather than raw fetched
+bodies.
 
 See `docs/KERNEL_V3_FINANCE_BENCHMARK_TRACK.md` for the scoring schema and
 planned Finance Agent Benchmark / FinAgent / SECQUE / FinanceQA path.

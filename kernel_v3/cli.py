@@ -11,7 +11,7 @@ from typing import Callable
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
-from kernel_v3.behavior_graph import BehaviorGraphBuilder, render_behavior_graph_dot
+from kernel_v3.behavior_graph import BehaviorGraphBuilder, build_benchmark_result_graph_from_path, render_behavior_graph_dot
 from kernel_v3.bench import (
     PUBLIC_FINANCE_BENCHMARK_SPECS,
     FinanceBenchmarkItem,
@@ -626,6 +626,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     finance_import.add_argument("--limit", type=int, default=None)
     finance_import.add_argument("--offset", type=int, default=0)
+    finance_graph = bench_sub.add_parser("finance-graph")
+    finance_graph.add_argument("--results", required=True, help="Finance benchmark result JSONL/JSON produced by bench finance.")
+    finance_graph.add_argument("--benchmark-id", default="finance")
+    finance_graph.add_argument("--format", choices=["json", "dot"], default="json")
+    finance_graph.add_argument("--output", default=None)
+    finance_graph.add_argument("--max-items", type=int, default=200)
     finance_bench = bench_sub.add_parser("finance")
     finance_bench.add_argument("--dataset", required=True)
     finance_bench.add_argument("--predictions", default=None)
@@ -1064,6 +1070,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "bench":
         payload = _bench_command(args, journal)
+        raw_output = payload.pop("_stdout", None)
+        if isinstance(raw_output, str):
+            print(raw_output)
+            return 0 if payload.get("status") not in {"failed", "blocked", "error"} else 1
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0 if payload.get("status") not in {"failed", "blocked", "error"} else 1
 
@@ -1962,6 +1972,33 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             state_delta={"finance_benchmark_import_status": summary.status, "finance_benchmark_items": summary.item_count},
         )
         return {"status": "ok", "mode": "finance_import", "summary": summary.to_dict()}
+    if command == "finance-graph":
+        graph = build_benchmark_result_graph_from_path(
+            args.results,
+            benchmark_id=args.benchmark_id,
+            max_items=args.max_items,
+        )
+        if args.format == "dot":
+            rendered = render_behavior_graph_dot(graph)
+        else:
+            rendered = json.dumps(graph.to_dict(), ensure_ascii=False, sort_keys=True, indent=2)
+        if args.output:
+            path = Path(args.output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(rendered + "\n", encoding="utf-8")
+            output = str(path)
+            stdout = None
+        else:
+            stdout = rendered
+            output = None
+        return {
+            "status": "ok",
+            "mode": "finance_graph",
+            "schema": graph.schema,
+            "diagnostics": graph.diagnostics,
+            "output": output,
+            "_stdout": stdout,
+        }
     if command != "finance":
         return {"status": "failed", "reason": "unknown_benchmark", "benchmark": command}
     output_path = Path(args.output) if args.output else None

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from kernel_v3 import cli
-from kernel_v3.behavior_graph import BehaviorGraphBuilder, render_behavior_graph_dot
+from kernel_v3.behavior_graph import BehaviorGraphBuilder, build_benchmark_result_graph_from_path, render_behavior_graph_dot
 from kernel_v3.journal import JournalStore
 
 
@@ -84,6 +84,78 @@ def test_behavior_graph_cli_writes_json(tmp_path: Path) -> None:
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["schema"] == "holo.kernel_v3.behavior_graph.v1"
     assert payload["diagnostics"]["node_count"] >= 10
+
+
+def test_benchmark_result_graph_summarizes_scores_and_failure_modes(tmp_path: Path) -> None:
+    results = tmp_path / "results.jsonl"
+    _write_benchmark_results(results)
+
+    graph = build_benchmark_result_graph_from_path(results, benchmark_id="finance-smoke")
+
+    assert graph.schema == "holo.kernel_v3.benchmark_behavior_graph.v1"
+    assert graph.diagnostics["item_count"] == 2
+    assert graph.diagnostics["passed_count"] == 1
+    assert graph.diagnostics["pass_rate"] == 0.5
+    assert graph.diagnostics["citation_present_rate"] == 0.5
+    assert graph.diagnostics["failure_mode_counts"]["fetch_failed"] == 1
+    node_types = graph.diagnostics["node_types"]
+    assert node_types["benchmark"] == 1
+    assert node_types["benchmark_item"] == 2
+    assert node_types["benchmark_status"] == 2
+    assert node_types["benchmark_metric"] >= 4
+    dumped = json.dumps(graph.to_dict(), ensure_ascii=False)
+    assert "gold_answer" not in dumped
+    assert "AAPL" in dumped
+
+
+def test_benchmark_result_graph_cli_outputs_dot(tmp_path: Path, capsys) -> None:
+    results = tmp_path / "results.jsonl"
+    _write_benchmark_results(results)
+
+    code = cli.main(
+        [
+            "bench",
+            "finance-graph",
+            "--results",
+            str(results),
+            "--benchmark-id",
+            "finance-smoke",
+            "--format",
+            "dot",
+        ]
+    )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "digraph HoloBehaviorGraph" in out
+    assert "Benchmark finance-smoke" in out
+    assert "Status: failed" in out
+
+
+def test_benchmark_result_graph_cli_writes_json(tmp_path: Path, capsys) -> None:
+    results = tmp_path / "results.jsonl"
+    output = tmp_path / "bench-graph.json"
+    _write_benchmark_results(results)
+
+    code = cli.main(
+        [
+            "bench",
+            "finance-graph",
+            "--results",
+            str(results),
+            "--output",
+            str(output),
+            "--max-items",
+            "1",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    graph = json.loads(output.read_text(encoding="utf-8"))
+    assert graph["schema"] == "holo.kernel_v3.benchmark_behavior_graph.v1"
+    assert graph["diagnostics"]["truncated_items"] == 1
 
 
 def _populate_retrieval_task(journal: JournalStore) -> None:
@@ -214,3 +286,56 @@ def _populate_retrieval_task(journal: JournalStore) -> None:
         kind="agent_final_answer",
         data={"answer": "Apple net sales were reported.", "citation_refs": ["cite-1"], "confidence": 0.9},
     )
+
+
+def _write_benchmark_results(path: Path) -> None:
+    rows = [
+        {
+            "item_id": "Q1",
+            "status": "passed",
+            "question": "What was AAPL revenue?",
+            "answer": "AAPL revenue was cited.",
+            "scorecard": {
+                "status": "passed",
+                "scored": True,
+                "reason": "numeric_within_tolerance",
+                "answer_present": True,
+                "citation_present": True,
+                "numeric": {"scored": True, "passed": True},
+            },
+            "trace_metrics": {
+                "total_tokens": 1200,
+                "retrieval_run_count": 2,
+                "fetch_attempt_count": 7,
+                "downloaded_bytes": 1000,
+                "query_repetition_rate": 0.1,
+                "final_answer_chars": 450,
+            },
+            "metadata": {"category": "fact_extraction", "source": "finance_agent_benchmark"},
+        },
+        {
+            "item_id": "Q2",
+            "status": "failed",
+            "question": "What was ORCL net income?",
+            "answer": "Insufficient evidence.",
+            "scorecard": {
+                "status": "failed",
+                "scored": True,
+                "reason": "numeric_outside_tolerance",
+                "answer_present": True,
+                "citation_present": False,
+                "numeric": {"scored": True, "passed": False},
+            },
+            "trace_metrics": {
+                "total_tokens": 1800,
+                "retrieval_run_count": 3,
+                "fetch_attempt_count": 9,
+                "downloaded_bytes": 2000,
+                "query_repetition_rate": 0.4,
+                "final_answer_chars": 120,
+                "latest_failure_mode": "fetch_failed",
+            },
+            "metadata": {"category": "fact_extraction", "source": "finance_agent_benchmark"},
+        },
+    ]
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows) + "\n", encoding="utf-8")

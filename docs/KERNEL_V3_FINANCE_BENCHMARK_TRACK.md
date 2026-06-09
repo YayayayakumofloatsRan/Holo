@@ -118,5 +118,5 @@ The summary reports:
    import/scoring runnable from local exports.
 2. Add claim-level citation judge for answers whose gold target is not purely numeric.
 3. Add source-support scoring against benchmark evidence excerpts.
-4. Add benchmark-level aggregate graph summaries across many task-level behavior graphs.
+4. Add report/PPT-ready rendering presets for task and benchmark graphs.
 5. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo retrieval plus memory.

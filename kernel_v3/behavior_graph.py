@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import Contract, JsonObject, LedgerRecord
@@ -186,6 +187,183 @@ class BehaviorGraphBuilder:
                             builder.add_edge(action_node_id, node.node_id, "attempted_before_failure")
 
         return builder.to_graph()
+
+
+def load_benchmark_result_records(path: Path | str) -> list[JsonObject]:
+    source = Path(path)
+    text = source.read_text(encoding="utf-8")
+    stripped = text.strip()
+    if not stripped:
+        return []
+    if source.suffix.lower() in {".jsonl", ".ndjson"}:
+        return [_json_object(line) for line in text.splitlines() if line.strip()]
+    payload = json.loads(stripped)
+    if isinstance(payload, list):
+        return [dict(item) for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("results", "items", "records", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [dict(item) for item in value if isinstance(item, dict)]
+        if "item_id" in payload or "question" in payload:
+            return [payload]
+    raise ValueError(f"unsupported benchmark result graph input: {source}")
+
+
+def build_benchmark_result_graph(
+    results: list[JsonObject],
+    *,
+    benchmark_id: str = "finance",
+    max_items: int = 200,
+) -> BehaviorGraph:
+    benchmark_node_id = f"benchmark:{_safe_node_id(benchmark_id)}"
+    builder = _GraphAccumulator(task_id=benchmark_node_id, max_nodes=max(MAX_GRAPH_NODES, max_items * 6 + 32))
+    summary = _benchmark_result_summary(results)
+    builder.add_node(
+        BehaviorGraphNode(
+            node_id=benchmark_node_id,
+            node_type="benchmark",
+            label=f"Benchmark {benchmark_id}",
+            metadata={**summary, "item_count": len(results), "shown_item_count": min(len(results), max_items)},
+        )
+    )
+
+    status_nodes: dict[str, str] = {}
+    category_nodes: dict[str, str] = {}
+    reason_nodes: dict[str, str] = {}
+    failure_nodes: dict[str, str] = {}
+    metric_nodes = _benchmark_metric_nodes(summary)
+    for node in metric_nodes:
+        if builder.add_node(node):
+            builder.add_edge(benchmark_node_id, node.node_id, "has_metric")
+
+    for index, result in enumerate(results[: max(0, max_items)], start=1):
+        item_id = _text(result.get("item_id")) or f"item-{index}"
+        status = _text(result.get("status")) or _scorecard_text(result, "status") or "unknown"
+        scorecard = _dict(result.get("scorecard"))
+        trace_metrics = _dict(result.get("trace_metrics"))
+        metadata = _dict(result.get("metadata"))
+        item_node_id = f"bench_item:{_safe_node_id(item_id)}"
+        item_node = BehaviorGraphNode(
+            node_id=item_node_id,
+            node_type="benchmark_item",
+            label=_preview(f"{item_id}: {status}", 140),
+            metadata=_safe_metadata(
+                {
+                    "item_id": item_id,
+                    "status": status,
+                    "question_preview": _preview(_text(result.get("question")), 220),
+                    "task_id": _text(result.get("task_id")),
+                    "thread_id": _text(result.get("thread_id")),
+                    "category": _text(metadata.get("category")),
+                    "source": _text(metadata.get("source")),
+                    "score_reason": _text(scorecard.get("reason")),
+                    "answer_present": scorecard.get("answer_present"),
+                    "citation_present": scorecard.get("citation_present"),
+                    "numeric_passed": _nested(scorecard, "numeric", "passed"),
+                    "total_tokens": _number(trace_metrics.get("total_tokens")),
+                    "retrieval_runs": _number(trace_metrics.get("retrieval_run_count")),
+                    "fetches": _number(trace_metrics.get("fetch_attempt_count")),
+                    "downloaded_bytes": _number(trace_metrics.get("downloaded_bytes")),
+                    "query_repetition_rate": _number(trace_metrics.get("query_repetition_rate")),
+                    "processor_errors": _number(trace_metrics.get("processor_error_count")),
+                    "final_answer_chars": _number(trace_metrics.get("final_answer_chars")),
+                    "latest_failure_mode": _text(trace_metrics.get("latest_failure_mode")),
+                }
+            ),
+        )
+        if not builder.add_node(item_node):
+            builder.truncated_records += 1
+            continue
+        builder.add_edge(benchmark_node_id, item_node_id, "contains_item", status)
+
+        status_node_id = status_nodes.get(status)
+        if status_node_id is None:
+            status_node_id = f"bench_status:{_safe_node_id(status)}"
+            status_nodes[status] = status_node_id
+            if builder.add_node(
+                BehaviorGraphNode(
+                    node_id=status_node_id,
+                    node_type="benchmark_status",
+                    label=f"Status: {status}",
+                    metadata={"status": status, "count": summary["status_counts"].get(status, 0)},
+                )
+            ):
+                builder.add_edge(benchmark_node_id, status_node_id, "has_status")
+        builder.add_edge(item_node_id, status_node_id, "has_status")
+
+        category = _text(metadata.get("category"))
+        if category:
+            category_node_id = category_nodes.get(category)
+            if category_node_id is None:
+                category_node_id = f"bench_category:{_safe_node_id(category)}"
+                category_nodes[category] = category_node_id
+                if builder.add_node(
+                    BehaviorGraphNode(
+                        node_id=category_node_id,
+                        node_type="benchmark_category",
+                        label=_preview(f"Category: {category}", 120),
+                        metadata={"category": category},
+                    )
+                ):
+                    builder.add_edge(benchmark_node_id, category_node_id, "has_category")
+            builder.add_edge(item_node_id, category_node_id, "in_category")
+
+        reason = _text(scorecard.get("reason"))
+        if reason:
+            reason_node_id = reason_nodes.get(reason)
+            if reason_node_id is None:
+                reason_node_id = f"bench_reason:{_safe_node_id(reason)}"
+                reason_nodes[reason] = reason_node_id
+                if builder.add_node(
+                    BehaviorGraphNode(
+                        node_id=reason_node_id,
+                        node_type="benchmark_reason",
+                        label=_preview(f"Reason: {reason}", 120),
+                        metadata={"reason": reason},
+                    )
+                ):
+                    builder.add_edge(benchmark_node_id, reason_node_id, "has_reason")
+            builder.add_edge(item_node_id, reason_node_id, "scored_as")
+
+        failure_mode = _text(trace_metrics.get("latest_failure_mode"))
+        if failure_mode:
+            failure_node_id = failure_nodes.get(failure_mode)
+            if failure_node_id is None:
+                failure_node_id = f"bench_failure:{_safe_node_id(failure_mode)}"
+                failure_nodes[failure_mode] = failure_node_id
+                if builder.add_node(
+                    BehaviorGraphNode(
+                        node_id=failure_node_id,
+                        node_type="benchmark_failure_mode",
+                        label=_preview(f"Failure: {failure_mode}", 120),
+                        metadata={"failure_mode": failure_mode},
+                    )
+                ):
+                    builder.add_edge(benchmark_node_id, failure_node_id, "has_failure_mode")
+            builder.add_edge(item_node_id, failure_node_id, "failed_at")
+
+    graph = builder.to_graph()
+    diagnostics = dict(graph.diagnostics)
+    diagnostics.update(summary)
+    if len(results) > max_items:
+        diagnostics["truncated_items"] = len(results) - max_items
+    return BehaviorGraph(
+        schema="holo.kernel_v3.benchmark_behavior_graph.v1",
+        task_id=benchmark_node_id,
+        nodes=graph.nodes,
+        edges=graph.edges,
+        diagnostics=diagnostics,
+    )
+
+
+def build_benchmark_result_graph_from_path(
+    path: Path | str,
+    *,
+    benchmark_id: str = "finance",
+    max_items: int = 200,
+) -> BehaviorGraph:
+    return build_benchmark_result_graph(load_benchmark_result_records(path), benchmark_id=benchmark_id, max_items=max_items)
 
 
 def render_behavior_graph_dot(graph: BehaviorGraph) -> str:
@@ -442,6 +620,99 @@ def _source_node(source: JsonObject) -> BehaviorGraphNode:
     )
 
 
+def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
+    status_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    failure_mode_counts: dict[str, int] = {}
+    values: dict[str, list[float]] = {
+        "total_tokens": [],
+        "retrieval_run_count": [],
+        "fetch_attempt_count": [],
+        "downloaded_bytes": [],
+        "query_repetition_rate": [],
+        "final_answer_chars": [],
+    }
+    answer_present = 0
+    citation_present = 0
+    numeric_scored = 0
+    numeric_passed = 0
+    scored = 0
+    passed = 0
+    for result in results:
+        status = _text(result.get("status")) or _scorecard_text(result, "status") or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status == "passed":
+            passed += 1
+        scorecard = _dict(result.get("scorecard"))
+        if scorecard.get("scored") is True:
+            scored += 1
+        if scorecard.get("answer_present") is True:
+            answer_present += 1
+        if scorecard.get("citation_present") is True:
+            citation_present += 1
+        reason = _text(scorecard.get("reason"))
+        if reason:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        numeric = _dict(scorecard.get("numeric"))
+        if numeric.get("scored") is True:
+            numeric_scored += 1
+            if numeric.get("passed") is True:
+                numeric_passed += 1
+        trace_metrics = _dict(result.get("trace_metrics"))
+        failure_mode = _text(trace_metrics.get("latest_failure_mode"))
+        if failure_mode:
+            failure_mode_counts[failure_mode] = failure_mode_counts.get(failure_mode, 0) + 1
+        for key in values:
+            value = trace_metrics.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                values[key].append(float(value))
+    item_count = len(results)
+    return {
+        "status_counts": status_counts,
+        "reason_counts": reason_counts,
+        "failure_mode_counts": failure_mode_counts,
+        "item_count": item_count,
+        "scored_count": scored,
+        "passed_count": passed,
+        "pass_rate": _rate(passed, scored),
+        "answer_present_rate": _rate(answer_present, item_count),
+        "citation_present_rate": _rate(citation_present, item_count),
+        "numeric_accuracy": _rate(numeric_passed, numeric_scored) if numeric_scored else None,
+        "average_total_tokens": _average(values["total_tokens"]),
+        "average_retrieval_runs": _average(values["retrieval_run_count"]),
+        "average_fetches": _average(values["fetch_attempt_count"]),
+        "average_downloaded_bytes": _average(values["downloaded_bytes"]),
+        "average_query_repetition_rate": _average(values["query_repetition_rate"]),
+        "average_final_answer_chars": _average(values["final_answer_chars"]),
+    }
+
+
+def _benchmark_metric_nodes(summary: JsonObject) -> list[BehaviorGraphNode]:
+    specs = [
+        ("pass_rate", "Pass rate"),
+        ("citation_present_rate", "Citation rate"),
+        ("average_total_tokens", "Avg tokens"),
+        ("average_retrieval_runs", "Avg retrieval runs"),
+        ("average_fetches", "Avg fetches"),
+        ("average_query_repetition_rate", "Avg query repetition"),
+        ("average_final_answer_chars", "Avg answer chars"),
+    ]
+    nodes: list[BehaviorGraphNode] = []
+    for key, label in specs:
+        value = summary.get(key)
+        if value is None:
+            continue
+        nodes.append(
+            BehaviorGraphNode(
+                node_id=f"bench_metric:{key}",
+                node_type="benchmark_metric",
+                label=f"{label}: {value}",
+                metadata={"metric": key, "value": value},
+            )
+        )
+    return nodes
+
+
 def _processor_task_type(data: JsonObject) -> str:
     parameters = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
     output = data.get("output") if isinstance(data.get("output"), dict) else {}
@@ -469,6 +740,58 @@ def _safe_metadata(data: JsonObject) -> JsonObject:
         else:
             safe[key] = _preview(_redact(str(value)), 160)
     return safe
+
+
+def _json_object(text: str) -> JsonObject:
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("expected JSON object per benchmark result row")
+    return payload
+
+
+def _dict(value: object) -> JsonObject:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _nested(data: JsonObject, *path: str) -> object:
+    current: object = data
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _scorecard_text(result: JsonObject, key: str) -> str:
+    scorecard = _dict(result.get("scorecard"))
+    return _text(scorecard.get(key))
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 4)
+
+
+def _average(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 4)
+
+
+def _safe_node_id(text: str) -> str:
+    safe = []
+    for char in str(text):
+        if char.isalnum() or char in {"-", "_", "."}:
+            safe.append(char)
+        else:
+            safe.append("-")
+    joined = "".join(safe).strip("-")
+    if not joined:
+        return _short_hash(text)
+    if len(joined) > 80:
+        return joined[:60] + "-" + _short_hash(text)
+    return joined
 
 
 def _find_node_by_record_data(nodes: dict[str, JsonObject], key: str, value: str) -> str | None:
@@ -573,5 +896,12 @@ def _dot_color(node_type: str) -> str:
         "citation": "#d28a31",
         "final_answer": "#3f8f5f",
         "failure_report": "#b84a4a",
+        "benchmark": "#666666",
+        "benchmark_item": "#777777",
+        "benchmark_status": "#4f8f5f",
+        "benchmark_metric": "#d28a31",
+        "benchmark_category": "#888888",
+        "benchmark_reason": "#b8843a",
+        "benchmark_failure_mode": "#b84a4a",
     }
     return colors.get(node_type, "#777777")

@@ -34,6 +34,21 @@ holo-v3 behavior-graph <task_id> --format json
 holo-v3 behavior-graph <task_id> --format dot --output graph.dot
 ```
 
+Benchmark result graphs summarize many benchmark rows without needing the
+worker journals:
+
+```bash
+holo-v3 bench finance-graph \
+  --results artifacts/finance_bench_results.jsonl \
+  --format dot \
+  --output finance_bench.dot
+```
+
+The benchmark graph groups items by status, category, score reason, failure
+mode, citation coverage, token use, retrieval runs, fetches, query repetition,
+and final-answer length. This is meant for report/PPT diagnostics: it shows
+where capability breaks down instead of only reporting a pass rate.
+
 ## Why It Matters
 
 This moves the project away from hand-picked transcripts and toward reproducible
@@ -42,8 +57,9 @@ benchmark evaluation:
 - public dataset provenance is explicit;
 - prompt leakage boundaries are testable;
 - agent loop behavior can be inspected as topology, not only as logs;
+- benchmark-level failures can be grouped by cause and cost;
 - benchmark reports can include loop efficiency, evidence flow, and failure
-location diagrams.
+  location diagrams.
 
 ## Current Validation
 
@@ -54,11 +70,10 @@ location diagrams.
   tests/test_kernel_v3_finance_metric_intent.py
 ```
 
-Result: `21 passed`.
+Result: `24 passed`.
 
 ## Remaining Work
 
 - Run a fresh live public benchmark subset under explicit traffic budgets.
 - Add claim-level scoring and evidence-support scoring for rubric-heavy tasks.
-- Add benchmark-level aggregate graph summaries across many task graphs.
-- Add report/PPT-ready graph rendering presets.
+- Add report/PPT-ready graph rendering presets, including DOT-to-image assets.
