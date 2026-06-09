@@ -136,7 +136,11 @@ def analyze_goal_with_processor(
         schema=SEMANTIC_INTAKE_SCHEMA,
         provider=provider,
         model=model,
-        parameters={"adapter": "SemanticIntake", "contract_version": 1},
+        parameters={
+            "adapter": "SemanticIntake",
+            "contract_version": 1,
+            **_processor_budget_parameters(runtime_context),
+        },
     )
     if outcome.parsed is None:
         return _processor_failed_intake(goal, response_language=response_language)
@@ -229,6 +233,7 @@ def _compact_runtime_context(value: JsonObject | None) -> JsonObject:
         "task_execution_step",
         "interaction_preferences",
         "agent_loop",
+        "processor_budget",
         "host_situation",
         "answer_profile",
         "research_mission",
@@ -237,6 +242,15 @@ def _compact_runtime_context(value: JsonObject | None) -> JsonObject:
         if isinstance(item, dict):
             allowed[key] = _compact_prompt_value(item)
     return allowed
+
+
+def _processor_budget_parameters(runtime_context: JsonObject | None) -> JsonObject:
+    if not isinstance(runtime_context, dict):
+        return {}
+    budget = runtime_context.get("processor_budget")
+    if not isinstance(budget, dict):
+        return {}
+    return {"processor_budget": dict(budget)}
 
 
 def _compact_prompt_value(value):

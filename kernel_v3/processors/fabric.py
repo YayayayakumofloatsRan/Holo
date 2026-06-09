@@ -33,6 +33,7 @@ class ProcessorFabric:
         self.max_repair_attempts = max(0, max_repair_attempts)
         self._counter = 0
         self._provider_circuit: dict[str, JsonObject] = {}
+        self._budget_counters: dict[str, JsonObject] = {}
 
     def run_json(
         self,
@@ -107,6 +108,43 @@ class ProcessorFabric:
         )
         provider_model = str(request.parameters.get("model") or route.model)
         self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
+        budget_error = self._processor_budget_error(request, task_id=task_id)
+        if budget_error is not None:
+            result = ProcessorResult(
+                result_id=f"result-{request.request_id}",
+                request_id=request.request_id,
+                status="failed",
+                output={
+                    "provider": route.provider,
+                    "model": provider_model,
+                    "task_type": task_type,
+                    "budget": budget_error.get("budget", {}),
+                    "budget_state": budget_error.get("state", {}),
+                    "reason": budget_error.get("reason"),
+                },
+                usage={},
+                error="processor_budget_exceeded",
+            )
+            self._journal_result(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                request=request,
+                result=result,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                duration_ms=0,
+            )
+            return ProcessorOutcome(
+                request=request,
+                result=result,
+                parsed=None,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                duration_ms=0,
+            )
         circuit = self._provider_circuit.get(route.provider)
         if circuit is not None:
             result = ProcessorResult(
@@ -199,6 +237,7 @@ class ProcessorFabric:
                 usage={},
                 error=type(exc).__name__,
             )
+            self._record_processor_budget_usage(request, task_id=task_id, result=result)
             self._open_provider_circuit(
                 route.provider,
                 task_type=task_type,
@@ -237,6 +276,7 @@ class ProcessorFabric:
                 usage=coerce_usage(provider_result.usage),
                 error=provider_result.error or "provider_failed",
             )
+            self._record_processor_budget_usage(request, task_id=task_id, result=result)
             if _is_provider_availability_error(provider_result.error or "", output):
                 self._open_provider_circuit(
                     route.provider,
@@ -289,6 +329,7 @@ class ProcessorFabric:
             usage=coerce_usage(provider_result.usage, prompt=prompt, completion=text),
             error=error,
         )
+        self._record_processor_budget_usage(request, task_id=task_id, result=result)
         self._journal_result(
             task_id=task_id,
             run_id=run_id,
@@ -311,6 +352,45 @@ class ProcessorFabric:
             repaired=parsed.repaired,
             repair_attempts=parsed.attempts,
         )
+
+    def _processor_budget_error(self, request: ProcessorRequest, *, task_id: str | None) -> JsonObject | None:
+        budget = _processor_budget(request)
+        if not budget:
+            return None
+        state = self._processor_budget_state(request, task_id=task_id)
+        max_prompt_chars = _positive_budget_int(budget.get("max_prompt_chars_per_call"))
+        if max_prompt_chars is not None and len(request.prompt) > max_prompt_chars:
+            return {
+                "reason": "max_prompt_chars_per_call",
+                "budget": budget,
+                "state": {**state, "prompt_chars": len(request.prompt)},
+            }
+        max_calls = _positive_budget_int(budget.get("max_calls_per_task"))
+        if max_calls is not None and int(state.get("calls") or 0) >= max_calls:
+            return {"reason": "max_calls_per_task", "budget": budget, "state": state}
+        max_tokens = _positive_budget_int(budget.get("max_total_tokens_per_task"))
+        if max_tokens is not None and int(state.get("total_tokens") or 0) >= max_tokens:
+            return {"reason": "max_total_tokens_per_task", "budget": budget, "state": state}
+        return None
+
+    def _processor_budget_state(self, request: ProcessorRequest, *, task_id: str | None) -> JsonObject:
+        key = _processor_budget_key(request, task_id=task_id)
+        state = self._budget_counters.setdefault(key, {"calls": 0, "total_tokens": 0})
+        return dict(state)
+
+    def _record_processor_budget_usage(
+        self,
+        request: ProcessorRequest,
+        *,
+        task_id: str | None,
+        result: ProcessorResult,
+    ) -> None:
+        if not _processor_budget(request):
+            return
+        key = _processor_budget_key(request, task_id=task_id)
+        state = self._budget_counters.setdefault(key, {"calls": 0, "total_tokens": 0})
+        state["calls"] = int(state.get("calls") or 0) + 1
+        state["total_tokens"] = int(state.get("total_tokens") or 0) + _usage_total_tokens(result.usage)
 
     def _open_provider_circuit(self, provider: str, *, task_type: str, error: str, error_preview: str | None) -> None:
         self._provider_circuit.setdefault(
@@ -436,6 +516,46 @@ def _matches_type(value: object, expected: str) -> bool:
     if isinstance(value, dict):
         return "dict" in options
     return False
+
+
+def _processor_budget(request: ProcessorRequest) -> JsonObject:
+    value = request.parameters.get("processor_budget")
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _processor_budget_key(request: ProcessorRequest, *, task_id: str | None) -> str:
+    if task_id:
+        return f"task:{task_id}"
+    if request.run_id:
+        return f"run:{request.run_id}"
+    return f"request:{request.request_id}"
+
+
+def _positive_budget_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _usage_total_tokens(usage: JsonObject) -> int:
+    for key in ("total_tokens", "tokens"):
+        value = usage.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+        if isinstance(value, float) and value > 0:
+            return int(value)
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    total = 0
+    if isinstance(prompt, (int, float)) and prompt > 0:
+        total += int(prompt)
+    if isinstance(completion, (int, float)) and completion > 0:
+        total += int(completion)
+    return total
 
 
 def _result_text(result: ProcessorResult) -> str:

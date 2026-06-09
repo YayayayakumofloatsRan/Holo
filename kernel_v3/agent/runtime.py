@@ -785,6 +785,7 @@ class AgentRuntime:
             evidence=evidence,
             citations=citations,
             synthesizer_mode=synthesizer_mode,
+            recipe=recipe,
         )
         if synthesized.status != "ok" or synthesized.answer is None:
             return None, self._failure(
@@ -806,6 +807,7 @@ class AgentRuntime:
                 evidence=evidence,
                 citations=citations,
                 synthesizer_mode=synthesizer_mode,
+                recipe=recipe,
                 retry_instruction=_answer_quality_retry_instruction(quality_gaps, recipe=recipe),
             )
             if repaired.status == "ok" and repaired.answer is not None:
@@ -895,6 +897,7 @@ class AgentRuntime:
             evidence=evidence,
             citations=citations,
             synthesizer_mode=synthesizer_mode,
+            recipe=recipe,
         )
         if synthesized.status != "ok" or synthesized.answer is None:
             return None, self._failure(task_id, run_id, synthesized.error or "synthesis_failed", next_action="read_more_files", recipe=recipe)
@@ -909,6 +912,7 @@ class AgentRuntime:
                 evidence=evidence,
                 citations=citations,
                 synthesizer_mode=synthesizer_mode,
+                recipe=recipe,
                 retry_instruction=_answer_quality_retry_instruction(quality_gaps, recipe=recipe),
             )
             if repaired.status == "ok" and repaired.answer is not None:
@@ -1030,6 +1034,7 @@ class AgentRuntime:
         evidence: list[EvidenceItem],
         citations: list[CitationItem],
         synthesizer_mode: str,
+        recipe: TaskRecipe,
         retry_instruction: str | None = None,
     ):
         if synthesizer_mode == "model":
@@ -1043,6 +1048,7 @@ class AgentRuntime:
                 evidence=evidence,
                 citations=citations,
                 retry_instruction=retry_instruction,
+                processor_budget=_processor_budget_metadata(recipe),
             )
         answer = _grounded_answer(report=report, evidence=evidence, citations=citations)
         report_limitations = _string_list(report.diagnostics.get("limitations")) if isinstance(report.diagnostics, dict) else []
@@ -1070,6 +1076,7 @@ class AgentRuntime:
             report=report,
             evidence=evidence,
             citations=citations,
+            processor_budget=_processor_budget_metadata(recipe),
         )
 
     def _semantic_intake(
@@ -2306,10 +2313,22 @@ def _with_planned_action_count(goal: str, recipe: TaskRecipe) -> TaskRecipe:
 
 def _with_runtime_loop_budget(recipe: TaskRecipe, *, planner_mode: str) -> TaskRecipe:
     loop = _agent_loop_metadata(recipe)
+    profile = _execution_profile_metadata(recipe)
+    profile_id = str(profile.get("profile_id") or "")
+    hard_cap_loop = bool(profile_id and profile_id != "long-mission")
     model_dynamic = planner_mode == "model" and recipe.mode in {"retrieval_answer", "workspace_answer", "workspace_write"}
     max_steps = _positive_metadata_int(loop.get("max_steps"), default=0) if loop else 0
     max_tool_calls = _positive_metadata_int(loop.get("max_tool_calls"), default=0) if loop else 0
     max_artifact_bytes = _positive_metadata_int(loop.get("max_total_artifact_bytes"), default=0) if loop else 0
+    if hard_cap_loop:
+        return replace(
+            recipe,
+            max_steps=max_steps if max_steps > 0 else recipe.max_steps,
+            max_tool_calls=max_tool_calls if max_tool_calls > 0 else recipe.max_tool_calls,
+            max_total_artifact_bytes=max_artifact_bytes
+            if max_artifact_bytes > 0
+            else recipe.max_total_artifact_bytes,
+        )
     if model_dynamic:
         max_steps = max(max_steps, DEFAULT_MODEL_DYNAMIC_MAX_STEPS)
         max_tool_calls = max(max_tool_calls, DEFAULT_MODEL_DYNAMIC_MAX_TOOL_CALLS)
@@ -4177,8 +4196,18 @@ def _execution_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _execution_profile_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = _execution_metadata(recipe).get("execution_profile")
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _agent_loop_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("agent_loop")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _processor_budget_metadata(recipe: TaskRecipe) -> JsonObject:
+    value = _execution_metadata(recipe).get("processor_budget")
     return dict(value) if isinstance(value, dict) else {}
 
 
@@ -5035,6 +5064,7 @@ def _semantic_runtime_context(metadata: JsonObject | None) -> JsonObject:
         "task_execution_step",
         "interaction_preferences",
         "agent_loop",
+        "processor_budget",
         "host_situation",
     ):
         value = metadata.get(key)

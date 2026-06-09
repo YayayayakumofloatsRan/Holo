@@ -4,15 +4,19 @@ from types import SimpleNamespace
 
 from kernel_v3 import cli
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.contracts import TaskRecipe
 from kernel_v3.agent.execution_profile import (
     execution_profile,
     execution_profile_runtime_metadata,
     profile_mission_enabled,
     profile_processor_mode,
 )
+from kernel_v3.agent.runtime import _with_runtime_loop_budget
 from kernel_v3.context import ArtifactStore
+from kernel_v3.contracts import ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
 from kernel_v3.mission import MissionRuntime
+from kernel_v3.processors import PLANNER_SCHEMA, FakeJsonProvider, ProcessorFabric, ProcessorRouter
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 
 
@@ -65,6 +69,144 @@ def test_benchmark_runtime_metadata_keeps_explicit_loop_overrides() -> None:
     assert metadata["agent_loop"]["max_tool_calls"] == 7
 
 
+def test_fast_execution_profile_loop_budget_is_hard_cap_for_model_planner() -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
+    recipe = TaskRecipe(
+        recipe_id="recipe-retrieval-answer",
+        allowed_tools=["retrieval.run"],
+        max_steps=2048,
+        max_tool_calls=1024,
+        max_network_fetches=2048,
+        max_total_artifact_bytes=100_000_000,
+        permission_profile="read_write",
+        citations_required=True,
+        finalizer="retrieval_synthesizer",
+        context_budget_mode="truncate",
+        mode="retrieval_answer",
+        metadata={"execution_metadata": metadata},
+    )
+
+    bounded = _with_runtime_loop_budget(recipe, planner_mode="model")
+
+    assert bounded.max_steps == 4
+    assert bounded.max_tool_calls == 3
+
+
+def test_long_mission_without_profile_still_allows_dynamic_model_loop_budget() -> None:
+    recipe = TaskRecipe(
+        recipe_id="recipe-retrieval-answer",
+        allowed_tools=["retrieval.run"],
+        max_steps=2,
+        max_tool_calls=1,
+        max_network_fetches=2048,
+        max_total_artifact_bytes=1_000_000,
+        permission_profile="read_write",
+        citations_required=True,
+        finalizer="retrieval_synthesizer",
+        context_budget_mode="truncate",
+        mode="retrieval_answer",
+        metadata={},
+    )
+
+    bounded = _with_runtime_loop_budget(recipe, planner_mode="model")
+
+    assert bounded.max_steps == 2048
+    assert bounded.max_tool_calls == 1024
+
+
+def test_processor_budget_blocks_oversized_prompt_before_provider_call() -> None:
+    journal = JournalStore.in_memory()
+    provider = _CountingJsonProvider(_planner_payload())
+    fabric = ProcessorFabric(
+        providers={"fake_json": provider},
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+
+    outcome = fabric.run_json(
+        task_type="planner.propose",
+        task_id="task-budget",
+        run_id="run-budget",
+        context_id="ctx-budget",
+        prompt="x" * 20,
+        schema=PLANNER_SCHEMA,
+        parameters={"processor_budget": {"max_prompt_chars_per_call": 8}},
+    )
+
+    assert outcome.result.status == "failed"
+    assert outcome.result.error == "processor_budget_exceeded"
+    assert outcome.result.output["reason"] == "max_prompt_chars_per_call"
+    assert provider.calls == 0
+
+
+def test_processor_budget_blocks_calls_after_task_limit() -> None:
+    provider = _CountingJsonProvider(_planner_payload())
+    fabric = ProcessorFabric(
+        providers={"fake_json": provider},
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+    )
+    parameters = {"processor_budget": {"max_calls_per_task": 1}}
+
+    first = fabric.run_json(
+        task_type="planner.propose",
+        task_id="task-budget",
+        run_id="run-budget",
+        context_id="ctx-budget",
+        prompt="first",
+        schema=PLANNER_SCHEMA,
+        parameters=parameters,
+    )
+    second = fabric.run_json(
+        task_type="planner.propose",
+        task_id="task-budget",
+        run_id="run-budget",
+        context_id="ctx-budget",
+        prompt="second",
+        schema=PLANNER_SCHEMA,
+        parameters=parameters,
+    )
+
+    assert first.result.status == "ok"
+    assert second.result.status == "failed"
+    assert second.result.error == "processor_budget_exceeded"
+    assert second.result.output["reason"] == "max_calls_per_task"
+    assert provider.calls == 1
+
+
+def test_processor_budget_blocks_after_total_token_limit_is_spent() -> None:
+    provider = _CountingJsonProvider(_planner_payload())
+    fabric = ProcessorFabric(
+        providers={"fake_json": provider},
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+    )
+    parameters = {"processor_budget": {"max_total_tokens_per_task": 1}}
+
+    first = fabric.run_json(
+        task_type="planner.propose",
+        task_id="task-token-budget",
+        run_id="run-budget",
+        context_id="ctx-budget",
+        prompt="first",
+        schema=PLANNER_SCHEMA,
+        parameters=parameters,
+    )
+    second = fabric.run_json(
+        task_type="planner.propose",
+        task_id="task-token-budget",
+        run_id="run-budget",
+        context_id="ctx-budget",
+        prompt="second",
+        schema=PLANNER_SCHEMA,
+        parameters=parameters,
+    )
+
+    assert first.result.status == "ok"
+    assert second.result.status == "failed"
+    assert second.result.error == "processor_budget_exceeded"
+    assert second.result.output["reason"] == "max_total_tokens_per_task"
+    assert provider.calls == 1
+
+
 def test_chat_runtime_can_skip_mission_wrapper() -> None:
     journal = JournalStore.in_memory()
     runtime = cli._chat_runtime(
@@ -109,3 +251,26 @@ def _benchmark_args(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _planner_payload():
+    return {
+        "action_id": "act-answer",
+        "kind": "respond",
+        "name": None,
+        "description": "answer",
+        "payload": {"text": "ok"},
+        "score": 1.0,
+        "reasons": ["test"],
+        "side_effect_class": "none",
+    }
+
+
+class _CountingJsonProvider(FakeJsonProvider):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.calls = 0
+
+    def run(self, request: ProcessorRequest) -> ProcessorResult:
+        self.calls += 1
+        return super().run(request)

@@ -36,6 +36,17 @@ wrapping and workmethod framing for fast benchmark questions, while preserving
 model planning, host policy validation, tool execution, journal records,
 evidence/citation handling, and synthesis.
 
+Fast execution profiles now treat `agent_loop` limits as hard caps. A model
+planner in `retrieval_answer` mode no longer expands `finance-fact-fast` from
+4 steps / 3 tool calls into the long-mission dynamic budget. The long-mission
+profile keeps the large dynamic loop for genuinely resident work.
+
+`processor_budget` is also enforced by `ProcessorFabric` before provider calls.
+Budgets can cap prompt characters per call, total model calls per task, and
+accumulated model tokens per task. Budget blocks return structured
+`processor_budget_exceeded` processor results and are journaled like other
+processor failures; they are no longer passive metadata.
+
 `long-mission` keeps the full resident mission path for complex tasks that are
 supposed to exercise multi-iteration supervision.
 
@@ -61,10 +72,17 @@ This is the first explicit "multi-speed gearbox" in Kernel v3:
 
 Result: `24 passed`.
 
+Latest regression after hard-budget enforcement:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3*.py
+```
+
+Result: `813 passed`.
+
 ## Next
 
 - Add per-item process timeout/failure row support for public live benchmark
   batches.
-- Add processor-budget hard enforcement in `ProcessorFabric`.
 - Add domain finance evidence ledger and numeric verifier so fast finance lanes
   can score higher without long mission overhead.

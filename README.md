@@ -1045,7 +1045,10 @@ holo-v3 bench finance \
 Live finance benchmark runs use an explicit execution lane. The benchmark
 default is `finance-fact-fast`, which bypasses resident mission supervision and
 workmethod framing so simple public benchmark questions do not pay the full
-long-mission cost. Use `--execution-profile long-mission` only when the task is
+long-mission cost. Its loop and processor budgets are hard control-plane limits:
+the host will not silently expand a fast profile into the 2048-step resident
+budget, and `ProcessorFabric` blocks over-budget model calls before sending a
+provider request. Use `--execution-profile long-mission` only when the task is
 intended to exercise the full resident loop.
 
 ```bash

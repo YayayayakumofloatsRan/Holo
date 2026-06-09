@@ -49,7 +49,7 @@ class ModelPlanner:
             schema=PLANNER_SCHEMA,
             provider=self.provider,
             model=self.model,
-            parameters={"adapter": "ModelPlanner"},
+            parameters={"adapter": "ModelPlanner", **_processor_budget_parameters_from_context(context)},
         )
         if outcome.parsed is None:
             return _planner_fallback(run_id, "processor_failed")
@@ -98,7 +98,11 @@ class ModelEvaluator:
             schema=EVALUATOR_SCHEMA,
             provider=self.provider,
             model=self.model,
-            parameters={"adapter": "ModelEvaluator", "observation_id": observation.observation_id},
+            parameters={
+                "adapter": "ModelEvaluator",
+                "observation_id": observation.observation_id,
+                **_processor_budget_parameters_from_context(context),
+            },
         )
         if outcome.parsed is None:
             return Feedback(
@@ -134,7 +138,9 @@ class Synthesizer:
         citations: list[CitationItem],
         task_id: str | None = None,
         retry_instruction: str | None = None,
+        processor_budget: JsonObject | None = None,
     ) -> FinalAnswer:
+        budget_parameters = {"processor_budget": dict(processor_budget)} if isinstance(processor_budget, dict) else {}
         outcome = self.fabric.run_json(
             task_type="synthesizer.answer",
             task_id=task_id,
@@ -147,6 +153,7 @@ class Synthesizer:
             parameters={
                 "adapter": "Synthesizer",
                 "retrieval_report_id": report.report_id,
+                **budget_parameters,
                 **({"retry_reason": "answer_quality"} if retry_instruction else {}),
             },
         )
@@ -184,6 +191,7 @@ class Synthesizer:
                     "adapter": "Synthesizer",
                     "retrieval_report_id": report.report_id,
                     "repair_reason": "missing_citation_refs",
+                    **budget_parameters,
                 },
             )
             if retry.parsed is not None:
@@ -271,6 +279,19 @@ def _compact_context(context: ContextBundle) -> JsonObject:
         "state": _compact_context_state_for_provider(context.state),
         "token_budget": context.token_budget,
     }
+
+
+def _processor_budget_parameters_from_context(context: ContextBundle) -> JsonObject:
+    recipe = context.state.get("agent_recipe")
+    recipe = recipe if isinstance(recipe, dict) else {}
+    metadata = recipe.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    execution = metadata.get("execution_metadata")
+    execution = execution if isinstance(execution, dict) else {}
+    budget = execution.get("processor_budget")
+    if not isinstance(budget, dict):
+        return {}
+    return {"processor_budget": dict(budget)}
 
 
 def _compact_context_state_for_provider(state: JsonObject) -> JsonObject:
