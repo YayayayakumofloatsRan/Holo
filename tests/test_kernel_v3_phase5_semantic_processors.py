@@ -1058,6 +1058,58 @@ def test_phase5_deepseek_provider_retries_transient_network_errors(monkeypatch):
     assert provider.calls == 2
 
 
+def test_deepseek_provider_retries_incomplete_read_errors(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    class FlakyIncompleteReadProvider(DeepSeekProvider):
+        def __init__(self):
+            super().__init__(enabled=True, max_retries=2)
+            self.calls = 0
+
+        def _post_json(self, url, api_key, payload, timeout_seconds):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("deepseek network error: IncompleteRead: IncompleteRead(0 bytes read)")
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action_id": "act-incomplete-read-ok",
+                                    "kind": "respond",
+                                    "name": None,
+                                    "description": "respond after incomplete read retry",
+                                    "payload": {"text": "ok"},
+                                    "score": 0.9,
+                                    "reasons": ["incomplete read retry succeeded"],
+                                    "side_effect_class": "none",
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    provider = FlakyIncompleteReadProvider()
+    fabric = ProcessorFabric(
+        providers={"deepseek": provider},
+        router=deepseek_v4_router(profile="balanced"),
+    )
+
+    outcome = fabric.run_json(
+        task_type="planner.propose",
+        run_id="run-incomplete-read",
+        context_id="ctx-incomplete-read",
+        prompt="retry incomplete read provider error",
+        schema=PLANNER_SCHEMA,
+    )
+
+    assert outcome.result.status == "ok"
+    assert provider.calls == 2
+
+
 def test_phase5_deepseek_provider_does_not_retry_bad_request(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
 

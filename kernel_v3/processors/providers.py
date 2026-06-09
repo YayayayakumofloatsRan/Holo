@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import http.client
 import urllib.error
 import urllib.request
 import hashlib
@@ -262,6 +263,8 @@ class OpenAICompatibleProvider:
             raise RuntimeError(f"{self.name} HTTP {exc.code}: {detail[:240]}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"{self.name} network error: {exc.reason}") from exc
+        except (http.client.IncompleteRead, http.client.RemoteDisconnected) as exc:
+            raise RuntimeError(f"{self.name} network error: {type(exc).__name__}: {exc}") from exc
         try:
             decoded = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -338,7 +341,10 @@ def _retryable_provider_error(message: str) -> bool:
         "timeout",
         "temporarily unavailable",
         "unexpected_eof",
+        "incompleteread",
+        "incomplete read",
         "eof occurred",
+        "remotedisconnected",
         "connection reset",
         "remote end closed",
     ]

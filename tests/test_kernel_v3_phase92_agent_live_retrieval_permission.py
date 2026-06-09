@@ -812,6 +812,8 @@ def _runtime_args(**overrides: object) -> SimpleNamespace:
         "live_search_max_sources_per_provider": None,
         "live_timeout_seconds": None,
         "live_max_bytes": None,
+        "live_download_byte_budget": cli.DEFAULT_LIVE_DOWNLOAD_BYTE_BUDGET,
+        "live_cache_dir": cli.DEFAULT_LIVE_CACHE_DIR,
         "live_max_network_fetches": cli.DEFAULT_LIVE_NETWORK_FETCH_BUDGET,
         "response_language": None,
         "context_profile": "provider",

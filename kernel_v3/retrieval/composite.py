@@ -249,7 +249,7 @@ class AdaptiveSearchProvider:
     def search(self, query: str, *, goal: SearchGoal, plan: QueryPlan) -> list[SearchSource]:
         request = _strategy_request(goal.metadata, default_strategy=self.default_strategy)
         providers = _strategy_providers(self.providers, request=request)
-        if request["mode"] == "aggregate":
+        if request["mode"] in {"aggregate", "structured", "fresh_live", "crawl"}:
             provider: SearchProvider = AggregateSearchProvider(
                 providers,
                 max_sources_per_provider=request.get("max_sources_per_provider") or self.max_sources_per_provider,

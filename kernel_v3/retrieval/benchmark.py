@@ -21,6 +21,14 @@ def retrieval_behavior_benchmark(journal: JournalStore, task_id: str) -> JsonObj
     unique_queries = sorted(set(queries))
     fetch_status_counts = Counter(str(item.get("status") or "unknown") for item in fetch_attempts)
     search_status_counts = Counter(str(item.get("status") or "unknown") for item in search_attempts)
+    fetch_bytes = sum(_int_value(item.get("size_bytes")) for item in fetch_attempts)
+    downloaded_bytes = max(
+        [_int_value(_diagnostics(item).get("downloaded_bytes")) for item in fetch_attempts] or [0]
+    )
+    cache_hit_count = sum(1 for item in fetch_attempts if _diagnostics(item).get("cache_hit") is True)
+    budget_block_count = sum(
+        1 for item in fetch_attempts if _diagnostics(item).get("reason") == "download_byte_budget_exhausted"
+    )
     source_ids = [str(item.get("source_id") or "") for item in fetch_attempts if item.get("source_id")]
     unique_source_ids = set(source_ids)
     latest_report = retrieval_reports[-1] if retrieval_reports else {}
@@ -39,6 +47,10 @@ def retrieval_behavior_benchmark(journal: JournalStore, task_id: str) -> JsonObj
         "fetch_attempt_count": len(fetch_attempts),
         "successful_fetch_count": fetch_status_counts.get("ok", 0),
         "fetch_success_rate": _rate(fetch_status_counts.get("ok", 0), len(fetch_attempts)),
+        "fetch_bytes": fetch_bytes,
+        "downloaded_bytes": downloaded_bytes,
+        "cache_hit_count": cache_hit_count,
+        "download_budget_block_count": budget_block_count,
         "unique_fetch_source_count": len(unique_source_ids),
         "fetch_source_repetition_rate": _repetition_rate(len(source_ids), len(unique_source_ids)),
         "evidence_count": len(evidence),
@@ -98,6 +110,18 @@ def _rate(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return round(numerator / denominator, 4)
+
+
+def _diagnostics(item: JsonObject) -> JsonObject:
+    diagnostics = item.get("diagnostics")
+    return diagnostics if isinstance(diagnostics, dict) else {}
+
+
+def _int_value(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _nested_string(data: JsonObject, *path: str) -> str | None:

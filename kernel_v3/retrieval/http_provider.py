@@ -140,35 +140,39 @@ class HttpFetchProvider:
                 },
             )
         if response.status_code < 200 or response.status_code >= 300:
+            budget_diagnostics = _budget_diagnostics_from_headers(response.headers)
             return FetchResponse(
                 status="failed",
                 body="",
                 diagnostics={
-                    "reason": "http_status_error",
+                    "reason": budget_diagnostics.get("reason") or "http_status_error",
                     "status_code": response.status_code,
+                    **budget_diagnostics,
                     **_safe_url_diagnostics(source.uri),
                     **self._source_discovery_diagnostics(source),
                 },
             )
-        if len(response.body) > self.max_bytes:
-            return FetchResponse(
-                status="failed",
-                body="",
-                diagnostics={
-                    "reason": "http_body_too_large",
-                    "max_bytes": self.max_bytes,
-                    **_safe_url_diagnostics(source.uri),
-                    **self._source_discovery_diagnostics(source),
-                },
-            )
+        truncated = len(response.body) > self.max_bytes
+        body = response.body[: self.max_bytes] if truncated else response.body
+        budget_diagnostics = _budget_diagnostics_from_headers(response.headers)
         return FetchResponse(
             status="ok",
-            body=_decode_http_body(response.body, mime_type=response.mime_type),
+            body=_decode_http_body(body, mime_type=response.mime_type),
             mime_type=response.mime_type or "text/plain",
             diagnostics={
                 "source": "http_fetch",
                 "status_code": response.status_code,
-                "byte_count": len(response.body),
+                "byte_count": len(body),
+                "truncated": truncated,
+                **budget_diagnostics,
+                **(
+                    {
+                        "truncation_reason": "http_body_too_large",
+                        "max_bytes": self.max_bytes,
+                    }
+                    if truncated
+                    else {}
+                ),
                 **_safe_url_diagnostics(source.uri),
                 **self._source_discovery_diagnostics(source),
             },
@@ -545,6 +549,18 @@ def _source_id_from_result(result: JsonObject, *, uri: str, index: int, provider
     if isinstance(raw_source_id, str) and raw_source_id and not contains_secret_like_content(raw_source_id):
         return _bounded_text(raw_source_id, SEARCH_RESULT_ID_LIMIT)
     return _bounded_text(f"{provider_id}-{_text_hash(uri)[:12]}-{index}", SEARCH_RESULT_ID_LIMIT)
+
+
+def _budget_diagnostics_from_headers(headers: JsonObject | None) -> JsonObject:
+    if not isinstance(headers, dict):
+        return {}
+    result: JsonObject = {}
+    for key, value in headers.items():
+        text_key = str(key).lower()
+        if not text_key.startswith("x-holo-"):
+            continue
+        result[text_key.removeprefix("x-holo-").replace("-", "_")] = value
+    return result
 
 
 def _text_hash(text: str) -> str:

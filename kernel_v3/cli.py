@@ -7,12 +7,17 @@ import os
 import sys
 import urllib.parse
 from pathlib import Path
+from typing import Callable
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
 from kernel_v3.bench import (
+    FinanceBenchmarkItem,
+    FinanceBenchmarkResult,
+    finance_benchmark_run_id,
     load_finance_benchmark_items,
     run_finance_benchmark,
+    run_finance_benchmark_parallel,
     score_finance_prediction_file,
     write_finance_benchmark_outputs,
 )
@@ -83,7 +88,10 @@ from kernel_v3.retrieval import (
     retrieval_behavior_benchmark,
 )
 from kernel_v3.retrieval.live_config import (
+    DEFAULT_LIVE_CACHE_DIR,
+    DEFAULT_LIVE_DOWNLOAD_BYTE_BUDGET,
     LIVE_ALLOW_ALL_HOSTS_ENV,
+    LIVE_CACHE_DIR_ENV,
     LIVE_CRAWL_INCLUDE_SITEMAPS_ENV,
     LIVE_CRAWL_MAX_LINKS_PER_PAGE_ENV,
     LIVE_CRAWL_MAX_PAGES_ENV,
@@ -93,6 +101,7 @@ from kernel_v3.retrieval.live_config import (
     LIVE_CRAWL_SOURCE_DIRECTORY_ENV,
     LIVE_FETCH_DISCOVERED_SEARCH_HOSTS_ENV,
     LIVE_FETCH_ALLOWED_HOSTS_ENV,
+    LIVE_DOWNLOAD_BYTE_BUDGET_ENV,
     LIVE_MAX_BYTES_ENV,
     LIVE_RETRIEVAL_ENV,
     LIVE_SEARCH_ALLOWED_HOSTS_ENV,
@@ -113,14 +122,15 @@ from kernel_v3.storage import (
     default_memory_index_path,
     default_memory_log_path,
     default_thread_root,
+    safe_storage_id,
 )
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
 from kernel_v3.trace import TraceRenderer
 
 
-DEFAULT_LIVE_NETWORK_FETCH_BUDGET = 409_600
-DEFAULT_LIVE_RETRIEVAL_FETCH_BUDGET = 4_096
+DEFAULT_LIVE_NETWORK_FETCH_BUDGET = 512
+DEFAULT_LIVE_RETRIEVAL_FETCH_BUDGET = 128
 DEFAULT_RESEARCH_DEPTH = "deep"
 DEFAULT_LIVE_CONTEXT_PROFILE = "provider"
 DEFAULT_LIVE_WEB_SEARCH_PROVIDERS = "bing_html,duckduckgo_html"
@@ -181,6 +191,17 @@ def _add_live_retrieval_args(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("--live-search-max-sources-per-provider", type=int, default=None)
     command_parser.add_argument("--live-timeout-seconds", type=int, default=None)
     command_parser.add_argument("--live-max-bytes", type=int, default=None)
+    command_parser.add_argument(
+        "--live-download-byte-budget",
+        type=int,
+        default=DEFAULT_LIVE_DOWNLOAD_BYTE_BUDGET,
+        help="Total live HTTP download byte budget for this process/cache scope. Cache hits do not count.",
+    )
+    command_parser.add_argument(
+        "--live-cache-dir",
+        default=DEFAULT_LIVE_CACHE_DIR,
+        help="Directory for live HTTP response cache shared across benchmark workers. Use an empty string to disable.",
+    )
 
 
 def _add_online_model_arg(command_parser: argparse.ArgumentParser) -> None:
@@ -589,6 +610,17 @@ def main(argv: list[str] | None = None) -> int:
     finance_bench.add_argument("--limit", type=int, default=None)
     finance_bench.add_argument("--offset", type=int, default=0)
     finance_bench.add_argument("--thread-prefix", default="finance-bench")
+    finance_bench.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Run live benchmark questions concurrently. Each worker uses an isolated journal/state directory.",
+    )
+    finance_bench.add_argument(
+        "--worker-state-root",
+        default=None,
+        help="Root directory for per-question worker state. Defaults to a fresh directory next to --output.",
+    )
     finance_bench.add_argument(
         "--question-prefix",
         default="",
@@ -1441,6 +1473,9 @@ def _live_retrieval_config_from_args(args, *, enable: bool) -> LiveRetrievalConf
     )
     _set_positive_env(env, LIVE_TIMEOUT_SECONDS_ENV, getattr(args, "live_timeout_seconds", None))
     _set_positive_env(env, LIVE_MAX_BYTES_ENV, getattr(args, "live_max_bytes", None))
+    _set_positive_env(env, LIVE_DOWNLOAD_BYTE_BUDGET_ENV, getattr(args, "live_download_byte_budget", None))
+    if getattr(args, "live_cache_dir", None) is not None:
+        env[LIVE_CACHE_DIR_ENV] = str(getattr(args, "live_cache_dir") or "")
     return LiveRetrievalConfig.from_env(env)
 
 
@@ -1908,19 +1943,173 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         return live_retrieval
     artifact_store = _runtime_artifact_store(args)
     research_corpus_store = _runtime_corpus_store(args)
-    runtime = _chat_runtime(
+    items = load_finance_benchmark_items(args.dataset, limit=args.limit, offset=args.offset)
+    progress_callback = _finance_benchmark_progress_callback(output_path=output_path, total=len(items))
+    if int(getattr(args, "parallel", 1) or 1) > 1:
+        worker_root = _finance_benchmark_worker_root(args, output_path=output_path)
+        results = run_finance_benchmark_parallel(
+            items=items,
+            runtime_factory=lambda index, item: _finance_benchmark_worker_runtime(
+                args,
+                live_retrieval=live_retrieval,
+                worker_root=worker_root,
+                index=index,
+                item_id=item.item_id,
+            ),
+            max_workers=args.parallel,
+            thread_prefix=args.thread_prefix,
+            question_prefix=args.question_prefix,
+            result_callback=progress_callback,
+        )
+        worker_state_root = str(worker_root)
+    else:
+        runtime = _chat_runtime(
+            journal,
+            artifact_store=artifact_store,
+            memory_store=_memory_store(args, create_default=True),
+            research_corpus_store=research_corpus_store,
+            retrieval_operator=_build_live_retrieval_operator(
+                live_retrieval,
+                artifact_store=artifact_store,
+                corpus_store=research_corpus_store,
+            )
+            if live_retrieval is not None
+            else None,
+            thread_store=_thread_store(args, create_default=True),
+            live_model=_agent_uses_live_model(args),
+            model=args.model,
+            profile=args.profile,
+            thinking=_thinking_override(args.thinking),
+            reasoning_effort=args.reasoning_effort,
+            max_output_tokens=args.max_output_tokens,
+            temperature=args.temperature,
+            generation_mode=args.generation_mode,
+            latency_target=args.latency_target,
+            response_language=_response_language_for_args(args),
+            planner_mode=_processor_mode(args, "planner"),
+            evaluator_mode=_processor_mode(args, "evaluator"),
+            synthesizer_mode=_processor_mode(args, "synthesizer"),
+            semantic_mode=_processor_mode(args, "semantic_intake"),
+            turn_router_mode=_processor_mode(args, "turn_router"),
+            default_mode="retrieval",
+            execution_metadata=_runtime_execution_metadata(args),
+        )
+        results = run_finance_benchmark(
+            items=items,
+            runtime=runtime,
+            thread_prefix=args.thread_prefix,
+            question_prefix=args.question_prefix,
+            journal=journal,
+            result_callback=progress_callback,
+        )
+        worker_state_root = None
+    summary = write_finance_benchmark_outputs(
+        results,
+        output_path=output_path,
+        summary_path=summary_path,
+        journal=journal,
+    )
+    return {
+        "status": "ok",
+        "mode": "live_holo",
+        "summary": summary.to_dict(),
+        "output": str(output_path) if output_path is not None else None,
+        "summary_output": str(summary_path) if summary_path is not None else None,
+        "parallel": int(getattr(args, "parallel", 1) or 1),
+        "worker_state_root": worker_state_root,
+    }
+
+
+def _finance_benchmark_progress_callback(
+    *,
+    output_path: Path | None,
+    total: int,
+) -> Callable[[int, FinanceBenchmarkItem, FinanceBenchmarkResult], None] | None:
+    if total <= 0:
+        return None
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("", encoding="utf-8")
+
+    completed = 0
+
+    def on_result(index: int, item: FinanceBenchmarkItem, result: FinanceBenchmarkResult) -> None:
+        nonlocal completed
+        completed += 1
+        if output_path is not None:
+            with output_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+        metrics = result.trace_metrics or {}
+        tokens = metrics.get("total_tokens")
+        retrieval_runs = metrics.get("retrieval_run_count")
+        fetches = metrics.get("fetch_attempt_count")
+        downloaded_bytes = metrics.get("downloaded_bytes")
+        cache_hits = metrics.get("cache_hit_count")
+        budget_blocks = metrics.get("download_budget_block_count")
+        duration_ms = metrics.get("processor_duration_ms")
+        reason = result.scorecard.get("reason") if isinstance(result.scorecard, dict) else None
+        print(
+            "[bench] "
+            f"{completed}/{total} item={item.item_id} index={index} status={result.status} "
+            f"reason={reason or '-'} tokens={tokens if tokens is not None else '-'} "
+            f"fetches={fetches if fetches is not None else '-'} "
+            f"download_mb={_mb(downloaded_bytes) if downloaded_bytes is not None else '-'} "
+            f"cache_hits={cache_hits if cache_hits is not None else '-'} "
+            f"budget_blocks={budget_blocks if budget_blocks is not None else '-'} "
+            f"retrieval_runs={retrieval_runs if retrieval_runs is not None else '-'} "
+            f"processor_ms={duration_ms if duration_ms is not None else '-'}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return on_result
+
+
+def _mb(value: object) -> str:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{parsed / 1_000_000:.1f}"
+
+
+def _finance_benchmark_worker_root(args, *, output_path: Path | None) -> Path:
+    configured = getattr(args, "worker_state_root", None)
+    if configured:
+        return Path(configured)
+    if output_path is not None:
+        base = output_path.parent / f"{output_path.stem}.workers"
+    else:
+        base = Path(".state/kernel_v3/bench/finance/workers")
+    return base / finance_benchmark_run_id()
+
+
+def _finance_benchmark_worker_runtime(
+    args,
+    *,
+    live_retrieval: LiveRetrievalConfig | None,
+    worker_root: Path,
+    index: int,
+    item_id: str,
+) -> ChatRuntime:
+    item_root = worker_root / f"{index:04d}-{safe_storage_id(item_id)}"
+    journal = JournalStore(item_root / "journal.jsonl", index_path=item_root / "journal.sqlite")
+    artifact_store = ArtifactStore(item_root / "artifacts.jsonl")
+    corpus_store = ResearchCorpusStore(item_root / "corpus.jsonl", index_path=item_root / "corpus.sqlite")
+    memory_store = MemoryStore(item_root / "memory.jsonl", index_path=item_root / "memory.sqlite")
+    return _chat_runtime(
         journal,
         artifact_store=artifact_store,
-        memory_store=_memory_store(args, create_default=True),
-        research_corpus_store=research_corpus_store,
+        memory_store=memory_store,
+        research_corpus_store=corpus_store,
         retrieval_operator=_build_live_retrieval_operator(
             live_retrieval,
             artifact_store=artifact_store,
-            corpus_store=research_corpus_store,
+            corpus_store=corpus_store,
         )
         if live_retrieval is not None
         else None,
-        thread_store=_thread_store(args, create_default=True),
+        thread_store=ThreadTranscriptStore(item_root / "threads"),
         live_model=_agent_uses_live_model(args),
         model=args.model,
         profile=args.profile,
@@ -1939,27 +2128,6 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         default_mode="retrieval",
         execution_metadata=_runtime_execution_metadata(args),
     )
-    items = load_finance_benchmark_items(args.dataset, limit=args.limit, offset=args.offset)
-    results = run_finance_benchmark(
-        items=items,
-        runtime=runtime,
-        thread_prefix=args.thread_prefix,
-        question_prefix=args.question_prefix,
-        journal=journal,
-    )
-    summary = write_finance_benchmark_outputs(
-        results,
-        output_path=output_path,
-        summary_path=summary_path,
-        journal=journal,
-    )
-    return {
-        "status": "ok",
-        "mode": "live_holo",
-        "summary": summary.to_dict(),
-        "output": str(output_path) if output_path is not None else None,
-        "summary_output": str(summary_path) if summary_path is not None else None,
-    }
 
 
 def _resident_command(args, journal: JournalStore) -> dict[str, object]:
@@ -2450,8 +2618,8 @@ def _live_processor_fabric(
     latency_target: str = "balanced",
 ) -> ProcessorFabric:
     providers = {
-        "deepseek": DeepSeekProvider(enabled=True, model=model),
-        "openai_compatible": OpenAICompatibleProvider(enabled=True, model=model or "local-model"),
+        "deepseek": DeepSeekProvider(enabled=True, model=model, max_retries=2),
+        "openai_compatible": OpenAICompatibleProvider(enabled=True, model=model or "local-model", max_retries=2),
     }
     if provider == "deepseek":
         router = deepseek_v4_router(

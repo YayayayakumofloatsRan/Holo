@@ -42,6 +42,45 @@ def test_phase100_issuer_identity_resolves_common_us_company_name_in_finance_con
     assert "builtin_issuer_registry" in identity.sources
 
 
+def test_phase100_issuer_identity_resolves_common_financial_issuers_in_finance_context():
+    goldman = resolve_issuer_identity(
+        "Goldman Sachs net revenues 2024 10-K",
+        {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+    )
+    blackrock = resolve_issuer_identity(
+        "BlackRock total revenues annual report",
+        {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+    )
+
+    assert goldman.ticker == "GS"
+    assert goldman.cik == "0000886982"
+    assert goldman.company == "The Goldman Sachs Group, Inc."
+    assert "builtin_issuer_registry" in goldman.sources
+    assert blackrock.ticker == "BLK"
+    assert blackrock.cik == "0002012383"
+    assert blackrock.company == "BlackRock, Inc."
+    assert "builtin_issuer_registry" in blackrock.sources
+
+
+def test_issuer_identity_enriches_known_ticker_with_registry_urls():
+    identity = resolve_issuer_identity(
+        "BLK total revenues 2024 SEC companyfacts",
+        {
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "ticker": "BLK",
+            "sec_cik": "2012383",
+        },
+    )
+
+    assert identity.ticker == "BLK"
+    assert identity.cik == "0002012383"
+    assert identity.company == "BlackRock, Inc."
+    assert identity.identifiers["annual_reports_url"] == (
+        "https://ir.blackrock.com/financials/annual-reports-and-proxy/default.aspx"
+    )
+    assert "builtin_issuer_registry" in identity.sources
+
+
 def test_phase100_issuer_identity_ignores_finance_acronyms_as_us_tickers():
     identity = resolve_issuer_identity("SEC EDGAR API JSON companyfacts")
 

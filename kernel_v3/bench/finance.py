@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.contracts import Contract, JsonObject, JsonValue
@@ -66,6 +68,7 @@ class FinanceBenchmarkResult(Contract):
     scorecard: JsonObject
     trace_metrics: JsonObject
     trace_refs: list[str]
+    final_answer: JsonObject | None
     failure_report: JsonObject | None
     metadata: JsonObject = field(default_factory=dict)
 
@@ -92,6 +95,9 @@ class FinanceBenchmarkSummary(Contract):
     output_path: str | None = None
 
 
+FinanceBenchmarkResultCallback = Callable[[int, FinanceBenchmarkItem, FinanceBenchmarkResult], None]
+
+
 def load_finance_benchmark_items(path: Path | str, *, limit: int | None = None, offset: int = 0) -> list[FinanceBenchmarkItem]:
     records = _load_records(Path(path))
     items = [_item_from_record(record, index=index) for index, record in enumerate(records, start=1)]
@@ -114,12 +120,23 @@ def score_finance_answer(
     normalized_answer = _normalize_text(answer_text)
     gold = item.gold_answer or ""
     gold_sentinel = _gold_sentinel(gold)
-    numeric = _score_numeric(answer_text, item.numeric_value, item.tolerance)
+    expected_numeric = item.numeric_value
+    expected_tolerance = item.tolerance
+    if expected_numeric is None and gold_sentinel:
+        expected_numeric = _numeric_target_from_gold(gold)
+        if expected_numeric is not None:
+            expected_tolerance = max(abs(expected_numeric) * 0.01, 1.0)
+    elif expected_numeric is None and gold:
+        expected_numeric = _numeric_target_from_gold(gold)
+        if expected_numeric is not None:
+            expected_tolerance = max(abs(expected_numeric) * 0.01, 1.0)
+    numeric = _score_numeric(answer_text, expected_numeric, expected_tolerance)
     gold_overlap = _token_overlap(gold, answer_text) if gold and not gold_sentinel else None
     gold_string_match = _normalize_text(gold) in normalized_answer if gold and not gold_sentinel else None
     citation_refs = _citation_refs(final_answer, answer_text=answer_text)
     citation_present = bool(citation_refs)
     unavailable_ack = _contains_any(normalized_answer, UNAVAILABLE_MARKERS)
+    corrected_actual = gold_sentinel and bool(numeric["scored"]) and bool(numeric["passed"])
     answer_present = bool(normalized_answer.strip())
 
     scored = False
@@ -127,8 +144,11 @@ def score_finance_answer(
     reason = "ungraded_no_gold_signal"
     if gold_sentinel:
         scored = True
-        passed = unavailable_ack and answer_present
-        reason = "sentinel_answer_acknowledged" if passed else "sentinel_answer_not_acknowledged"
+        passed = (unavailable_ack or corrected_actual) and answer_present
+        if corrected_actual:
+            reason = "sentinel_actual_value_corrected"
+        else:
+            reason = "sentinel_answer_acknowledged" if passed else "sentinel_answer_not_acknowledged"
     elif numeric["scored"]:
         scored = True
         passed = bool(numeric["passed"])
@@ -151,6 +171,7 @@ def score_finance_answer(
         "answer_present": answer_present,
         "gold_sentinel": gold_sentinel,
         "unavailable_acknowledged": unavailable_ack,
+        "corrected_actual_value": corrected_actual,
         "gold_string_match": gold_string_match,
         "gold_token_overlap": gold_overlap,
         "numeric": numeric,
@@ -168,6 +189,7 @@ def run_finance_benchmark(
     thread_prefix: str = "finance-bench",
     question_prefix: str = "",
     journal: JournalStore | None = None,
+    result_callback: FinanceBenchmarkResultCallback | None = None,
 ) -> list[FinanceBenchmarkResult]:
     journal = journal or getattr(runtime, "journal", None)
     results: list[FinanceBenchmarkResult] = []
@@ -195,6 +217,7 @@ def run_finance_benchmark(
             scorecard=scorecard,
             trace_metrics=metrics,
             trace_refs=list(payload.trace_refs),
+            final_answer=payload.final_answer,
             failure_report=payload.failure_report,
             metadata={
                 "category": item.category,
@@ -212,7 +235,56 @@ def run_finance_benchmark(
                 data=result.to_dict(),
                 state_delta={"finance_benchmark_status": result.status, "finance_benchmark_item_id": item.item_id},
             )
+        if result_callback is not None:
+            result_callback(index, item, result)
     return results
+
+
+def run_finance_benchmark_parallel(
+    *,
+    items: list[FinanceBenchmarkItem],
+    runtime_factory: Callable[[int, FinanceBenchmarkItem], ChatRuntimeLike],
+    max_workers: int,
+    thread_prefix: str = "finance-bench",
+    question_prefix: str = "",
+    result_callback: FinanceBenchmarkResultCallback | None = None,
+) -> list[FinanceBenchmarkResult]:
+    if max_workers <= 1:
+        results: list[FinanceBenchmarkResult] = []
+        for index, item in enumerate(items, start=1):
+            runtime = runtime_factory(index, item)
+            results.extend(
+                run_finance_benchmark(
+                    items=[item],
+                    runtime=runtime,
+                    thread_prefix=thread_prefix,
+                    question_prefix=question_prefix,
+                    journal=getattr(runtime, "journal", None),
+                    result_callback=result_callback,
+                )
+            )
+        return results
+
+    by_index: dict[int, FinanceBenchmarkResult] = {}
+    with ThreadPoolExecutor(max_workers=max(1, int(max_workers))) as pool:
+        futures = {
+            pool.submit(
+                _run_one_finance_benchmark_item,
+                index,
+                item,
+                runtime_factory,
+                thread_prefix,
+                question_prefix,
+            ): index
+            for index, item in enumerate(items, start=1)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            result = future.result()
+            by_index[index] = result
+            if result_callback is not None:
+                result_callback(index, items[index - 1], result)
+    return [by_index[index] for index in sorted(by_index)]
 
 
 def score_finance_prediction_file(
@@ -238,6 +310,10 @@ def score_finance_prediction_file(
             )
         )
         final_answer = prediction.get("final_answer") if isinstance(prediction.get("final_answer"), dict) else None
+        if final_answer is None:
+            scorecard_payload = prediction.get("scorecard")
+            if isinstance(scorecard_payload, dict) and isinstance(scorecard_payload.get("citation_refs"), list):
+                final_answer = {"citation_refs": scorecard_payload.get("citation_refs")}
         trace_metrics_payload = prediction.get("trace_metrics") if isinstance(prediction.get("trace_metrics"), dict) else {}
         scorecard = score_finance_answer(
             item,
@@ -258,6 +334,7 @@ def score_finance_prediction_file(
                 scorecard=scorecard,
                 trace_metrics=dict(trace_metrics_payload),
                 trace_refs=[str(ref) for ref in prediction.get("trace_refs", [])] if isinstance(prediction.get("trace_refs"), list) else [],
+                final_answer=final_answer,
                 failure_report=prediction.get("failure_report") if isinstance(prediction.get("failure_report"), dict) else None,
                 metadata={"source": "prediction_file", "category": item.category},
             )
@@ -335,6 +412,10 @@ def write_finance_benchmark_outputs(
     return summary
 
 
+def finance_benchmark_run_id() -> str:
+    return "finbench-" + str(int(time.time() * 1000))
+
+
 def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonObject:
     if journal is None or task_id is None:
         return {}
@@ -366,6 +447,10 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "query_repetition_rate": retrieval.get("query_repetition_rate", 0.0),
         "fetch_attempt_count": retrieval.get("fetch_attempt_count", 0),
         "fetch_success_rate": retrieval.get("fetch_success_rate", 0.0),
+        "fetch_bytes": retrieval.get("fetch_bytes", 0),
+        "downloaded_bytes": retrieval.get("downloaded_bytes", 0),
+        "cache_hit_count": retrieval.get("cache_hit_count", 0),
+        "download_budget_block_count": retrieval.get("download_budget_block_count", 0),
         "evidence_count": retrieval.get("evidence_count", 0),
         "citation_count": retrieval.get("citation_count", 0),
         "final_answer_chars": retrieval.get("final_answer_chars", 0),
@@ -397,6 +482,59 @@ def _load_records(path: Path) -> list[JsonObject]:
                 return [payload]
         raise ValueError(f"expected a JSONL file or a JSON object with data/items/questions in {path}")
     return _load_jsonl_records(text)
+
+
+def _run_one_finance_benchmark_item(
+    index: int,
+    item: FinanceBenchmarkItem,
+    runtime_factory: Callable[[int, FinanceBenchmarkItem], ChatRuntimeLike],
+    thread_prefix: str,
+    question_prefix: str,
+) -> FinanceBenchmarkResult:
+    runtime = runtime_factory(index, item)
+    journal = getattr(runtime, "journal", None)
+    thread_id = f"{safe_storage_id(thread_prefix)}-{index:04d}-{safe_storage_id(item.item_id)}"
+    prompt = _benchmark_prompt(item, question_prefix=question_prefix)
+    payload = runtime.receive(prompt, thread_id=thread_id)
+    answer = _answer_from_chat_result(payload)
+    metrics = trace_metrics(journal, task_id=payload.task_id)
+    scorecard = score_finance_answer(
+        item,
+        answer=answer,
+        final_answer=payload.final_answer,
+        failure_report=payload.failure_report,
+        trace_metrics=metrics,
+    )
+    result = FinanceBenchmarkResult(
+        item_id=item.item_id,
+        status=str(scorecard["status"]),
+        question=item.question,
+        answer=answer,
+        task_id=payload.task_id,
+        run_id=payload.run_id,
+        thread_id=payload.thread_id,
+        scorecard=scorecard,
+        trace_metrics=metrics,
+        trace_refs=list(payload.trace_refs),
+        final_answer=payload.final_answer,
+        failure_report=payload.failure_report,
+        metadata={
+            "category": item.category,
+            "source": item.source,
+            "required_tools": list(item.required_tools),
+            "parallel_index": index,
+        },
+    )
+    if journal is not None:
+        journal.append(
+            task_id=payload.task_id,
+            run_id=payload.run_id or "finance-benchmark",
+            step_id=None,
+            kind="finance_benchmark_item_result",
+            data=result.to_dict(),
+            state_delta={"finance_benchmark_status": result.status, "finance_benchmark_item_id": item.item_id},
+        )
+    return result
 
 
 def _load_jsonl_records(text: str) -> list[JsonObject]:
@@ -491,8 +629,30 @@ def _score_numeric(answer: str, expected: float | None, tolerance: float | None)
     }
 
 
+def _numeric_target_from_gold(gold: str) -> float | None:
+    candidates = _extract_numeric_candidates(gold)
+    if not candidates:
+        return None
+    preferred = [
+        candidate
+        for candidate in candidates
+        if (candidate["prefix"] or candidate["unit"]) and not _looks_like_year(float(candidate["value"]))
+    ]
+    if preferred:
+        return float(preferred[0]["value"])
+    for candidate in candidates:
+        value = float(candidate["value"])
+        if not _looks_like_year(value):
+            return value
+    return float(candidates[0]["value"])
+
+
 def _extract_numeric_values(text: str) -> list[float]:
-    values: list[float] = []
+    return [float(candidate["value"]) for candidate in _extract_numeric_candidates(text)]
+
+
+def _extract_numeric_candidates(text: str) -> list[JsonObject]:
+    candidates: list[JsonObject] = []
     pattern = re.compile(
         r"(?P<prefix>[$€£¥])?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
         r"(?P<unit>%|million|billion|trillion|thousand|mn|bn|m|b|亿|万)?",
@@ -518,8 +678,19 @@ def _extract_numeric_values(text: str) -> list[float]:
         elif unit == "万":
             value *= 10_000
         if math.isfinite(value):
-            values.append(value)
-    return values
+            candidates.append(
+                {
+                    "value": value,
+                    "raw_number": raw,
+                    "prefix": match.group("prefix") or "",
+                    "unit": unit,
+                }
+            )
+    return candidates
+
+
+def _looks_like_year(value: float) -> bool:
+    return value.is_integer() and 1900 <= value <= 2100
 
 
 def _gold_sentinel(gold: str) -> bool:

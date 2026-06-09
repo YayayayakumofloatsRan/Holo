@@ -117,6 +117,30 @@ def test_phase99_source_query_provider_expands_macro_source_queries():
     assert fred.metadata["authority_level"] == "primary"
 
 
+def test_phase99_source_query_provider_expands_builtin_issuer_ir_urls():
+    provider = ResearchSourceQuerySearchProvider()
+
+    sources = provider.search(
+        "BlackRock total revenues annual report earnings release",
+        goal=SearchGoal(
+            goal_id="goal-source-query-issuer-ir",
+            query="BlackRock total revenues annual report earnings release",
+            max_sources=20,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        plan=_plan(),
+    )
+
+    urls = {source.uri for source in sources}
+    assert "https://ir.blackrock.com/" in urls
+    assert "https://ir.blackrock.com/financials/annual-reports-and-proxy/default.aspx" in urls
+    assert "https://ir.blackrock.com/financials/quarterly-results/default.aspx" in urls
+    annual = next(source for source in sources if source.uri.endswith("annual-reports-and-proxy/default.aspx"))
+    assert annual.metadata["source_family"] == "company_ir"
+    assert annual.metadata["authority_level"] == "primary"
+    assert annual.metadata["source_kind"] == "issuer_annual_reports"
+
+
 def test_phase99_source_query_provider_expands_common_market_data_portals():
     provider = ResearchSourceQuerySearchProvider()
 

@@ -36,6 +36,7 @@ from kernel_v3.retrieval.discovery import (
     build_research_graph,
     expand_discovery_sources,
 )
+from kernel_v3.retrieval.document_expansion import expand_document_links
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator, is_discovery_goal, qualify_evidence_candidate
 from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
@@ -312,7 +313,12 @@ class RetrievalOperator:
         fetch_summaries: list[JsonObject] = []
         source_by_id = {source.source_id: source for source in _dedupe_sources(sources)}
         if fetchable_ranked:
-            fetch_queue = fetchable_ranked
+            fetch_queue = _initial_fetch_queue_with_discovery_supplements(
+                goal,
+                fetchable_ranked=fetchable_ranked,
+                ranked_all=ranked_all,
+                research_profile=research_profile,
+            )
         elif _should_fetch_rejected_sources(goal, research_profile=research_profile, source_rejections=source_rejections):
             fetch_queue = ranked_all
         else:
@@ -322,103 +328,150 @@ class RetrievalOperator:
             for index, ranked_source in enumerate(fetch_queue[: goal.max_fetches], start=1)
             if ranked_source.source_id in source_by_id
         ]
-        for index, ranked_source, source, response, fetch_error in self._fetch_ranked_sources(fetch_jobs):
-            fetch_id = f"fetch-{goal.goal_id}-{index}"
-            artifact_refs: list[str] = []
-            if response is not None and response.status == "ok":
-                artifact = artifact_store.write_blob(
-                    kind="retrieval_fetched_document",
-                    payload=response.body,
-                    mime_type=response.mime_type,
-                    metadata={
+        (
+            documents,
+            fetch_attempt_ids,
+            fetch_summaries,
+        ) = self._fetch_jobs_and_record(
+            fetch_jobs,
+            goal=goal,
+            journal=journal,
+            artifact_store=artifact_store,
+            task_id=task_id,
+            run_id=run_id,
+            step_id_prefix=step_id_prefix,
+            action_ref=action_ref,
+            source_assessments=source_assessments,
+        )
+
+        all_fetch_jobs = list(fetch_jobs)
+        document_expanded_sources: list[SearchSource] = []
+        remaining_fetch_budget = max(0, goal.max_fetches - len(fetch_attempt_ids))
+        if documents and remaining_fetch_budget > 0:
+            document_expansions: list[DiscoveryExpansion]
+            document_expansion_actions = []
+            document_expanded_sources, document_expansions, document_expansion_actions = expand_document_links(
+                goal=goal,
+                documents=documents,
+                source_by_id=source_by_id,
+                max_candidates=min(remaining_fetch_budget, max(1, goal.max_sources * 4), 128),
+            )
+            if document_expansions:
+                discovery_expansions.extend(document_expansions)
+                expansion_actions.extend(document_expansion_actions)
+                _append(
+                    journal,
+                    task_id,
+                    run_id,
+                    f"{step_id_prefix}-document-expansion",
+                    "retrieval_document_expansion",
+                    {
                         "goal_id": goal.goal_id,
-                        "source_id": source.source_id,
-                        "uri": source.uri,
-                        "title": source.title,
+                        "expanded_source_count": len(document_expanded_sources),
+                        "expansion_count": len(document_expansions),
+                        "expansions": [item.to_dict() for item in document_expansions[:64]],
+                        "diagnostics": {
+                            "truncated": len(document_expansions) > 64,
+                            "next_tool_action_count": len(document_expansion_actions),
+                            "remaining_fetch_budget": remaining_fetch_budget,
+                        },
                     },
+                    action_ref=action_ref,
                 )
-                preview = _preview(response.body, self.preview_chars)
-                document = FetchedDocument(
-                    document_id=f"doc-{goal.goal_id}-{index}",
-                    goal_id=goal.goal_id,
-                    source_id=source.source_id,
-                    uri=source.uri,
-                    title=source.title,
-                    artifact_id=artifact.artifact_id,
-                    payload_hash=artifact.payload_hash,
-                    preview=preview,
-                    size_bytes=int(artifact.metadata.get("size_bytes", 0)),
-                    metadata={"mime_type": response.mime_type, "source_metadata": _safe_json(source.metadata)},
-                )
-                documents.append((document, response.body))
-                artifact_refs.append(artifact.artifact_id)
-                corpus_document = self._record_corpus_document(
-                    document=document,
-                    source=source,
-                    goal=goal,
-                    task_id=task_id,
-                    run_id=run_id,
-                    source_assessment=source_assessments.get(document.source_id),
-                )
-                if corpus_document is not None:
+            if document_expanded_sources:
+                sources.extend(document_expanded_sources)
+                for source in document_expanded_sources:
+                    source_by_id[source.source_id] = source
+                    if research_profile is not None:
+                        source_assessments[source.source_id] = assess_search_source(source, profile=research_profile)
+                if research_profile is not None:
+                    source_quality = source_quality_summary(
+                        list(source_assessments.values()),
+                        authority_requirement=_source_authority_requirement(goal),
+                    )
                     _append(
                         journal,
                         task_id,
                         run_id,
-                        f"{step_id_prefix}-corpus-{index}",
-                        "retrieval_corpus_document",
-                        corpus_document.to_dict(),
+                        f"{step_id_prefix}-source-assessment-document-expansion",
+                        "retrieval_source_assessment",
+                        {
+                            "goal_id": goal.goal_id,
+                            "research_profile": research_profile.to_dict(),
+                            "assessments": [
+                                source_assessments[source.source_id].to_dict()
+                                for source in document_expanded_sources
+                                if source.source_id in source_assessments
+                            ],
+                            "diagnostics": {
+                                **source_authority_summary(list(source_assessments.values())),
+                                "source_quality": source_quality,
+                                "assessment_scope": "document_expansion",
+                            },
+                        },
                         action_ref=action_ref,
-                        artifact_refs=[document.artifact_id],
                     )
-                attempt = FetchAttempt(
-                    fetch_id=fetch_id,
-                    goal_id=goal.goal_id,
-                    source_id=source.source_id,
-                    uri=source.uri,
-                    status="ok",
-                    artifact_id=artifact.artifact_id,
-                    payload_hash=artifact.payload_hash,
-                    preview=preview,
-                    size_bytes=document.size_bytes,
-                    diagnostics=_safe_diagnostics(response.diagnostics),
+                expanded_ranked_all = rank_sources(goal, document_expanded_sources, research_profile=research_profile)
+                expanded_fetchable_ranked, expanded_source_rejections = _fetchable_ranked_sources(goal, expanded_ranked_all)
+                source_rejections.extend(expanded_source_rejections)
+                _append(
+                    journal,
+                    task_id,
+                    run_id,
+                    f"{step_id_prefix}-rank-document-expansion",
+                    "retrieval_rank_sources",
+                    RankSources(
+                        ranking_id=f"rank-{goal.goal_id}-document-expansion",
+                        goal_id=goal.goal_id,
+                        ranked_sources=[_safe_source_dict(source) for source in expanded_ranked_all],
+                        diagnostics={
+                            "ranked_source_count": len(expanded_ranked_all),
+                            "raw_ranked_source_count": len(expanded_ranked_all),
+                            "rejected_ranked_source_count": len(expanded_source_rejections),
+                            "max_sources": goal.max_sources,
+                            "ranking_scope": "document_expansion",
+                        },
+                    ).to_dict(),
+                    action_ref=action_ref,
                 )
-            else:
-                attempt = FetchAttempt(
-                    fetch_id=fetch_id,
-                    goal_id=goal.goal_id,
-                    source_id=source.source_id,
-                    uri=source.uri,
-                    status=response.status if response is not None else "failed",
-                    artifact_id=None,
-                    payload_hash=None,
-                    preview="",
-                    size_bytes=0,
-                    diagnostics=_safe_diagnostics(
-                        response.diagnostics if response is not None else {"error": fetch_error}
-                    ),
+                if expanded_fetchable_ranked:
+                    expansion_fetch_queue = expanded_fetchable_ranked
+                elif _should_fetch_rejected_sources(
+                    goal,
+                    research_profile=research_profile,
+                    source_rejections=expanded_source_rejections,
+                ):
+                    expansion_fetch_queue = expanded_ranked_all
+                else:
+                    expansion_fetch_queue = []
+                expanded_fetch_jobs = [
+                    (index, ranked_source, source_by_id[ranked_source.source_id])
+                    for index, ranked_source in enumerate(
+                        expansion_fetch_queue[:remaining_fetch_budget],
+                        start=len(fetch_attempt_ids) + 1,
+                    )
+                    if ranked_source.source_id in source_by_id
+                ]
+                (
+                    extra_documents,
+                    extra_fetch_attempt_ids,
+                    extra_fetch_summaries,
+                ) = self._fetch_jobs_and_record(
+                    expanded_fetch_jobs,
+                    goal=goal,
+                    journal=journal,
+                    artifact_store=artifact_store,
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id_prefix=step_id_prefix,
+                    action_ref=action_ref,
+                    source_assessments=source_assessments,
                 )
-            fetch_summaries.append(
-                {
-                    "fetch_id": fetch_id,
-                    "source_id": source.source_id,
-                    "uri": source.uri,
-                    "status": attempt.status,
-                    "size_bytes": attempt.size_bytes,
-                    "reason": attempt.diagnostics.get("reason") or attempt.diagnostics.get("error"),
-                }
-            )
-            fetch_attempt_ids.append(fetch_id)
-            _append(
-                journal,
-                task_id,
-                run_id,
-                f"{step_id_prefix}-fetch-{index}",
-                "retrieval_fetch_attempt",
-                attempt.to_dict(),
-                action_ref=action_ref,
-                artifact_refs=artifact_refs,
-            )
+                documents.extend(extra_documents)
+                fetch_attempt_ids.extend(extra_fetch_attempt_ids)
+                fetch_summaries.extend(extra_fetch_summaries)
+                all_fetch_jobs.extend(expanded_fetch_jobs)
+                ranked_all = rank_sources(goal, _dedupe_sources(sources), research_profile=research_profile)
 
         spans = []
         evidence_candidates: list[EvidenceCandidate] = []
@@ -599,7 +652,7 @@ class RetrievalOperator:
             sources=sources,
             ranked=ranked,
             source_rejections=source_rejections,
-            fetch_jobs=fetch_jobs,
+            fetch_jobs=all_fetch_jobs,
             fetch_summaries=fetch_summaries,
             documents=documents,
             spans=spans,
@@ -714,7 +767,7 @@ class RetrievalOperator:
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
                 **_budget_clamp_diagnostics(requested_goal, goal),
-                "fetch_concurrency": min(self.fetch_concurrency, max(1, len(fetch_jobs))),
+                "fetch_concurrency": min(self.fetch_concurrency, max(1, len(all_fetch_jobs))),
                 "provider_capabilities": self.provider_capabilities(),
                 "search_attempt_count": len(search_attempt_ids),
                 "search_summaries": search_summaries[-16:],
@@ -726,6 +779,7 @@ class RetrievalOperator:
                 "operator_critic": operator_critic,
                 "discovery_expansion_count": len(discovery_expansions),
                 "discovery_expanded_source_count": len(expanded_sources),
+                "document_expanded_source_count": len(document_expanded_sources),
                 "source_rejection_count": len(source_rejections),
                 "source_rejection_reasons": _count_by_key(source_rejections, "reason"),
                 "candidate_span_count": len(spans),
@@ -758,6 +812,121 @@ class RetrievalOperator:
             artifact_refs=report.artifact_refs,
         )
         return report
+
+    def _fetch_jobs_and_record(
+        self,
+        fetch_jobs: list[tuple[int, RankedSource, SearchSource]],
+        *,
+        goal: SearchGoal,
+        journal: JournalStore,
+        artifact_store: ArtifactStore,
+        task_id: str | None,
+        run_id: str,
+        step_id_prefix: str,
+        action_ref: str | None,
+        source_assessments: dict[str, SourceAssessment],
+    ) -> tuple[list[tuple[FetchedDocument, str]], list[str], list[JsonObject]]:
+        documents: list[tuple[FetchedDocument, str]] = []
+        fetch_attempt_ids: list[str] = []
+        fetch_summaries: list[JsonObject] = []
+        for index, _ranked_source, source, response, fetch_error in self._fetch_ranked_sources(fetch_jobs):
+            fetch_id = f"fetch-{goal.goal_id}-{index}"
+            artifact_refs: list[str] = []
+            if response is not None and response.status == "ok":
+                artifact = artifact_store.write_blob(
+                    kind="retrieval_fetched_document",
+                    payload=response.body,
+                    mime_type=response.mime_type,
+                    metadata={
+                        "goal_id": goal.goal_id,
+                        "source_id": source.source_id,
+                        "uri": source.uri,
+                        "title": source.title,
+                    },
+                )
+                preview = _preview(response.body, self.preview_chars)
+                document = FetchedDocument(
+                    document_id=f"doc-{goal.goal_id}-{index}",
+                    goal_id=goal.goal_id,
+                    source_id=source.source_id,
+                    uri=source.uri,
+                    title=source.title,
+                    artifact_id=artifact.artifact_id,
+                    payload_hash=artifact.payload_hash,
+                    preview=preview,
+                    size_bytes=int(artifact.metadata.get("size_bytes", 0)),
+                    metadata={"mime_type": response.mime_type, "source_metadata": _safe_json(source.metadata)},
+                )
+                documents.append((document, response.body))
+                artifact_refs.append(artifact.artifact_id)
+                corpus_document = self._record_corpus_document(
+                    document=document,
+                    source=source,
+                    goal=goal,
+                    task_id=task_id,
+                    run_id=run_id,
+                    source_assessment=source_assessments.get(document.source_id),
+                )
+                if corpus_document is not None:
+                    _append(
+                        journal,
+                        task_id,
+                        run_id,
+                        f"{step_id_prefix}-corpus-{index}",
+                        "retrieval_corpus_document",
+                        corpus_document.to_dict(),
+                        action_ref=action_ref,
+                        artifact_refs=[document.artifact_id],
+                    )
+                attempt = FetchAttempt(
+                    fetch_id=fetch_id,
+                    goal_id=goal.goal_id,
+                    source_id=source.source_id,
+                    uri=source.uri,
+                    status="ok",
+                    artifact_id=artifact.artifact_id,
+                    payload_hash=artifact.payload_hash,
+                    preview=preview,
+                    size_bytes=document.size_bytes,
+                    diagnostics=_safe_diagnostics(response.diagnostics),
+                )
+            else:
+                attempt = FetchAttempt(
+                    fetch_id=fetch_id,
+                    goal_id=goal.goal_id,
+                    source_id=source.source_id,
+                    uri=source.uri,
+                    status=response.status if response is not None else "failed",
+                    artifact_id=None,
+                    payload_hash=None,
+                    preview="",
+                    size_bytes=0,
+                    diagnostics=_safe_diagnostics(
+                        response.diagnostics if response is not None else {"error": fetch_error}
+                    ),
+                )
+            fetch_summaries.append(
+                {
+                    "fetch_id": fetch_id,
+                    "source_id": source.source_id,
+                    "uri": source.uri,
+                    "status": attempt.status,
+                    "size_bytes": attempt.size_bytes,
+                    "reason": attempt.diagnostics.get("reason") or attempt.diagnostics.get("error"),
+                }
+            )
+            fetch_attempt_ids.append(fetch_id)
+            _append(
+                journal,
+                task_id,
+                run_id,
+                f"{step_id_prefix}-fetch-{index}",
+                "retrieval_fetch_attempt",
+                attempt.to_dict(),
+                action_ref=action_ref,
+                artifact_refs=artifact_refs,
+            )
+        return documents, fetch_attempt_ids, fetch_summaries
 
     def _fetch_ranked_sources(
         self,
@@ -1185,6 +1354,76 @@ def _fetchable_ranked_sources(goal: SearchGoal, ranked: list[RankedSource]) -> t
             }
         )
     return fetchable, rejections
+
+
+def _initial_fetch_queue_with_discovery_supplements(
+    goal: SearchGoal,
+    *,
+    fetchable_ranked: list[RankedSource],
+    ranked_all: list[RankedSource],
+    research_profile: ResearchProfile | None,
+) -> list[RankedSource]:
+    """Reserve a small part of the fetch budget for discovery pages.
+
+    High-authority structured sources can be directly useful, but they can also
+    mask better primary documents behind filing or issuer discovery pages. The
+    reserved discovery fetches are not treated as final evidence; they are
+    inputs for the document-expansion layer.
+    """
+
+    if goal.max_fetches <= 0:
+        return []
+    discovery = _supplemental_discovery_ranked_sources(
+        goal,
+        ranked_all=ranked_all,
+        research_profile=research_profile,
+    )
+    if not discovery:
+        return fetchable_ranked
+    reserved = min(len(discovery), _supplemental_discovery_fetch_limit(goal, research_profile=research_profile))
+    if reserved <= 0 or goal.max_fetches <= 1:
+        return fetchable_ranked
+    primary_limit = max(1, goal.max_fetches - reserved)
+    queue: list[RankedSource] = []
+    seen: set[str] = set()
+    for source in fetchable_ranked[:primary_limit]:
+        queue.append(source)
+        seen.add(source.uri)
+    for source in discovery:
+        if len(queue) >= goal.max_fetches:
+            break
+        if source.uri in seen:
+            continue
+        queue.append(source)
+        seen.add(source.uri)
+    return queue
+
+
+def _supplemental_discovery_ranked_sources(
+    goal: SearchGoal,
+    *,
+    ranked_all: list[RankedSource],
+    research_profile: ResearchProfile | None,
+) -> list[RankedSource]:
+    if is_discovery_goal(goal=goal, research_profile=research_profile):
+        return []
+    result: list[RankedSource] = []
+    for source in ranked_all:
+        if _research_profile_discovery_source_rejection(goal, source) == "source_discovery_only_for_research_profile":
+            result.append(source)
+    return result
+
+
+def _supplemental_discovery_fetch_limit(goal: SearchGoal, *, research_profile: ResearchProfile | None) -> int:
+    profile = _research_profile_from_goal(goal) if research_profile is None else research_profile
+    if profile is None:
+        return 0
+    depth = str(goal.metadata.get("research_depth") or "").strip().lower()
+    if profile.profile_id == "finance_fundamentals":
+        return 8 if depth == "deep" else 4
+    if profile.profile_id == "academic_research":
+        return 6 if depth == "deep" else 3
+    return 4 if depth in {"balanced", "deep"} else 2
 
 
 def _ranked_source_fetch_rejection_reason(goal: SearchGoal, source: RankedSource) -> str | None:

@@ -6,6 +6,7 @@ from kernel_v3.bench import (
     FinanceBenchmarkItem,
     load_finance_benchmark_items,
     run_finance_benchmark,
+    run_finance_benchmark_parallel,
     score_finance_answer,
 )
 from kernel_v3.chat.contracts import ChatRuntimeResult
@@ -76,6 +77,49 @@ def test_finance_benchmark_sentinel_scoring_rewards_honest_unavailable_answer() 
     assert score["unavailable_acknowledged"] is True
 
 
+def test_finance_benchmark_sentinel_scoring_accepts_corrected_actual_value() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="adv-actual-1",
+        question="What was Google's operating cash flow for fiscal year 2024?",
+        gold_answer="INCORRECT_PREMISE — actual FY2024 operating cash flow was $125.3 billion",
+    )
+
+    score = score_finance_answer(item, answer="The 2024 operating cash flow was 1252.99亿美元.")
+
+    assert score["status"] == "passed"
+    assert score["gold_sentinel"] is True
+    assert score["corrected_actual_value"] is True
+    assert score["numeric"]["passed"] is True
+
+
+def test_finance_benchmark_gold_numeric_scoring_handles_approximate_text() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="fe-approx",
+        question="What was Salesforce revenue?",
+        gold_answer="approximately $34.8 billion (implied from fiscal 2025 revenue of $37.9 billion)",
+    )
+
+    score = score_finance_answer(item, answer="Salesforce total revenue was $34,857,000,000.")
+
+    assert score["status"] == "passed"
+    assert score["reason"] == "numeric_within_tolerance"
+    assert score["numeric"]["expected"] == 34_800_000_000
+
+
+def test_finance_benchmark_sentinel_actual_value_does_not_score_year_as_target() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="adv-year",
+        question="What was operating cash flow?",
+        gold_answer="INCORRECT_PREMISE — actual FY2024 operating cash flow was $125.3 billion",
+    )
+
+    score = score_finance_answer(item, answer="Operating cash flow was $125.299 billion in FY2024.")
+
+    assert score["status"] == "passed"
+    assert score["numeric"]["expected"] == 125_300_000_000
+    assert score["numeric"]["matched_value"] == 125_299_000_000
+
+
 def test_finance_benchmark_runner_does_not_need_gold_during_agent_run() -> None:
     journal = JournalStore.in_memory()
     runtime = _StaticChatRuntime(journal)
@@ -92,6 +136,62 @@ def test_finance_benchmark_runner_does_not_need_gold_during_agent_run() -> None:
     assert "$10 million" not in runtime.seen_prompts[0]
     assert results[0].status == "passed"
     assert journal.records(kind="finance_benchmark_item_result")
+
+
+def test_finance_benchmark_parallel_runner_isolates_and_orders_workers() -> None:
+    seen: list[tuple[int, str, str]] = []
+
+    def factory(index: int, item: FinanceBenchmarkItem) -> _StaticChatRuntime:
+        journal = JournalStore.in_memory()
+        runtime = _StaticChatRuntime(journal)
+        runtime.answer = f"{item.item_id} revenue was $10 million."
+        runtime.on_receive = lambda prompt, thread_id, index=index, item=item: seen.append((index, item.item_id, thread_id))
+        return runtime
+
+    items = [
+        FinanceBenchmarkItem(item_id="Q1", question="Q1 revenue?", gold_answer="$10 million"),
+        FinanceBenchmarkItem(item_id="Q2", question="Q2 revenue?", gold_answer="$10 million"),
+        FinanceBenchmarkItem(item_id="Q3", question="Q3 revenue?", gold_answer="$10 million"),
+    ]
+
+    results = run_finance_benchmark_parallel(
+        items=items,
+        runtime_factory=factory,
+        max_workers=3,
+        thread_prefix="parallel-smoke",
+        question_prefix="Do not see gold.",
+    )
+
+    assert [result.item_id for result in results] == ["Q1", "Q2", "Q3"]
+    assert [result.status for result in results] == ["passed", "passed", "passed"]
+    assert sorted(index for index, _, _ in seen) == [1, 2, 3]
+    assert all(thread_id.startswith("parallel-smoke-") for _, _, thread_id in seen)
+
+
+def test_finance_benchmark_parallel_runner_reports_item_progress() -> None:
+    progress: list[tuple[int, str, str]] = []
+
+    def factory(index: int, item: FinanceBenchmarkItem) -> _StaticChatRuntime:
+        journal = JournalStore.in_memory()
+        runtime = _StaticChatRuntime(journal)
+        runtime.answer = f"{item.item_id} revenue was $10 million."
+        return runtime
+
+    items = [
+        FinanceBenchmarkItem(item_id="Q1", question="Q1 revenue?", gold_answer="$10 million"),
+        FinanceBenchmarkItem(item_id="Q2", question="Q2 revenue?", gold_answer="$10 million"),
+    ]
+
+    results = run_finance_benchmark_parallel(
+        items=items,
+        runtime_factory=factory,
+        max_workers=2,
+        thread_prefix="progress-smoke",
+        result_callback=lambda index, item, result: progress.append((index, item.item_id, result.status)),
+    )
+
+    assert [result.item_id for result in results] == ["Q1", "Q2"]
+    assert sorted(progress) == [(1, "Q1", "passed"), (2, "Q2", "passed")]
 
 
 def test_finance_benchmark_cli_scores_prediction_file(tmp_path: Path) -> None:
@@ -135,9 +235,13 @@ class _StaticChatRuntime:
     def __init__(self, journal: JournalStore) -> None:
         self.journal = journal
         self.seen_prompts: list[str] = []
+        self.answer = "ExampleCo revenue was $10 million."
+        self.on_receive = None
 
     def receive(self, text: str, *, thread_id: str = "default") -> ChatRuntimeResult:
         self.seen_prompts.append(text)
+        if self.on_receive is not None:
+            self.on_receive(text, thread_id)
         self.journal.append(
             task_id="task-bench",
             run_id="run-bench",
@@ -158,7 +262,7 @@ class _StaticChatRuntime:
             run_id="run-bench",
             answer=None,
             final_answer={
-                "answer": "ExampleCo revenue was $10 million.",
+                "answer": self.answer,
                 "citation_refs": ["cite-1"],
                 "used_evidence": ["ev-1"],
                 "limitations": [],

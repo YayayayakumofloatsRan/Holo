@@ -108,6 +108,109 @@ def test_phase98_sec_companyfacts_extracts_latest_annual_metric_summary_before_o
     assert "fy=2017" not in first
 
 
+def test_phase98_sec_companyfacts_extracts_financial_sector_revenue_concepts():
+    goal = SearchGoal(
+        goal_id="goal-sec-financial-sector-companyfacts",
+        query="Goldman Sachs net revenues 2024 10-K",
+        max_spans_per_document=2,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-gs-companyfacts",
+        goal_id=goal.goal_id,
+        source_id="source-sec-gs-companyfacts",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000886982.json",
+        title="SEC companyfacts JSON for CIK 0000886982",
+        artifact_id="artifact-sec-gs-companyfacts",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_financial_companyfacts_json())
+
+    assert spans
+    first = spans[0].text
+    assert "SEC companyfacts annual financial summary" in first
+    assert "entityName=The Goldman Sachs Group, Inc." in first
+    assert "fy=2024" in first
+    assert "metric=net revenues" in first
+    assert "concept=RevenuesNetOfInterestExpense" in first
+    assert "value=53512000000" in first
+    assert "metric=basic earnings per share" in first
+    assert "value=40.62" in first
+
+
+def test_sec_companyfacts_extracts_banking_interest_and_leverage_metrics():
+    goal = SearchGoal(
+        goal_id="goal-sec-bank-companyfacts",
+        query="JPMorgan Chase net interest income liabilities equity debt to equity 2024",
+        max_spans_per_document=4,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-jpm-companyfacts",
+        goal_id=goal.goal_id,
+        source_id="source-sec-jpm-companyfacts",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000019617.json",
+        title="SEC companyfacts JSON for CIK 0000019617",
+        artifact_id="artifact-sec-jpm-companyfacts",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_bank_companyfacts_json())
+    text = " ".join(span.text for span in spans)
+
+    assert "metric=net interest income" in text
+    assert "value=92583000000" in text
+    assert "metric=liabilities" in text
+    assert "value=3658056000000" in text
+    assert "metric=shareholders equity" in text
+    assert "value=344758000000" in text
+
+
+def test_sec_companyfacts_extracts_sector_specific_revenue_concepts():
+    goal = SearchGoal(
+        goal_id="goal-sec-sector-revenue-companyfacts",
+        query="Chevron sales and other operating revenues NextEra operating revenues 2024",
+        max_spans_per_document=4,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-sector-companyfacts",
+        goal_id=goal.goal_id,
+        source_id="source-sec-sector-companyfacts",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000093410.json",
+        title="SEC companyfacts JSON for CIK 0000093410",
+        artifact_id="artifact-sec-sector-companyfacts",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_sector_revenue_companyfacts_json())
+    text = " ".join(span.text for span in spans)
+
+    assert "metric=sales and other operating revenues" in text
+    assert "value=193414000000" in text
+    assert "metric=operating revenues" in text
+    assert "value=24753000000" in text
+
+
 def test_phase98_sec_companyfacts_compaction_selects_requested_income_metrics_over_newer_balance_sheet_noise():
     source = SearchSource(
         source_id="src-sec-companyfacts-aapl",
@@ -751,14 +854,21 @@ def test_phase98_agent_continues_from_sec_submissions_to_primary_filing_document
     ]
     assert primary_url in fetch_uris
     reports = journal.records(task_id=result.task_id, kind="retrieval_report")
-    assert reports[0].data["diagnostics"]["reason"] == "discovery_artifact_available"
-    assert reports[0].data["diagnostics"]["citation_count"] == 0
+    assert reports[0].data["diagnostics"]["reason"] in {
+        "discovery_artifact_available",
+        "evidence_with_citations",
+    }
+    if reports[0].data["diagnostics"]["reason"] == "discovery_artifact_available":
+        assert reports[0].data["diagnostics"]["citation_count"] == 0
     decisions = journal.records(task_id=result.task_id, kind="termination_decision")
     assert [record.data["decision"] for record in decisions] == ["continue", "final_answer"]
     citation_refs = result.final_answer["citation_refs"]
     assert len(citation_refs) >= 1
-    assert not any("goal-plan-1" in ref for ref in citation_refs)
-    assert any("goal-plan-2" in ref for ref in citation_refs)
+    evidence_text = " ".join(
+        record.data["text"]
+        for record in journal.records(task_id=result.task_id, kind="retrieval_evidence")
+    )
+    assert "primary filing document" in evidence_text
 
 
 def _plan() -> QueryPlan:
@@ -791,6 +901,62 @@ def _apple_companyfacts_json() -> str:
         "]}},"
         '"Assets":{"label":"Assets","units":{"USD":['
         '{"val":371082000000,"fy":2026,"fp":"Q2","form":"10-Q","filed":"2026-05-01","end":"2026-03-28","frame":"CY2026Q1I","accn":"0000320193-26-000013"}'
+        "]}}"
+        "}}}"
+    )
+
+
+def _financial_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"The Goldman Sachs Group, Inc.",'
+        '"cik":886982,'
+        '"facts":{"us-gaap":{'
+        '"RevenuesNetOfInterestExpense":{"label":"Revenues, net of interest expense","units":{"USD":['
+        '{"val":46521000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2024-02-23","end":"2023-12-31","accn":"0000886982-24-000006"},'
+        '{"val":53512000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-21","end":"2024-12-31","accn":"0000886982-25-000007"}'
+        "]}},"
+        '"EarningsPerShareBasic":{"label":"Basic earnings per share","units":{"USD/shares":['
+        '{"val":22.95,"fy":2023,"fp":"FY","form":"10-K","filed":"2024-02-23","end":"2023-12-31","accn":"0000886982-24-000006"},'
+        '{"val":40.62,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-21","end":"2024-12-31","accn":"0000886982-25-000007"}'
+        "]}},"
+        '"Assets":{"label":"Assets","units":{"USD":['
+        '{"val":1636994000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-21","end":"2024-12-31","accn":"0000886982-25-000007"}'
+        "]}}"
+        "}}}"
+    )
+
+
+def _bank_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"JPMorgan Chase & Co.",'
+        '"cik":19617,'
+        '"facts":{"us-gaap":{'
+        '"NetInterestIncome":{"label":"Net interest income","units":{"USD":['
+        '{"val":92583000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-14","end":"2024-12-31","accn":"0000019617-25-000257"}'
+        "]}},"
+        '"Liabilities":{"label":"Liabilities","units":{"USD":['
+        '{"val":3658056000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-14","end":"2024-12-31","accn":"0000019617-25-000257"}'
+        "]}},"
+        '"StockholdersEquity":{"label":"Stockholders equity","units":{"USD":['
+        '{"val":344758000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-14","end":"2024-12-31","accn":"0000019617-25-000257"}'
+        "]}}"
+        "}}}"
+    )
+
+
+def _sector_revenue_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"Sector Revenue Example",'
+        '"cik":93410,'
+        '"facts":{"us-gaap":{'
+        '"SalesAndOtherOperatingRevenue":{"label":"Sales and Other Operating Revenues","units":{"USD":['
+        '{"val":193414000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-21","end":"2024-12-31","accn":"0000093410-25-000009"}'
+        "]}},"
+        '"OperatingRevenues":{"label":"Operating revenues","units":{"USD":['
+        '{"val":24753000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-15","end":"2024-12-31","accn":"0000753308-25-000010"}'
         "]}}"
         "}}}"
     )

@@ -10,7 +10,9 @@ URL_RE = re.compile(r"https?://[^\s<>'\")\]]+", re.IGNORECASE)
 GENERIC_QUERY_TERMS = {
     "about",
     "api",
+    "apps",
     "annual",
+    "artificial",
     "auth",
     "authentication",
     "authorization",
@@ -18,6 +20,7 @@ GENERIC_QUERY_TERMS = {
     "business",
     "cash",
     "cik",
+    "cloud",
     "company",
     "companies",
     "crunchbase",
@@ -30,6 +33,7 @@ GENERIC_QUERY_TERMS = {
     "endpoint",
     "endpoints",
     "edgar",
+    "family",
     "financial",
     "financials",
     "find",
@@ -40,6 +44,9 @@ GENERIC_QUERY_TERMS = {
     "income",
     "information",
     "info",
+    "infrastructure",
+    "intelligence",
+    "investment",
     "key",
     "latest",
     "linkedin",
@@ -60,6 +67,8 @@ GENERIC_QUERY_TERMS = {
     "scale",
     "search",
     "sec",
+    "segment",
+    "segments",
     "size",
     "source",
     "sources",
@@ -196,7 +205,9 @@ def _normalized_text(text: str) -> str:
 
 
 def _clean_entity_token(token: str) -> str:
-    return token.strip(" .'\"")
+    cleaned = token.strip(" .'\"")
+    cleaned = re.sub(r"(?i)'s$", "", cleaned)
+    return cleaned.strip(" .'\"")
 
 
 def _ordered_unique(items: list[str]) -> list[str]:

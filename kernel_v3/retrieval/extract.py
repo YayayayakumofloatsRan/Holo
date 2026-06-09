@@ -75,9 +75,30 @@ STRUCTURED_TEXT_MODES = {
 }
 SEC_COMPANYFACTS_CONCEPTS = (
     ("Revenues", "revenue"),
+    ("RevenuesNetOfInterestExpense", "net revenues"),
     ("RevenueFromContractWithCustomerExcludingAssessedTax", "revenue"),
+    ("RevenueFromContractWithCustomerIncludingAssessedTax", "revenue including assessed tax"),
+    ("SalesAndOtherOperatingRevenue", "sales and other operating revenues"),
+    ("SalesRevenueServicesNet", "service revenue"),
+    ("SalesRevenueGoodsNet", "goods revenue"),
     ("SalesRevenueNet", "net sales"),
+    ("OperatingRevenues", "operating revenues"),
+    ("RegulatedAndUnregulatedOperatingRevenue", "operating revenues"),
+    ("RevenuesFromExternalCustomers", "segment revenue from external customers"),
+    ("SegmentReportingInformationRevenue", "segment revenue"),
+    ("SegmentReportingInformationRevenueFromExternalCustomers", "segment revenue from external customers"),
+    ("InvestmentAdvisoryAdministrationFees", "investment advisory and administration fees"),
+    ("InvestmentBankingRevenue", "investment banking revenue"),
+    ("InterestIncomeExpenseNet", "net interest income"),
+    ("NetInterestIncome", "net interest income"),
+    ("InterestAndDividendIncomeOperating", "interest and dividend income"),
+    ("InterestIncomeOperating", "interest income"),
+    ("InterestExpenseOperating", "interest expense"),
+    ("NoninterestIncome", "noninterest income"),
+    ("ProvisionForLoanLeaseAndOtherLosses", "provision for credit losses"),
     ("NetIncomeLoss", "net income"),
+    ("NetIncomeLossAvailableToCommonStockholdersBasic", "net income available to common shareholders"),
+    ("NetIncomeLossAttributableToParent", "net income attributable to parent"),
     ("ProfitLoss", "net income"),
     ("OperatingIncomeLoss", "operating income"),
     ("GrossProfit", "gross profit"),
@@ -86,7 +107,42 @@ SEC_COMPANYFACTS_CONCEPTS = (
     ("Assets", "assets"),
     ("Liabilities", "liabilities"),
     ("StockholdersEquity", "shareholders equity"),
+    ("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", "shareholders equity including noncontrolling interest"),
+    ("CommonStocksIncludingAdditionalPaidInCapital", "common stock and additional paid-in capital"),
+    ("LongTermDebt", "long-term debt"),
+    ("LongTermDebtCurrent", "current long-term debt"),
+    ("LongTermDebtAndFinanceLeaseObligations", "long-term debt and finance lease obligations"),
+    ("LongTermDebtAndFinanceLeaseObligationsCurrent", "current long-term debt and finance lease obligations"),
+    ("ShortTermBorrowings", "short-term borrowings"),
+    ("Deposits", "deposits"),
+    ("FederalFundsPurchasedAndSecuritiesSoldUnderAgreementsToRepurchase", "federal funds purchased and securities sold under agreements to repurchase"),
     ("EarningsPerShareDiluted", "diluted earnings per share"),
+    ("EarningsPerShareBasic", "basic earnings per share"),
+)
+SEC_COMPANYFACTS_DYNAMIC_KEYWORDS = (
+    "revenue",
+    "revenues",
+    "sales",
+    "net interest",
+    "interest income",
+    "interest expense",
+    "noninterest",
+    "segment",
+    "family of apps",
+    "reality labs",
+    "cloud",
+    "artificial intelligence",
+    "infrastructure",
+    "investment",
+    "income",
+    "loss",
+    "cash flow",
+    "assets",
+    "liabilities",
+    "equity",
+    "debt",
+    "earnings per share",
+    "eps",
 )
 SEC_COMPANYFACTS_SUMMARY_YEARS = 4
 SEC_COMPANYFACTS_FORMS = {"10-K", "10-Q", "20-F", "40-F"}
@@ -879,7 +935,7 @@ def _extract_sec_companyfacts_readable_text(body: str) -> str:
         taxonomy = facts.get(taxonomy_name)
         if not isinstance(taxonomy, dict):
             continue
-        for concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+        for concept, metric in _companyfacts_concept_specs(taxonomy):
             item = taxonomy.get(concept)
             if not isinstance(item, dict):
                 continue
@@ -910,13 +966,133 @@ def _extract_sec_companyfacts_readable_text(body: str) -> str:
     return "\n".join(lines)[:READABLE_TEXT_LIMIT]
 
 
+def _companyfacts_concept_specs(taxonomy: dict) -> list[tuple[str, str]]:
+    specs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+        if concept in taxonomy and concept not in seen:
+            seen.add(concept)
+            specs.append((concept, metric))
+    dynamic: list[tuple[int, str, str]] = []
+    for concept, item in taxonomy.items():
+        if concept in seen or not isinstance(item, dict):
+            continue
+        label = _structured_value(item.get("label") or concept)
+        metric = _companyfacts_dynamic_metric(concept=concept, label=label)
+        if not metric:
+            continue
+        dynamic.append((_companyfacts_dynamic_priority(concept=concept, label=label, metric=metric), concept, metric))
+    dynamic.sort(key=lambda item: (-item[0], item[1].lower()))
+    for _priority, concept, metric in dynamic[:96]:
+        specs.append((concept, metric))
+    return specs
+
+
+def _ordered_companyfacts_metrics(metrics: dict[str, object]) -> list[tuple[str, str]]:
+    order: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+        if metric in metrics and metric not in seen:
+            seen.add(metric)
+            order.append((concept, metric))
+    for metric in sorted(str(item) for item in metrics.keys() if str(item) not in seen):
+        order.append(("", metric))
+    return order
+
+
+def _companyfacts_dynamic_metric(*, concept: str, label: str) -> str | None:
+    compact = _compact_metric_text(concept)
+    lower = f"{concept} {label}".lower().replace("_", " ")
+    if "familyofapps" in compact and "revenue" in compact:
+        return "family of apps revenue"
+    if "realitylabs" in compact and "revenue" in compact:
+        return "reality labs revenue"
+    if "salesandotheroperatingrevenue" in compact:
+        return "sales and other operating revenues"
+    if "totalrevenuesandotherincome" in compact or ("total revenues" in lower and "other income" in lower):
+        return "total revenues and other income"
+    if "operatingrevenues" in compact or ("operating" in lower and "revenue" in lower):
+        return "operating revenues"
+    if "netrevenues" in compact or "net revenues" in lower:
+        return "net revenues"
+    if "netinterestincome" in compact or ("net interest" in lower and "income" in lower):
+        return "net interest income"
+    if "interestincomeexpensenet" in compact:
+        return "net interest income"
+    if "interestincome" in compact or "interest income" in lower:
+        return "interest income"
+    if "interestexpense" in compact or "interest expense" in lower:
+        return "interest expense"
+    if "noninterestincome" in compact or "noninterest income" in lower:
+        return "noninterest income"
+    if "revenuefromexternalcustomers" in compact:
+        return "segment revenue from external customers"
+    if "segment" in lower and "revenue" in lower:
+        return "segment revenue"
+    if "cloud" in lower and ("investment" in lower or "infrastructure" in lower):
+        return "cloud and AI infrastructure investment"
+    if "artificial intelligence" in lower and ("investment" in lower or "infrastructure" in lower):
+        return "cloud and AI infrastructure investment"
+    if "capitalexpenditure" in compact or ("capital" in lower and "expenditure" in lower):
+        return "capital expenditures"
+    if "capitalized" in lower and ("software" in lower or "cloud" in lower):
+        return "capitalized software or cloud infrastructure"
+    if "revenue" in lower or "revenues" in lower or compact.endswith("sales"):
+        return "revenue"
+    if "earningspershare" in compact or "earnings per share" in lower:
+        return "earnings per share"
+    if "netincomeloss" in compact or "net income" in lower:
+        return "net income"
+    if "operatingincomeloss" in compact or "operating income" in lower:
+        return "operating income"
+    if "cashflow" in compact or "cash flow" in lower:
+        return "cash flow"
+    if "stockholdersequity" in compact or "shareholders equity" in lower or "stockholders equity" in lower:
+        return "shareholders equity"
+    if "liabilities" in lower:
+        return "liabilities"
+    if "assets" in lower:
+        return "assets"
+    if "longtermdebt" in compact:
+        return "long-term debt"
+    if "shorttermborrowings" in compact:
+        return "short-term borrowings"
+    if "debt" in lower:
+        return "debt"
+    return None
+
+
+def _companyfacts_dynamic_priority(*, concept: str, label: str, metric: str) -> int:
+    text = f"{concept} {label} {metric}".lower()
+    priority = 0
+    for index, keyword in enumerate(SEC_COMPANYFACTS_DYNAMIC_KEYWORDS):
+        if keyword in text:
+            priority += max(1, len(SEC_COMPANYFACTS_DYNAMIC_KEYWORDS) - index)
+    if metric in {
+        "net interest income",
+        "sales and other operating revenues",
+        "total revenues and other income",
+        "operating revenues",
+        "segment revenue",
+        "family of apps revenue",
+    }:
+        priority += 40
+    if "abstract" in text or "policy" in text or "schedule" in text:
+        priority -= 20
+    return priority
+
+
+def _compact_metric_text(value: str) -> str:
+    return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
+
+
 def _companyfacts_annual_summary_lines(facts: dict, *, entity_name: str, cik: str) -> list[str]:
     groups: dict[tuple[int, str], dict[str, object]] = {}
     for taxonomy_name in ("us-gaap", "ifrs-full"):
         taxonomy = facts.get(taxonomy_name)
         if not isinstance(taxonomy, dict):
             continue
-        for concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+        for concept, metric in _companyfacts_concept_specs(taxonomy):
             item = taxonomy.get(concept)
             if not isinstance(item, dict):
                 continue
@@ -979,7 +1155,7 @@ def _companyfacts_annual_summary_lines(facts: dict, *, entity_name: str, cik: st
         metrics = group.get("metrics") if isinstance(group.get("metrics"), dict) else {}
         metric_parts = []
         emitted_metrics: set[str] = set()
-        for _concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+        for _concept, metric in _ordered_companyfacts_metrics(metrics):
             if metric in emitted_metrics:
                 continue
             entry = metrics.get(metric)

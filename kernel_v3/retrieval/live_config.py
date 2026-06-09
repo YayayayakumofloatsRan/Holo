@@ -5,6 +5,7 @@ import os
 import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.research import RESEARCH_PROFILE_IDS, source_directory_for_profile
@@ -12,6 +13,7 @@ from kernel_v3.retrieval.http_provider import (
     HttpFetchProvider,
     HttpTransport,
     JsonHttpSearchProvider,
+    _urllib_transport as _default_http_transport,
 )
 from kernel_v3.retrieval.web_search_provider import LiveWebSearchProvider, web_search_engine_hosts
 from kernel_v3.retrieval.composite import AdaptiveSearchProvider, AggregateSearchProvider, FallbackSearchProvider, RoutingFetchProvider
@@ -23,6 +25,11 @@ from kernel_v3.retrieval.crawl_provider import (
 )
 from kernel_v3.retrieval.arxiv_provider import ArxivApiSearchProvider
 from kernel_v3.retrieval.fiscaldata_provider import FiscalDataSearchProvider
+from kernel_v3.retrieval.fetch_budget import (
+    DEFAULT_LIVE_CACHE_DIR,
+    DEFAULT_LIVE_DOWNLOAD_BYTE_BUDGET,
+    wrap_transport_with_budget,
+)
 from kernel_v3.retrieval.fred_provider import FredSearchProvider
 from kernel_v3.retrieval.sec_edgar_provider import SecEdgarSearchProvider
 from kernel_v3.retrieval.source_query_provider import ResearchSourceQuerySearchProvider
@@ -55,7 +62,9 @@ LIVE_SEARCH_STRATEGY_ENV = "HOLO_V3_LIVE_SEARCH_STRATEGY"
 LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER_ENV = "HOLO_V3_LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER"
 LIVE_TIMEOUT_SECONDS_ENV = "HOLO_V3_LIVE_RETRIEVAL_TIMEOUT_SECONDS"
 LIVE_MAX_BYTES_ENV = "HOLO_V3_LIVE_RETRIEVAL_MAX_BYTES"
-DEFAULT_LIVE_MAX_BYTES = 16_000_000
+LIVE_DOWNLOAD_BYTE_BUDGET_ENV = "HOLO_V3_LIVE_RETRIEVAL_DOWNLOAD_BYTE_BUDGET"
+LIVE_CACHE_DIR_ENV = "HOLO_V3_LIVE_RETRIEVAL_CACHE_DIR"
+DEFAULT_LIVE_MAX_BYTES = 4_000_000
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -265,6 +274,8 @@ class LiveRetrievalConfig:
     fetch: LiveHttpFetchConfig = field(default_factory=LiveHttpFetchConfig)
     search_strategy: str = "adaptive"
     max_sources_per_provider: int | None = None
+    max_download_bytes: int = DEFAULT_LIVE_DOWNLOAD_BYTE_BUDGET
+    cache_dir: str | None = DEFAULT_LIVE_CACHE_DIR
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "LiveRetrievalConfig":
@@ -274,6 +285,11 @@ class LiveRetrievalConfig:
         allowed_schemes = _csv(values.get(LIVE_ALLOWED_SCHEMES_ENV)) or ["https"]
         timeout_seconds = _positive_int(values.get(LIVE_TIMEOUT_SECONDS_ENV), default=20)
         max_bytes = _positive_int(values.get(LIVE_MAX_BYTES_ENV), default=DEFAULT_LIVE_MAX_BYTES)
+        max_download_bytes = _positive_int(
+            values.get(LIVE_DOWNLOAD_BYTE_BUDGET_ENV),
+            default=DEFAULT_LIVE_DOWNLOAD_BYTE_BUDGET,
+        )
+        cache_dir = _optional(values.get(LIVE_CACHE_DIR_ENV))
         source_directory_allowlist = _truthy(values.get(LIVE_SOURCE_DIRECTORY_ALLOWLIST_ENV))
         source_directory_hosts = _source_directory_allowed_hosts() if source_directory_allowlist else []
         web_search_providers = _csv(values.get(LIVE_WEB_SEARCH_PROVIDERS_ENV))
@@ -337,6 +353,8 @@ class LiveRetrievalConfig:
             ),
             search_strategy=_search_strategy(values.get(LIVE_SEARCH_STRATEGY_ENV)),
             max_sources_per_provider=_optional_positive_int(values.get(LIVE_SEARCH_MAX_SOURCES_PER_PROVIDER_ENV)),
+            max_download_bytes=max_download_bytes,
+            cache_dir=cache_dir,
         )
 
     def build_operator(
@@ -348,6 +366,35 @@ class LiveRetrievalConfig:
         crawl_transport: HttpTransport | None = None,
         fetch_transport: HttpTransport | None = None,
     ) -> RetrievalOperator:
+        budget_cache_dir = Path(self.cache_dir).expanduser() if self.cache_dir else None
+        if search_transport is not None:
+            budgeted_search_transport = wrap_transport_with_budget(
+                search_transport,
+                cache_dir=budget_cache_dir,
+                max_download_bytes=self.max_download_bytes,
+            )
+        else:
+            budgeted_search_transport = wrap_transport_with_budget(
+                _default_http_transport,
+                cache_dir=budget_cache_dir,
+                max_download_bytes=self.max_download_bytes,
+            )
+        if crawl_transport is not None:
+            budgeted_crawl_transport = wrap_transport_with_budget(
+                crawl_transport,
+                cache_dir=budget_cache_dir,
+                max_download_bytes=self.max_download_bytes,
+            )
+        else:
+            budgeted_crawl_transport = budgeted_search_transport
+        if fetch_transport is not None:
+            budgeted_fetch_transport = wrap_transport_with_budget(
+                fetch_transport,
+                cache_dir=budget_cache_dir,
+                max_download_bytes=self.max_download_bytes,
+            )
+        else:
+            budgeted_fetch_transport = budgeted_search_transport
         corpus_enabled = corpus_store is not None and artifact_store is not None
         search_providers = []
         if corpus_enabled:
@@ -360,17 +407,17 @@ class LiveRetrievalConfig:
         if self.fetch.enabled:
             search_providers.append(
                 ArxivApiSearchProvider(
-                    transport=search_transport,
+                    transport=budgeted_search_transport,
                     timeout_seconds=self.fetch.timeout_seconds,
                     max_bytes=min(self.fetch.max_bytes, 1_000_000),
                 )
             )
         if self.search.configured:
-            search_providers.append(self.search.build_provider(transport=search_transport))
+            search_providers.append(self.search.build_provider(transport=budgeted_search_transport))
         if self.web_search.configured:
-            search_providers.append(self.web_search.build_provider(transport=search_transport))
+            search_providers.append(self.web_search.build_provider(transport=budgeted_search_transport))
         if self.crawl.configured:
-            search_providers.append(self.crawl.build_provider(transport=crawl_transport))
+            search_providers.append(self.crawl.build_provider(transport=budgeted_crawl_transport))
         search_providers.append(SourceDirectorySearchProvider())
         if self.search_strategy == "aggregate":
             search_provider = AggregateSearchProvider(
@@ -385,7 +432,7 @@ class LiveRetrievalConfig:
             )
         else:
             search_provider = FallbackSearchProvider(search_providers)
-        live_fetch_provider = self.fetch.build_provider(transport=fetch_transport)
+        live_fetch_provider = self.fetch.build_provider(transport=budgeted_fetch_transport)
         fetch_provider = (
             RoutingFetchProvider(
                 routes={"research_corpus": CorpusFetchProvider(artifact_store)},
@@ -406,6 +453,8 @@ class LiveRetrievalConfig:
             "env_gate": LIVE_RETRIEVAL_ENV,
             "search_strategy": self.search_strategy,
             "max_sources_per_provider": self.max_sources_per_provider,
+            "max_download_bytes": self.max_download_bytes,
+            "cache_dir": self.cache_dir,
             "search": self.search.safe_diagnostics(),
             "web_search": self.web_search.safe_diagnostics(),
             "crawl": self.crawl.safe_diagnostics(),

@@ -30,6 +30,7 @@ _IGNORED_TICKERS = {
     "IMF",
     "IR",
     "JSON",
+    "K",
     "OECD",
     "Q",
     "SEC",
@@ -69,6 +70,9 @@ def resolve_issuer_identity(query: str, metadata: JsonObject | None = None) -> I
     hkex_code = _first_string(flattened, "hkex_code", "hk_code", "stock_code_hk") or _hk_from_query(query)
     sgx_code = _first_string(flattened, "sgx_code") or _sgx_from_query(query)
     edinet_code = _first_string(flattened, "edinet_code")
+    investor_relations_url = _first_string(flattened, "investor_relations_url", "ir_url")
+    annual_reports_url = _first_string(flattened, "annual_reports_url", "annual_report_url")
+    earnings_url = _first_string(flattened, "earnings_url", "results_url")
     market = _first_string(flattened, "market", "exchange", "listing_market") or _market_from_identifiers(
         asx_code=asx_code,
         hkex_code=hkex_code,
@@ -96,14 +100,18 @@ def resolve_issuer_identity(query: str, metadata: JsonObject | None = None) -> I
         cik = _normalize_cik(_ticker_cik_map(flattened).get(ticker.upper()))
         if cik:
             sources.append("metadata_ticker_cik_map")
-    if not ticker and not cik and _allow_builtin_issuer_registry(query, flattened):
-        registered = builtin_issuer_for_text(query)
+    if _allow_builtin_issuer_registry(query, flattened):
+        registered = builtin_issuer_for_text(" ".join(item for item in (query, ticker or "", company or "") if item))
         if registered:
-            ticker = _first_string(registered, "ticker")
-            cik = _normalize_cik(registered.get("sec_cik"))
+            ticker = ticker or _first_string(registered, "ticker")
+            cik = cik or _normalize_cik(registered.get("sec_cik"))
             company = company or _first_string(registered, "company")
             market = market or _first_string(registered, "market")
-            sources.append("builtin_issuer_registry")
+            investor_relations_url = investor_relations_url or _first_string(registered, "investor_relations_url")
+            annual_reports_url = annual_reports_url or _first_string(registered, "annual_reports_url")
+            earnings_url = earnings_url or _first_string(registered, "earnings_url")
+            if "builtin_issuer_registry" not in sources:
+                sources.append("builtin_issuer_registry")
 
     identifiers = {
         key: value
@@ -118,6 +126,9 @@ def resolve_issuer_identity(query: str, metadata: JsonObject | None = None) -> I
             "sgx_code": sgx_code.upper() if sgx_code else None,
             "edinet_code": edinet_code.upper() if edinet_code else None,
             "market": market,
+            "investor_relations_url": investor_relations_url,
+            "annual_reports_url": annual_reports_url,
+            "earnings_url": earnings_url,
         }.items()
         if isinstance(value, str) and value
     }

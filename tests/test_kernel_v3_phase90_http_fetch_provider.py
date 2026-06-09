@@ -16,6 +16,7 @@ from kernel_v3.retrieval import (
     inspect_retrieval_providers,
     provider_capability,
 )
+from kernel_v3.retrieval.fetch_budget import LiveFetchBudget, wrap_transport_with_budget
 
 
 def test_phase90_http_fetch_provider_is_live_and_disabled_by_default() -> None:
@@ -155,7 +156,7 @@ def test_phase90_http_fetch_provider_rejects_secret_bearing_url_before_transport
     assert "access_token" not in dumped
 
 
-def test_phase90_http_fetch_provider_rejects_oversized_body_without_returning_raw_body() -> None:
+def test_phase90_http_fetch_provider_truncates_oversized_body_without_diagnostics_leak() -> None:
     transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"0123456789"))
     provider = HttpFetchProvider(
         enabled=True,
@@ -166,11 +167,60 @@ def test_phase90_http_fetch_provider_rejects_oversized_body_without_returning_ra
 
     response = provider.fetch(_source("https://example.com/large"))
 
-    assert response.status == "failed"
-    assert response.body == ""
-    assert response.diagnostics["reason"] == "http_body_too_large"
+    assert response.status == "ok"
+    assert response.body == "0123"
+    assert response.diagnostics["truncated"] is True
+    assert response.diagnostics["truncation_reason"] == "http_body_too_large"
     assert response.diagnostics["max_bytes"] == 4
     assert "0123456789" not in json.dumps(response.diagnostics, ensure_ascii=False)
+
+
+def test_phase90_http_fetch_provider_uses_budgeted_transport_cache(tmp_path) -> None:
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"cached filing evidence"))
+    budgeted = wrap_transport_with_budget(
+        transport,
+        cache_dir=tmp_path / "cache",
+        max_download_bytes=1_000,
+    )
+    provider = HttpFetchProvider(
+        enabled=True,
+        allowed_hosts=["example.com"],
+        transport=budgeted,
+    )
+
+    first = provider.fetch(_source("https://example.com/filing"))
+    second = provider.fetch(_source("https://example.com/filing"))
+
+    assert first.status == "ok"
+    assert second.status == "ok"
+    assert first.diagnostics["cache_hit"] is False
+    assert second.diagnostics["cache_hit"] is True
+    assert len(transport.calls) == 1
+
+
+def test_phase90_http_fetch_provider_blocks_after_download_byte_budget() -> None:
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"0123456789"))
+    budget = LiveFetchBudget(max_download_bytes=5)
+    budgeted = wrap_transport_with_budget(
+        transport,
+        cache_dir=None,
+        max_download_bytes=budget.max_download_bytes,
+    )
+    provider = HttpFetchProvider(
+        enabled=True,
+        allowed_hosts=["example.com"],
+        transport=budgeted,
+    )
+
+    first = provider.fetch(_source("https://example.com/a"))
+    second = provider.fetch(_source("https://example.com/b"))
+
+    assert first.status == "ok"
+    assert first.diagnostics["downloaded_bytes"] == 10
+    assert second.status == "failed"
+    assert second.diagnostics["reason"] == "download_byte_budget_exhausted"
+    assert second.diagnostics["max_download_bytes"] == 5
+    assert len(transport.calls) == 1
 
 
 def test_phase90_http_fetch_provider_keeps_retrieval_network_gated_and_auditable() -> None:

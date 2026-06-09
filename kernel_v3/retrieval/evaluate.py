@@ -23,6 +23,7 @@ from kernel_v3.research.profiles import (
     FINANCE_FUNDAMENTALS_PROFILE_ID,
     FINANCE_NUMERIC_FACT_FACETS,
 )
+from kernel_v3.research.identity import resolve_issuer_identity
 from kernel_v3.research.source_policy import (
     assess_evidence_source,
     source_authority_summary,
@@ -64,6 +65,17 @@ def qualify_evidence_candidate(
             result["reason"] = "target_entity_mismatch"
     if _is_finance_profile(goal=goal, research_profile=research_profile):
         _add_finance_compatibility_fields(result)
+        entity_mismatch = _finance_companyfacts_entity_mismatch(goal=goal, evidence=evidence)
+        if entity_mismatch:
+            result["accepted"] = False
+            result["reason"] = "finance_companyfacts_entity_mismatch"
+            result["target_entity"] = entity_mismatch
+        if bool(result.get("accepted", True)):
+            qualifier_diagnostics = _finance_specialized_query_coverage(goal=goal, evidence=[evidence])
+            result["finance_specialized_query_coverage"] = qualifier_diagnostics
+            if qualifier_diagnostics["required"] and not qualifier_diagnostics["satisfied"]:
+                result["accepted"] = False
+                result["reason"] = "finance_specialized_query_terms_missing"
     if bool(result.get("accepted", True)):
         weak_source = _weak_source_for_required_profile(goal=goal, evidence=evidence, research_profile=research_profile)
         if weak_source:
@@ -129,8 +141,20 @@ class EvidenceEvaluator:
             research_profile=research_profile,
         )
         diagnostics.update(profile_diagnostics)
+        period_diagnostics: dict[str, object] | None = None
         if _is_finance_profile(goal=goal, research_profile=research_profile):
             diagnostics.update(_finance_coverage_compatibility(profile_diagnostics))
+            period_diagnostics = _finance_target_period_diagnostics(goal=goal, evidence=evidence)
+            diagnostics["finance_target_period"] = period_diagnostics
+            specialized_query_diagnostics = _finance_specialized_query_coverage(goal=goal, evidence=evidence)
+            diagnostics["finance_specialized_query_coverage"] = specialized_query_diagnostics
+            if (
+                sufficient
+                and specialized_query_diagnostics["required"]
+                and not specialized_query_diagnostics["satisfied"]
+            ):
+                sufficient = False
+                reason = "finance_specialized_query_terms_missing"
         if sufficient and profile_diagnostics["profile_evidence_required"] and profile_diagnostics["missing_profile_facets"]:
             sufficient = False
             reason = (
@@ -138,6 +162,9 @@ class EvidenceEvaluator:
                 if _is_finance_profile(goal=goal, research_profile=research_profile)
                 else "profile_evidence_facets_missing"
             )
+        if period_diagnostics is not None and period_diagnostics["required"] and not period_diagnostics["satisfied"]:
+            sufficient = False
+            reason = "finance_target_period_missing"
 
         resolved_profile = resolve_goal_research_profile(goal, research_profile)
         if resolved_profile is not None:
@@ -239,6 +266,244 @@ def _add_finance_compatibility_fields(result: dict[str, object]) -> None:
 
 def _finance_missing_names(values: list[str]) -> list[str]:
     return ["numeric_financial_fact" if value == "numeric_profile_fact" else value for value in values]
+
+
+def _finance_companyfacts_entity_mismatch(*, goal: SearchGoal, evidence: EvidenceItem) -> dict[str, object] | None:
+    text = str(evidence.text or "")
+    if "SEC companyfacts" not in text and "entityName=" not in text:
+        return None
+    entity = _companyfacts_entity_name(text)
+    if not entity:
+        return None
+    identity = resolve_issuer_identity(goal.query, goal.metadata)
+    target = identity.company or _metadata_company(goal.metadata)
+    if not target:
+        return None
+    entity_key = _entity_key(entity)
+    target_key = _entity_key(target)
+    if not entity_key or not target_key:
+        return None
+    entity_tokens = set(entity_key.split())
+    target_tokens = set(target_key.split())
+    if target_tokens and target_tokens.issubset(entity_tokens) and not _has_unrequested_subsidiary_terms(
+        entity_tokens,
+        target_tokens=target_tokens,
+    ):
+        return None
+    if entity_tokens and entity_tokens.issubset(target_tokens):
+        return None
+    if target_key in entity_key and not _has_unrequested_subsidiary_terms(entity_tokens, target_tokens=target_tokens):
+        return None
+    return {
+        "target_entity_required": True,
+        "target_entity_satisfied": False,
+        "expected_company": target,
+        "observed_companyfacts_entity": entity,
+        "identity_sources": list(identity.sources),
+        "reason": "companyfacts_entity_not_target_company",
+    }
+
+
+def _companyfacts_entity_name(text: str) -> str | None:
+    match = re.search(r"\bentityName=([^=\n\r]{1,160}?)(?:\s+cik=|\s+source=|\s+fy=|\s+taxonomy=|\s+concept=|$)", text)
+    if not match:
+        return None
+    return " ".join(match.group(1).replace(",", " ").split())
+
+
+def _metadata_company(metadata: dict[str, object]) -> str | None:
+    for key in ("company", "company_name", "issuer", "issuer_name"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())
+    nested = metadata.get("metadata")
+    if isinstance(nested, dict):
+        return _metadata_company(nested)
+    return None
+
+
+def _entity_key(value: str) -> str:
+    tokens = []
+    for raw in re.findall(r"[a-z0-9]+", str(value or "").lower()):
+        if raw in _ENTITY_SUFFIX_TOKENS:
+            continue
+        tokens.append(raw)
+    return " ".join(tokens)
+
+
+def _has_unrequested_subsidiary_terms(entity_tokens: set[str], *, target_tokens: set[str]) -> bool:
+    return bool((entity_tokens - target_tokens) & _SUBSIDIARY_ENTITY_TOKENS)
+
+
+def _finance_target_period_diagnostics(*, goal: SearchGoal, evidence: list[EvidenceItem]) -> dict[str, object]:
+    years = _requested_finance_period_years(goal.query)
+    if not years:
+        return {
+            "required": False,
+            "satisfied": True,
+            "requested_years": [],
+            "covered_years": [],
+            "missing_years": [],
+        }
+    covered: list[str] = []
+    evidence_refs: dict[str, list[str]] = {}
+    for year in years:
+        refs = [
+            item.evidence_id
+            for item in evidence
+            if _evidence_covers_finance_period(item.text, year)
+        ]
+        if refs:
+            covered.append(year)
+            evidence_refs[year] = refs[:8]
+    covered_set = set(covered)
+    missing = [year for year in years if year not in covered_set]
+    return {
+        "required": True,
+        "satisfied": not missing,
+        "requested_years": years,
+        "covered_years": covered,
+        "missing_years": missing,
+        "evidence_refs": evidence_refs,
+    }
+
+
+def _finance_specialized_query_coverage(*, goal: SearchGoal, evidence: list[EvidenceItem]) -> dict[str, object]:
+    terms = _finance_specialized_query_terms(goal)
+    if not terms:
+        return {
+            "required": False,
+            "satisfied": True,
+            "terms": [],
+            "matched_terms": [],
+            "missing_terms": [],
+            "required_match_count": 0,
+        }
+    corpus = "\n".join(f"{item.title} {item.uri} {item.text}" for item in evidence).lower()
+    matched = [term for term in terms if term in corpus]
+    required_count = 1 if len(terms) == 1 else min(2, len(terms))
+    missing = [term for term in terms if term not in set(matched)]
+    return {
+        "required": True,
+        "satisfied": len(matched) >= required_count,
+        "terms": terms,
+        "matched_terms": matched,
+        "missing_terms": missing,
+        "required_match_count": required_count,
+    }
+
+
+def _finance_specialized_query_terms(goal: SearchGoal) -> list[str]:
+    query = str(goal.query or "").lower()
+    if not _finance_query_has_specialized_scope(query):
+        return []
+    stopwords = set(_FINANCE_SPECIALIZED_QUERY_STOPWORDS)
+    identity = resolve_issuer_identity(goal.query, goal.metadata)
+    for value in (identity.company, identity.ticker, identity.issuer):
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower()):
+            stopwords.add(token)
+    for year in _requested_finance_period_years(goal.query):
+        stopwords.add(year)
+    terms: list[str] = []
+    seen: set[str] = set()
+    for phrase in _SPECIALIZED_QUERY_PHRASES:
+        if phrase in query and phrase not in seen:
+            seen.add(phrase)
+            terms.append(phrase)
+    for token in re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]{2,}", query):
+        if token.isdigit() or token in stopwords:
+            continue
+        if len(token) < 4 and not re.search(r"[\u4e00-\u9fff]", token):
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        terms.append(token)
+    return terms[:8]
+
+
+def _finance_query_has_specialized_scope(query: str) -> bool:
+    return any(marker in query for marker in _SPECIALIZED_QUERY_SCOPE_MARKERS)
+
+
+def _requested_finance_period_years(query: str) -> list[str]:
+    text = str(query or "").lower()
+    years = re.findall(r"\b(?:19|20)\d{2}\b", text)
+    if not years:
+        return []
+    if any(
+        marker in text
+        for marker in (
+            "fiscal",
+            "fy",
+            "financial year",
+            "year-end",
+            "year end",
+            "annual",
+            "10-k",
+            "10k",
+            "财年",
+            "年度",
+            "年报",
+        )
+    ):
+        return _ordered_unique(years)
+    if _is_finance_metric_query(text):
+        return _ordered_unique(years)
+    return []
+
+
+def _evidence_covers_finance_period(text: str, year: str) -> bool:
+    normalized = str(text or "").lower()
+    escaped = re.escape(year)
+    structured_patterns = (
+        rf"\bfy\s*=?\s*{escaped}\b",
+        rf"\bend\s*=\s*{escaped}-\d{{2}}-\d{{2}}\b",
+        rf"\breportdate\s*=\s*{escaped}-\d{{2}}-\d{{2}}\b",
+        rf"\breport\s+date\s*=\s*{escaped}-\d{{2}}-\d{{2}}\b",
+        rf"\bframe\s*=\s*cy{escaped}(?!q)\b",
+    )
+    if any(re.search(pattern, normalized) for pattern in structured_patterns):
+        return True
+    if any(marker in normalized for marker in ("fy=", "end=", "reportdate=", "report date=", "frame=", "filed=")):
+        return False
+    period_patterns = (
+        rf"\bfiscal\s+year\s+{escaped}\b",
+        rf"\bfinancial\s+year\s+{escaped}\b",
+        rf"\b{escaped}\s+fiscal\s+year\b",
+        rf"\b{escaped}\s+(?:form\s+)?10-k\b",
+        rf"\b{escaped}\s+annual\s+report\b",
+        rf"\bannual\s+report\s+{escaped}\b",
+        rf"\bfor\s+(?:the\s+)?(?:year|fiscal\s+year)\s+(?:ended\s+)?{escaped}\b",
+        rf"\b(?:revenue|revenues|net income|eps|earnings|assets|cash flow)[^.\n]{{0,120}}\b{escaped}\b",
+        rf"\b{escaped}\b[^.\n]{{0,120}}\b(?:revenue|revenues|net income|eps|earnings|assets|cash flow)\b",
+    )
+    return any(re.search(pattern, normalized) for pattern in period_patterns)
+
+
+def _is_finance_metric_query(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "revenue",
+            "revenues",
+            "net income",
+            "eps",
+            "earnings",
+            "assets",
+            "liabilities",
+            "cash flow",
+            "market cap",
+            "pe ratio",
+            "total revenues",
+            "收入",
+            "营收",
+            "净利润",
+            "每股收益",
+            "资产",
+            "现金流",
+        )
+    )
 
 
 def _is_finance_fundamental_goal(*, goal: SearchGoal, research_profile: ResearchProfile | None = None) -> bool:
@@ -382,6 +647,17 @@ def _string_list(value: object) -> list[str]:
     return [item for item in (str(raw).strip() for raw in value if isinstance(raw, str)) if item]
 
 
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
 _QUERY_TOPIC_STOPWORDS = {
     "about",
     "academic",
@@ -426,4 +702,99 @@ _QUERY_TOPIC_STOPWORDS = {
     "报告",
     "文献",
     "综述",
+}
+
+_ENTITY_SUFFIX_TOKENS = {
+    "and",
+    "co",
+    "company",
+    "corp",
+    "corporation",
+    "de",
+    "inc",
+    "incorporated",
+    "limited",
+    "llc",
+    "ltd",
+    "plc",
+    "the",
+}
+
+_SUBSIDIARY_ENTITY_TOKENS = {
+    "bank",
+    "capital",
+    "credit",
+    "finance",
+    "financing",
+    "fund",
+    "funding",
+    "holdings",
+    "insurance",
+    "lease",
+    "leasing",
+    "mortgage",
+    "receivables",
+    "securities",
+    "statutory",
+    "trust",
+}
+
+_SPECIALIZED_QUERY_SCOPE_MARKERS = {
+    "artificial intelligence",
+    "business unit",
+    "capital expenditure",
+    "cloud",
+    "family of apps",
+    "infrastructure",
+    "investment",
+    "operating segment",
+    "reportable segment",
+    "segment",
+    "segment reporting",
+    "分部",
+    "板块",
+    "业务线",
+    "云",
+    "人工智能",
+    "基础设施",
+}
+
+_SPECIALIZED_QUERY_PHRASES = (
+    "artificial intelligence",
+    "business unit",
+    "capital expenditure",
+    "family of apps",
+    "operating segment",
+    "reportable segment",
+    "segment reporting",
+)
+
+_FINANCE_SPECIALIZED_QUERY_STOPWORDS = {
+    "and",
+    "annual",
+    "apps",
+    "company",
+    "corp",
+    "corporation",
+    "customer",
+    "debt",
+    "equity",
+    "fiscal",
+    "from",
+    "income",
+    "investment",
+    "inc",
+    "incorporated",
+    "net",
+    "ratio",
+    "revenue",
+    "revenues",
+    "sales",
+    "segment",
+    "stated",
+    "total",
+    "what",
+    "with",
+    "year",
+    "year-end",
 }
