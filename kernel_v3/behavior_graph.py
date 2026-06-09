@@ -1,0 +1,577 @@
+from __future__ import annotations
+
+import json
+import hashlib
+from dataclasses import dataclass, field
+
+from kernel_v3.context.redaction import Redactor
+from kernel_v3.contracts import Contract, JsonObject, LedgerRecord
+from kernel_v3.journal import JournalStore
+
+
+MAX_GRAPH_NODES = 800
+MAX_GRAPH_EDGES = 1600
+_REDACTOR = Redactor()
+
+
+@dataclass(frozen=True, kw_only=True)
+class BehaviorGraphNode(Contract):
+    node_id: str
+    node_type: str
+    label: str
+    record_id: str | None = None
+    run_id: str | None = None
+    step_id: str | None = None
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class BehaviorGraphEdge(Contract):
+    source: str
+    target: str
+    edge_type: str
+    label: str | None = None
+    metadata: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class BehaviorGraph(Contract):
+    schema: str
+    task_id: str
+    nodes: list[JsonObject]
+    edges: list[JsonObject]
+    diagnostics: JsonObject
+
+
+class BehaviorGraphBuilder:
+    def __init__(self, journal: JournalStore) -> None:
+        self.journal = journal
+
+    def build_task_graph(self, task_id: str, *, max_nodes: int = MAX_GRAPH_NODES) -> BehaviorGraph:
+        records = self.journal.records(task_id=task_id)
+        builder = _GraphAccumulator(task_id=task_id, max_nodes=max_nodes)
+        builder.add_node(
+            BehaviorGraphNode(
+                node_id=f"task:{task_id}",
+                node_type="task",
+                label=f"Task {task_id}",
+                metadata={"record_count": len(records)},
+            )
+        )
+        previous: str | None = None
+        request_nodes: dict[str, str] = {}
+        action_nodes: dict[str, str] = {}
+        observation_nodes: dict[str, str] = {}
+        retrieval_plan_nodes: dict[str, str] = {}
+        search_nodes_by_goal: dict[str, list[str]] = {}
+        source_nodes: dict[str, str] = {}
+        fetch_nodes_by_source: dict[str, str] = {}
+        document_nodes: dict[str, str] = {}
+        evidence_nodes: dict[str, str] = {}
+
+        for record in records:
+            node = _node_for_record(record)
+            if node is None:
+                continue
+            if not builder.add_node(node):
+                builder.truncated_records += 1
+                continue
+            builder.add_edge("task:" + task_id, node.node_id, "contains")
+            if previous is not None:
+                builder.add_edge(previous, node.node_id, "next")
+            previous = node.node_id
+
+            data = record.data
+            if record.kind == "processor_request":
+                request_id = _text(data.get("request_id"))
+                if request_id:
+                    request_nodes[request_id] = node.node_id
+            elif record.kind == "processor_result":
+                request_id = _text(data.get("request_id"))
+                if request_id and request_id in request_nodes:
+                    builder.add_edge(request_nodes[request_id], node.node_id, "processor_result", _status_label(data))
+            elif record.kind == "action":
+                action_id = _text(data.get("action_id"))
+                if action_id:
+                    action_nodes[action_id] = node.node_id
+            elif record.kind == "observation":
+                observation_id = _text(data.get("observation_id"))
+                if observation_id:
+                    observation_nodes[observation_id] = node.node_id
+                action_id = _text(data.get("action_id"))
+                if action_id and action_id in action_nodes:
+                    builder.add_edge(action_nodes[action_id], node.node_id, "observed", _status_label(data))
+            elif record.kind == "feedback":
+                observation_id = _text(data.get("observation_id"))
+                if observation_id and observation_id in observation_nodes:
+                    builder.add_edge(observation_nodes[observation_id], node.node_id, "evaluated")
+
+            if record.kind == "retrieval_query_plan":
+                plan_id = _text(data.get("plan_id"))
+                if plan_id:
+                    retrieval_plan_nodes[plan_id] = node.node_id
+            elif record.kind == "retrieval_search_attempt":
+                goal_id = _text(data.get("goal_id"))
+                if goal_id:
+                    search_nodes_by_goal.setdefault(goal_id, []).append(node.node_id)
+                    for plan_node_id in retrieval_plan_nodes.values():
+                        builder.add_edge(plan_node_id, node.node_id, "searches")
+                for source in _list_of_dicts(data.get("sources"))[:64]:
+                    source_node = _source_node(source)
+                    if builder.add_node(source_node):
+                        source_id = _text(source.get("source_id")) or source_node.node_id.removeprefix("source:")
+                        source_nodes[source_id] = source_node.node_id
+                        builder.add_edge(node.node_id, source_node.node_id, "found_source", _score_label(source))
+            elif record.kind == "retrieval_fetch_attempt":
+                source_id = _text(data.get("source_id"))
+                if source_id and source_id in source_nodes:
+                    builder.add_edge(source_nodes[source_id], node.node_id, "fetched", _status_label(data))
+                    fetch_nodes_by_source[source_id] = node.node_id
+                artifact_id = _text(data.get("artifact_id"))
+                if artifact_id:
+                    artifact_node = BehaviorGraphNode(
+                        node_id=f"artifact:{artifact_id}",
+                        node_type="artifact",
+                        label=_preview(f"Artifact {artifact_id}", 80),
+                        metadata={"artifact_id": artifact_id, "payload_hash": _text(data.get("payload_hash"))},
+                    )
+                    if builder.add_node(artifact_node):
+                        builder.add_edge(node.node_id, artifact_node.node_id, "stores_raw_body")
+            elif record.kind == "retrieval_extraction":
+                document = data.get("document") if isinstance(data.get("document"), dict) else {}
+                document_id = _text(document.get("document_id")) or _text(data.get("document_id"))
+                if document_id:
+                    document_node = BehaviorGraphNode(
+                        node_id=f"document:{document_id}",
+                        node_type="document",
+                        label=_preview(_text(document.get("title")) or document_id, 120),
+                        record_id=record.record_id,
+                        run_id=record.run_id,
+                        step_id=record.step_id,
+                        metadata={
+                            "document_id": document_id,
+                            "artifact_id": _text(document.get("artifact_id")),
+                            "span_count": len(_list_of_dicts(data.get("spans"))),
+                        },
+                    )
+                    if builder.add_node(document_node):
+                        document_nodes[document_id] = document_node.node_id
+                        artifact_id = _text(document.get("artifact_id"))
+                        if artifact_id:
+                            builder.add_edge(f"artifact:{artifact_id}", document_node.node_id, "extracted_document")
+                        builder.add_edge(document_node.node_id, node.node_id, "extracted_spans")
+            elif record.kind == "retrieval_evidence":
+                evidence_id = _text(data.get("evidence_id"))
+                if evidence_id:
+                    evidence_nodes[evidence_id] = node.node_id
+                source_id = _text(data.get("source_id"))
+                if source_id and source_id in fetch_nodes_by_source:
+                    builder.add_edge(fetch_nodes_by_source[source_id], node.node_id, "supports_evidence", _score_label(data))
+                artifact_id = _text(data.get("artifact_id"))
+                if artifact_id:
+                    builder.add_edge(f"artifact:{artifact_id}", node.node_id, "supports_evidence")
+            elif record.kind == "retrieval_citation":
+                evidence_id = _text(data.get("evidence_id"))
+                if evidence_id and evidence_id in evidence_nodes:
+                    builder.add_edge(evidence_nodes[evidence_id], node.node_id, "cited_by")
+            elif record.kind in {"agent_final_answer", "semantic_task_plan_final_answer"}:
+                for ref in _string_list(data.get("citation_refs")):
+                    citation_node_id = _find_node_by_record_data(builder.nodes, "citation_id", ref)
+                    if citation_node_id:
+                        builder.add_edge(citation_node_id, node.node_id, "used_in_answer")
+            elif record.kind == "agent_failure_report":
+                for action_name in _string_list(data.get("attempted_actions")):
+                    for action_id, action_node_id in action_nodes.items():
+                        if action_name in action_node_id or action_name in action_id:
+                            builder.add_edge(action_node_id, node.node_id, "attempted_before_failure")
+
+        return builder.to_graph()
+
+
+def render_behavior_graph_dot(graph: BehaviorGraph) -> str:
+    lines = ["digraph HoloBehaviorGraph {", '  rankdir="LR";', '  node [shape=box, style="rounded"];']
+    for node in graph.nodes:
+        node_id = _dot_id(str(node.get("node_id")))
+        label = _dot_label(str(node.get("label") or node.get("node_id")))
+        node_type = str(node.get("node_type") or "node")
+        lines.append(f'  "{node_id}" [label="{label}", color="{_dot_color(node_type)}"];')
+    for edge in graph.edges:
+        label = _dot_label(str(edge.get("label") or edge.get("edge_type") or ""))
+        lines.append(
+            f'  "{_dot_id(str(edge.get("source")))}" -> "{_dot_id(str(edge.get("target")))}" '
+            f'[label="{label}"];'
+        )
+    lines.append("}")
+    return "\n".join(lines)
+
+
+class _GraphAccumulator:
+    def __init__(self, *, task_id: str, max_nodes: int) -> None:
+        self.task_id = task_id
+        self.max_nodes = max(8, int(max_nodes or MAX_GRAPH_NODES))
+        self.nodes: dict[str, JsonObject] = {}
+        self.edges: list[JsonObject] = []
+        self.truncated_records = 0
+
+    def add_node(self, node: BehaviorGraphNode) -> bool:
+        if node.node_id in self.nodes:
+            return True
+        if len(self.nodes) >= self.max_nodes:
+            return False
+        self.nodes[node.node_id] = node.to_dict()
+        return True
+
+    def add_edge(self, source: str, target: str, edge_type: str, label: str | None = None) -> bool:
+        if source not in self.nodes or target not in self.nodes:
+            return False
+        if len(self.edges) >= MAX_GRAPH_EDGES:
+            return False
+        edge = BehaviorGraphEdge(source=source, target=target, edge_type=edge_type, label=label)
+        payload = edge.to_dict()
+        if payload not in self.edges:
+            self.edges.append(payload)
+        return True
+
+    def to_graph(self) -> BehaviorGraph:
+        node_types: dict[str, int] = {}
+        edge_types: dict[str, int] = {}
+        for node in self.nodes.values():
+            key = str(node.get("node_type") or "unknown")
+            node_types[key] = node_types.get(key, 0) + 1
+        for edge in self.edges:
+            key = str(edge.get("edge_type") or "unknown")
+            edge_types[key] = edge_types.get(key, 0) + 1
+        return BehaviorGraph(
+            schema="holo.kernel_v3.behavior_graph.v1",
+            task_id=self.task_id,
+            nodes=list(self.nodes.values()),
+            edges=list(self.edges),
+            diagnostics={
+                "node_count": len(self.nodes),
+                "edge_count": len(self.edges),
+                "node_types": node_types,
+                "edge_types": edge_types,
+                "truncated_records": self.truncated_records,
+                "max_nodes": self.max_nodes,
+            },
+        )
+
+
+def _node_for_record(record: LedgerRecord) -> BehaviorGraphNode | None:
+    data = record.data
+    kind = record.kind
+    if kind == "processor_request":
+        task_type = _processor_task_type(data)
+        return _record_node(record, "processor_request", f"Model request: {task_type}", {"task_type": task_type})
+    if kind == "processor_result":
+        task_type = _processor_task_type(data)
+        return _record_node(
+            record,
+            "processor_result",
+            f"Model result: {task_type} {_text(data.get('status'))}",
+            {"task_type": task_type, "status": _text(data.get("status")), "error": _preview(_text(data.get("error")), 160)},
+        )
+    if kind == "semantic_intake":
+        return _record_node(record, "semantic", "Semantic intake", {"intent": _text(data.get("primary_intent"))})
+    if kind == "semantic_task_graph":
+        return _record_node(record, "task_graph", "Semantic task graph", {"status": _text(data.get("status"))})
+    if kind == "semantic_task_plan":
+        return _record_node(record, "task_plan", "Semantic task plan", {"status": _text(data.get("status"))})
+    if kind == "mission_assessment":
+        return _record_node(record, "mission_assessment", "Mission assessment", {"decision": _text(data.get("decision"))})
+    if kind == "mission_directive":
+        return _record_node(record, "mission_directive", "Mission directive", {"strategy": _text(data.get("strategy"))})
+    if kind == "workmethod_frame":
+        return _record_node(record, "workmethod", "Work method frame", {"status": _text(data.get("status"))})
+    if kind == "work_gap_assessment":
+        return _record_node(record, "work_gap", "Work gap", {"status": _text(data.get("status"))})
+    if kind == "strategy_shift":
+        return _record_node(record, "strategy_shift", "Strategy shift", {"strategy": _text(data.get("strategy"))})
+    if kind == "action":
+        name = _text(data.get("name")) or _text(data.get("kind"))
+        return _record_node(
+            record,
+            "action",
+            f"Action: {name}",
+            {"action_id": _text(data.get("action_id")), "name": name, "side_effect_class": _text(data.get("side_effect_class"))},
+        )
+    if kind == "policy_decision":
+        return _record_node(record, "policy", f"Policy: {_text(data.get('allowed'))}", {"reason": _preview(_text(data.get("reason")), 160)})
+    if kind == "observation":
+        return _record_node(
+            record,
+            "observation",
+            f"Observation: {_text(data.get('source'))} {_text(data.get('status'))}",
+            {
+                "observation_id": _text(data.get("observation_id")),
+                "action_id": _text(data.get("action_id")),
+                "status": _text(data.get("status")),
+                "source": _text(data.get("source")),
+            },
+        )
+    if kind == "feedback":
+        return _record_node(
+            record,
+            "feedback",
+            f"Feedback: {_text(data.get('status'))}",
+            {"status": _text(data.get("status")), "stop_reason": _text(data.get("stop_reason"))},
+        )
+    if kind == "retrieval_query_plan":
+        return _record_node(
+            record,
+            "query_plan",
+            f"Query plan: {len(_list_of_dicts(data.get('queries')))} queries",
+            {"plan_id": _text(data.get("plan_id")), "goal_id": _text(data.get("goal_id"))},
+        )
+    if kind == "retrieval_search_attempt":
+        return _record_node(
+            record,
+            "search",
+            f"Search: {_preview(_text(data.get('query')), 120)}",
+            {
+                "attempt_id": _text(data.get("attempt_id")),
+                "goal_id": _text(data.get("goal_id")),
+                "query": _preview(_text(data.get("query")), 240),
+                "status": _text(data.get("status")),
+            },
+        )
+    if kind == "retrieval_rank_sources":
+        return _record_node(record, "rank", "Rank sources", {"source_count": len(_list_of_dicts(data.get("ranked_sources")))})
+    if kind == "retrieval_fetch_attempt":
+        return _record_node(
+            record,
+            "fetch",
+            f"Fetch: {_text(data.get('status'))}",
+            {
+                "fetch_id": _text(data.get("fetch_id")),
+                "source_id": _text(data.get("source_id")),
+                "uri": _preview(_text(data.get("uri")), 240),
+                "status": _text(data.get("status")),
+                "artifact_id": _text(data.get("artifact_id")),
+                "size_bytes": _int(data.get("size_bytes")),
+            },
+        )
+    if kind == "retrieval_extraction":
+        return _record_node(record, "extraction", "Extract spans", {"span_count": len(_list_of_dicts(data.get("spans")))})
+    if kind == "retrieval_evidence":
+        return _record_node(
+            record,
+            "evidence",
+            f"Evidence: {_preview(_text(data.get('text')), 100)}",
+            {
+                "evidence_id": _text(data.get("evidence_id")),
+                "source_id": _text(data.get("source_id")),
+                "artifact_id": _text(data.get("artifact_id")),
+                "score": _number(data.get("score")),
+            },
+        )
+    if kind == "retrieval_citation":
+        return _record_node(
+            record,
+            "citation",
+            f"Citation: {_text(data.get('citation_id'))}",
+            {
+                "citation_id": _text(data.get("citation_id")),
+                "evidence_id": _text(data.get("evidence_id")),
+                "artifact_id": _text(data.get("artifact_id")),
+                "quote_preview": _preview(_text(data.get("quote")), 160),
+            },
+        )
+    if kind == "retrieval_evaluation_decision":
+        return _record_node(
+            record,
+            "retrieval_evaluation",
+            f"Retrieval evaluation: {_text(data.get('sufficient'))}",
+            {"reason": _preview(_text(data.get("reason")), 160)},
+        )
+    if kind == "retrieval_report":
+        return _record_node(record, "retrieval_report", f"Retrieval report: {_text(data.get('status'))}", {"status": _text(data.get("status"))})
+    if kind == "agent_final_answer":
+        return _record_node(
+            record,
+            "final_answer",
+            "Final answer",
+            {"confidence": _number(data.get("confidence")), "citation_refs": _string_list(data.get("citation_refs"))[:64]},
+        )
+    if kind == "agent_failure_report":
+        return _record_node(
+            record,
+            "failure_report",
+            "Failure report",
+            {"reason": _preview(_text(data.get("reason")), 160), "next_possible_action": _text(data.get("next_possible_action"))},
+        )
+    if kind.startswith("memory_"):
+        return _record_node(record, "memory", kind, {"memory_id": _text(data.get("memory_id")), "proposal_id": _text(data.get("proposal_id"))})
+    return None
+
+
+def _record_node(record: LedgerRecord, node_type: str, label: str, metadata: JsonObject | None = None) -> BehaviorGraphNode:
+    return BehaviorGraphNode(
+        node_id=f"record:{record.record_id}",
+        node_type=node_type,
+        label=_preview(_redact(label), 160),
+        record_id=record.record_id,
+        run_id=record.run_id,
+        step_id=record.step_id,
+        metadata=_safe_metadata(
+            {
+                "kind": record.kind,
+                "payload_hash": record.payload_hash,
+                "artifact_refs": list(record.artifact_refs),
+                **dict(metadata or {}),
+            }
+        ),
+    )
+
+
+def _source_node(source: JsonObject) -> BehaviorGraphNode:
+    source_id = _text(source.get("source_id")) or _text(source.get("id")) or _short_hash(source)
+    title = _text(source.get("title")) or _text(source.get("name")) or source_id
+    return BehaviorGraphNode(
+        node_id=f"source:{source_id}",
+        node_type="source",
+        label=_preview(_redact(title), 140),
+        metadata=_safe_metadata(
+            {
+                "source_id": source_id,
+                "uri": _preview(_text(source.get("uri") or source.get("url")), 240),
+                "authority": _text(source.get("authority")),
+                "score": _number(source.get("score")),
+            }
+        ),
+    )
+
+
+def _processor_task_type(data: JsonObject) -> str:
+    parameters = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
+    output = data.get("output") if isinstance(data.get("output"), dict) else {}
+    for container in (data, parameters, output):
+        value = container.get("task_type") if isinstance(container, dict) else None
+        if isinstance(value, str) and value:
+            return value
+    processor = data.get("processor")
+    return str(processor) if isinstance(processor, str) and processor else "unknown"
+
+
+def _safe_metadata(data: JsonObject) -> JsonObject:
+    safe: JsonObject = {}
+    for key, value in data.items():
+        if value in (None, "", []):
+            continue
+        if isinstance(value, str):
+            safe[key] = _preview(_redact(value), 300)
+        elif isinstance(value, (int, float, bool)):
+            safe[key] = value
+        elif isinstance(value, list):
+            safe[key] = [_preview(_redact(str(item)), 160) for item in value[:64]]
+        elif isinstance(value, dict):
+            safe[key] = {str(k): _preview(_redact(str(v)), 160) for k, v in list(value.items())[:64]}
+        else:
+            safe[key] = _preview(_redact(str(value)), 160)
+    return safe
+
+
+def _find_node_by_record_data(nodes: dict[str, JsonObject], key: str, value: str) -> str | None:
+    for node_id, node in nodes.items():
+        metadata = node.get("metadata")
+        if isinstance(metadata, dict) and metadata.get(key) == value:
+            return node_id
+    return None
+
+
+def _list_of_dicts(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item not in (None, "")]
+    if isinstance(value, str) and value:
+        return [value]
+    return []
+
+
+def _text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _redact(value.strip())
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return _redact(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+
+def _redact(text: str) -> str:
+    redacted, _ = _REDACTOR.redact(text)
+    return str(redacted)
+
+
+def _preview(text: str, limit: int) -> str:
+    safe = _redact(str(text or "")).replace("\n", " ").strip()
+    if len(safe) <= limit:
+        return safe
+    return safe[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _number(value: object) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def _int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
+def _status_label(data: JsonObject) -> str | None:
+    status = _text(data.get("status"))
+    return status or None
+
+
+def _score_label(data: JsonObject) -> str | None:
+    score = data.get("score")
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        return f"score={score:.3g}"
+    return None
+
+
+def _short_hash(value: object) -> str:
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _dot_id(text: str) -> str:
+    return text.replace('"', "'")
+
+
+def _dot_label(text: str) -> str:
+    return _preview(text, 120).replace("\\", "\\\\").replace('"', "'")
+
+
+def _dot_color(node_type: str) -> str:
+    colors = {
+        "task": "#666666",
+        "processor_request": "#888888",
+        "processor_result": "#999999",
+        "action": "#c47f2c",
+        "policy": "#4f8f5f",
+        "observation": "#6d6d6d",
+        "search": "#d08a2d",
+        "source": "#b8843a",
+        "fetch": "#b05c42",
+        "artifact": "#777777",
+        "document": "#777777",
+        "evidence": "#3f8f5f",
+        "citation": "#d28a31",
+        "final_answer": "#3f8f5f",
+        "failure_report": "#b84a4a",
+    }
+    return colors.get(node_type, "#777777")

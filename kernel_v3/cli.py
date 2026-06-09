@@ -11,6 +11,7 @@ from typing import Callable
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
+from kernel_v3.behavior_graph import BehaviorGraphBuilder, render_behavior_graph_dot
 from kernel_v3.bench import (
     PUBLIC_FINANCE_BENCHMARK_SPECS,
     FinanceBenchmarkItem,
@@ -601,6 +602,11 @@ def main(argv: list[str] | None = None) -> int:
     retrieval_trace_parser.add_argument("task_id")
     retrieval_benchmark_parser = sub.add_parser("retrieval-benchmark")
     retrieval_benchmark_parser.add_argument("task_id")
+    behavior_graph_parser = sub.add_parser("behavior-graph")
+    behavior_graph_parser.add_argument("task_id")
+    behavior_graph_parser.add_argument("--format", choices=["json", "dot"], default="json")
+    behavior_graph_parser.add_argument("--output", default=None)
+    behavior_graph_parser.add_argument("--max-nodes", type=int, default=800)
 
     bench_parser = sub.add_parser("bench")
     bench_sub = bench_parser.add_subparsers(dest="bench_command", required=True)
@@ -1040,6 +1046,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "retrieval-benchmark":
         print(json.dumps(retrieval_behavior_benchmark(journal, args.task_id), ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "behavior-graph":
+        graph = BehaviorGraphBuilder(journal).build_task_graph(args.task_id, max_nodes=args.max_nodes)
+        if args.format == "dot":
+            rendered = render_behavior_graph_dot(graph)
+        else:
+            rendered = json.dumps(graph.to_dict(), ensure_ascii=False, sort_keys=True, indent=2)
+        if args.output:
+            path = Path(args.output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(rendered + "\n", encoding="utf-8")
+        else:
+            print(rendered)
         return 0
 
     if args.command == "bench":

@@ -103,7 +103,9 @@ system-time/resident scheduling pass is tracked in
 memory/RAG research and implementation target is summarized in
 `docs/KERNEL_V3_MEMORY_RAG_RESEARCH_2026-06-07.md`. The 2026-06-08 memory
 digest and SEC companyfacts extraction pass is tracked in
-`docs/KERNEL_V3_PROGRESS_2026-06-08_MEMORY_DIGEST_SEC_EXTRACTION.md`. The current
+`docs/KERNEL_V3_PROGRESS_2026-06-08_MEMORY_DIGEST_SEC_EXTRACTION.md`. The
+2026-06-09 public-benchmark import and behavior-graph pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-09_BENCHMARK_GRAPH.md`. The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -1039,6 +1041,18 @@ holo-v3 bench finance \
   --dataset data/finagent.jsonl \
   --predictions artifacts/finance_predictions.jsonl
 ```
+
+Task behavior graphs can be exported for benchmark reports and debugging:
+
+```bash
+holo-v3 behavior-graph <task_id> --format json
+holo-v3 behavior-graph <task_id> --format dot --output graph.dot
+```
+
+The graph is journal-derived and links model requests/results, actions,
+retrieval queries, sources, fetches, artifacts, documents, evidence, citations,
+feedback, and final answers or failure reports. It stores previews, refs,
+hashes, and diagnostics rather than raw fetched bodies.
 
 See `docs/KERNEL_V3_FINANCE_BENCHMARK_TRACK.md` for the scoring schema and
 planned Finance Agent Benchmark / FinAgent / SECQUE / FinanceQA path.
