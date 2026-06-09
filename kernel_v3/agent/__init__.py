@@ -13,6 +13,14 @@ from kernel_v3.agent.contracts import (
     TaskIntent,
     TaskRecipe,
 )
+from kernel_v3.agent.execution_profile import (
+    EXECUTION_PROFILE_IDS,
+    ExecutionProfile,
+    execution_profile,
+    execution_profile_runtime_metadata,
+    profile_mission_enabled,
+    profile_processor_mode,
+)
 from kernel_v3.agent.runtime import AgentRuntime
 from kernel_v3.agent.semantics import analyze_goal, analyze_goal_with_processor
 from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from_semantic, validate_task_graph
@@ -40,17 +48,23 @@ def __getattr__(name: str):
 
 __all__ = [
     "AgentRuntime",
+    "EXECUTION_PROFILE_IDS",
+    "ExecutionProfile",
     "MissionRuntime",
     "MissionSupervisor",
     "AgentRuntimeResult",
     "AnswerProfile",
     "analyze_goal",
     "analyze_goal_with_processor",
+    "execution_profile",
+    "execution_profile_runtime_metadata",
     "EvidenceSufficiency",
     "FailureReport",
     "FinalAnswer",
     "ProgressAssessment",
     "ProgressSignal",
+    "profile_mission_enabled",
+    "profile_processor_mode",
     "RepetitionSignal",
     "SemanticIntake",
     "SemanticStateProfile",

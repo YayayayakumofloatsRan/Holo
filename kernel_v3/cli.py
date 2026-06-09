@@ -11,6 +11,14 @@ from typing import Callable
 
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import SemanticIntake
+from kernel_v3.agent.execution_profile import (
+    EXECUTION_PROFILE_IDS,
+    ExecutionProfile,
+    execution_profile,
+    execution_profile_runtime_metadata,
+    profile_mission_enabled,
+    profile_processor_mode,
+)
 from kernel_v3.behavior_graph import BehaviorGraphBuilder, build_benchmark_result_graph_from_path, render_behavior_graph_dot
 from kernel_v3.bench import (
     PUBLIC_FINANCE_BENCHMARK_SPECS,
@@ -649,6 +657,18 @@ def main(argv: list[str] | None = None) -> int:
     finance_bench.add_argument("--limit", type=int, default=None)
     finance_bench.add_argument("--offset", type=int, default=0)
     finance_bench.add_argument("--thread-prefix", default="finance-bench")
+    finance_bench.add_argument(
+        "--execution-profile",
+        choices=EXECUTION_PROFILE_IDS,
+        default="finance-fact-fast",
+        help="Execution lane for benchmark runs. Fast lanes bypass resident mission overhead; long-mission preserves full supervision.",
+    )
+    finance_bench.add_argument(
+        "--mission",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Override MissionRuntime wrapping for benchmark runs. auto follows --execution-profile.",
+    )
     finance_bench.add_argument(
         "--parallel",
         type=int,
@@ -1322,6 +1342,7 @@ def _chat_runtime(
     turn_router_mode: str = "fake",
     default_mode: str = "auto",
     execution_metadata: JsonObject | None = None,
+    mission_enabled: bool = True,
 ) -> ChatRuntime:
     agent_runtime = _agent_runtime(
         journal,
@@ -1342,7 +1363,7 @@ def _chat_runtime(
     )
     return ChatRuntime(
         journal=journal,
-        agent_runtime=_mission_runtime(agent_runtime, live_model=live_model),
+        agent_runtime=_mission_runtime(agent_runtime, live_model=live_model) if mission_enabled else agent_runtime,
         memory_store=memory_store,
         planner_mode=planner_mode,
         evaluator_mode=evaluator_mode,
@@ -1391,11 +1412,14 @@ def _runtime_corpus_store(args) -> ResearchCorpusStore | None:
 def _runtime_execution_metadata(args) -> JsonObject | None:
     metadata: JsonObject = {}
     response_language = _response_language_for_args(args)
+    execution = _execution_profile_for_args(args)
+    if execution is not None:
+        metadata.update(execution_profile_runtime_metadata(execution))
     metadata["interaction_preferences"] = {
         "response_language": response_language,
     }
     metadata["context_budget"] = merge_context_budget(
-        getattr(args, "context_profile", "compact"),
+        _context_profile_for_args(args, execution),
         token_budget=getattr(args, "context_token_budget", None),
         section_budget=getattr(args, "context_section_budget", None),
         workspace_evidence_chars=getattr(args, "workspace_evidence_chars", None),
@@ -1409,10 +1433,12 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
     if getattr(args, "max_agent_artifact_bytes", None) is not None:
         loop_budget["max_total_artifact_bytes"] = _positive_limit(getattr(args, "max_agent_artifact_bytes"), default=1)
     if loop_budget:
-        metadata["agent_loop"] = loop_budget
+        current_loop = metadata.get("agent_loop")
+        current_loop = dict(current_loop) if isinstance(current_loop, dict) else {}
+        metadata["agent_loop"] = {**current_loop, **loop_budget}
     research_profile = getattr(args, "research_profile", None)
     if isinstance(research_profile, str) and research_profile:
-        research_depth = str(getattr(args, "research_depth", "balanced") or "balanced")
+        research_depth = _research_depth_for_args(args, execution)
         retrieval = metadata.setdefault("retrieval", {})
         current_metadata = retrieval.get("metadata")
         current_metadata = dict(current_metadata) if isinstance(current_metadata, dict) else {}
@@ -1423,6 +1449,19 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
         }
         for key, value in research_depth_defaults(research_profile, research_depth).items():
             retrieval.setdefault(key, value)
+        if execution is not None:
+            retrieval["max_queries"] = execution.max_queries
+            retrieval["max_sources"] = execution.max_sources
+            retrieval["max_fetches"] = execution.max_fetches
+            retrieval["max_spans_per_document"] = execution.max_spans_per_document
+            retrieval["max_retrieval_runs"] = execution.max_retrieval_runs
+            retrieval_metadata = retrieval.get("metadata")
+            retrieval_metadata = dict(retrieval_metadata) if isinstance(retrieval_metadata, dict) else {}
+            retrieval["metadata"] = {
+                **retrieval_metadata,
+                "execution_profile": execution.profile_id,
+                "retrieval_mode": execution.retrieval_mode,
+            }
     if _live_retrieval_requested(args):
         retrieval = metadata.setdefault("retrieval", {})
         retrieval["allow_network"] = True
@@ -1440,6 +1479,46 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
         if max_queries:
             retrieval["network_fetch_count"] = max_queries + int(retrieval["max_fetches"])
     return metadata or None
+
+
+def _execution_profile_for_args(args) -> ExecutionProfile | None:
+    profile_id = getattr(args, "execution_profile", None)
+    if not profile_id:
+        return None
+    return execution_profile(str(profile_id))
+
+
+def _context_profile_for_args(args, execution: ExecutionProfile | None) -> str:
+    if execution is not None:
+        current = str(getattr(args, "context_profile", "") or "")
+        if not current or current == DEFAULT_LIVE_CONTEXT_PROFILE:
+            return execution.context_profile
+    return str(getattr(args, "context_profile", "compact") or "compact")
+
+
+def _research_depth_for_args(args, execution: ExecutionProfile | None) -> str:
+    if execution is not None:
+        current = str(getattr(args, "research_depth", "") or "")
+        if not current or current == DEFAULT_RESEARCH_DEPTH:
+            return execution.research_depth
+    return str(getattr(args, "research_depth", "balanced") or "balanced")
+
+
+def _benchmark_processor_mode(args, name: str, execution: ExecutionProfile | None) -> str:
+    if execution is not None:
+        return profile_processor_mode(
+            execution,
+            name,
+            str(getattr(args, name, "fake")),
+            online=bool(getattr(args, "online", False)),
+        )
+    return _processor_mode(args, name)
+
+
+def _mission_enabled_for_args(args, execution: ExecutionProfile | None) -> bool:
+    if execution is None:
+        return True
+    return profile_mission_enabled(execution, requested=str(getattr(args, "mission", "auto") or "auto"))
 
 
 def _response_language_for_args(args) -> str:
@@ -2071,6 +2150,8 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
     artifact_store = _runtime_artifact_store(args)
     research_corpus_store = _runtime_corpus_store(args)
     items = load_finance_benchmark_items(args.dataset, limit=args.limit, offset=args.offset)
+    execution = _execution_profile_for_args(args)
+    mission_enabled = _mission_enabled_for_args(args, execution)
     progress_callback = _finance_benchmark_progress_callback(output_path=output_path, total=len(items))
     if int(getattr(args, "parallel", 1) or 1) > 1:
         worker_root = _finance_benchmark_worker_root(args, output_path=output_path)
@@ -2113,13 +2194,14 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             generation_mode=args.generation_mode,
             latency_target=args.latency_target,
             response_language=_response_language_for_args(args),
-            planner_mode=_processor_mode(args, "planner"),
-            evaluator_mode=_processor_mode(args, "evaluator"),
-            synthesizer_mode=_processor_mode(args, "synthesizer"),
-            semantic_mode=_processor_mode(args, "semantic_intake"),
-            turn_router_mode=_processor_mode(args, "turn_router"),
+            planner_mode=_benchmark_processor_mode(args, "planner", execution),
+            evaluator_mode=_benchmark_processor_mode(args, "evaluator", execution),
+            synthesizer_mode=_benchmark_processor_mode(args, "synthesizer", execution),
+            semantic_mode=_benchmark_processor_mode(args, "semantic_intake", execution),
+            turn_router_mode=_benchmark_processor_mode(args, "turn_router", execution),
             default_mode="retrieval",
             execution_metadata=_runtime_execution_metadata(args),
+            mission_enabled=mission_enabled,
         )
         results = run_finance_benchmark(
             items=items,
@@ -2144,6 +2226,8 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         "summary_output": str(summary_path) if summary_path is not None else None,
         "parallel": int(getattr(args, "parallel", 1) or 1),
         "worker_state_root": worker_state_root,
+        "execution_profile": execution.profile_id if execution is not None else None,
+        "mission_enabled": mission_enabled,
     }
 
 
@@ -2219,6 +2303,7 @@ def _finance_benchmark_worker_runtime(
     index: int,
     item_id: str,
 ) -> ChatRuntime:
+    execution = _execution_profile_for_args(args)
     item_root = worker_root / f"{index:04d}-{safe_storage_id(item_id)}"
     journal = JournalStore(item_root / "journal.jsonl", index_path=item_root / "journal.sqlite")
     artifact_store = ArtifactStore(item_root / "artifacts.jsonl")
@@ -2247,13 +2332,14 @@ def _finance_benchmark_worker_runtime(
         generation_mode=args.generation_mode,
         latency_target=args.latency_target,
         response_language=_response_language_for_args(args),
-        planner_mode=_processor_mode(args, "planner"),
-        evaluator_mode=_processor_mode(args, "evaluator"),
-        synthesizer_mode=_processor_mode(args, "synthesizer"),
-        semantic_mode=_processor_mode(args, "semantic_intake"),
-        turn_router_mode=_processor_mode(args, "turn_router"),
+        planner_mode=_benchmark_processor_mode(args, "planner", execution),
+        evaluator_mode=_benchmark_processor_mode(args, "evaluator", execution),
+        synthesizer_mode=_benchmark_processor_mode(args, "synthesizer", execution),
+        semantic_mode=_benchmark_processor_mode(args, "semantic_intake", execution),
+        turn_router_mode=_benchmark_processor_mode(args, "turn_router", execution),
         default_mode="retrieval",
         execution_metadata=_runtime_execution_metadata(args),
+        mission_enabled=_mission_enabled_for_args(args, execution),
     )
 
 

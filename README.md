@@ -1042,6 +1042,20 @@ holo-v3 bench finance \
   --predictions artifacts/finance_predictions.jsonl
 ```
 
+Live finance benchmark runs use an explicit execution lane. The benchmark
+default is `finance-fact-fast`, which bypasses resident mission supervision and
+workmethod framing so simple public benchmark questions do not pay the full
+long-mission cost. Use `--execution-profile long-mission` only when the task is
+intended to exercise the full resident loop.
+
+```bash
+holo-v3 bench finance \
+  --dataset .state/kernel_v3/bench/finance/finance_agent_benchmark_public.normalized.jsonl \
+  --limit 5 \
+  --execution-profile finance-fact-fast \
+  --live-retrieval
+```
+
 Task behavior graphs can be exported for benchmark reports and debugging:
 
 ```bash

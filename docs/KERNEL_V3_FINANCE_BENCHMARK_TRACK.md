@@ -69,14 +69,26 @@ Run Holo against a JSONL benchmark:
 
 ```bash
 HOLO_V3_LIVE_MODEL=1 ./holo-v3 bench finance \
-  --dataset data/finagent.jsonl \
+  --dataset .state/kernel_v3/bench/finance/finance_agent_benchmark_public.normalized.jsonl \
   --limit 10 \
   --online \
+  --execution-profile finance-fact-fast \
   --research-profile finance_fundamentals \
-  --research-depth deep \
   --live-retrieval \
   --live-search-strategy adaptive
 ```
+
+Execution profiles:
+
+- `finance-fact-fast`: default benchmark lane. Skips resident mission
+  supervision and workmethod framing; uses a compact context, model planner,
+  rule evaluator, model synthesizer, and small retrieval/loop budgets.
+- `finance-modeling`: medium lane for multi-metric finance analysis and
+  calculations.
+- `web-research`: open-web lane for market analysis questions that need broader
+  source families.
+- `long-mission`: full resident mission loop. Use for stress-testing the
+  always-on architecture, not for simple benchmark fact extraction.
 
 Score existing predictions without running Holo:
 

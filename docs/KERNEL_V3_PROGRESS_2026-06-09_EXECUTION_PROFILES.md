@@ -1,0 +1,70 @@
+# Kernel v3 Progress: Execution Profiles
+
+Date: 2026-06-09
+
+## Problem
+
+Public Finance Agent Benchmark runs exposed a structural issue: simple or
+bounded questions could still enter the same heavy resident loop used for long
+missions. That made one benchmark item pay for chat routing, semantic intake,
+workmethod framing, mission assessment, repeated retrieval/evaluation, and large
+context packets.
+
+The target architecture is not one loop for every task. Kernel v3 should keep
+the same host-owned journal, policy, evidence, and memory substrate while
+choosing a fit-for-purpose execution lane.
+
+## What Changed
+
+Added `ExecutionProfile` presets:
+
+- `local-retrieval-fast`
+- `finance-fact-fast`
+- `finance-modeling`
+- `web-research`
+- `long-mission`
+
+`bench finance` now accepts:
+
+```bash
+--execution-profile finance-fact-fast
+--mission auto|on|off
+```
+
+The benchmark default is `finance-fact-fast`. This disables resident mission
+wrapping and workmethod framing for fast benchmark questions, while preserving
+model planning, host policy validation, tool execution, journal records,
+evidence/citation handling, and synthesis.
+
+`long-mission` keeps the full resident mission path for complex tasks that are
+supposed to exercise multi-iteration supervision.
+
+## Why It Matters
+
+This is the first explicit "multi-speed gearbox" in Kernel v3:
+
+- simple tasks can take a short path;
+- finance fact tasks can use compact evidence-first execution;
+- complex research and resident work can still use mission/workmethod memory and
+  reflection;
+- benchmark scoring can measure speed, token use, retrieval runs, and pass rate
+  without forcing every question through the heaviest architecture.
+
+## Validation
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_execution_profile.py \
+  tests/test_kernel_v3_finance_benchmark.py \
+  tests/test_kernel_v3_finance_benchmark_report.py
+```
+
+Result: `24 passed`.
+
+## Next
+
+- Add per-item process timeout/failure row support for public live benchmark
+  batches.
+- Add processor-budget hard enforcement in `ProcessorFabric`.
+- Add domain finance evidence ledger and numeric verifier so fast finance lanes
+  can score higher without long mission overhead.

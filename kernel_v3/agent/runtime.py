@@ -325,27 +325,35 @@ class AgentRuntime:
             answer_profile=answer_profile,
             research_mission=research_mission,
         )
-        workmethod_state = WorkMethodSupervisor(
-            processor_fabric=self.processor_fabric,
-            mode=(
-                "model"
-                if _use_model_workmethod(
-                    self.processor_fabric,
-                    semantic_mode=semantic_mode,
-                    execution_metadata=execution_metadata,
-                )
-                else "rule"
-            ),
-        ).frame_task(
-            goal=semantic_goal,
-            thread_id=thread_id,
-            semantic_intake=intake,
-            task_plan=task_plan,
-            answer_profile=answer_profile,
-            execution_metadata=execution_metadata,
-            task_id=task_id,
-            run_id="workmethod-pre",
-        )
+        if _execution_profile_uses_workmethod(execution_metadata):
+            workmethod_state = WorkMethodSupervisor(
+                processor_fabric=self.processor_fabric,
+                mode=(
+                    "model"
+                    if _use_model_workmethod(
+                        self.processor_fabric,
+                        semantic_mode=semantic_mode,
+                        execution_metadata=execution_metadata,
+                    )
+                    else "rule"
+                ),
+            ).frame_task(
+                goal=semantic_goal,
+                thread_id=thread_id,
+                semantic_intake=intake,
+                task_plan=task_plan,
+                answer_profile=answer_profile,
+                execution_metadata=execution_metadata,
+                task_id=task_id,
+                run_id="workmethod-pre",
+            )
+        else:
+            workmethod_state = _disabled_workmethod_state(
+                goal=semantic_goal,
+                thread_id=thread_id,
+                task_plan=task_plan,
+                execution_metadata=execution_metadata,
+            )
         execution_metadata = _with_workmethod_metadata(
             execution_metadata,
             workmethod=workmethod_state.to_dict(),
@@ -5105,6 +5113,60 @@ def _use_model_workmethod(
     except Exception:
         return False
     return route.provider not in {"fake_json", "fake_malformed_json", "fake_timeout"}
+
+
+def _execution_profile_uses_workmethod(metadata: JsonObject | None) -> bool:
+    if not isinstance(metadata, dict):
+        return True
+    profile = metadata.get("execution_profile")
+    if not isinstance(profile, dict):
+        return True
+    value = profile.get("use_workmethod")
+    return bool(value) if isinstance(value, bool) else True
+
+
+def _disabled_workmethod_state(
+    *,
+    goal: str,
+    thread_id: str,
+    task_plan: TaskExecutionPlan,
+    execution_metadata: JsonObject | None,
+) -> WorkMethodState:
+    profile = (
+        dict(execution_metadata.get("execution_profile"))
+        if isinstance(execution_metadata, dict) and isinstance(execution_metadata.get("execution_profile"), dict)
+        else {}
+    )
+    profile_id = str(profile.get("profile_id") or "unknown")
+    return WorkMethodState(
+        state_id="workstate-disabled-" + _short_hash(thread_id, goal, profile_id),
+        frame={
+            "frame_id": "workframe-disabled-" + _short_hash(thread_id, goal),
+            "user_goal": goal,
+            "inferred_goal": goal,
+            "work_type": "execution_profile_fast_lane",
+            "difficulty": "profile_controlled",
+            "risk_level": "profile_controlled",
+            "expected_output": {},
+            "done_criteria": [],
+            "tool_needs": [],
+            "memory_needs": [],
+            "assumptions": [f"workmethod disabled by execution_profile={profile_id}"],
+        },
+        method={
+            "method_id": "workmethod-disabled-" + _short_hash(profile_id, task_plan.plan_id),
+            "method_name": "fast_lane_without_workmethod",
+            "first_moves": [],
+            "evidence_strategy": [],
+            "failure_moves": [],
+            "stop_policy": [],
+            "user_interaction_policy": [],
+            "notes": ["Workmethod framing skipped by execution profile to reduce benchmark/simple-task overhead."],
+        },
+        thread_working_set={},
+        source="disabled_by_execution_profile",
+        diagnostics={"execution_profile": profile_id, "selected_mode": task_plan.selected_mode},
+    )
 
 
 def _pending_answer_prefers_semantic_mode(
