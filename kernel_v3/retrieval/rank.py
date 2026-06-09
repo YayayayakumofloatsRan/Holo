@@ -95,6 +95,7 @@ def _source_haystack(source: SearchSource) -> str:
 def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "") -> float:
     source_kind = metadata.get("source_kind")
     query_text = query.lower()
+    sec_directory_intent = _sec_directory_lookup_intent(query_text)
     submissions_intent = any(
         marker in query_text
         for marker in (
@@ -118,7 +119,9 @@ def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "
         if submissions_intent:
             return 0.51
         return 0.42
-    if source_kind in {"sec_ticker_cik_directory", "sec_edgar_search", "sec_filing_directory"}:
+    if source_kind == "sec_ticker_cik_directory":
+        return 0.62 if sec_directory_intent else -0.32
+    if source_kind in {"sec_edgar_search", "sec_filing_directory"}:
         return -0.32
     if source_kind == "sec_edgar_browse":
         return -0.12
@@ -141,6 +144,15 @@ def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "
     if source_kind in {"crawl_discovered", "crawl_sitemap", "direct_url"}:
         return 0.03
     return 0.0
+
+
+def _sec_directory_lookup_intent(query_text: str) -> bool:
+    normalized = " ".join(str(query_text or "").replace("_", " ").replace("-", " ").split())
+    if not normalized:
+        return False
+    has_identity_term = any(term in normalized for term in ("cik", "ticker", "identifier", "company_tickers"))
+    has_directory_term = any(term in normalized for term in ("directory", "mapping", "lookup", "registry", "index"))
+    return has_identity_term and has_directory_term
 
 
 def _source_family_preference_adjustment(goal_metadata: dict[str, object], source_metadata: dict[str, object]) -> float:

@@ -10,6 +10,7 @@ from kernel_v3.research.profile_policy import (
     profile_evidence_facets,
 )
 from kernel_v3.retrieval.contracts import EvidenceItem, ExtractedSpan, SearchGoal
+from kernel_v3.retrieval.finance_metrics import finance_metric_intent_score
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -33,10 +34,10 @@ def compact_evidence_candidates(
     effective_limit = max(1, min(limit, effective_limit))
     per_source_limit = _positive_int(policy.get("per_source_limit"), default=effective_limit)
     required_facets = profile_evidence_facets(goal=goal, research_profile=research_profile)
-    unique_candidates = _dedupe_candidates(candidates, required_facets=required_facets)
+    unique_candidates = _dedupe_candidates(candidates, goal=goal, required_facets=required_facets)
     ordered = sorted(
         unique_candidates,
-        key=lambda candidate: _candidate_sort_key(candidate, required_facets=required_facets),
+        key=lambda candidate: _candidate_sort_key(candidate, goal=goal, required_facets=required_facets),
     )
 
     selected: list[EvidenceCandidate] = []
@@ -87,15 +88,21 @@ def compact_evidence_candidates(
     return selected, rejected, diagnostics
 
 
-def _dedupe_candidates(candidates: list[EvidenceCandidate], *, required_facets: list[str]) -> list[EvidenceCandidate]:
+def _dedupe_candidates(
+    candidates: list[EvidenceCandidate],
+    *,
+    goal: SearchGoal,
+    required_facets: list[str],
+) -> list[EvidenceCandidate]:
     best_by_hash: dict[str, EvidenceCandidate] = {}
     for candidate in candidates:
         key = _text_hash(candidate.evidence.text)
         existing = best_by_hash.get(key)
         if existing is None or _candidate_sort_key(
             candidate,
+            goal=goal,
             required_facets=required_facets,
-        ) < _candidate_sort_key(existing, required_facets=required_facets):
+        ) < _candidate_sort_key(existing, goal=goal, required_facets=required_facets):
             best_by_hash[key] = candidate
     return list(best_by_hash.values())
 
@@ -132,8 +139,9 @@ def _select_candidate(
 def _candidate_sort_key(
     candidate: EvidenceCandidate,
     *,
+    goal: SearchGoal,
     required_facets: list[str],
-) -> tuple[float, float, float, float, float, float, int, str]:
+) -> tuple[float, float, float, float, float, float, float, int, str]:
     evidence = candidate.evidence
     qualification = evidence.diagnostics.get("qualification")
     facets = _candidate_facets(candidate)
@@ -141,11 +149,13 @@ def _candidate_sort_key(
     numeric_bonus = 0.2 if isinstance(qualification, dict) and qualification.get("profile_numeric_fact_present") else 0.0
     required_specific = _specific_required_facets(required_facets)
     specific_overlap = len(set(facets).intersection(required_specific))
+    metric_intent_score = finance_metric_intent_score(evidence.text, query=goal.query)
     metric_density = _metric_density(evidence.text)
     structured_summary_bonus = 1.0 if _looks_like_structured_finance_summary(evidence.text) else 0.0
     return (
         -authority,
         -float(specific_overlap),
+        -float(metric_intent_score),
         -structured_summary_bonus,
         -float(metric_density),
         -(float(evidence.score) + numeric_bonus),

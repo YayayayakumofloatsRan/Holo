@@ -15,6 +15,10 @@ from kernel_v3.research.profile_policy import (
     resolve_goal_research_profile,
 )
 from kernel_v3.retrieval.contracts import ExtractedSpan, FetchedDocument, SearchGoal
+from kernel_v3.retrieval.finance_metrics import (
+    finance_metric_intent_diagnostics,
+    finance_metric_intent_score,
+)
 
 READABLE_TEXT_LIMIT = 200_000
 SPAN_BEFORE_CHARS = 120
@@ -211,6 +215,7 @@ def extract_spans(
         _ranked_structured_line_candidates(
             text,
             terms,
+            query=goal.query,
             required_terms=_topic_anchor_terms(goal.query) if text_mode in _scholarly_text_modes() else None,
         )
         if text_mode in STRUCTURED_TEXT_MODES
@@ -230,6 +235,11 @@ def extract_spans(
                 metadata={
                     "matched_terms": candidate["matched_terms"],
                     "text_mode": text_mode,
+                    **(
+                        {"finance_metric_intent": candidate["finance_metric_intent"]}
+                        if candidate.get("finance_metric_intent")
+                        else {}
+                    ),
                     **({"anchor_terms": candidate["anchor_terms"]} if candidate.get("anchor_terms") else {}),
                 },
             )
@@ -306,6 +316,7 @@ def _ranked_structured_line_candidates(
     text: str,
     terms: list[str],
     *,
+    query: str,
     required_terms: list[str] | None = None,
 ) -> list[dict]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -327,6 +338,8 @@ def _ranked_structured_line_candidates(
             continue
         matched = [candidate for candidate in terms if candidate in lower]
         if matched:
+            metric_score = finance_metric_intent_score(line, query=query)
+            structured_summary_bonus = 1.0 if _looks_like_structured_finance_summary(line) else 0.0
             snippet = _normalize_span(f"{header} {line}")
             candidates.append(
                 {
@@ -335,7 +348,14 @@ def _ranked_structured_line_candidates(
                     "text": snippet,
                     "matched_terms": matched,
                     "anchor_terms": required_matched,
-                    "score": min(1.0, (len(matched) + len(required_matched)) / max(1, len(terms))),
+                    "finance_metric_intent": finance_metric_intent_diagnostics(line, query=query),
+                    "structured_summary_bonus": structured_summary_bonus,
+                    "score": min(
+                        1.0,
+                        ((len(matched) + len(required_matched)) / max(1, len(terms)))
+                        + max(0.0, metric_score) / 40.0
+                        + structured_summary_bonus / 10.0,
+                    ),
                 }
             )
         offset += len(line) + 1
@@ -343,6 +363,8 @@ def _ranked_structured_line_candidates(
         candidates,
         key=lambda item: (
             -float(item["score"]),
+            -float(item.get("structured_summary_bonus") or 0.0),
+            -float((item.get("finance_metric_intent") or {}).get("score") or 0.0),
             -len(item["matched_terms"]),
             int(item["start_offset"]),
         ),
@@ -366,6 +388,13 @@ def _scholarly_text_modes() -> set[str]:
 def _looks_like_structured_header(line: str) -> bool:
     normalized = line.lower()
     return normalized.startswith("scholarly metadata records") or normalized.startswith("sec companyfacts official")
+
+
+def _looks_like_structured_finance_summary(line: str) -> bool:
+    normalized = line.lower()
+    return "sec companyfacts annual financial summary" in normalized or (
+        "period=annual" in normalized and "facts=metric=" in normalized
+    )
 
 
 def _topic_anchor_terms(text: str) -> list[str]:

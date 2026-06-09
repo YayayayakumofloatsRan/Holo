@@ -82,3 +82,34 @@ The failures were concentrated in:
 
 This means the next quality work should focus on finance metric semantics and
 document acquisition, not on unbounded crawling.
+
+## 2026-06-09 Follow-Up Fixes
+
+The retrieval path now has two additional quality controls for finance
+benchmarks:
+
+- SEC/companyfacts evidence ranking uses a finance metric-intent signal. It
+  prefers the line item implied by the user query, such as `Assets` for total
+  assets, `SalesAndOtherOperatingRevenue` for energy-company total revenue,
+  `TotalRevenuesAndOtherIncome` for companies that report that concept, and
+  `SalesRevenueNet` for net-sales questions. This is a relative evidence
+  ranking signal, not a benchmark-answer table.
+- SEC ticker/CIK directory lookup queries now rank the SEC ticker directory
+  ahead of companyfacts/submissions sources. This preserves the intended
+  workflow: resolve identity first, then expose structured submissions and
+  companyfacts payload hints to the planner.
+
+Targeted verification:
+
+```bash
+.venv/bin/pytest -q \
+  tests/test_kernel_v3_finance_metric_intent.py \
+  tests/test_kernel_v3_retrieval_document_expansion.py \
+  tests/test_kernel_v3_phase98_sec_edgar_provider.py \
+  tests/test_kernel_v3_finance_benchmark.py \
+  tests/test_kernel_v3_phase91_live_retrieval_config.py \
+  tests/test_kernel_v3_phase92_agent_live_retrieval_permission.py \
+  tests/test_kernel_v3_phase103_model_retrieval_feedback.py
+```
+
+Expected result for this slice: `72 passed`.

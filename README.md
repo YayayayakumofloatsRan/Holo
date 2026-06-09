@@ -112,6 +112,11 @@ model-owned with structured route-relation validation instead of phrase tables,
 durable memory is visible as both project and thread context views, SEC
 companyfacts/direct-URL retrieval now preserves structured financial evidence
 such as concept, metric, annual/quarterly period, filing, and value fields,
+finance evidence compaction uses query-derived metric intent so total-assets,
+net-sales, energy-revenue, and total-revenues questions keep the closest SEC
+line-item evidence instead of a generic revenue/equity row, SEC ticker/CIK
+directory lookups are ranked ahead of companyfacts when the current task is
+identity resolution,
 deep retrieval can run model-owned retrieval strategy packets first, then fall
 back to adaptive host query campaigns with large candidate pools, concurrent
 fetch, source-family rejection, and structured coverage-gap diagnostics. A
@@ -1011,7 +1016,10 @@ HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \
 
 The benchmark runner records one Holo run per question, writes JSONL item
 results plus a summary, and keeps benchmark gold answers out of model/tool
-prompts. Existing predictions can be scored without running Holo:
+prompts. Live benchmark runs are guarded by fetch-count, per-response byte,
+process download-budget, and shared-cache controls; see
+`docs/KERNEL_V3_LIVE_BENCHMARK_COST_CONTROL.md` before running broad parallel
+live evaluations. Existing predictions can be scored without running Holo:
 
 ```bash
 holo-v3 bench finance \
