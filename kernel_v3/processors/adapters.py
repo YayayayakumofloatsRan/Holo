@@ -384,10 +384,15 @@ def _compact_agent_recipe_for_provider(recipe: JsonObject) -> JsonObject:
 def _compact_runtime_directive_for_provider(directive: JsonObject) -> JsonObject:
     return {
         "mode": directive.get("mode"),
+        "initial_action": _compact_prompt_value(directive.get("initial_action")),
         "required_first_action": _compact_prompt_value(directive.get("required_first_action")),
         "required_outcome": _compact_prompt_value(directive.get("required_outcome")),
         "allowed_tools": _string_list(directive.get("allowed_tools"))[:16],
         "forbidden": _string_list(directive.get("forbidden"))[:16],
+        "tool_selection": _compact_list_for_provider(
+            directive.get("tool_selection"),
+            limit=6,
+        ),
         "allowed_non_tool_actions": _compact_list_for_provider(
             directive.get("allowed_non_tool_actions"),
             limit=4,

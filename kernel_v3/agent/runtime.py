@@ -32,6 +32,13 @@ from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile, merge_context_budget
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
 from kernel_v3.evaluator import Evaluator
+from kernel_v3.finance import (
+    CALCULATOR_TOOL_NAME,
+    FormulaTrace,
+    build_finance_fact_ledger,
+    register_finance_tools,
+    verify_finance_answer,
+)
 from kernel_v3.interaction import guard_user_visible_text, interaction_preferences, normalize_response_language
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
@@ -553,6 +560,8 @@ class AgentRuntime:
                 journal=self.journal,
                 artifact_store=self.artifact_store,
             )
+            if CALCULATOR_TOOL_NAME in recipe.allowed_tools:
+                register_finance_tools(registry)
             return self._with_memory_tools(registry)
         if recipe.mode in {"workspace_answer", "workspace_write"}:
             if self.workspace_root is not None:
@@ -844,6 +853,23 @@ class AgentRuntime:
                 next_action="expand_final_answer_or_collect_more_evidence",
                 recipe=recipe,
             )
+        if _finance_numeric_verifier_required(recipe):
+            verification = self._append_finance_numeric_verification(
+                final,
+                recipe=recipe,
+                evidence=evidence,
+                citations=citations,
+            )
+            if verification.status == "failed":
+                missing = _finance_numeric_missing_evidence(verification)
+                return None, self._failure(
+                    task_id,
+                    run_id,
+                    "finance_numeric_verification_failed",
+                    missing_evidence=missing or ["supported_finance_numeric_values"],
+                    next_action="collect_supported_finance_facts_or_run_calculator",
+                    recipe=recipe,
+                )
         final = self._append_final(final)
         self._maybe_propose_research_memory(final, recipe=recipe)
         return final, None
@@ -1267,6 +1293,58 @@ class AgentRuntime:
             if not any(_same_url_or_prefix(cited_url, required_url) for cited_url in cited_urls for required_url in required_urls):
                 gaps.append("required_source_url_citation_missing")
         return gaps
+
+    def _append_finance_numeric_verification(
+        self,
+        answer: FinalAnswer,
+        *,
+        recipe: TaskRecipe,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+    ):
+        facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+        trace_refs = _trace_refs(self.journal, answer.task_id)
+        ledger_record = self.journal.append(
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            step_id=None,
+            kind="finance_fact_ledger",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.finance_fact_ledger.v1",
+                    "fact_count": len(facts),
+                    "facts": [fact.to_dict() for fact in facts[:512]],
+                    "evidence_count": len(evidence),
+                    "citation_count": len(citations),
+                }
+            ),
+            state_delta={"finance_fact_count": len(facts)},
+        )
+        formula_traces = _calculator_formula_traces(self.journal, task_id=answer.task_id, run_id=answer.run_id)
+        verification = verify_finance_answer(
+            answer=answer.answer,
+            facts=facts,
+            formula_traces=formula_traces,
+            citations=citations,
+            evidence=evidence,
+            question=_root_goal_from_recipe(recipe),
+        )
+        self.journal.append(
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            step_id=None,
+            kind="finance_numeric_verification",
+            data=redact_journal_data(
+                {
+                    **verification.to_dict(),
+                    "schema": "holo.kernel_v3.finance_numeric_verification.v1",
+                    "ledger_ref": ledger_record.record_id,
+                    "trace_refs": [*trace_refs, ledger_record.record_id],
+                }
+            ),
+            state_delta={"finance_numeric_verification": verification.status},
+        )
+        return verification
 
     def _append_final_quality_check(
         self,
@@ -2163,9 +2241,12 @@ def task_recipe(
         max_network_fetches = _retrieval_network_fetch_budget(recipe_metadata)
         if max_network_fetches > 0:
             recipe_metadata = _with_allowed_permission(recipe_metadata, "network:fetch")
+        allowed_tools = ["retrieval.run"]
+        if _metadata_requires_finance_numeric_verifier(recipe_metadata):
+            allowed_tools.append(CALCULATOR_TOOL_NAME)
         return TaskRecipe(
             recipe_id="recipe-retrieval-answer",
-            allowed_tools=["retrieval.run"],
+            allowed_tools=allowed_tools,
             max_steps=DEFAULT_RETRIEVAL_MAX_STEPS,
             max_tool_calls=DEFAULT_RETRIEVAL_MAX_TOOL_CALLS,
             max_network_fetches=max_network_fetches,
@@ -2856,14 +2937,43 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     research_mission = _research_mission_metadata(recipe)
     workmethod = _compact_workmethod_for_prompt(_workmethod_metadata(recipe))
     if recipe.mode == "retrieval_answer":
+        tool_selection = [
+            {
+                "kind": "tool",
+                "name": "retrieval.run",
+                "side_effect_class": "read",
+                "use_when": "external or indexed evidence is needed, evidence coverage is incomplete, or citation support is missing",
+                "payload_requirements": ["query or goal"],
+            }
+        ]
+        if CALCULATOR_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": CALCULATOR_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": (
+                        "finance facts have been observed and the user asks for a calculation, ratio, CAGR, margin, "
+                        "basis-point difference, transaction multiple, DIO, DCF/LBO step, or other numeric derivation"
+                    ),
+                    "payload_requirements": [
+                        "expression: Decimal-safe arithmetic expression",
+                        "variables: named numeric inputs from cited facts",
+                        "unit: optional percent/bps/USD/etc.",
+                        "input_fact_ids: finance fact ids when available",
+                    ],
+                }
+            )
         return {
             "mode": recipe.mode,
-            "required_first_action": {
+            "initial_action": {
                 "kind": "tool",
                 "name": "retrieval.run",
                 "side_effect_class": "read",
                 "payload_requirements": ["query or goal"],
+                "use_when": "no relevant retrieval evidence has been observed yet",
             },
+            "tool_selection": tool_selection,
             "search_strategy_hint": {
                 "payload_path": "metadata.search_strategy",
                 "allowed_values": ["fallback", "aggregate", "corpus_only", "fresh_live", "structured", "crawl"],
@@ -4201,6 +4311,24 @@ def _execution_profile_metadata(recipe: TaskRecipe) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _metadata_requires_finance_numeric_verifier(metadata: JsonObject) -> bool:
+    execution = metadata.get("execution_metadata")
+    execution = execution if isinstance(execution, dict) else {}
+    profile = execution.get("execution_profile")
+    profile = profile if isinstance(profile, dict) else {}
+    if bool(profile.get("require_numeric_verifier")):
+        return True
+    return bool(metadata.get("require_numeric_verifier") or execution.get("require_numeric_verifier"))
+
+
+def _finance_numeric_verifier_required(recipe: TaskRecipe) -> bool:
+    if recipe.mode != "retrieval_answer":
+        return False
+    if CALCULATOR_TOOL_NAME in recipe.allowed_tools:
+        return True
+    return _metadata_requires_finance_numeric_verifier(recipe.metadata)
+
+
 def _agent_loop_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("agent_loop")
     return dict(value) if isinstance(value, dict) else {}
@@ -4482,7 +4610,13 @@ def _compact_agent_runtime_directive_for_prompt(value: object) -> JsonObject:
         "mode": value.get("mode"),
         "allowed_tools": _string_list(value.get("allowed_tools")),
         "forbidden": _string_list(value.get("forbidden")),
+        "initial_action": _compact_simple_dict(value.get("initial_action"), limit=8),
         "required_first_action": _compact_simple_dict(value.get("required_first_action"), limit=8),
+        "tool_selection": [
+            _compact_simple_dict(item, limit=10)
+            for item in list(value.get("tool_selection") or [])[:6]
+            if isinstance(item, dict)
+        ],
         "allowed_non_tool_actions": [
             _compact_simple_dict(item, limit=8)
             for item in list(value.get("allowed_non_tool_actions") or [])[:4]
@@ -6941,6 +7075,45 @@ def _root_goal_for_memory_reflection(journal: JournalStore, task_id: str, recipe
         if isinstance(text, str) and text.strip():
             return text.strip()
     return task_id
+
+
+def _calculator_formula_traces(journal: JournalStore, *, task_id: str, run_id: str) -> list[FormulaTrace]:
+    traces: list[FormulaTrace] = []
+    seen: set[str] = set()
+    for record in journal.records(task_id=task_id, kind="observation"):
+        if record.run_id != run_id:
+            continue
+        if record.data.get("source") != f"tool:{CALCULATOR_TOOL_NAME}" or record.data.get("status") != "ok":
+            continue
+        content = record.data.get("content")
+        content = content if isinstance(content, dict) else {}
+        payload = content.get("formula_trace")
+        if not isinstance(payload, dict):
+            continue
+        try:
+            trace = FormulaTrace.from_dict(payload)
+        except Exception:
+            continue
+        if trace.formula_id in seen:
+            continue
+        seen.add(trace.formula_id)
+        traces.append(trace)
+    return traces
+
+
+def _finance_numeric_missing_evidence(verification) -> list[str]:
+    missing: list[str] = []
+    for issue in list(getattr(verification, "issues", []) or []):
+        if not isinstance(issue, dict):
+            continue
+        missing.append(str(issue.get("code") or "finance_numeric_issue"))
+    for value in list(getattr(verification, "missing_values", []) or [])[:8]:
+        if not isinstance(value, dict):
+            continue
+        raw = str(value.get("raw") or value.get("value") or "").strip()
+        if raw:
+            missing.append(f"unsupported_numeric_value:{raw}")
+    return _ordered_unique(missing)
 
 
 def _agent_final_from_processor(processor_answer, *, task_id: str, run_id: str, trace_refs: list[str]) -> FinalAnswer:

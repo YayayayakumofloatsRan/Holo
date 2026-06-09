@@ -23,6 +23,9 @@ inserted into planner, evaluator, retrieval, memory, or synthesis prompts.
 
 - Finance Agent Benchmark: real financial research tasks with Google Search and SEC EDGAR
   style tool assumptions.
+- Finance Agent v2 public set: public development questions from Vals'
+  Finance Agent v2 benchmark, focused on analyst-style filing research,
+  transaction analysis, DCF/LBO modeling, and numeric convention handling.
 - FinAgent Benchmark: SEC 10-K/10-Q grounded questions with gold answers, numeric values,
   tolerance, evidence excerpts, and required tool annotations.
 - SECQUE: SEC filing long-context questions with filing metadata and judge-oriented answer
@@ -51,6 +54,8 @@ Supported import formats:
 
 - `finance_agent_benchmark`: HuggingFace-style fields such as `Question`, `Answer`,
   `Question Type`, `Expert time (mins)`, and `Rubric`.
+- `finance_agent_v2_public`: plain text public development questions, one question
+  per line, with no public gold answer in the normalized prompt item.
 - `secque`: question, answer/ground truth, SEC filing context/supporting data, accession,
   page/item/section metadata.
 - `financeqa`: question, answer, filing context, question type, company, file link/name.
@@ -62,6 +67,20 @@ Import policy:
 - rubrics and reference chain-of-thought/program annotations are scoring-only;
 - benchmark-provided filing/report context may be inserted into the prompt as evidence;
 - every import can write a manifest with source URL, prompt policy, item count, and warnings.
+
+Finance Agent v2 public import:
+
+```bash
+./holo-v3 bench finance-import \
+  --benchmark finance_agent_v2_public \
+  --input data/raw/fabv2_public.txt \
+  --output .state/kernel_v3/bench/finance/fabv2_public_dev.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/fabv2_public_dev.manifest.json
+```
+
+The official public file lives at
+`https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt`.
+Keep it as a local input for reproducible runs and to avoid accidental repeated downloads.
 
 ## CLI
 
@@ -89,6 +108,18 @@ Execution profiles:
   source families.
 - `long-mission`: full resident mission loop. Use for stress-testing the
   always-on architecture, not for simple benchmark fact extraction.
+
+Finance execution substrate:
+
+- `FinanceFactLedger` converts retrieval evidence into structured facts with
+  metric, period, value, unit, evidence ref, and citation ref.
+- `calculator.compute` is a host-validated Decimal calculator. It accepts a
+  formula expression, variables, optional unit, and input fact ids, then journals
+  a `FormulaTrace`.
+- `finance.verify_numeric` is a deterministic final gate for finance profiles
+  that require numeric verification. It checks material answer numbers against
+  fact ledger entries or formula traces and blocks unsupported finance numbers
+  before final answer delivery.
 
 Score existing predictions without running Holo:
 
@@ -131,6 +162,10 @@ The summary reports:
 - answer-present rate,
 - citation-present rate,
 - numeric accuracy,
+- calculator-used rate,
+- numeric-verifier pass rate,
+- formula-trace present rate,
+- answer numeric support rate,
 - adversarial/unavailable-answer accuracy,
 - average token use,
 - average processor duration,
@@ -150,5 +185,6 @@ The report renderer turns item results into Markdown, HTML, or JSON with:
    import/scoring runnable from local exports.
 2. Add claim-level citation judge for answers whose gold target is not purely numeric.
 3. Add source-support scoring against benchmark evidence excerpts.
-4. Add PPT-ready rendering presets for task and benchmark graphs.
-5. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo retrieval plus memory.
+4. Promote calculator/numeric-verifier rates into the finance benchmark summary and report.
+5. Add PPT-ready rendering presets for task and benchmark graphs.
+6. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo retrieval plus memory.

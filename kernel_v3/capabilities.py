@@ -574,7 +574,7 @@ def semantic_capability_catalog() -> JsonObject:
         },
         "executable_tools_by_recipe": {
             "semantic_answer": [],
-            "retrieval_answer": ["retrieval.run"],
+            "retrieval_answer": ["retrieval.run", "calculator.compute"],
             "workspace_answer": ["workspace.list", "workspace.search", "file.read"],
             "workspace_write": ["workspace.list", "workspace.search", "file.read", "workspace.write"],
             "system_answer": ["system.time"],

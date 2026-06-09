@@ -1015,6 +1015,17 @@ holo-v3 bench finance-import \
   --manifest-output .state/kernel_v3/bench/finance/finance_agent_benchmark.manifest.json
 ```
 
+Finance Agent v2 public questions can be imported from a local copy of the
+public text file:
+
+```bash
+holo-v3 bench finance-import \
+  --benchmark finance_agent_v2_public \
+  --input data/raw/fabv2_public.txt \
+  --output .state/kernel_v3/bench/finance/fabv2_public_dev.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/fabv2_public_dev.manifest.json
+```
+
 ```bash
 HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \
   --dataset .state/kernel_v3/bench/finance/finance_agent_benchmark.normalized.jsonl \
@@ -1029,10 +1040,10 @@ HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \
 The benchmark runner records one Holo run per question, writes JSONL item
 results plus a summary, and keeps benchmark gold answers out of model/tool
 prompts. `bench finance-import` supports `finance_agent_benchmark`, `secque`,
-`financeqa`, and `finqa` local CSV/JSON/JSONL exports, preserving a provenance
-manifest while keeping gold answers, rubrics, and reference reasoning out of
-agent prompts. Live benchmark runs are guarded by fetch-count, per-response byte,
-process download-budget, and shared-cache controls; see
+`finance_agent_v2_public`, `financeqa`, and `finqa` local CSV/JSON/JSONL/text
+exports, preserving a provenance manifest while keeping gold answers, rubrics,
+and reference reasoning out of agent prompts. Live benchmark runs are guarded by
+fetch-count, per-response byte, process download-budget, and shared-cache controls; see
 `docs/KERNEL_V3_LIVE_BENCHMARK_COST_CONTROL.md` before running broad parallel
 live evaluations. Existing predictions can be scored without running Holo:
 
@@ -1048,8 +1059,22 @@ workmethod framing so simple public benchmark questions do not pay the full
 long-mission cost. Its loop and processor budgets are hard control-plane limits:
 the host will not silently expand a fast profile into the 2048-step resident
 budget, and `ProcessorFabric` blocks over-budget model calls before sending a
-provider request. Use `--execution-profile long-mission` only when the task is
-intended to exercise the full resident loop.
+provider request.
+
+Finance lanes also include a deterministic finance substrate:
+
+- `FinanceFactLedger` turns retrieval evidence, especially SEC companyfacts
+  spans, into structured finance facts with metric, fiscal period, value, unit,
+  evidence ref, and citation ref.
+- `calculator.compute` is a host tool using Decimal arithmetic and an AST
+  whitelist; the model proposes the formula, the host executes it.
+- `finance.verify_numeric` runs as a host final gate for finance profiles that
+  require numeric verification. Unsupported answer numbers, unit/scale
+  mismatches, period mismatches, and missing formula support become structured
+  failure reports instead of polished but unsupported answers.
+
+Use `--execution-profile long-mission` only when the task is intended to
+exercise the full resident loop.
 
 ```bash
 holo-v3 bench finance \

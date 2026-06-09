@@ -45,6 +45,17 @@ PUBLIC_FINANCE_BENCHMARK_SPECS: dict[str, PublicFinanceBenchmarkSpec] = {
             "Gold rubrics are for scoring only and must never enter the agent prompt.",
         ],
     ),
+    "finance_agent_v2_public": PublicFinanceBenchmarkSpec(
+        benchmark_id="finance_agent_v2_public",
+        display_name="Finance Agent v2 public set",
+        homepage_url="https://www.vals.ai/benchmarks/fabv2",
+        dataset_url="https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt",
+        default_scoring="behavioral_without_public_gold",
+        notes=[
+            "Public development questions for Finance Agent v2; no gold answer is included in the agent prompt.",
+            "Use behavior metrics such as calculator usage, numeric verifier status, citation coverage, and loop budget.",
+        ],
+    ),
     "secque": PublicFinanceBenchmarkSpec(
         benchmark_id="secque",
         display_name="SECQUE",
@@ -98,7 +109,7 @@ def convert_public_finance_benchmark(
 
     source = Path(input_path)
     output = Path(output_path)
-    records = _load_public_records(source)
+    records = _load_public_records(source, benchmark_id=spec.benchmark_id)
     selected = records[max(0, int(offset)) :]
     if limit is not None:
         selected = selected[: max(0, int(limit))]
@@ -161,6 +172,8 @@ def convert_public_finance_benchmark(
 def _normalize_public_finance_record(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int) -> JsonObject:
     if spec.benchmark_id == "finance_agent_benchmark":
         return _normalize_finance_agent_benchmark(spec, record, index=index)
+    if spec.benchmark_id == "finance_agent_v2_public":
+        return _normalize_finance_agent_v2_public(spec, record, index=index)
     if spec.benchmark_id == "secque":
         return _normalize_secque(spec, record, index=index)
     if spec.benchmark_id == "financeqa":
@@ -190,6 +203,33 @@ def _normalize_finance_agent_benchmark(spec: PublicFinanceBenchmarkSpec, record:
         category=_text_or_none(_first_present(record, "Question Type", "question_type", "type")),
         evidence_excerpt=None,
         required_tools=["web_search", "sec_edgar"],
+        metadata=metadata,
+    )
+
+
+def _normalize_finance_agent_v2_public(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int) -> JsonObject:
+    question = _text(_first_present(record, "question", "Question", "prompt", "text"))
+    if not question:
+        raise ValueError("missing question")
+    category = _finance_agent_v2_category(question)
+    metadata: JsonObject = _base_metadata(spec, record)
+    metadata.update(
+        {
+            "category": category,
+            "requires": _finance_agent_v2_required_capabilities(question),
+            "expected_capabilities": ["retrieval.run", "calculator.compute", "finance.verify_numeric"],
+            "gold_policy": "public_set_has_no_gold_answer",
+            "evaluation_policy": "score behavior and numeric verification until official rubric/gold is available",
+        }
+    )
+    return _normalized_item(
+        spec,
+        item_id=_item_id(record, index=index, prefix="fabv2-public"),
+        question=question,
+        gold_answer=None,
+        category=category,
+        evidence_excerpt=None,
+        required_tools=["retrieval.run", "calculator.compute", "finance.verify_numeric"],
         metadata=metadata,
     )
 
@@ -299,7 +339,7 @@ def _normalized_item(
     }
 
 
-def _load_public_records(path: Path) -> list[JsonObject]:
+def _load_public_records(path: Path, *, benchmark_id: str | None = None) -> list[JsonObject]:
     suffix = path.suffix.lower()
     if suffix == ".csv":
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -308,6 +348,12 @@ def _load_public_records(path: Path) -> list[JsonObject]:
     stripped = text.strip()
     if not stripped:
         return []
+    if benchmark_id == "finance_agent_v2_public" or suffix == ".txt":
+        return [
+            {"id": f"fabv2-public-{index:05d}", "question": line.strip()}
+            for index, line in enumerate(text.splitlines(), start=1)
+            if line.strip()
+        ]
     if suffix in {".jsonl", ".ndjson"}:
         return [payload for payload in (_json_object(line) for line in text.splitlines() if line.strip()) if payload is not None]
     payload = json.loads(stripped)
@@ -346,10 +392,37 @@ def _normalize_benchmark_id(value: str) -> str:
         "fab": "finance_agent_benchmark",
         "financeagent": "finance_agent_benchmark",
         "finance_agent": "finance_agent_benchmark",
+        "fabv2": "finance_agent_v2_public",
+        "finance_agent_v2": "finance_agent_v2_public",
+        "finance_agent_v2_public": "finance_agent_v2_public",
+        "financeagentv2": "finance_agent_v2_public",
         "secque_benchmark": "secque",
         "finance_qa": "financeqa",
     }
     return aliases.get(normalized, normalized)
+
+
+def _finance_agent_v2_category(question: str) -> str:
+    text = question.lower()
+    if any(marker in text for marker in ("dcf", "discounted cash flow", "lbo", "irr", "moic")):
+        return "financial_modeling"
+    if any(marker in text for marker in ("transaction", "acquisition", "merger", "purchase price", "enterprise value")):
+        return "transaction_analysis"
+    if any(marker in text for marker in ("cagr", "basis points", "bps", "margin", "multiple", "ratio", "dio", "coverage")):
+        return "numeric_reasoning"
+    if any(marker in text for marker in ("8-k", "10-k", "10-q", "filing", "disclosure")):
+        return "filing_research"
+    return "finance_research"
+
+
+def _finance_agent_v2_required_capabilities(question: str) -> list[str]:
+    text = question.lower()
+    capabilities = ["sec_filings", "retrieval"]
+    if any(marker in text for marker in ("calculate", "cagr", "basis points", "bps", "dcf", "lbo", "irr", "moic", "multiple", "ratio", "margin", "dio")):
+        capabilities.extend(["calculator", "numeric_verifier"])
+    if any(marker in text for marker in ("share price", "closing share", "market prices", "stock price")):
+        capabilities.append("market_data")
+    return sorted(set(capabilities))
 
 
 def _base_metadata(spec: PublicFinanceBenchmarkSpec, record: JsonObject) -> JsonObject:

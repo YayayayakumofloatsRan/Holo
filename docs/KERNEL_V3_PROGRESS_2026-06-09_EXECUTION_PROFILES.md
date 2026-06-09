@@ -80,9 +80,23 @@ Latest regression after hard-budget enforcement:
 
 Result: `813 passed`.
 
-## Next
+## Finance Substrate Follow-up
+
+Implemented after the execution-profile hard caps:
+
+- `kernel_v3/finance/` now contains finance contracts, a fact ledger, a
+  Decimal calculator, and a deterministic numeric verifier.
+- `calculator.compute` is exposed as a host tool for finance retrieval lanes
+  that require numeric verification.
+- Finance finalization journals `finance_fact_ledger` and
+  `finance_numeric_verification`; unsupported material answer numbers now return
+  `finance_numeric_verification_failed` instead of an unverified final answer.
+- `bench finance-import --benchmark finance_agent_v2_public` normalizes the Vals
+  Finance Agent v2 public text set into local Holo benchmark JSONL.
+
+Remaining work:
 
 - Add per-item process timeout/failure row support for public live benchmark
   batches.
-- Add domain finance evidence ledger and numeric verifier so fast finance lanes
-  can score higher without long mission overhead.
+- Promote calculator/numeric-verifier rates into benchmark summaries and report
+  renderers.
