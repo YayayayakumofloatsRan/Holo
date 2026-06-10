@@ -777,6 +777,75 @@ def test_transaction_submission_prioritizes_merger_8k_over_earnings_8k():
     assert earnings_url not in fetch_uris
 
 
+def test_transaction_primary_filing_expands_late_exhibit_press_release_link():
+    primary = SearchSource(
+        source_id="pfe-primary-8k",
+        uri="https://www.sec.gov/Archives/edgar/data/78003/000119312523068538/d408093d8k.htm",
+        title="Pfizer Seagen acquisition Form 8-K",
+        snippet="SEC primary filing document for the Pfizer Seagen acquisition.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "regulatory_filing",
+            "authority_level": "primary",
+            "source_kind": "sec_primary_filing_document",
+        },
+    )
+    exhibit_url = "https://www.sec.gov/Archives/edgar/data/78003/000119312523068538/d408093dex991.htm"
+    primary_body = (
+        "<html><body>"
+        + ("boilerplate " * 180000)
+        + '<a href="d408093dex991.htm">EX-99.1 Press Release dated March 13, 2023</a>'
+        + "</body></html>"
+    )
+    assert primary_body.find("d408093dex991.htm") > 1_500_000
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {"Pfizer Seagen acquisition transaction EV revenue multiple public deal disclosures": [primary]}
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                primary.uri: primary_body,
+                exhibit_url: (
+                    "Pfizer to acquire Seagen for $229 per Seagen share in cash, "
+                    "for a total enterprise value of approximately $43 billion. "
+                    "Transaction value of approximately $43 billion, inclusive of net debt."
+                ),
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-transaction-late-exhibit-link",
+            query="Pfizer Seagen acquisition transaction EV revenue multiple public deal disclosures",
+            max_sources=5,
+            max_fetches=3,
+            max_spans_per_document=4,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_depth": "light",
+                "source_authority_requirement": "primary",
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-transaction-late-exhibit-link",
+        run_id="run-1",
+    )
+
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-transaction-late-exhibit-link", kind="retrieval_fetch_attempt")
+    ]
+    assert exhibit_url in fetch_uris
+    evidence_text = " ".join(
+        record.data["text"]
+        for record in journal.records(task_id="task-transaction-late-exhibit-link", kind="retrieval_evidence")
+    )
+    assert "$43 billion" in evidence_text
+
+
 def test_transaction_amount_span_ranks_within_tight_span_budget():
     body = """
     <html><body>
@@ -2179,6 +2248,106 @@ def test_finance_evaluator_requires_transaction_terms_for_transaction_multiple_q
     assert qualification["reason"] == "finance_specialized_query_terms_missing"
     assert decision.status == "insufficient_evidence"
     assert decision.diagnostics["finance_specialized_query_coverage"]["satisfied"] is False
+
+
+def test_finance_evaluator_accepts_primary_transaction_disclosure_for_ev_revenue_inputs():
+    evidence = EvidenceItem(
+        evidence_id="ev-pfe-sgen-8k",
+        goal_id="goal-pfe-sgen-transaction-8k",
+        span_id="span-pfe-sgen-8k",
+        document_id="doc-pfe-sgen-8k",
+        source_id="source-pfe-sgen-8k",
+        artifact_id="artifact-pfe-sgen-8k",
+        uri="https://www.sec.gov/Archives/edgar/data/78003/000119312523068538/d408093d8k.htm",
+        title="Pfizer Seagen acquisition Form 8-K",
+        text=(
+            "Pfizer Inc. and Seagen Inc. entered into a merger agreement on Form 8-K. "
+            "The transaction value was approximately $43 billion and Seagen reported "
+            "2022 revenue of $2.0 billion."
+        ),
+        score=0.95,
+        payload_hash="hash",
+        diagnostics={
+            "source_assessment": {
+                "authority_level": "primary",
+                "authority_score": 0.98,
+                "source_family": "regulatory_filing",
+                "usable_as_primary": True,
+                "metadata": {"source_kind": "sec_primary_filing_document"},
+            }
+        },
+    )
+    citation = CitationItem(
+        citation_id="cite-pfe-sgen-8k",
+        goal_id=evidence.goal_id,
+        evidence_id=evidence.evidence_id,
+        artifact_id=evidence.artifact_id,
+        uri=evidence.uri,
+        title=evidence.title,
+        quote=evidence.text,
+        span_start=0,
+        span_end=len(evidence.text),
+        metadata={},
+    )
+    goal = SearchGoal(
+        goal_id=evidence.goal_id,
+        query="Pfizer Seagen acquisition transaction EV revenue multiple using public deal disclosures and 8-K filing evidence",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_authority_requirement": "primary",
+        },
+    )
+
+    qualification = qualify_evidence_candidate(goal=goal, evidence=evidence)
+    decision = EvidenceEvaluator().evaluate(goal=goal, evidence=[evidence], citations=[citation])
+
+    assert qualification["accepted"] is True
+    assert "transaction_disclosure" in qualification["covered_finance_facets"]
+    assert decision.status == "sufficient"
+    assert decision.diagnostics["finance_specialized_query_coverage"]["satisfied"] is True
+
+
+def test_finance_evaluator_accepts_companyfacts_as_complementary_transaction_slot_source():
+    evidence = EvidenceItem(
+        evidence_id="ev-sgen-companyfacts-revenue",
+        goal_id="goal-pfe-sgen-companyfacts-revenue",
+        span_id="span-sgen-companyfacts-revenue",
+        document_id="doc-sgen-companyfacts-revenue",
+        source_id="source-sgen-companyfacts-revenue",
+        artifact_id="artifact-sgen-companyfacts-revenue",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0001060736.json",
+        title="SEC companyfacts JSON for CIK 0001060736",
+        text=(
+            "SEC companyfacts official financial statements entityName=Seagen Inc. "
+            "cik=1060736 source=SEC_XBRL_companyfacts metric=revenue value=1960000000 "
+            "unit=USD fy=2022 form=10-K filed=2023-02-15."
+        ),
+        score=0.9,
+        payload_hash="hash",
+        diagnostics={
+            "source_assessment": {
+                "authority_level": "primary",
+                "authority_score": 0.98,
+                "source_family": "structured_regulatory_data",
+                "usable_as_primary": True,
+                "metadata": {"source_kind": "sec_companyfacts_json"},
+            }
+        },
+    )
+    goal = SearchGoal(
+        goal_id=evidence.goal_id,
+        query="Seagen SGEN 10-K revenue needed for Pfizer Seagen acquisition EV revenue multiple",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "root_goal": "Pfizer Seagen acquisition transaction EV revenue multiple using public deal disclosures and 8-K filing evidence",
+        },
+    )
+
+    qualification = qualify_evidence_candidate(goal=goal, evidence=evidence)
+
+    assert qualification["accepted"] is True
+    assert qualification["finance_specialized_query_coverage"]["satisfied"] is False
+    assert "revenue" in qualification["covered_finance_facets"]
 
 
 def test_finance_evaluator_uses_root_goal_for_transaction_specialized_terms():

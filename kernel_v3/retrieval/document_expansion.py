@@ -60,15 +60,20 @@ DOCUMENT_KEYWORDS = {
     "annualreport",
     "companyfacts",
     "earnings",
+    "exhibit",
     "financial",
     "filing",
     "form-10",
     "investor",
+    "merger",
+    "merger-agreement",
     "press-release",
+    "press release",
     "quarter",
     "quarterly",
     "report",
     "results",
+    "transaction",
     "xbrl",
 }
 LOW_VALUE_LINK_KEYWORDS = {
@@ -233,7 +238,8 @@ def _candidate_links(
         start=-10_000,
     ):
         scored.append((float(link.get("score") or 0.0), index, link))
-    for index, link in enumerate(_extract_links(body[:1_500_000], base_url=document.uri)):
+    link_scan_limit = _link_scan_limit(source=source, document=document, body=body)
+    for index, link in enumerate(_extract_links(body[:link_scan_limit], base_url=document.uri)):
         url = str(link.get("url") or "")
         text = str(link.get("text") or "")
         if not _safe_url(url) or _is_low_value_link(url=url, text=text):
@@ -250,6 +256,13 @@ def _candidate_links(
     for rank, (_score, _index, link) in enumerate(scored[:remaining], start=1):
         candidates.append(_source_from_link(goal=goal, document=document, source=source, link=link, rank=rank))
     return candidates
+
+
+def _link_scan_limit(*, source: SearchSource, document: FetchedDocument, body: str) -> int:
+    kind = _source_kind(source) or _document_source_kind(document)
+    if kind in {"sec_primary_filing_document", "sec_complete_submission_text"}:
+        return min(len(body), 4_000_000)
+    return min(len(body), 1_500_000)
 
 
 def _source_from_link(

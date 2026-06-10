@@ -764,6 +764,24 @@ def test_finance_missing_fact_payload_for_bridge_uses_slot_frame_and_evidence_po
     assert metadata["evidence_policy"]["authority"] == "primary"
 
 
+def test_finance_missing_fact_payload_for_transaction_ev_revenue_seeds_sec_issuer_sources() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="ev_revenue",
+        missing=["equity_value_or_market_cap"],
+        goal=(
+            "For Pfizer's acquisition of Seagen, calculate the transaction EV / revenue multiple "
+            "using public deal disclosures and filing evidence."
+        ),
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/submissions/CIK0000078003.json" in source_urls
+    assert "https://data.sec.gov/submissions/CIK0001060736.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0001060736.json" in source_urls
+    assert payload["source_urls"] == source_urls
+    assert payload["metadata"]["preferred_source_families"][0] == "structured_regulatory_data"
+
+
 def test_finance_valuation_retrieval_defaults_allow_market_data_sources() -> None:
     recipe = task_recipe(
         "retrieval_answer",

@@ -596,7 +596,44 @@ class RetrievalOperator:
         rejected_evidence: list[JsonObject] = []
         evidence_item_limit = _evidence_item_limit(goal)
         for index, (document, body) in enumerate(documents, start=1):
-            document_spans = extract_spans(goal=goal, document=document, body=body)
+            try:
+                document_spans = extract_spans(goal=goal, document=document, body=body)
+            except Exception as exc:  # pragma: no cover - exact parser failures vary by document type.
+                error_diagnostics = {
+                    "span_count": 0,
+                    "status": "failed",
+                    "reason": "extract_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                }
+                _append(
+                    journal,
+                    task_id,
+                    run_id,
+                    f"{step_id_prefix}-extract-{index}",
+                    "retrieval_extraction",
+                    {
+                        "goal_id": goal.goal_id,
+                        "document": document.to_dict(),
+                        "spans": [],
+                        "diagnostics": error_diagnostics,
+                    },
+                    action_ref=action_ref,
+                    artifact_refs=[document.artifact_id] if document.artifact_id else [],
+                )
+                rejected_evidence.append(
+                    {
+                        "source_id": document.source_id,
+                        "document_id": document.document_id,
+                        "uri": document.uri,
+                        "title": document.title,
+                        "reason": "extract_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "preview": _preview(body, self.preview_chars),
+                    }
+                )
+                continue
             spans.extend(document_spans)
             _append(
                 journal,
@@ -1579,6 +1616,7 @@ def _initial_fetch_queue_with_discovery_supplements(
         research_profile=research_profile,
     )
     if _wants_sec_filing_text(goal):
+        priority_companyfacts = _priority_sec_companyfacts_sources(goal, ranked_all)
         priority_discovery = _priority_sec_filing_discovery_sources(discovery)
         priority_event_sources = _priority_issuer_event_sources(goal, discovery)
         priority_market_sources = _priority_market_data_sources(goal, ranked_all)
@@ -1587,6 +1625,7 @@ def _initial_fetch_queue_with_discovery_supplements(
                 max_count=goal.max_fetches,
                 groups=[
                     priority_discovery,
+                    priority_companyfacts,
                     priority_event_sources,
                     priority_market_sources,
                     fetchable_ranked,
@@ -1594,14 +1633,15 @@ def _initial_fetch_queue_with_discovery_supplements(
                         source
                         for source in discovery
                         if source.source_id
-                        not in {item.source_id for item in [*priority_discovery, *priority_event_sources, *priority_market_sources]}
+                        not in {item.source_id for item in [*priority_companyfacts, *priority_discovery, *priority_event_sources, *priority_market_sources]}
                     ],
                 ],
             )
-        if priority_discovery or priority_market_sources:
+        if priority_discovery or priority_market_sources or priority_companyfacts:
             return _merge_ranked_sources(
                 max_count=goal.max_fetches,
                 groups=[
+                    priority_companyfacts,
                     priority_market_sources,
                     priority_discovery,
                     priority_event_sources,
@@ -1610,7 +1650,7 @@ def _initial_fetch_queue_with_discovery_supplements(
                         source
                         for source in discovery
                         if source.source_id
-                        not in {item.source_id for item in [*priority_market_sources, *priority_discovery, *priority_event_sources]}
+                        not in {item.source_id for item in [*priority_companyfacts, *priority_market_sources, *priority_discovery, *priority_event_sources]}
                     ],
                 ],
             )
@@ -1644,6 +1684,18 @@ def _priority_sec_filing_discovery_sources(sources: list[RankedSource]) -> list[
     ]
     result.sort(key=lambda source: (0 if _ranked_source_kind(source) == "sec_submissions_json" else 1, source.rank))
     return result
+
+
+def _priority_sec_companyfacts_sources(goal: SearchGoal, sources: list[RankedSource]) -> list[RankedSource]:
+    if not _wants_companyfacts_fact_sources(goal):
+        return []
+    result = [
+        source
+        for source in sources
+        if _ranked_source_kind(source) == "sec_companyfacts_json"
+    ]
+    result.sort(key=lambda source: source.rank)
+    return result[:4]
 
 
 def _priority_sec_filing_document_sources(sources: list[RankedSource]) -> list[RankedSource]:
@@ -1753,6 +1805,36 @@ def _wants_transaction_filing_evidence(goal: SearchGoal) -> bool:
             "purchase price allocation",
         )
     )
+
+
+def _wants_companyfacts_fact_sources(goal: SearchGoal) -> bool:
+    intent = _goal_intent_text(goal).lower().replace("_", " ").replace("-", " ")
+    compact = "".join(ch for ch in intent if ch.isalnum())
+    fact_markers = (
+        "companyfacts",
+        "xbrl",
+        "revenue",
+        "revenues",
+        "net sales",
+        "net income",
+        "cash and cash equivalents",
+        "cash equivalents",
+        "total debt",
+        "long term debt",
+        "short term debt",
+        "assets",
+        "liabilities",
+        "shares outstanding",
+    )
+    compact_markers = (
+        "companyfacts",
+        "netincomeloss",
+        "revenuefromcontract",
+        "cashandcashequivalents",
+        "longtermdebt",
+        "sharesoutstanding",
+    )
+    return any(marker in intent for marker in fact_markers) or any(marker in compact for marker in compact_markers)
 
 
 def _market_data_source_is_key_statistics(source: RankedSource) -> bool:

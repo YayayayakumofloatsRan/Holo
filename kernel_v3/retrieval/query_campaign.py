@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import string
+import urllib.parse
 from dataclasses import dataclass, field
 
 from kernel_v3.contracts import JsonObject
+from kernel_v3.research import identity_template_values, resolve_issuer_identity
 from kernel_v3.research.contracts import ResearchProfile
 from kernel_v3.retrieval.contracts import SearchGoal
 from kernel_v3.retrieval.strategy import materially_different_query, query_signature
@@ -51,7 +54,8 @@ def build_query_campaign(
         candidates.append((query, "base_query_fallback"))
 
     active_templates = templates if strategy_driven else templates or profile_templates
-    candidates.extend((_render_query_template(template, query=query), "template") for template in active_templates)
+    rendered_templates, skipped_templates = _render_query_templates(active_templates, query=query, metadata=goal.metadata)
+    candidates.extend((item, "template") for item in rendered_templates)
 
     if expansion_enabled:
         candidates.extend((item, "suggested_query_hint") for item in _metadata_string_list(goal.metadata.get("suggested_query_hints")))
@@ -67,11 +71,15 @@ def build_query_campaign(
     selected: list[str] = []
     selected_reasons: list[JsonObject] = []
     skipped: list[JsonObject] = []
+    skipped.extend(skipped_templates)
     seen: set[str] = set()
     for raw, reason in candidates:
         candidate = _bounded_query(raw)
         signature = query_signature(candidate)
         if not candidate:
+            continue
+        if _has_unresolved_template_field(candidate):
+            skipped.append({"query": candidate, "reason": "unresolved_template_field", "source": reason})
             continue
         if signature in seen:
             skipped.append({"query": candidate, "reason": "duplicate_candidate", "source": reason})
@@ -215,7 +223,10 @@ def _source_target_queries(metadata: JsonObject) -> list[str]:
             continue
         base = _string(target.get("title")) or _string(target.get("source_id"))
         for hint in _metadata_string_list(target.get("query_hints")):
-            queries.append(f"{base} {hint}" if base else hint)
+            rendered = _render_query_template(hint, query="", metadata=metadata)
+            if rendered is None:
+                continue
+            queries.append(f"{base} {rendered}" if base else rendered)
     return queries
 
 
@@ -448,10 +459,73 @@ def _metadata_string_list(value: object) -> list[str]:
     return [item for item in (str(raw).strip() for raw in value if isinstance(raw, str)) if item]
 
 
-def _render_query_template(template: str, *, query: str) -> str:
-    if "{query}" in template:
-        return template.replace("{query}", query)
-    return f"{query} {template}"
+def _render_query_templates(templates: list[str], *, query: str, metadata: JsonObject) -> tuple[list[str], list[JsonObject]]:
+    rendered: list[str] = []
+    skipped: list[JsonObject] = []
+    for template in templates:
+        item = _render_query_template(template, query=query, metadata=metadata)
+        if item is None:
+            skipped.append({"query": template, "reason": "unresolved_template_field", "source": "template"})
+            continue
+        rendered.append(item)
+    return rendered, skipped
+
+
+def _render_query_template(template: str, *, query: str, metadata: JsonObject) -> str | None:
+    text = " ".join(str(template or "").split())
+    if not text:
+        return None
+    fields = [field for _, field, _, _ in string.Formatter().parse(text) if field]
+    if fields:
+        values = _template_values(query=query, metadata=metadata)
+        if any(field not in values or values[field] == "" for field in fields):
+            return None
+        try:
+            return text.format(**values)
+        except (KeyError, ValueError):
+            return None
+    return f"{query} {text}".strip()
+
+
+def _template_values(*, query: str, metadata: JsonObject) -> dict[str, str]:
+    raw: dict[str, str] = {"query": " ".join(str(query or "").split())}
+    raw.update(identity_template_values(resolve_issuer_identity(query, metadata)))
+    for key, value in _flatten_metadata(metadata).items():
+        if isinstance(value, str) and value.strip():
+            raw[key] = " ".join(value.split())
+    raw["company_or_query"] = raw.get("company") or raw.get("issuer") or raw.get("query") or ""
+    raw["ticker_or_query"] = raw.get("ticker") or raw.get("sec_ticker") or raw.get("query") or ""
+    raw["stock_code_or_ticker"] = raw.get("stock_code") or raw.get("asx_code") or raw.get("ticker") or raw.get("query") or ""
+    raw["metric_or_query"] = raw.get("metric") or raw.get("indicator") or raw.get("query") or ""
+
+    values: dict[str, str] = {}
+    for key, value in raw.items():
+        if not value:
+            continue
+        values[key] = value
+        values[f"{key}_url"] = urllib.parse.quote(value, safe="")
+        lowered = value.lower()
+        values[f"{key}_lower"] = lowered
+        values[f"{key}_lower_url"] = urllib.parse.quote(lowered, safe="")
+    return values
+
+
+def _flatten_metadata(metadata: JsonObject) -> JsonObject:
+    result: JsonObject = {}
+    for key, value in metadata.items():
+        if key == "metadata" and isinstance(value, dict):
+            result.update(_flatten_metadata(value))
+        else:
+            result[key] = value
+    return result
+
+
+def _has_unresolved_template_field(value: str) -> bool:
+    try:
+        fields = [field for _, field, _, _ in string.Formatter().parse(str(value or "")) if field]
+    except ValueError:
+        return True
+    return bool(fields)
 
 
 def _bounded_query(value: str) -> str:

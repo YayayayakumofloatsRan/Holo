@@ -1157,24 +1157,23 @@ score, calculator usage, formula trace count, finance fact count, numeric
 verifier status, answer numeric support rate, and finance numeric failure
 taxonomy.
 
-Latest live smoke status: several curated FAB v2-style items now close through the
-finance substrate. `fabv2-hd-low-dio` retrieves SEC companyfacts for HD and LOW,
-projects 36 finance facts, runs 4 calculator traces, passes numeric
-verification, and reaches 100% post-run dev annotation score. After SEC
-complete-submission expansion, per-share binding fixes, and SEC identifier
-noise filtering, `fabv2-pfe-sgen-transaction-multiple` retrieves the Pfizer /
-Seagen 8-K and Exhibit 99.1 evidence, projects 17 finance facts, runs one
-EV/Revenue calculator trace, passes numeric verification with 100% numeric
-support, and reaches 100% post-run dev annotation score. A later stable3 rerun
-showed this PFE/SGEN case is not repeatably closed yet: one batch hit a
-DeepSeek SSL EOF before tools, and one single-item retry reached
-`retrieval.run` but failed the retrieval observation and subsequent planner JSON
-repair. Treat it as an important unstable transaction-multiple target, not as a
-solved case. A newer PFE-only rerun after planner-failure rescue still failed
-to produce facts/claims/calculator traces: it exposed an SEC parser assertion
-(`unknown status keyword 'BZ' in marked section`), then fell into acquisition
-source queries containing unbound placeholders such as `{ticker}` and exhausted
-fast-lane tool calls. The WSC adjusted
+Latest live smoke status: several curated FAB v2-style items now close through
+the finance substrate. `fabv2-hd-low-dio` retrieves SEC companyfacts for HD and
+LOW, projects 36 finance facts, runs 4 calculator traces, passes numeric
+verification, and reaches 100% post-run dev annotation score. `fabv2-pfe-sgen-
+transaction-multiple` remains the main unstable transaction-multiple target.
+Earlier runs could close it, but current repeatability checks show the source
+acquisition path is still incomplete: recent live reruns now reach SEC 8-K
+primary filing and/or Seagen companyfacts, project claim/fact ledgers, slot
+frames, transform plans, and verifier-gate records, but they still fail to
+consistently acquire the total transaction enterprise value needed to trigger
+`calculator.compute`. Treat PFE/SGEN as an event-source resolver gap, not as a
+solved case. The latest reliability pass fixed unbound acquisition-source
+templates such as `{ticker}`, isolated SEC extraction exceptions so one bad
+document no longer aborts `retrieval.run`, accepts primary 8-K transaction
+disclosures and complementary companyfacts facts, expands late SEC exhibit /
+press-release links from long filing HTML, and seeds missing-fact retrieval
+with issuer SEC submissions/companyfacts URLs. The WSC adjusted
 EBITDA add-back trend smoke now retrieves SEC 10-K evidence, extracts 108
 finance facts, runs one bridge-subtotal calculator trace, passes
 `finance.verify_numeric` with 100% answer numeric support, keeps citation

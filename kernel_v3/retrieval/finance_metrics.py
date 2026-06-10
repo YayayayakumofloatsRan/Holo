@@ -180,6 +180,36 @@ def finance_metric_intent(query: str) -> FinanceMetricIntent:
             ),
         )
 
+    if (
+        _has_any(normalized, "ev/revenue", "ev / revenue", "enterprise value to revenue")
+        or _has_all(normalized, "enterprise", "value", "revenue")
+        or _has_all(normalized, "transaction", "value", "revenue")
+    ):
+        return FinanceMetricIntent(
+            metric_family="ev_revenue",
+            preferred_phrases=(
+                "metric=enterprise value",
+                "enterprise value",
+                "metric=transaction value",
+                "transaction value",
+                "deal value",
+                "purchase price",
+                "total consideration",
+                "consideration paid",
+                "metric=revenue",
+                "metric=net sales",
+                "revenues",
+                "net sales",
+            ),
+            required_phrases=("value", "revenue"),
+            demoted_phrases=(
+                "inventory",
+                "cost of goods",
+                "cost of sales",
+                "income tax",
+            ),
+        )
+
     if _has_any(normalized, "net income", "net profit"):
         return FinanceMetricIntent(
             metric_family="net_income",

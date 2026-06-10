@@ -86,7 +86,11 @@ def qualify_evidence_candidate(
         if bool(result.get("accepted", True)):
             qualifier_diagnostics = _finance_specialized_query_coverage(goal=goal, evidence=[evidence])
             result["finance_specialized_query_coverage"] = qualifier_diagnostics
-            if qualifier_diagnostics["required"] and not qualifier_diagnostics["satisfied"]:
+            if (
+                qualifier_diagnostics["required"]
+                and not qualifier_diagnostics["satisfied"]
+                and not _finance_complementary_fact_source(goal=goal, evidence=evidence)
+            ):
                 result["accepted"] = False
                 result["reason"] = "finance_specialized_query_terms_missing"
     if bool(result.get("accepted", True)):
@@ -684,6 +688,36 @@ def _finance_transaction_required_terms(goal: SearchGoal) -> list[str]:
     if not any(marker in query for marker in ("transaction", "acquisition", "deal disclosure", "merger agreement", "8-k", "ev / revenue", "ev revenue")):
         return []
     return ["transaction", "acquisition", "deal", "merger", "8-k", "form 8-k", "consideration"]
+
+
+def _finance_complementary_fact_source(*, goal: SearchGoal, evidence: EvidenceItem) -> bool:
+    if not _finance_transaction_required_terms(goal):
+        return False
+    source_kind = evidence_source_kind(evidence)
+    if source_kind != "sec_companyfacts_json":
+        return False
+    text = str(evidence.text or "").lower()
+    if "sec_xbrl_companyfacts" not in text and "companyfacts" not in text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "metric=revenue",
+            "metric=net sales",
+            "metric=net income",
+            "metric=cash",
+            "metric=cash and cash equivalents",
+            "metric=debt",
+            "metric=assets",
+            "metric=shares outstanding",
+            "concept=revenue",
+            "concept=revenues",
+            "concept=entitycommonstocksharesoutstanding",
+            "entity common stock, shares outstanding",
+            "revenues",
+            "net sales",
+        )
+    )
 
 
 def _finance_addback_trend_required_terms(goal: SearchGoal) -> list[str]:

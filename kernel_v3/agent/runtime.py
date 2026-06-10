@@ -2537,6 +2537,7 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
 def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[str], goal: str) -> JsonObject:
     base_query = " ".join(str(goal or "").split())
     tickers = _finance_goal_tickers(base_query)
+    source_urls = _finance_issuer_seed_urls(base_query, formula_name=formula_name)
     slot_frame = finance_slot_frame(
         question=base_query,
         facts=[],
@@ -2585,10 +2586,12 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
         "max_sources": 24,
         "max_fetches": max_fetches,
         "max_spans_per_document": 8,
+        **({"source_urls": source_urls} if source_urls else {}),
         "metadata": {
             "root_goal": base_query,
             "finance_formula_missing_facts": missing,
             "finance_formula_name": formula_name,
+            **({"source_urls": source_urls} if source_urls else {}),
             "slot_frame": slot_frame.to_dict(),
             "missing_slots": list(slot_frame.missing_slots),
             "evidence_policy": evidence_policy.to_dict() if evidence_policy is not None else {},
@@ -2602,6 +2605,19 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             **({"target_tickers": tickers} if tickers else {}),
         },
     }
+
+
+def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
+    urls: list[str] = []
+    for issuer in builtin_issuers_for_text(goal):
+        cik = str(issuer.get("cik") or issuer.get("sec_cik") or "").strip()
+        if not cik:
+            continue
+        padded = cik.zfill(10)
+        urls.append(f"https://data.sec.gov/submissions/CIK{padded}.json")
+        if formula_name in {"ev_revenue", "ev_ebitda", "margin", "cagr", "yoy_growth"}:
+            urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
+    return _ordered_unique(urls)[:12]
 
 
 def _host_rescue_retrieval_payload(

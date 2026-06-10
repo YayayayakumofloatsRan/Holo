@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import string
 from dataclasses import dataclass, field
 
 from kernel_v3.contracts import JsonObject
@@ -182,7 +183,7 @@ def _first_material_query(candidates: list[str], *, attempted_queries: list[str]
     for candidate in candidates:
         query = _bounded_query(candidate)
         signature = query_signature(query)
-        if not query or signature in seen:
+        if not query or signature in seen or _has_unresolved_template_field(query):
             continue
         seen.add(signature)
         if materially_different_query(query, attempted_queries):
@@ -200,6 +201,8 @@ def _source_target_queries(hints: JsonObject) -> list[str]:
             continue
         base = _string(target.get("title")) or _string(target.get("source_id"))
         for hint in _string_list(target.get("query_hints")):
+            if _has_unresolved_template_field(hint):
+                continue
             queries.append(f"{base} {hint}" if base else hint)
     return queries
 
@@ -256,7 +259,7 @@ def _diversified_queries(value: object, *, hints: JsonObject, attempted_queries:
     for candidate in candidates:
         query = _bounded_query(candidate)
         signature = query_signature(query)
-        if not query or signature in seen:
+        if not query or signature in seen or _has_unresolved_template_field(query):
             continue
         seen.add(signature)
         diversified.append(query)
@@ -374,6 +377,14 @@ def _bounded_query(value: str) -> str:
     if len(text) <= QUERY_TEXT_LIMIT:
         return text
     return text[: QUERY_TEXT_LIMIT - 3] + "..."
+
+
+def _has_unresolved_template_field(value: object) -> bool:
+    try:
+        fields = [field for _, field, _, _ in string.Formatter().parse(str(value or "")) if field]
+    except ValueError:
+        return True
+    return bool(fields)
 
 
 def _string(value: object) -> str | None:

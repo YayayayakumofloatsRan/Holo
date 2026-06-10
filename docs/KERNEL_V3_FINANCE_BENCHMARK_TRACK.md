@@ -559,12 +559,34 @@ Post-dev10 EV/EBITDA iteration:
   `For Pfizer` is not treated as an entity phrase, and an explicit finance
   numeric-claim policy in the synthesizer packet. These are generic reliability
   changes, not PFE answer tables.
-- The next concrete live validation should first fix acquisition compiler
-  placeholder binding and SEC parser robustness for the PFE/SGEN path, then
-  rerun PFE/SGEN and finally rerun KHC/WSC/PFE-SGEN together. If a case fails,
-  classify the failure as source acquisition, fetch/parser, fact-ledger
-  extraction, formula binding, verifier policy, or model-synthesis/JSON repair
-  before adding any new task-specific heuristic.
+- The current acquisition hardening pass fixes three concrete substrate
+  failures exposed by PFE/SGEN repeatability runs:
+  1. acquisition query templates are rendered against issuer/query metadata and
+     unresolved placeholders such as `{ticker}` or `{company}` are skipped
+     instead of sent to search;
+  2. `retrieval.run` catches per-document extraction exceptions, records
+     `extract_failed` diagnostics/rejected evidence, and continues processing
+     other fetched documents;
+  3. SEC event acquisition now treats transaction 8-K evidence as valid primary
+     deal evidence, accepts SEC companyfacts as complementary slot evidence for
+     transaction tasks, scans longer SEC filing bodies for late exhibit links,
+     and seeds missing-fact retrieval with recognized issuers' SEC submissions
+     and companyfacts URLs.
+- Live PFE/SGEN after these fixes is improved but still not closed. The
+  `run_pfe_sgen_after_complementary_companyfacts` run reached the Pfizer 8-K
+  and Seagen companyfacts, with `facts=46`, `claims=46`, `slot_frame_present=1`,
+  `transform_plan_present=1`, `verifier_gate=passed`, and 100% numeric support,
+  but `calculator_call_count=0` because the total transaction EV was not in the
+  accepted facts. The later `run_pfe_sgen_after_sec_seed_urls` run reached the
+  Pfizer 8-K and produced `facts=10`, `claims=10`, but still lacked the total
+  EV and revenue slots together. This is now classified as an event-source /
+  exhibit acquisition gap, not a formula, verifier, or prompt-format issue.
+- The next concrete live validation should implement a stronger event resolver
+  for transaction questions, then rerun PFE/SGEN and finally rerun
+  KHC/WSC/PFE-SGEN together. If a case fails, classify the failure as source
+  acquisition, fetch/parser, fact-ledger extraction, formula binding, verifier
+  policy, or model-synthesis/JSON repair before adding any task-specific
+  heuristic.
 - Fast-lane cost is still high. Successful single-item runs often consume
   60k-90k tokens, and hard cases can fail after model JSON repair issues. The
   next executor work should shrink planner/evaluator context for finance facts,

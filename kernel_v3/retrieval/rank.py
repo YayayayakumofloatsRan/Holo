@@ -157,10 +157,10 @@ def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "
     if source_kind == "sec_companyfacts_json":
         if submissions_intent:
             return 0.38
-        if filing_text_intent:
-            return -0.20
         if sec_companyfacts_intent:
             return 1.18
+        if filing_text_intent:
+            return -0.20
         return 0.50
     if source_kind == "sec_submissions_json":
         if filing_text_intent:
@@ -226,6 +226,16 @@ def _sec_companyfacts_fact_intent(query_text: str) -> bool:
         for marker in (
             "companyfacts",
             "xbrl",
+            "revenue",
+            "revenues",
+            "net sales",
+            "net income",
+            "cash and cash equivalents",
+            "total debt",
+            "long term debt",
+            "short term debt",
+            "assets",
+            "liabilities",
             "inventorynet",
             "costofrevenue",
             "costofgoodsandservicessold",
