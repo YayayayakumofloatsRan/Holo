@@ -304,6 +304,87 @@ def test_finance_bridge_planner_accepts_income_from_continuing_operations_base()
     assert "base_metric" not in frame.missing_slots
 
 
+def test_finance_fact_ledger_keeps_adjusted_ebitda_before_eps_table_title() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="khc-adjusted-ebitda-before-eps",
+            title="Kraft Heinz 2023 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/1637459/example/khc-20231230.htm",
+            text=(
+                "The Kraft Heinz Company Reconciliation of Net Income/(Loss) to Adjusted EBITDA "
+                "(in millions) (Unaudited) December 30, 2023 December 31, 2022 "
+                "Net income/(loss) $ 2,846 $ 2,368 "
+                "Interest expense 912 921 "
+                "Other expense/(income) 27 (253) "
+                "Provision for/(benefit from) income taxes 787 598 "
+                "Depreciation and amortization (excluding restructuring activities) 923 922 "
+                "Restructuring activities 60 74 "
+                "Equity award compensation expense 141 148 "
+                "Adjusted EBITDA $ 6,307 $ 6,003 "
+                "The Kraft Heinz Company Reconciliation of Diluted EPS to Adjusted EPS"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-khc-adjusted-ebitda-before-eps")]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    metrics = {fact.metric for fact in facts}
+    plan = plan_finance_formula(question="Explain the adjusted EBITDA bridge subtotal.", facts=facts)
+
+    assert "adjusted ebitda" in metrics
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["formula_name"] == "bridge_subtotal"
+
+
+def test_finance_bridge_planner_keeps_reconciliation_table_columns_together() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="khc-quarterly-noise",
+            title="Kraft Heinz 2023 Form 10-Q",
+            uri="https://www.sec.gov/Archives/edgar/data/1637459/example/khc-20230930.htm",
+            text=(
+                "Quarterly adjusted EBITDA reconciliation. "
+                "Net income was $254 million. Interest expense was $230 million. "
+                "Adjusted EBITDA was $1,480 million."
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="khc-annual-bridge",
+            title="Kraft Heinz 2023 Form 10-K complete submission text",
+            uri="https://www.sec.gov/Archives/edgar/data/1637459/example/khc-20231230.htm",
+            text=(
+                "Reconciliation of Net Income/(Loss) to Adjusted EBITDA (in millions) "
+                "December 30, 2023 December 31, 2022 "
+                "Net income/(loss) $ 2,846 $ 2,368 "
+                "Interest expense 912 921 "
+                "Provision for income taxes 787 598 "
+                "Depreciation and amortization 923 922 "
+                "Restructuring activities 60 74 "
+                "Equity award compensation expense 141 148 "
+                "Adjusted EBITDA $ 5,669 $ 5,031"
+            ),
+        ),
+    ]
+    citations = [
+        _finance_citation(evidence[0], citation_id="cite-khc-quarterly-noise"),
+        _finance_citation(evidence[1], citation_id="cite-khc-annual-bridge"),
+    ]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    plan = plan_finance_formula(question="Explain the adjusted EBITDA bridge subtotal.", facts=facts)
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.diagnostics["bridge_group_key"] == "source:cite-khc-annual-bridge"
+    assert plan.diagnostics["bridge_detected_column_count"] == 2
+    assert plan.payload["variables"]["base"] == "2846000000"
+    assert plan.payload["variables"]["reported_adjusted"] == "5669000000"
+    assert "921000000" not in set(plan.payload["variables"].values())
+    trace = compute_formula(**plan.payload)
+    assert trace.result_value == "5669000000"
+
+
 def test_finance_fact_ledger_does_not_extract_dividend_per_share_as_ebitda() -> None:
     evidence = [
         _finance_evidence(

@@ -211,6 +211,66 @@ The report renderer turns item results into Markdown, HTML, or JSON with:
 
 ## Live Smoke Notes
 
+2026-06-10 KHC adjusted EBITDA bridge follow-up:
+
+- implemented bridge source grouping in `FinanceFormulaPlanner`, keyed by
+  citation/evidence/source, before formula binding;
+- bridge subtotals now preserve retrieval extraction order and select one
+  reconciliation-table column instead of adding adjacent annual columns
+  together;
+- the fact ledger now preserves direct `Adjusted EBITDA $ ...` rows even when
+  a following table title mentions EPS/per-share terms;
+- regression coverage now includes a mixed 10-Q/10-K bridge fixture that must
+  choose the 10-K group, keep the selected column together, and compute the
+  reported adjusted EBITDA subtotal through `calculator.compute`;
+- related local regression command:
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_finance_engine.py \
+  tests/test_kernel_v3_finance_benchmark.py \
+  tests/test_kernel_v3_retrieval_document_expansion.py \
+  tests/test_kernel_v3_phase98_sec_edgar_provider.py \
+  tests/test_kernel_v3_phase99_source_query_provider.py
+```
+
+Result: `140 passed`.
+
+Live KHC smoke command:
+
+```bash
+HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
+  --dataset data/bench/finance/fabv2_dev10.jsonl \
+  --dev-gold data/bench/finance/fabv2_dev10.gold.jsonl \
+  --offset 1 --limit 1 \
+  --output .state/kernel_v3/bench/finance/run_khc_after_bridge_column_fix.jsonl \
+  --summary-output .state/kernel_v3/bench/finance/run_khc_after_bridge_column_fix.summary.json \
+  --thread-prefix fabv2-khc-after-bridge-column-fix \
+  --execution-profile finance-fact-fast \
+  --mission off --online \
+  --planner model --evaluator fake --synthesizer model \
+  --semantic-intake fake --turn-router fake \
+  --research-profile finance_fundamentals --research-depth light \
+  --context-profile compact --live-retrieval --live-search-strategy adaptive \
+  --max-output-tokens 1200
+```
+
+Observed live status:
+
+- retrieval runs: 1
+- calculator calls: 1
+- formula traces: 1
+- finance facts: 86
+- query repetition: 0%
+- dev annotation substrate score: 1.0
+- numeric verifier status: failed
+- answer numeric support: 64%
+- failure taxonomy: `unsupported_answer_number`
+
+Interpretation: acquisition and deterministic substrate are now active on KHC,
+but the final answer path still needs repair/calibration so synthesis does not
+emit display numbers that the fact ledger or formula traces cannot support.
+
 2026-06-10 live smoke and repeat smoke on `fabv2-hd-low-dio` with `finance-fact-fast`,
 mission disabled, live retrieval, model planner, fake evaluator, and model
 synthesizer:

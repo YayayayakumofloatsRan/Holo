@@ -430,38 +430,25 @@ def _plan_dio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
 
 
 def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
-    base = _latest_fact(facts, ("net income", "operating income", "income from continuing operations"))
-    addbacks = _first_fact_per_metric(
-        _facts_for_metric(
-            facts,
-            (
-                "addback",
-                "add-back",
-                "depreciation and amortization",
-                "d&a",
-                "interest expense",
-                "tax",
-                "income tax expense",
-                "other expense",
-                "other income",
-                "restructuring",
-            ),
+    candidate = _best_bridge_group(facts)
+    if candidate is None:
+        base = _latest_fact(facts, ("net income", "operating income", "income from continuing operations"))
+        addbacks = _bridge_component_facts(facts)
+        adjusted = _latest_fact(facts, ("adjusted ebitda",))
+        missing = ["base_metric"] if base is None else []
+        if not addbacks:
+            missing.append("addback_components")
+        if adjusted is None:
+            missing.append("adjusted_metric")
+        return _missing(
+            "bridge_subtotal",
+            missing,
+            facts=[item for item in (base, adjusted) if item is not None],
         )
-    )
-    deductions = _first_fact_per_metric(
-        _facts_for_metric(
-            facts,
-            (
-                "deduction",
-                "cash charges",
-                "one-time cost",
-                "license income",
-                "divestiture-related license income",
-                "gain",
-            ),
-        )
-    )
-    adjusted = _latest_fact(facts, ("adjusted ebitda",))
+    base = candidate["base"]
+    addbacks = candidate["addbacks"]
+    deductions = candidate["deductions"]
+    adjusted = candidate["adjusted"]
     if base is None or not addbacks or adjusted is None:
         missing = ["base_metric"] if base is None else []
         if not addbacks:
@@ -486,13 +473,201 @@ def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
         variables[name] = _absolute_decimal_string(fact.value)
         expression_parts.append(f"- {name}")
         input_facts.append(fact)
+    if adjusted is not None:
+        variables["reported_adjusted"] = adjusted.value
+        input_facts.append(adjusted)
+    diagnostics: JsonObject = {}
+    if candidate is not None:
+        diagnostics.update(
+            {
+                "bridge_group_key": candidate["group_key"],
+                "bridge_group_score": candidate["score"],
+                "bridge_target_column_index": candidate.get("target_column_index"),
+                "bridge_detected_column_count": candidate.get("detected_column_count"),
+                "reported_adjusted_fact_id": adjusted.fact_id if adjusted is not None else None,
+                "component_fact_count": len(input_facts),
+            }
+        )
     return _ready(
         "bridge_subtotal",
         " ".join(expression_parts),
         variables,
         unit=base.unit,
         facts=input_facts,
+        diagnostics=diagnostics,
     )
+
+
+def _best_bridge_group(facts: list[FinanceFact]) -> JsonObject | None:
+    groups = _bridge_fact_groups(facts)
+    candidates: list[JsonObject] = []
+    for group_key, group_facts in groups.items():
+        adjusted_facts = _facts_for_metric(group_facts, ("adjusted ebitda",))
+        if not adjusted_facts:
+            continue
+        target_index = 0
+        adjusted = adjusted_facts[target_index]
+        base = _bridge_select_column_fact(
+            _facts_for_metric(group_facts, ("net income", "operating income", "income from continuing operations")),
+            target_index=target_index,
+            column_count=len(adjusted_facts),
+        )
+        components = _bridge_select_column_components(
+            _bridge_component_facts(group_facts),
+            target_index=target_index,
+            column_count=len(adjusted_facts),
+        )
+        addbacks = [fact for fact in components if _metric_text(fact.metric) != "deduction"]
+        deductions = [fact for fact in components if _metric_text(fact.metric) == "deduction"]
+        if base is None or adjusted is None or not addbacks:
+            continue
+        score = _bridge_group_score(group_facts, base=base, adjusted=adjusted, addbacks=addbacks, deductions=deductions)
+        candidates.append(
+            {
+                "group_key": group_key,
+                "score": score,
+                "target_column_index": target_index,
+                "detected_column_count": len(adjusted_facts),
+                "base": base,
+                "adjusted": adjusted,
+                "addbacks": addbacks,
+                "deductions": deductions,
+            }
+        )
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item["score"],
+            _fact_sort_token(item["adjusted"]),
+            str(item["group_key"]),
+        ),
+    )[-1]
+
+
+def _bridge_fact_groups(facts: list[FinanceFact]) -> dict[str, list[FinanceFact]]:
+    groups: dict[str, list[FinanceFact]] = {}
+    for fact in facts:
+        keys = []
+        for prefix, value in (
+            ("citation", fact.citation_ref),
+            ("evidence", fact.evidence_ref),
+            ("source", fact.source_ref),
+        ):
+            if value:
+                keys.append(f"{prefix}:{value}")
+        if not keys:
+            keys.append("all")
+        for key in keys:
+            groups.setdefault(key, []).append(fact)
+    if facts:
+        groups.setdefault("all", list(facts))
+    return groups
+
+
+def _bridge_component_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
+    components = _facts_for_metric(
+        facts,
+        (
+            "addback",
+            "add-back",
+            "depreciation and amortization",
+            "d&a",
+            "interest expense",
+            "tax",
+            "income tax expense",
+            "other expense",
+            "other income",
+            "restructuring",
+            "deduction",
+            "cash charges",
+            "one-time cost",
+            "license income",
+            "divestiture-related license income",
+            "gain",
+        ),
+    )
+    selected: dict[str, FinanceFact] = {}
+    for fact in components:
+        if fact.fact_id not in selected:
+            selected[fact.fact_id] = fact
+    return list(selected.values())
+
+
+def _bridge_select_column_fact(
+    facts: list[FinanceFact],
+    *,
+    target_index: int,
+    column_count: int,
+) -> FinanceFact | None:
+    if not facts:
+        return None
+    if column_count <= 1:
+        return facts[0]
+    return facts[min(max(0, target_index), len(facts) - 1)]
+
+
+def _bridge_select_column_components(
+    facts: list[FinanceFact],
+    *,
+    target_index: int,
+    column_count: int,
+) -> list[FinanceFact]:
+    if not facts or column_count <= 1:
+        return facts
+    selected: list[FinanceFact] = []
+    position = 0
+    while position < len(facts):
+        chunk = facts[position : position + column_count]
+        if target_index < len(chunk):
+            selected.append(chunk[target_index])
+        elif target_index == 0 and chunk:
+            selected.append(chunk[0])
+        position += max(1, column_count)
+    return selected
+
+
+def _bridge_group_score(
+    facts: list[FinanceFact],
+    *,
+    base: FinanceFact,
+    adjusted: FinanceFact,
+    addbacks: list[FinanceFact],
+    deductions: list[FinanceFact],
+) -> int:
+    score = 100
+    score += min(len(addbacks), 16) * 6
+    score += min(len(deductions), 8) * 3
+    source_text = " ".join(
+        str(value or "")
+        for fact in facts
+        for value in (
+            fact.metadata.get("source_title"),
+            fact.metadata.get("source_uri"),
+            fact.metadata.get("form"),
+            fact.metadata.get("raw"),
+            fact.metadata.get("context"),
+        )
+    ).lower()
+    if "10-k" in source_text or "form 10-k" in source_text:
+        score += 30
+    if "reconciliation" in source_text:
+        score += 20
+    if "adjusted ebitda" in source_text:
+        score += 20
+    if "10-q" in source_text or "form 10-q" in source_text:
+        score -= 10
+    years = {fact.fiscal_year for fact in [base, adjusted, *addbacks, *deductions] if fact.fiscal_year is not None}
+    if len(years) == 1:
+        score += 15
+    elif len(years) > 1:
+        score -= 5
+    base_value = _decimal_or_none(base.value)
+    adjusted_value = _decimal_or_none(adjusted.value)
+    if base_value is not None and adjusted_value is not None and abs(adjusted_value) >= abs(base_value):
+        score += 5
+    return score
 
 
 def _ready(
@@ -712,6 +887,17 @@ def _sort_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
             str(fact.period or ""),
             fact.fact_id,
         ),
+    )
+
+
+def _fact_sort_token(fact: FinanceFact | None) -> tuple[int, str, str, str]:
+    if fact is None:
+        return (0, "", "", "")
+    return (
+        fact.fiscal_year or 0,
+        str(fact.metadata.get("end") or ""),
+        str(fact.metadata.get("filed") or ""),
+        fact.fact_id,
     )
 
 

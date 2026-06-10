@@ -503,11 +503,15 @@ def _looks_like_natural_context_noise(
         if re.search(r"\b(?:eps|earnings per share|per share|book value per share|net cash per share)\b", local):
             return True
     if metric in {"ebitda", "adjusted ebitda", "addback"}:
+        direct_adjusted_ebitda_amount = metric == "adjusted ebitda" and re.search(
+            r"\badjusted\s+ebitda\b[\s$€£¥,.\d()/-]*$",
+            before_near,
+        )
         if re.search(
             r"\b(?:dividend|dividends|dividend per share|dividend yield|earnings per share|eps|"
             r"book value per share|net cash per share|price target|share price|per share)\b",
             local,
-        ):
+        ) and not direct_adjusted_ebitda_amount:
             return True
         if re.search(r"\b(?:ebitda|adjusted ebitda)\s+margin\b", local) and re.search(
             r"\b(?:dividend|yield|per share|price target|share price)\b",

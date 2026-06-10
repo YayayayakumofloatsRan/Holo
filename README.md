@@ -1167,6 +1167,17 @@ evaluator, model synthesizer, and parallel 2 produced: overall dev annotation
 score 0.8111, behavior score 0.8667, substrate score 0.5667,
 calculator-used rate 0.20, formula-trace present rate 0.20,
 numeric-verifier pass rate 0.50, and average answer numeric support 70.56%.
+The latest KHC adjusted-EBITDA bridge pass improves the deterministic substrate:
+the fact ledger now keeps an `Adjusted EBITDA` amount even when the next table
+title is an EPS reconciliation, and bridge planning groups facts by
+citation/evidence/source before selecting one reconciliation-table column. This
+prevents annual and quarterly facts, or two adjacent annual columns, from being
+summed together in one formula trace. A live KHC smoke after this fix reached
+one retrieval run, one calculator trace, 86 finance facts, required trace
+coverage, and 0% query repetition; it still failed `finance.verify_numeric`
+because the final candidate answer included unsupported displayed bridge
+numbers. That is now a verifier/answer-repair calibration issue, not a missing
+search or missing calculator issue.
 The main failure mode is still `required_trace_missing` on harder
 modeling/coverage tasks: CRM DCF, EPAM LBO, TGT/WMT fixed-charge coverage,
 LULU/VSCO EV/EBITDA, CNC MLR, and purchase-price-allocation cases often gather
