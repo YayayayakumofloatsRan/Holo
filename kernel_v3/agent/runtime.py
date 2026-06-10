@@ -930,6 +930,27 @@ class AgentRuntime:
                 citations=citations,
             )
             if verification.status == "failed":
+                fallback_final = _finance_retrieval_fallback_final(
+                    journal=self.journal,
+                    task_id=task_id,
+                    run_id=run_id,
+                    recipe=recipe,
+                    evidence=evidence,
+                    citations=citations,
+                    synthesis_error="finance_numeric_verification_failed",
+                    require_formula_trace=True,
+                )
+                if fallback_final is not None:
+                    fallback_verification = self._append_finance_numeric_verification(
+                        fallback_final,
+                        recipe=recipe,
+                        evidence=evidence,
+                        citations=citations,
+                    )
+                    if fallback_verification.status != "failed":
+                        final = self._append_final(fallback_final)
+                        self._maybe_propose_research_memory(final, recipe=recipe)
+                        return final, None
                 missing = _finance_numeric_missing_evidence(verification)
                 return None, self._failure(
                     task_id,
@@ -7675,13 +7696,20 @@ def _finance_retrieval_fallback_final(
     evidence: list[EvidenceItem],
     citations: list[CitationItem],
     synthesis_error: str,
+    require_formula_trace: bool = False,
 ) -> FinalAnswer | None:
     citation_ids = [item.citation_id for item in citations if item.citation_id]
     if not citation_ids:
         return None
     traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    if require_formula_trace and not traces:
+        return None
+    if synthesis_error == "finance_numeric_verification_failed":
+        intro = "模型合成答案包含未被证据账本或 calculator trace 支持的数字，因此以下为 Holo host 生成的保守可验证回答。"
+    else:
+        intro = "模型最终合成输出格式失败，因此以下为 Holo host 基于已验证证据和计算轨迹生成的保守回答。"
     lines = [
-        "模型最终合成输出格式失败，因此以下为 Holo host 基于已验证证据和计算轨迹生成的保守回答。",
+        intro,
     ]
     goal = _root_goal_from_recipe(recipe)
     if goal:

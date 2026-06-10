@@ -182,7 +182,7 @@ def test_finance_fact_ledger_extracts_adjusted_ebitda_bridge_components() -> Non
                 "Net income was $1.0 billion. "
                 "Restructuring add-backs were $0.2 billion. "
                 "Less divestiture gains were $0.1 billion. "
-                "Adjusted EBITDA was $6.0 billion."
+                "Adjusted EBITDA was $1.1 billion."
             ),
         )
     ]
@@ -254,7 +254,7 @@ def test_finance_slot_frame_fills_reconciliation_period_series_and_source_table(
                 "Interest expense 912 921 "
                 "Provision for income taxes 787 598 "
                 "Depreciation and amortization 923 922 "
-                "Adjusted EBITDA $ 6,697 $ 6,327"
+                "Adjusted EBITDA $ 5,468 $ 4,809"
             ),
         )
     ]
@@ -320,7 +320,7 @@ def test_finance_fact_ledger_keeps_adjusted_ebitda_before_eps_table_title() -> N
                 "Depreciation and amortization (excluding restructuring activities) 923 922 "
                 "Restructuring activities 60 74 "
                 "Equity award compensation expense 141 148 "
-                "Adjusted EBITDA $ 6,307 $ 6,003 "
+                "Adjusted EBITDA $ 5,696 $ 4,778 "
                 "The Kraft Heinz Company Reconciliation of Diluted EPS to Adjusted EPS"
             ),
         )
@@ -385,6 +385,104 @@ def test_finance_bridge_planner_keeps_reconciliation_table_columns_together() ->
     assert trace.result_value == "5669000000"
 
 
+def test_finance_bridge_planner_does_not_mix_all_evidence_groups() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="khc-prior-bridge",
+            title="Kraft Heinz 2022 Form 10-K",
+            text=(
+                "Reconciliation of Net Income/(Loss) to Adjusted EBITDA (in millions) "
+                "December 31, 2022 December 25, 2021 "
+                "Net income/(loss) $ 2,368 $ 1,024 "
+                "Interest expense 921 2,047 "
+                "Provision for income taxes 598 684 "
+                "Depreciation and amortization 922 910 "
+                "Adjusted EBITDA $ 4,809 $ 4,665"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="khc-current-bridge",
+            title="Kraft Heinz 2023 Form 10-K",
+            text=(
+                "Reconciliation of Net Income/(Loss) to Adjusted EBITDA (in millions) "
+                "December 30, 2023 December 31, 2022 "
+                "Net income/(loss) $ 2,846 $ 2,368 "
+                "Interest expense 912 921 "
+                "Provision for income taxes 787 598 "
+                "Depreciation and amortization 923 922 "
+                "Adjusted EBITDA $ 5,468 $ 4,809"
+            ),
+        ),
+    ]
+    citations = [
+        _finance_citation(evidence[0], citation_id="cite-khc-prior-bridge"),
+        _finance_citation(evidence[1], citation_id="cite-khc-current-bridge"),
+    ]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    plan = plan_finance_formula(question="Explain the adjusted EBITDA bridge subtotal.", facts=facts)
+
+    assert plan.status == "ready"
+    assert plan.diagnostics["bridge_group_key"] in {
+        "source:cite-khc-current-bridge",
+        "citation:cite-khc-current-bridge",
+        "evidence:khc-current-bridge",
+    }
+    assert plan.diagnostics["bridge_group_key"] != "all"
+    assert plan.diagnostics["bridge_detected_column_count"] == 2
+    trace = compute_formula(**plan.payload)
+    assert trace.result_value == "5468000000"
+
+
+def test_finance_bridge_planner_rejects_subtotal_that_does_not_match_reported_adjusted() -> None:
+    facts = [
+        _finance_fact("net income", "4572", fact_id="fact-base"),
+        _finance_fact("addback", "2368", fact_id="fact-addback"),
+        _finance_fact("adjusted ebitda", "6307", fact_id="fact-adjusted"),
+    ]
+    plan = plan_finance_formula(question="Explain the adjusted EBITDA bridge subtotal.", facts=facts)
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "reported_adjusted"
+    assert plan.diagnostics["bridge_formula_source"] == "reported_adjusted_only"
+
+
+def test_finance_bridge_planner_scales_reported_adjusted_from_related_context() -> None:
+    facts = [
+        _finance_fact(
+            "net income",
+            "2846000000",
+            fact_id="fact-base",
+            metadata={
+                "context": (
+                    "Reconciliation of Net Income/(Loss) to Adjusted EBITDA (in millions) "
+                    "Net income/(loss) $ 2,846 $ 2,368"
+                )
+            },
+        ),
+        _finance_fact("addback", "2368000000", fact_id="fact-addback"),
+        _finance_fact(
+            "adjusted ebitda",
+            "6003",
+            fact_id="fact-adjusted",
+            metadata={
+                "context": (
+                    "Certain non-ordinary course legal and regulatory matters 2 210 "
+                    "Equity award compensation expense 141 148 Adjusted EBITDA $ 6,307 $ 6,003"
+                )
+            },
+        ),
+    ]
+    plan = plan_finance_formula(question="Explain the adjusted EBITDA bridge subtotal.", facts=facts)
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "reported_adjusted"
+    assert plan.payload["variables"]["reported_adjusted"] == "6003000000"
+    assert plan.diagnostics["reported_adjusted_scale_multiplier"] == "1000000"
+
+
 def test_finance_fact_ledger_does_not_extract_dividend_per_share_as_ebitda() -> None:
     evidence = [
         _finance_evidence(
@@ -417,7 +515,7 @@ def test_finance_fact_ledger_scales_in_millions_bridge_table_for_formula_planner
                 "Interest expense 912 921 "
                 "Provision for/(benefit from) income taxes 787 598 "
                 "Depreciation and amortization (excluding restructuring activities) 923 922 "
-                "Adjusted EBITDA $ 6,697 $ 6,327"
+                "Adjusted EBITDA $ 5,468 $ 4,809"
             ),
         )
     ]
@@ -433,7 +531,7 @@ def test_finance_fact_ledger_scales_in_millions_bridge_table_for_formula_planner
     assert "912000000" in by_metric["interest expense"]
     assert "787000000" in by_metric["tax"]
     assert "923000000" in by_metric["depreciation and amortization"]
-    assert "6697000000" in by_metric["adjusted ebitda"]
+    assert "5468000000" in by_metric["adjusted ebitda"]
     assert plan.status == "ready"
     assert plan.payload is not None
     assert plan.payload["formula_name"] == "bridge_subtotal"
@@ -1418,6 +1516,62 @@ def test_retrieval_finalization_blocks_unsupported_finance_numbers() -> None:
     assert failure.reason == "finance_numeric_verification_failed"
     assert "unsupported_answer_number:$999 billion" in failure.missing_evidence
     assert not journal.records(task_id="task-finance", kind="agent_final_answer")
+
+
+def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calculator_trace() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(
+        journal,
+        answer="KHC adjusted EBITDA was 0.54 and $999 billion, supported by cite-1.",
+    )
+    trace = compute_formula(
+        expression="base + addback_1",
+        variables={"base": "2846000000", "addback_1": "2823000000"},
+        unit="USD",
+        formula_name="bridge_subtotal",
+        input_fact_ids=["fact-base", "fact-addback"],
+    )
+    journal.append(
+        task_id="task-finance-repair",
+        run_id="run-1",
+        step_id=None,
+        kind="observation",
+        data={
+            "source": f"tool:{CALCULATOR_TOOL_NAME}",
+            "status": "ok",
+            "content": {"formula_trace": trace.to_dict()},
+        },
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-1",
+            title="Kraft Heinz 2023 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/1637459/example/khc-20231230.htm",
+            text="KHC adjusted EBITDA bridge evidence with source-backed calculator inputs.",
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-1")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))},
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-finance-repair",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    assert "5669000000 USD" in final.answer
+    assert "$999 billion" not in final.answer
+    verifications = journal.records(task_id="task-finance-repair", kind="finance_numeric_verification")
+    assert verifications[-1].data["status"] == "passed"
 
 
 def test_finance_formula_planner_generates_dio_payload_from_ledger() -> None:

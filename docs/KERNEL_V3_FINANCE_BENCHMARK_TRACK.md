@@ -463,6 +463,22 @@ Post-dev10 EV/EBITDA iteration:
   `fabv2-wsc-adjusted-ebitda-addback-trend`: each has closed at least once with
   retrieval evidence, structured finance facts, calculator/formula traces, and
   numeric verification.
+- The latest KHC adjusted-EBITDA bridge smoke closes through the reliability
+  gate after a scale repair. Earlier KHC runs exposed two bad behaviors:
+  bridge formulas could mix unrelated evidence groups, and a reported
+  `Adjusted EBITDA $ 6,003` from a table marked `in millions` could be traced
+  as `6003 USD`. The formula planner now rejects component subtotals that do
+  not match the reported adjusted subtotal, falls back to a conservative
+  `reported_adjusted` calculator trace, and infers table scale from related
+  facts in the same reconciliation group. The live rerun
+  `run_khc_after_reported_adjusted_scale_fix_live` produced
+  `retrieval_runs=1`, `fetches=8`, `finance_fact_count=218`,
+  `calculator_call_count=1`, `formula_trace_count=1`,
+  `numeric_verifier_status=passed`, `answer_numeric_support_rate=100%`,
+  `citation_present_rate=100%`, and post-run dev annotation `overall_score=1.0`.
+  The final user-visible answer was a host fallback because the model
+  synthesizer still inserted unsupported bridge numbers; that is now a
+  synthesis/answer-repair quality issue rather than a missing substrate issue.
 - The latest WSC add-back trend work deliberately tightened evidence gates so
   market-statistics snippets such as `EBITDA Margin` plus `Dividend Per Share`
   are no longer accepted as add-back/reconciliation evidence, and the natural
@@ -513,8 +529,8 @@ Post-dev10 EV/EBITDA iteration:
 ## Next Steps
 
 1. Rerun KHC/WSC/PFE-SGEN as a small live batch and confirm that each item
-   records evidence, facts, formula traces, citations, and numeric verification.
-   Keep the gold/dev annotations out of prompts.
+   records evidence, facts, formula traces, citations, and numeric verification
+   after the KHC scale repair. Keep the gold/dev annotations out of prompts.
 2. Map reconciliation `period_series` / `source_table` gaps into more explicit
    ledger extraction diagnostics and missing-slot replan hints, especially when
    the source contains a table but the fact ledger extracts no add-back rows.

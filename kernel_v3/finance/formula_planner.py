@@ -435,6 +435,26 @@ def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
         base = _latest_fact(facts, ("net income", "operating income", "income from continuing operations"))
         addbacks = _bridge_component_facts(facts)
         adjusted = _latest_fact(facts, ("adjusted ebitda",))
+        if adjusted is not None and (base is not None or addbacks):
+            support_facts = [adjusted]
+            if base is not None:
+                support_facts.append(base)
+            support_facts.extend(addbacks[:8])
+            reported_adjusted = _fact_value_for_formula(adjusted, related_facts=support_facts)
+            return _ready(
+                "bridge_subtotal",
+                "reported_adjusted",
+                {"reported_adjusted": reported_adjusted},
+                unit=adjusted.unit,
+                facts=support_facts,
+                diagnostics={
+                    "bridge_formula_source": "reported_adjusted_only",
+                    "reason": "component_sum_did_not_match_reported_adjusted",
+                    "reported_adjusted_scale_multiplier": str(
+                        _fact_context_scale_multiplier(adjusted, related_facts=support_facts)
+                    ),
+                },
+            )
         missing = ["base_metric"] if base is None else []
         if not addbacks:
             missing.append("addback_components")
@@ -474,7 +494,7 @@ def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
         expression_parts.append(f"- {name}")
         input_facts.append(fact)
     if adjusted is not None:
-        variables["reported_adjusted"] = adjusted.value
+        variables["reported_adjusted"] = _fact_value_for_formula(adjusted, related_facts=input_facts)
         input_facts.append(adjusted)
     diagnostics: JsonObject = {}
     if candidate is not None:
@@ -521,6 +541,10 @@ def _best_bridge_group(facts: list[FinanceFact]) -> JsonObject | None:
         deductions = [fact for fact in components if _metric_text(fact.metric) == "deduction"]
         if base is None or adjusted is None or not addbacks:
             continue
+        subtotal = _bridge_subtotal_value(base=base, addbacks=addbacks, deductions=deductions)
+        adjusted_value = _decimal_or_none(adjusted.value)
+        if subtotal is None or adjusted_value is None or not _bridge_subtotal_matches_reported(subtotal, adjusted_value):
+            continue
         score = _bridge_group_score(group_facts, base=base, adjusted=adjusted, addbacks=addbacks, deductions=deductions)
         candidates.append(
             {
@@ -548,6 +572,7 @@ def _best_bridge_group(facts: list[FinanceFact]) -> JsonObject | None:
 
 def _bridge_fact_groups(facts: list[FinanceFact]) -> dict[str, list[FinanceFact]]:
     groups: dict[str, list[FinanceFact]] = {}
+    ungrouped: list[FinanceFact] = []
     for fact in facts:
         keys = []
         for prefix, value in (
@@ -558,11 +583,12 @@ def _bridge_fact_groups(facts: list[FinanceFact]) -> dict[str, list[FinanceFact]
             if value:
                 keys.append(f"{prefix}:{value}")
         if not keys:
-            keys.append("all")
+            ungrouped.append(fact)
+            continue
         for key in keys:
             groups.setdefault(key, []).append(fact)
-    if facts:
-        groups.setdefault("all", list(facts))
+    if not groups and ungrouped:
+        groups["ungrouped"] = list(ungrouped)
     return groups
 
 
@@ -593,6 +619,70 @@ def _bridge_component_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
         if fact.fact_id not in selected:
             selected[fact.fact_id] = fact
     return list(selected.values())
+
+
+def _bridge_subtotal_value(
+    *,
+    base: FinanceFact,
+    addbacks: list[FinanceFact],
+    deductions: list[FinanceFact],
+) -> Decimal | None:
+    base_value = _decimal_or_none(base.value)
+    if base_value is None:
+        return None
+    total = base_value
+    for fact in addbacks:
+        value = _decimal_or_none(fact.value)
+        if value is None:
+            return None
+        total += value
+    for fact in deductions:
+        value = _decimal_or_none(fact.value)
+        if value is None:
+            return None
+        total -= abs(value)
+    return total
+
+
+def _bridge_subtotal_matches_reported(total: Decimal, reported: Decimal) -> bool:
+    candidates = [reported]
+    if abs(reported) < Decimal("1000000"):
+        candidates.extend([reported * Decimal(1_000), reported * Decimal(1_000_000), reported * Decimal(1_000_000_000)])
+    for candidate in candidates:
+        tolerance = max(abs(candidate) * Decimal("0.005"), Decimal("1"))
+        if abs(total - candidate) <= tolerance:
+            return True
+    return False
+
+
+def _fact_value_for_formula(fact: FinanceFact, *, related_facts: list[FinanceFact] | None = None) -> str:
+    value = _decimal_or_none(fact.value)
+    if value is None:
+        return str(fact.value)
+    scale_multiplier = _fact_context_scale_multiplier(fact, related_facts=related_facts)
+    if scale_multiplier != Decimal(1) and Decimal(0) < abs(value) < Decimal("1000000"):
+        value *= scale_multiplier
+    return _decimal_string(value)
+
+
+def _fact_context_scale_multiplier(fact: FinanceFact, *, related_facts: list[FinanceFact] | None = None) -> Decimal:
+    facts = [fact, *(related_facts or [])]
+    context = " ".join(
+        str(value or "")
+        for item in facts
+        for value in (
+            item.metadata.get("context") if isinstance(item.metadata, dict) else "",
+            item.metadata.get("source_title") if isinstance(item.metadata, dict) else "",
+            item.metadata.get("raw") if isinstance(item.metadata, dict) else "",
+        )
+    ).lower()
+    if re.search(r"(?:amounts?\s+)?in\s+billions|\(\s*in\s+billions\s*\)", context):
+        return Decimal(1_000_000_000)
+    if re.search(r"(?:amounts?\s+)?in\s+millions|\(\s*in\s+millions\s*\)", context):
+        return Decimal(1_000_000)
+    if re.search(r"(?:amounts?\s+)?in\s+thousands|\(\s*in\s+thousands\s*\)", context):
+        return Decimal(1_000)
+    return Decimal(1)
 
 
 def _bridge_select_column_fact(
