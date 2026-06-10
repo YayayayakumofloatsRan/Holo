@@ -105,6 +105,7 @@ class FinanceBenchmarkSummary(Contract):
     average_finance_facts: float
     numeric_verifier_pass_rate: float | None
     verifier_gate_pass_rate: float | None
+    synthesis_gate_pass_rate: float | None
     average_answer_numeric_support_rate: float | None
     finance_numeric_failure_reason_counts: JsonObject
     status_counts: JsonObject
@@ -373,6 +374,7 @@ def summarize_finance_benchmark(
     adversarial_scored = [result for result in results if bool(result.scorecard.get("gold_sentinel"))]
     verifier_scored = [result for result in results if result.trace_metrics.get("numeric_verifier_status") in {"passed", "failed"}]
     gate_scored = [result for result in results if result.trace_metrics.get("verifier_gate_status") in {"passed", "failed"}]
+    synthesis_gate_scored = [result for result in results if result.trace_metrics.get("synthesis_gate_status") in {"passed", "failed"}]
     support_rates = [
         float(result.trace_metrics["answer_numeric_support_rate"])
         for result in results
@@ -432,6 +434,12 @@ def summarize_finance_benchmark(
             len(gate_scored),
         )
         if gate_scored
+        else None,
+        synthesis_gate_pass_rate=_rate(
+            sum(1 for result in synthesis_gate_scored if result.trace_metrics.get("synthesis_gate_status") == "passed"),
+            len(synthesis_gate_scored),
+        )
+        if synthesis_gate_scored
         else None,
         average_answer_numeric_support_rate=_average(support_rates) if support_rates else None,
         finance_numeric_failure_reason_counts=dict(numeric_failure_reasons),
@@ -531,6 +539,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     slot_frames = [record.data for record in records if record.kind == "slot_frame"]
     transform_plans = [record.data for record in records if record.kind == "transform_plan"]
     verifier_gates = [record.data for record in records if record.kind == "verifier_gate_result"]
+    synthesis_gates = [record.data for record in records if record.kind == "synthesis_gate_result"]
     retrieval_evidence_records = [record.data for record in records if record.kind == "retrieval_evidence"]
     retrieval_citation_records = [record.data for record in records if record.kind == "retrieval_citation"]
     retrieval = retrieval_behavior_benchmark(journal, task_id)
@@ -558,6 +567,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     latest_claim_ledger = claim_ledgers[-1] if claim_ledgers else {}
     latest_slot_frame = slot_frames[-1] if slot_frames else {}
     latest_verifier_gate = verifier_gates[-1] if verifier_gates else {}
+    latest_synthesis_gate = synthesis_gates[-1] if synthesis_gates else {}
     latest_verification = numeric_verifications[-1] if numeric_verifications else {}
     latest_verification = latest_verification if isinstance(latest_verification, dict) else {}
     verification_diagnostics = latest_verification.get("diagnostics") if isinstance(latest_verification.get("diagnostics"), dict) else {}
@@ -567,6 +577,8 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     numeric_verifier_status = latest_verification.get("status") if isinstance(latest_verification.get("status"), str) else None
     verifier_gate_status = latest_verifier_gate.get("status") if isinstance(latest_verifier_gate.get("status"), str) else None
     verifier_gate_issues = latest_verifier_gate.get("issues") if isinstance(latest_verifier_gate.get("issues"), list) else []
+    synthesis_gate_status = latest_synthesis_gate.get("status") if isinstance(latest_synthesis_gate.get("status"), str) else None
+    synthesis_gate_issues = latest_synthesis_gate.get("issues") if isinstance(latest_synthesis_gate.get("issues"), list) else []
     answer_numeric_support_rate = _rate(len(matched_values), answer_numeric_count) if answer_numeric_count else None
     source_uris = _source_uris([*retrieval_evidence_records, *retrieval_citation_records])
     source_hosts = _source_hosts(source_uris)
@@ -613,6 +625,9 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "verifier_gate_status": verifier_gate_status,
         "verifier_gate_passed": verifier_gate_status == "passed" if verifier_gate_status else None,
         "verifier_gate_issue_count": len(verifier_gate_issues),
+        "synthesis_gate_status": synthesis_gate_status,
+        "synthesis_gate_passed": synthesis_gate_status == "passed" if synthesis_gate_status else None,
+        "synthesis_gate_issue_count": len(synthesis_gate_issues),
         "answer_numeric_support_rate": answer_numeric_support_rate,
         "finance_numeric_failure_reason": issue_codes[0] if issue_codes else None,
         "finance_numeric_failure_reasons": issue_codes,

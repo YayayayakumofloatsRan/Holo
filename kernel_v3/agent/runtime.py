@@ -929,6 +929,18 @@ class AgentRuntime:
                 evidence=evidence,
                 citations=citations,
             )
+            self._append_synthesis_gate_result(
+                final,
+                recipe=recipe,
+                status=verification.status,
+                issues=list(verification.issues),
+                diagnostics={
+                    "gate_id": "numeric_claim_support_v1",
+                    "source": "finance_numeric_verification",
+                    "answer_numeric_support_rate": _finance_answer_numeric_support_rate(verification),
+                    "policy": "material_numeric_claims_require_claim_or_transform_support",
+                },
+            )
             if verification.status == "failed":
                 fallback_final = _finance_retrieval_fallback_final(
                     journal=self.journal,
@@ -947,6 +959,19 @@ class AgentRuntime:
                         evidence=evidence,
                         citations=citations,
                     )
+                    self._append_synthesis_gate_result(
+                        fallback_final,
+                        recipe=recipe,
+                        status=fallback_verification.status,
+                        issues=list(fallback_verification.issues),
+                        diagnostics={
+                            "gate_id": "numeric_claim_support_v1",
+                            "source": "finance_numeric_verification",
+                            "attempt": "fallback",
+                            "answer_numeric_support_rate": _finance_answer_numeric_support_rate(fallback_verification),
+                            "policy": "material_numeric_claims_require_claim_or_transform_support",
+                        },
+                    )
                     if fallback_verification.status != "failed":
                         final = self._append_final(fallback_final)
                         self._maybe_propose_research_memory(final, recipe=recipe)
@@ -963,6 +988,42 @@ class AgentRuntime:
         final = self._append_final(final)
         self._maybe_propose_research_memory(final, recipe=recipe)
         return final, None
+
+    def _append_synthesis_gate_result(
+        self,
+        answer: FinalAnswer,
+        *,
+        recipe: TaskRecipe,
+        status: str,
+        issues: list[JsonObject],
+        diagnostics: JsonObject,
+    ) -> None:
+        root_goal = _root_goal_from_recipe(recipe)
+        missing_slots = [
+            str(item.get("code") or item.get("message") or "")
+            for item in issues
+            if isinstance(item, dict) and str(item.get("code") or item.get("message") or "").strip()
+        ]
+        self.journal.append(
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            step_id=None,
+            kind="synthesis_gate_result",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.synthesis_gate_result.v1",
+                    "gate_id": diagnostics.get("gate_id") or "synthesis_gate_v1",
+                    "domain": "finance" if _finance_numeric_verifier_required(recipe) else "generic",
+                    "status": status,
+                    "policy": diagnostics.get("policy"),
+                    "root_goal": root_goal,
+                    "issues": issues[:24],
+                    "missing_slots": missing_slots[:24],
+                    "diagnostics": diagnostics,
+                }
+            ),
+            state_delta={"synthesis_gate_status": status},
+        )
 
     def _finalize_workspace(
         self,
@@ -8190,6 +8251,15 @@ def _finance_numeric_missing_evidence(verification) -> list[str]:
         if raw:
             missing.append(f"unsupported_answer_number:{raw}")
     return _ordered_unique(missing)
+
+
+def _finance_answer_numeric_support_rate(verification) -> float | None:
+    diagnostics = getattr(verification, "diagnostics", {}) or {}
+    answer_numeric_count = diagnostics.get("answer_numeric_count") if isinstance(diagnostics, dict) else None
+    if not isinstance(answer_numeric_count, (int, float)) or answer_numeric_count <= 0:
+        return None
+    matched = list(getattr(verification, "matched_values", []) or [])
+    return min(1.0, max(0.0, len(matched) / float(answer_numeric_count)))
 
 
 def _agent_final_from_processor(processor_answer, *, task_id: str, run_id: str, trace_refs: list[str]) -> FinalAnswer:

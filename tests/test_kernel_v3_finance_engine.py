@@ -1613,6 +1613,10 @@ def test_retrieval_finalization_blocks_unsupported_finance_numbers() -> None:
     assert failure.reason == "finance_numeric_verification_failed"
     assert "unsupported_answer_number:$999 billion" in failure.missing_evidence
     assert not journal.records(task_id="task-finance", kind="agent_final_answer")
+    synthesis_gates = journal.records(task_id="task-finance", kind="synthesis_gate_result")
+    assert synthesis_gates
+    assert synthesis_gates[-1].data["status"] == "failed"
+    assert synthesis_gates[-1].data["policy"] == "material_numeric_claims_require_claim_or_transform_support"
 
 
 def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calculator_trace() -> None:
@@ -1669,6 +1673,9 @@ def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calcula
     assert "$999 billion" not in final.answer
     verifications = journal.records(task_id="task-finance-repair", kind="finance_numeric_verification")
     assert verifications[-1].data["status"] == "passed"
+    synthesis_gates = journal.records(task_id="task-finance-repair", kind="synthesis_gate_result")
+    assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
+    assert synthesis_gates[-1].data["diagnostics"]["attempt"] == "fallback"
 
 
 def test_finance_formula_planner_generates_dio_payload_from_ledger() -> None:

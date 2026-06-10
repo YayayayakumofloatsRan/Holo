@@ -1053,9 +1053,14 @@ def test_sec_submission_expands_complete_submission_then_exhibit_child_document(
 <DESCRIPTION>FORM 8-K
 </DOCUMENT>
 <DOCUMENT>
+<TYPE>EX-2.1
+<FILENAME>d408093dex21.htm
+<DESCRIPTION>Agreement and Plan of Merger
+</DOCUMENT>
+<DOCUMENT>
 <TYPE>EX-99.1
 <FILENAME>d408093dex991.htm
-<DESCRIPTION>Press Release dated March 13, 2023
+<DESCRIPTION>EX-99.1
 </DOCUMENT>
 </SEC-DOCUMENT>
 """
@@ -1070,6 +1075,9 @@ def test_sec_submission_expands_complete_submission_then_exhibit_child_document(
                 submissions.uri: submissions_body,
                 primary_url: "Pfizer and Seagen entered into a merger agreement for $229 per share.",
                 complete_url: complete_body,
+                f"https://www.sec.gov/Archives/edgar/data/78003/{compact}/d408093dex21.htm": (
+                    "Agreement and Plan of Merger. Each Seagen share receives $229 in cash."
+                ),
                 "https://www.sec.gov/Archives/edgar/data/78003/000007800323000019/pfe-20230221.htm": (
                     "Pfizer relocated its corporate headquarters."
                 ),
@@ -1109,6 +1117,27 @@ def test_sec_submission_expands_complete_submission_then_exhibit_child_document(
     assert complete_url in fetch_uris
     assert exhibit_url in fetch_uris
     assert f"https://www.sec.gov/Archives/edgar/data/78003/{compact}/d408093dex21.htm" not in fetch_uris
+    expansion_records = journal.records(task_id="task-transaction-submission-exhibit-second-hop", kind="retrieval_document_expansion")
+    expanded_candidates = [
+        candidate
+        for record in expansion_records
+        for expansion in record.data.get("expansions", [])
+        if isinstance(record.data.get("expansions"), list) and isinstance(expansion, dict)
+        for candidate in expansion.get("candidate_sources", [])
+        if isinstance(expansion.get("candidate_sources"), list)
+    ]
+    assert any(
+        isinstance(candidate, dict)
+        and isinstance(candidate.get("metadata"), dict)
+        and candidate["metadata"].get("source_kind") == "sec_exhibit_document"
+        and isinstance(candidate["metadata"].get("event_source_resolver"), dict)
+        for candidate in expanded_candidates
+    )
+    assert any(
+        isinstance(candidate, dict)
+        and candidate.get("uri") == exhibit_url
+        for candidate in expanded_candidates
+    )
     assert journal.records(task_id="task-transaction-submission-exhibit-second-hop", kind="retrieval_document_expansion")
     evidence_text = " ".join(
         record.data["text"]

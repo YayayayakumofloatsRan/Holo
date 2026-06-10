@@ -1157,39 +1157,36 @@ score, calculator usage, formula trace count, finance fact count, numeric
 verifier status, answer numeric support rate, and finance numeric failure
 taxonomy.
 
-Latest live smoke status: several curated FAB v2-style items now close through
-the finance substrate. The latest stable4 delivery rerun
-(`run_stable4_latest_after_pfe_acquisition_fixes`) used `finance-fact-fast`,
-mission disabled, live retrieval, model planner, fake evaluator, model
-synthesizer, compact context, and serial execution. It produced post-run dev
-annotation `overall_score=0.9603`, behavior `0.9643`, substrate `0.9167`,
-numeric `1.0`, calculator-used rate `0.75`, formula-trace-present rate `0.75`,
-claim-ledger and slot-frame present rates `1.0`, transform-plan present rate
-`1.0`, verifier-gate pass rate `1.0`, citation-present rate `1.0`, and 100%
-average answer numeric support. HD/LOW DIO, KHC adjusted EBITDA bridge, and WSC
-adjusted EBITDA add-back trend each closed with retrieval evidence, structured
-finance facts, calculator/formula traces, citations, and numeric verification.
-`fabv2-pfe-sgen-transaction-multiple` remains the main unstable
-transaction-multiple target. Earlier runs could close it, but current
-repeatability checks show the source acquisition path is still incomplete:
-recent live reruns now reach SEC transaction filings and project claim/fact
-ledgers, slot frames, transform plans, and verifier-gate records, but they
-still fail to consistently acquire and bind the total transaction enterprise
-value / revenue slots needed to trigger `calculator.compute`. Treat PFE/SGEN as
-an event-source resolver and fact-binding gap, not as a solved case. The latest
-reliability pass fixed unbound acquisition-source templates such as `{ticker}`,
-isolated SEC extraction exceptions so one bad document no longer aborts
-`retrieval.run`, accepts primary 8-K transaction disclosures and complementary
-companyfacts facts, expands SEC complete-submission child documents, reserves a
-second-hop fetch slot for transaction exhibits, and prioritizes SEC exhibit /
-press-release documents. These are real live runs, not fixed-answer tests.
+Latest live benchmark status: the finance substrate now closes the stable4
+showcase items through the generic workflow spine. The 2026-06-10 dev10 rerun
+(`run_dev10_event_resolver_v1`) used `finance-fact-fast`, mission disabled,
+live retrieval, model planner, fake evaluator, model synthesizer, compact
+context, and serial execution. The first four items, HD/LOW DIO, KHC adjusted
+EBITDA bridge, PFE/Seagen transaction multiple, and WSC adjusted EBITDA
+add-back trend, each closed with retrieval evidence, structured finance facts,
+claim ledgers, slot frames, transform plans, calculator/formula traces,
+citations, numeric verification, and verifier-gate pass. PFE/Seagen is no
+longer just an occasional smoke pass: the new SEC event-source resolver derived
+EX-99.1 transaction disclosure candidates from SEC submissions metadata, filled
+transaction value and revenue slots, triggered `calculator.compute`, and passed
+numeric verification in both the PFE-only rerun and the full dev10 rerun. These
+are real live runs, not fixed-answer tests.
 
-The full curated dev10 is still not solved. An earlier live run with
-`finance-fact-fast`, mission disabled, live retrieval, model planner, fake
-evaluator, model synthesizer, and parallel 2 produced: overall dev annotation
-score 0.8111, behavior score 0.8667, substrate score 0.5667,
-calculator-used rate 0.20, formula-trace present rate 0.20,
-numeric-verifier pass rate 0.50, and average answer numeric support 70.56%.
+The full curated dev10 is still not solved as a benchmark, but the latest
+score is materially stronger than the older `0.8111` baseline. The newest run
+produced post-run dev annotation `overall_score=0.9056`, behavior `0.9167`,
+substrate `0.8`, numeric `1.0`, calculator-used rate `0.4`,
+formula-trace-present rate `0.4`, claim-ledger and slot-frame present rates
+`1.0`, transform-plan present rate `1.0`, verifier-gate pass rate `0.5`,
+synthesis-gate pass rate `0.5`, citation-present rate `0.6`, and average
+answer numeric support `0.7953`. The remaining failures are now concentrated in
+harder modeling/valuation tasks that still need transform planning and formula
+templates: CRM DCF, EPAM LBO, TGT/WMT fixed-charge coverage, LULU/VSCO
+EV/EBITDA, CNC MLR rebate, and PFE/Seagen purchase-price allocation. In these
+cases Holo usually acquires claims and slot frames, but either does not yet
+produce a calculator trace or the SynthesisGate blocks unsupported numeric
+claims. That is the desired reliability posture: unsupported finance numbers
+should be stopped, not polished into a confident answer.
 The latest KHC adjusted-EBITDA bridge pass improves the deterministic substrate:
 the fact ledger now keeps an `Adjusted EBITDA` amount even when the next table
 title is an EPS reconciliation, and bridge planning groups facts by

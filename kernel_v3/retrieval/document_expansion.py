@@ -309,6 +309,7 @@ def _source_from_link(
         "filing_date",
         "filing_index",
         "expanded_from_submission_archive",
+        "event_source_resolver",
     ):
         value = link.get(key)
         if isinstance(value, str) and value:
@@ -316,6 +317,8 @@ def _source_from_link(
         elif isinstance(value, int):
             metadata[key] = value
         elif isinstance(value, bool):
+            metadata[key] = value
+        elif isinstance(value, dict) and value:
             metadata[key] = value
     if source.metadata.get("source_directory_id"):
         metadata["source_directory_id"] = source.metadata["source_directory_id"]
@@ -586,6 +589,15 @@ def _sec_submission_document_links(
                 "score": max(0.1, score - 0.08),
             }
         )
+        candidates.extend(
+            _sec_event_exhibit_candidate_links(
+                base_uri=base_uri,
+                common=common,
+                form=form,
+                primary_document=primary_document,
+                wants_transaction_event=wants_transaction_event,
+            )
+        )
     candidates = _select_sec_submission_candidates(
         candidates,
         wants_transaction_event=wants_transaction_event,
@@ -593,6 +605,67 @@ def _sec_submission_document_links(
         target_years=target_years,
     )
     return candidates[:48 if wants_transaction_or_bridge else 24]
+
+
+def _sec_event_exhibit_candidate_links(
+    *,
+    base_uri: str,
+    common: JsonObject,
+    form: str,
+    primary_document: str,
+    wants_transaction_event: bool,
+) -> list[JsonObject]:
+    if not wants_transaction_event:
+        return []
+    if form.upper().replace(" ", "") not in {"8-K", "6-K"}:
+        return []
+    prefix = _sec_primary_document_stem_prefix(primary_document)
+    if not prefix:
+        return []
+    score = max(float(common.get("score") or 0.0), 0.1) + 2.85
+    result: list[JsonObject] = []
+    filename = f"{prefix}dex991.htm"
+    result.append(
+        {
+            **common,
+            "url": f"{base_uri}/{filename}",
+            "text": "SEC event exhibit candidate EX-99.1 for transaction disclosure",
+            "source_kind": "sec_exhibit_document",
+            "source_family": "regulatory_filing",
+            "event_source_resolver": {
+                "resolver_id": "sec_transaction_exhibit_from_submission_v1",
+                "event_type": "transaction",
+                "candidate_role": "event_press_release_or_investor_disclosure",
+                "derived_from_primary_document": primary_document,
+                "derived_filename": filename,
+                "confidence": 0.72,
+            },
+            "score": score,
+            "matched_terms": _ordered_unique(
+                [
+                    *[str(item) for item in common.get("matched_terms", []) if item],
+                    "event",
+                    "ex-99",
+                    "press release",
+                    "transaction",
+                ]
+            )[:16],
+        }
+    )
+    return result
+
+
+def _sec_primary_document_stem_prefix(primary_document: str) -> str:
+    safe = _safe_sec_document_name(primary_document)
+    if not safe:
+        return ""
+    name = safe.rsplit("/", 1)[-1]
+    lower = name.lower()
+    match = re.match(r"^(?P<prefix>d\d+)(?:d(?:8k|6k|10k|10q))?\.html?$", lower)
+    if match:
+        return match.group("prefix")
+    match = re.match(r"^(?P<prefix>[a-z0-9]+)(?:[-_]?8k|[-_]?6k)\.html?$", lower)
+    return match.group("prefix") if match else ""
 
 
 def _sec_submission_archive_file_links(

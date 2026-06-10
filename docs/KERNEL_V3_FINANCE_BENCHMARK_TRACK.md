@@ -627,12 +627,51 @@ Post-dev10 EV/EBITDA iteration:
   post-run substrate score `0.6667`. This stable4 result is the current
   delivery-grade checkpoint; it should be reported as a strong auditable
   substrate demonstration, not as a solved official FAB v2 benchmark.
-- The next concrete live validation should implement a stronger event resolver
-  for transaction questions, then rerun PFE/SGEN and finally rerun
-  KHC/WSC/PFE-SGEN together. If a case fails, classify the failure as source
-  acquisition, fetch/parser, fact-ledger extraction, formula binding, verifier
-  policy, or model-synthesis/JSON repair before adding any task-specific
-  heuristic.
+- 2026-06-10 EventSourceResolver v1 and SynthesisGate v1 delivery pass:
+  SEC submissions expansion now derives a first-class EX-99.1 event-disclosure
+  candidate for transaction 8-K filings from the primary document stem
+  (`sec_transaction_exhibit_from_submission_v1`). This is a generic event-source
+  resolver rule for SEC transaction events; it does not encode answer values.
+  The same pass adds an explicit `synthesis_gate_result` journal record and
+  benchmark metric. For finance answers, the gate enforces that material numeric
+  claims must be backed by `ClaimLedger` facts, formula/transform traces, or
+  explicit assumptions; unsupported numbers trigger fallback or failure instead
+  of passing through synthesis.
+- PFE/SGEN is now repeatably closed in the latest live checks. The PFE-only run
+  `run_pfe_sgen_event_resolver_v1` completed with `retrieval_runs=1`,
+  `fetches=8`, `finance_fact_count=40`, `claim_count=40`,
+  `calculator_call_count=1`, `formula_trace_count=1`, `missing_slots=0`,
+  `transform_plan_count=2`, `numeric_verifier_status=passed`,
+  `verifier_gate_status=passed`, and 100% answer numeric support. The full
+  dev10 rerun also closed PFE/SGEN with `retrieval_runs=1`, `fetches=8`,
+  `facts=29`, `claims=29`, `calculator_call_count=1`,
+  `formula_trace_count=1`, `missing_slots=0`, and both verifier gates passed.
+  This moves PFE/SGEN out of the active source-acquisition gap bucket and into
+  the stable showcase bucket, while still keeping the mechanism generic.
+- Latest full curated dev10 live rerun:
+  `run_dev10_event_resolver_v1` used `finance-fact-fast`, mission off, live
+  retrieval, model planner, fake evaluator, model synthesizer, compact context,
+  and `parallel=1`. The run produced post-run dev annotation
+  `overall_score=0.9056`, behavior score `0.9167`, substrate score `0.8`,
+  numeric score `1.0`, calculator-used rate `0.4`,
+  formula-trace-present rate `0.4`, numeric-verifier pass rate `0.5`,
+  verifier-gate pass rate `0.5`, synthesis-gate pass rate `0.5`,
+  claim-ledger present rate `1.0`, slot-frame present rate `1.0`,
+  transform-plan present rate `1.0`, citation-present rate `0.6`, average
+  answer numeric support `0.7953`, average retrieval runs `1.0`, average total
+  tokens `61,422.7`, average finance facts `71.4`, and average claims `71.4`.
+  The first four representative workflow items all closed: HD/LOW DIO,
+  KHC adjusted EBITDA bridge, PFE/SGEN transaction multiple, and WSC adjusted
+  EBITDA add-back trend. The remaining six items mainly fail by
+  `required_trace_missing` or `unsupported_answer_number`: CRM DCF, EPAM LBO,
+  TGT/WMT fixed-charge coverage, LULU/VSCO EV/EBITDA, CNC MLR rebate, and
+  PFE/Seagen purchase-price allocation. These are now best classified as
+  transform-planning / formula-template / modeling-policy gaps, not source
+  acquisition failures.
+- Future validation should keep the same failure taxonomy discipline: classify
+  failures as source acquisition, fetch/parser, fact-ledger extraction, formula
+  binding, verifier policy, synthesis gate, or model JSON repair before adding
+  any task-specific heuristic.
 - Fast-lane cost is still high. Successful single-item runs often consume
   60k-90k tokens, and hard cases can fail after model JSON repair issues. The
   next executor work should shrink planner/evaluator context for finance facts,
@@ -641,34 +680,37 @@ Post-dev10 EV/EBITDA iteration:
 
 ## Next Steps
 
-1. Keep HD/LOW DIO, KHC adjusted EBITDA bridge, and WSC adjusted EBITDA add-back
-   trend as the stable delivery showcase. Do not claim PFE/SGEN is solved until
-   it repeatably acquires/binds the transaction enterprise-value and revenue
-   slots and triggers `calculator.compute`.
-2. Implement the next PFE/SGEN fix as an event-source resolver and fact-ledger
-   binding pass: identify issuer/target, likely announcement/closing periods,
-   SEC accession candidates, and whether the task needs 8-K, merger agreement,
-   10-K note, or investor/press-release evidence. Keep it generic for
-   transaction questions; do not hardcode answer values.
-3. After PFE/SGEN repeatability improves, rerun the full curated dev10 and
-   report the latest post-run annotation scores instead of the older `0.8111`
-   dev10 baseline.
-4. Map reconciliation `period_series` / `source_table` gaps into more explicit
+1. Keep HD/LOW DIO, KHC adjusted EBITDA bridge, PFE/SGEN transaction multiple,
+   and WSC adjusted EBITDA add-back trend as the stable delivery showcase. These
+   four demonstrate the general slot/evidence/claim/transform/verifier workflow
+   in finance form.
+2. Do not broaden new architecture before addressing the dev10 failure taxonomy.
+   The next substrate work should target transform-planning / modeling-policy
+   gaps that appear across several tasks: DCF, LBO, fixed-charge coverage,
+   EV/EBITDA, MLR rebate, and purchase price allocation.
+3. Add domain-pack formula templates and slot schemas only when they map to a
+   reusable workflow primitive: valuation model, coverage ratio, regulatory
+   rebate calculation, or purchase-price-allocation reconciliation. Do not add
+   item-specific answer heuristics.
+4. Improve `SynthesisGate` repair so failed gates can either remove unsupported
+   material numbers or produce a concise limitation answer with the missing
+   transform slots, instead of relying on model synthesis to self-correct.
+5. Map reconciliation `period_series` / `source_table` gaps into more explicit
    ledger extraction diagnostics and missing-slot replan hints, especially when
    the source contains a table but the fact ledger extracts no add-back rows.
-5. Run the curated dev10 in small batches and classify verifier failures into
+6. Run the curated dev10 in small batches and classify verifier failures into
    unsupported answer number, ledger extraction gap, missing formula trace, unit
    mismatch, period mismatch, and assumption-label issues.
-6. Expand the finance fact ledger and formula planner for bridge, transaction
+7. Expand the finance fact ledger and formula planner for bridge, transaction
    multiple, fixed-charge coverage, DCF/LBO, MLR, and purchase price allocation
    cases. EV/EBITDA now has formula intent and missing-fact fallback; it still
    needs stronger acquisition for market cap, total debt, cash, and EBITDA
    components.
-7. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
+8. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
    structured retrieval results more directly, and avoiding synthesis context
    duplication.
-8. Add claim-level citation judging for non-numeric assertions.
-9. Add source-support scoring against benchmark evidence excerpts.
-10. Add PPT-ready rendering presets for task and benchmark graphs.
-11. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
+9. Add claim-level citation judging for non-numeric assertions.
+10. Add source-support scoring against benchmark evidence excerpts.
+11. Add PPT-ready rendering presets for task and benchmark graphs.
+12. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
    retrieval plus memory.
