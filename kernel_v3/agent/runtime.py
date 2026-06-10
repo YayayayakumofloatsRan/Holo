@@ -2438,6 +2438,13 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
 def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[str], goal: str) -> JsonObject:
     base_query = " ".join(str(goal or "").split())
     tickers = _finance_goal_tickers(base_query)
+    slot_frame = finance_slot_frame(
+        question=base_query,
+        facts=[],
+        formula_name=formula_name,
+        missing_slots=missing,
+    )
+    evidence_policy = slot_frame.evidence_policy
     if formula_name == "ev_revenue":
         query = (
             f"{base_query} SEC 8-K merger agreement acquisition transaction value "
@@ -2455,8 +2462,8 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
         )
     elif formula_name == "bridge_subtotal":
         query = (
-            f"{base_query} SEC 10-K adjusted EBITDA reconciliation non-GAAP bridge "
-            "add-backs deductions subtotal"
+            f"{base_query} annual report 10-K 10-Q adjusted EBITDA reconciliation "
+            "non-GAAP bridge add-backs deductions subtotal"
         )
     else:
         query = f"{base_query} SEC filing missing finance facts {' '.join(missing)}"
@@ -2483,8 +2490,14 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             "root_goal": base_query,
             "finance_formula_missing_facts": missing,
             "finance_formula_name": formula_name,
+            "slot_frame": slot_frame.to_dict(),
+            "missing_slots": list(slot_frame.missing_slots),
+            "evidence_policy": evidence_policy.to_dict() if evidence_policy is not None else {},
             "source_authority_requirement": _finance_missing_fact_authority_requirement(formula_name),
             "preferred_source_families": _finance_missing_fact_preferred_families(formula_name),
+            "required_source_families": evidence_policy.required_source_families if evidence_policy is not None else [],
+            "forbidden_source_families": evidence_policy.forbidden_source_families if evidence_policy is not None else [],
+            "required_evidence_terms": evidence_policy.required_terms if evidence_policy is not None else [],
             "research_profile": "finance_fundamentals",
             **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda"} else {}),
             **({"target_tickers": tickers} if tickers else {}),
@@ -2539,7 +2552,7 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
     if formula_name == "ev_ebitda":
         return f"{goal} 10-K EBITDA debt cash market cap enterprise value"
     if formula_name == "bridge_subtotal":
-        return f"{goal} 10-K adjusted EBITDA reconciliation add backs"
+        return f"{goal} annual report 10-K 10-Q non-GAAP adjusted EBITDA reconciliation add backs"
     return f"{goal} SEC Archives 8-K 10-K consideration revenue"
 
 
@@ -2547,7 +2560,7 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
     if formula_name == "ev_ebitda":
         return f"{goal} official filing adjusted EBITDA market capitalization total debt cash equivalents"
     if formula_name == "bridge_subtotal":
-        return f"{goal} earnings release non-GAAP adjusted EBITDA reconciliation"
+        return f"{goal} investor relations annual report adjusted EBITDA non-GAAP reconciliation table"
     return f"{goal} official filing transaction value revenue"
 
 

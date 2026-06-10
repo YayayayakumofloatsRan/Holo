@@ -124,6 +124,11 @@ keeping the deterministic finance domain pack intact. This is intended to keep
 Holo from becoming a finance-only benchmark script collection; future
 mathematics, code, legal, policy, and research domain packs should reuse the
 same slot/evidence/claim/transform/verification spine.
+The same substrate now feeds acquisition hints back into retrieval: missing
+finance formula facts are expressed as `SlotFrame` missing slots and an
+`EvidencePolicy`, and document expansion uses those generic requirements to
+prefer annual/quarterly filings for non-GAAP reconciliation/add-back tasks
+instead of drifting into market-stat pages or unrelated event filings.
 The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime

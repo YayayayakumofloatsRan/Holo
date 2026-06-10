@@ -1046,6 +1046,100 @@ def test_bridge_reconciliation_prefers_annual_filing_over_event_8k():
         assert fetch_uris.index(tenk_url) < fetch_uris.index(eightk_url)
 
 
+def test_bridge_reconciliation_metadata_prefers_annual_filing_even_with_target_year():
+    submissions = SearchSource(
+        source_id="wsc-submissions",
+        uri="https://data.sec.gov/submissions/CIK0001699136.json",
+        title="SEC submissions JSON for CIK 0001699136",
+        snippet="Official SEC submissions metadata and primary document chronology.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "structured_regulatory_data",
+            "authority_level": "primary",
+            "source_kind": "sec_submissions_json",
+            "sec_cik": "0001699136",
+        },
+    )
+    tenk_url = "https://www.sec.gov/Archives/edgar/data/1699136/000169913625000011/wsc-20241231.htm"
+    eightk_url = "https://www.sec.gov/Archives/edgar/data/1699136/000169913624000066/wsc-20240930.htm"
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider({"WillScot Mobile Mini 2024 adjusted EBITDA": [submissions]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                submissions.uri: json.dumps(
+                    {
+                        "cik": "1699136",
+                        "filings": {
+                            "recent": {
+                                "accessionNumber": [
+                                    "0001699136-24-000066",
+                                    "0001699136-25-000011",
+                                ],
+                                "form": ["8-K", "10-K"],
+                                "primaryDocument": ["wsc-20240930.htm", "wsc-20241231.htm"],
+                                "primaryDocDescription": ["8-K earnings release", "10-K annual report"],
+                                "items": ["2.02,9.01", ""],
+                                "reportDate": ["2024-09-30", "2024-12-31"],
+                                "filingDate": ["2024-10-30", "2025-02-20"],
+                            }
+                        },
+                    }
+                ),
+                tenk_url: (
+                    "WillScot Mobile Mini 2024 Form 10-K. Non-GAAP reconciliation table. "
+                    "Adjusted EBITDA add-back components include restructuring, transaction costs, "
+                    "and stock-based compensation."
+                ),
+                eightk_url: "WillScot Mobile Mini third quarter 2024 earnings release.",
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-wsc-bridge-policy",
+            query="WillScot Mobile Mini 2024 adjusted EBITDA",
+            max_sources=5,
+            max_fetches=4,
+            max_spans_per_document=4,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "root_goal": "Investigate WSC adjusted EBITDA add-back trend in 2024 filings.",
+                "required_evidence_terms": ["reconciliation", "non-GAAP", "add-back"],
+                "missing_slots": ["base_metric", "addback_components", "adjusted_metric"],
+                "evidence_policy": {
+                    "authority": "primary",
+                    "required_terms": ["reconciliation", "non-GAAP", "add-back"],
+                    "required_source_families": ["regulatory_filing"],
+                    "forbidden_source_families": ["market_data_provider"],
+                },
+                "slot_frame": {
+                    "task_type": "reconcile",
+                    "missing_slots": ["base_metric", "addback_components", "adjusted_metric"],
+                    "required_slots": [
+                        {"name": "base_metric", "accepted_attributes": ["net income"]},
+                        {"name": "addback_components", "accepted_attributes": ["addback"]},
+                        {"name": "adjusted_metric", "accepted_attributes": ["adjusted ebitda"]},
+                    ],
+                },
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-wsc-bridge-policy",
+        run_id="run-1",
+    )
+
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-wsc-bridge-policy", kind="retrieval_fetch_attempt")
+    ]
+    assert tenk_url in fetch_uris
+    if eightk_url in fetch_uris:
+        assert fetch_uris.index(tenk_url) < fetch_uris.index(eightk_url)
+
+
 def test_transaction_retrieval_fetches_issuer_event_page_under_tight_budget():
     submissions = SearchSource(
         source_id="pfe-submissions",

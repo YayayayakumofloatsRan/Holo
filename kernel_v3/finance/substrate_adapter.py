@@ -79,26 +79,35 @@ def finance_slot_frame(
     question: str,
     facts: list[FinanceFact],
     plan: FinanceFormulaPlan | None = None,
+    formula_name: str | None = None,
+    missing_slots: list[str] | None = None,
 ) -> SlotFrame:
-    formula_name = str(plan.formula_name or "") if plan is not None and plan.formula_name else _infer_formula_name(question)
-    task_type = _task_type_for_formula(formula_name, question)
-    required = _slot_specs_for_formula(formula_name)
+    resolved_formula = str(formula_name or "")
+    if not resolved_formula and plan is not None and plan.formula_name:
+        resolved_formula = str(plan.formula_name or "")
+    if not resolved_formula:
+        resolved_formula = _infer_formula_name(question)
+    task_type = _task_type_for_formula(resolved_formula, question)
+    required = _slot_specs_for_formula(resolved_formula)
     claims = finance_facts_to_claims(facts)
     fills = _slot_fills(required, claims)
-    missing = list(plan.missing_facts) if plan is not None and plan.missing_facts else [
-        spec.name for spec in required if spec.name not in {fill.slot_name for fill in fills}
-    ]
+    if missing_slots is not None:
+        missing = list(missing_slots)
+    elif plan is not None and plan.missing_facts:
+        missing = list(plan.missing_facts)
+    else:
+        missing = [spec.name for spec in required if spec.name not in {fill.slot_name for fill in fills}]
     return SlotFrame(
-        frame_id="slot-frame-" + _short_hash(question, formula_name, ",".join(sorted(missing))),
+        frame_id="slot-frame-" + _short_hash(question, resolved_formula, ",".join(sorted(missing))),
         task_type=task_type,
         domain="finance",
         required_slots=required,
-        optional_slots=_optional_slot_specs_for_formula(formula_name),
+        optional_slots=_optional_slot_specs_for_formula(resolved_formula),
         filled_slots=fills,
         missing_slots=_ordered_unique([str(item) for item in missing if str(item)]),
-        evidence_policy=finance_evidence_policy_for_question(question, formula_name=formula_name),
+        evidence_policy=finance_evidence_policy_for_question(question, formula_name=resolved_formula),
         diagnostics={
-            "formula_name": formula_name or None,
+            "formula_name": resolved_formula or None,
             "claim_count": len(claims),
             "finance_fact_count": len(facts),
             "source": "finance_substrate_adapter",

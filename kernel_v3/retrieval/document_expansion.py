@@ -530,7 +530,7 @@ def _select_sec_submission_candidates(
     target_years: list[str],
 ) -> list[JsonObject]:
     candidates.sort(key=lambda item: (-float(item.get("score") or 0.0), str(item.get("url") or "")))
-    if wants_bridge_reconciliation and not target_years:
+    if wants_bridge_reconciliation:
         return _select_bridge_reconciliation_candidates(candidates)
     if not wants_transaction_event or target_years:
         return candidates
@@ -793,12 +793,49 @@ def _metadata_goal_terms(metadata: JsonObject) -> list[str]:
         value = metadata.get(key) if isinstance(metadata, dict) else None
         if isinstance(value, str) and value.strip():
             parts.extend(value.replace("-", " ").split())
+    for key in ("required_evidence_terms", "missing_slots"):
+        value = metadata.get(key) if isinstance(metadata, dict) else None
+        if isinstance(value, list):
+            parts.extend(_metadata_string_terms(value))
+    policy = metadata.get("evidence_policy") if isinstance(metadata, dict) else None
+    if isinstance(policy, dict):
+        parts.extend(_metadata_string_terms(policy.get("required_terms")))
+    slot_frame = metadata.get("slot_frame") if isinstance(metadata, dict) else None
+    if isinstance(slot_frame, dict):
+        parts.extend(_metadata_string_terms(slot_frame.get("missing_slots")))
+        for key in ("required_slots", "optional_slots"):
+            slots = slot_frame.get(key)
+            if not isinstance(slots, list):
+                continue
+            for slot in slots:
+                if isinstance(slot, dict):
+                    accepted = slot.get("accepted_attributes")
+                    accepted_terms = accepted if isinstance(accepted, list) else []
+                    parts.extend(_metadata_string_terms([slot.get("name"), *accepted_terms]))
     mission = metadata.get("research_mission") if isinstance(metadata, dict) else None
     if isinstance(mission, dict):
         value = mission.get("root_goal")
         if isinstance(value, str) and value.strip():
             parts.extend(value.replace("-", " ").split())
     return parts
+
+
+def _metadata_string_terms(value: object) -> list[str]:
+    if isinstance(value, str):
+        values: list[object] = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        return []
+    result: list[str] = []
+    for item in values:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text:
+            continue
+        result.extend(text.replace("-", " ").replace("_", " ").split())
+    return result
 
 
 def _sec_cik_from_payload(payload: JsonObject, *, document: FetchedDocument, source: SearchSource) -> str:

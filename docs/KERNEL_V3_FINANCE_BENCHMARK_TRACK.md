@@ -407,6 +407,14 @@ Post-dev10 EV/EBITDA iteration:
   are no longer accepted as add-back/reconciliation evidence, and the natural
   fact ledger no longer projects those dividend/per-share snippets as EBITDA
   facts. The local regression set now covers these failures.
+- The newest substrate/acquisition pass makes missing formula facts produce a
+  generic `SlotFrame` plus `EvidencePolicy` in retrieval metadata. Retrieval
+  document expansion now reads `required_evidence_terms`, `missing_slots`,
+  `slot_frame`, and `evidence_policy` metadata as intent terms. For
+  bridge/reconciliation tasks it now consistently prefers 10-K, 10-Q, 20-F, and
+  40-F candidates before recent 8-K/6-K event filings even when the query names
+  a target year. This is a task-family rule expressed through generic substrate
+  metadata, not a WSC answer table.
 - The latest live WSC rerun did not close. It produced an answer-present
   failure report rather than a hallucinated report: `retrieval_runs=1`,
   `fetches=8`, `download_mb=9.1`, `processor_call_count=4`,
@@ -415,12 +423,11 @@ Post-dev10 EV/EBITDA iteration:
   was `model_planner_processor_failed` after repeated planner JSON decode
   failures and all accepted evidence being rejected. This is a prompt/context
   and filing-acquisition problem, not a missing network-permission problem.
-- The next concrete fix should prioritize annual/quarterly filing and issuer
-  annual-report acquisition for `add-back` / `non-GAAP reconciliation` /
-  `bridge` queries. Recent 8-K event documents and generic market-stat pages
-  should not be allowed to satisfy add-back trend tasks unless they contain
-  actual reconciliation/add-back components. This is a general task-family rule,
-  not a WSC-specific answer table.
+- The next concrete live validation should rerun WSC/KHC bridge cases to see
+  whether the new substrate-driven acquisition finds actual reconciliation
+  tables under the same `finance-fact-fast` lane. If it still fails, classify
+  the failure as source acquisition, fetch/parser, fact-ledger extraction, or
+  model-planner JSON repair before adding any new heuristic.
 - Fast-lane cost is still high. Successful single-item runs often consume
   60k-90k tokens, and hard cases can fail after model JSON repair issues. The
   next executor work should shrink planner/evaluator context for finance facts,
@@ -429,14 +436,12 @@ Post-dev10 EV/EBITDA iteration:
 
 ## Next Steps
 
-1. Fix add-back / non-GAAP reconciliation acquisition: prefer 10-K, 10-Q,
-   20-F/40-F, complete submission text, and issuer annual-report pages before
-   event 8-Ks or market-stat pages; require actual add-back/reconciliation terms
-   in accepted evidence.
-2. Use the new `SlotFrame` / `EvidencePolicy` layer to express add-back trend
-   requirements as slots (`base_metric`, `adjustment_items`, `adjusted_metric`,
-   `period_series`, `source_table`) and policy constraints, then make retrieval
-   acquisition target missing slots rather than repeating broad queries.
+1. Rerun WSC/KHC bridge cases live with `finance-fact-fast` and inspect whether
+   annual/quarterly filing candidates are fetched before event 8-Ks and market
+   pages. Keep the gold/dev annotations out of prompts.
+2. Extend `SlotFrame` requirements for reconciliation tasks with
+   `period_series` and `source_table`, then map those slots into ledger
+   extraction diagnostics and missing-slot replan hints.
 3. Run the curated dev10 in small batches and classify verifier failures into
    unsupported answer number, ledger extraction gap, missing formula trace, unit
    mismatch, period mismatch, and assumption-label issues.

@@ -424,6 +424,25 @@ def test_finance_missing_fact_payload_for_ev_ebitda_is_ticker_aware_and_market_e
     assert payload["metadata"]["target_tickers"] == ["LULU", "VSCO"]
 
 
+def test_finance_missing_fact_payload_for_bridge_uses_slot_frame_and_evidence_policy() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="bridge_subtotal",
+        missing=["base_metric", "addback_components", "adjusted_metric"],
+        goal="For WSC, investigate the adjusted EBITDA add-back trend across public filings.",
+    )
+
+    metadata = payload["metadata"]
+    assert "annual report" in payload["query"].lower()
+    assert "10-k" in payload["query"].lower()
+    assert "reconciliation" in payload["query"].lower()
+    assert metadata["slot_frame"]["task_type"] == "reconcile"
+    assert metadata["missing_slots"] == ["base_metric", "addback_components", "adjusted_metric"]
+    assert "regulatory_filing" in metadata["required_source_families"]
+    assert "market_data_provider" in metadata["forbidden_source_families"]
+    assert "reconciliation" in metadata["required_evidence_terms"]
+    assert metadata["evidence_policy"]["authority"] == "primary"
+
+
 def test_finance_valuation_retrieval_defaults_allow_market_data_sources() -> None:
     recipe = task_recipe(
         "retrieval_answer",
