@@ -129,6 +129,9 @@ finance formula facts are expressed as `SlotFrame` missing slots and an
 `EvidencePolicy`, and document expansion uses those generic requirements to
 prefer annual/quarterly filings for non-GAAP reconciliation/add-back tasks
 instead of drifting into market-stat pages or unrelated event filings.
+Reconciliation slot frames now also expose `period_series` and `source_table`,
+so bridge/add-back work can distinguish "found a number" from "found the
+multi-period reconciliation table needed for analyst-grade review."
 The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime

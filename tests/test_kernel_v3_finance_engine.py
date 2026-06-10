@@ -241,6 +241,39 @@ def test_finance_substrate_adapter_projects_slots_claims_transforms_and_verifier
     assert gate.policy_id == frame.evidence_policy.policy_id
 
 
+def test_finance_slot_frame_fills_reconciliation_period_series_and_source_table() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="khc-substrate-bridge-periods",
+            title="Kraft Heinz 2023 Form 10-K complete submission text",
+            uri="https://www.sec.gov/Archives/edgar/data/1637459/000163745924000018/khc-20231230.htm",
+            text=(
+                "Reconciliation of Net Income/(Loss) to Adjusted EBITDA (in millions) "
+                "December 30, 2023 December 31, 2022 "
+                "Net income/(loss) $ 2,846 $ 2,368 "
+                "Interest expense 912 921 "
+                "Provision for income taxes 787 598 "
+                "Depreciation and amortization 923 922 "
+                "Adjusted EBITDA $ 6,697 $ 6,327"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-khc-periods")]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    plan = plan_finance_formula(question="Explain the adjusted EBITDA reconciliation bridge.", facts=facts)
+    frame = finance_slot_frame(question="Explain the adjusted EBITDA reconciliation bridge.", facts=facts, plan=plan)
+    fills = {fill.slot_name: fill for fill in frame.filled_slots}
+
+    assert plan.status == "ready"
+    assert "period_series" in fills
+    assert fills["period_series"].metadata["period_count"] >= 2
+    assert "source_table" in fills
+    assert "Form 10-K" in str(fills["source_table"].value)
+    assert "period_series" not in frame.missing_slots
+    assert "source_table" not in frame.missing_slots
+
+
 def test_finance_fact_ledger_does_not_extract_dividend_per_share_as_ebitda() -> None:
     evidence = [
         _finance_evidence(

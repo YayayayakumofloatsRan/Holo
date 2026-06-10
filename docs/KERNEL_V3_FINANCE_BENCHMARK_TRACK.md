@@ -415,6 +415,12 @@ Post-dev10 EV/EBITDA iteration:
   40-F candidates before recent 8-K/6-K event filings even when the query names
   a target year. This is a task-family rule expressed through generic substrate
   metadata, not a WSC answer table.
+- Reconciliation `SlotFrame` requirements now include `period_series` and
+  `source_table` in addition to base, add-back, adjusted-metric, and optional
+  deduction slots. The finance adapter can fill these slots from multi-period
+  reconciliation evidence, and the formula planner now reports missing bridge
+  inputs with the same slot names used by `SlotFrame` instead of separate
+  internal labels.
 - The latest live WSC rerun did not close. It produced an answer-present
   failure report rather than a hallucinated report: `retrieval_runs=1`,
   `fetches=8`, `download_mb=9.1`, `processor_call_count=4`,
@@ -439,9 +445,9 @@ Post-dev10 EV/EBITDA iteration:
 1. Rerun WSC/KHC bridge cases live with `finance-fact-fast` and inspect whether
    annual/quarterly filing candidates are fetched before event 8-Ks and market
    pages. Keep the gold/dev annotations out of prompts.
-2. Extend `SlotFrame` requirements for reconciliation tasks with
-   `period_series` and `source_table`, then map those slots into ledger
-   extraction diagnostics and missing-slot replan hints.
+2. Map reconciliation `period_series` / `source_table` gaps into more explicit
+   ledger extraction diagnostics and missing-slot replan hints, especially when
+   the source contains a table but the fact ledger extracts no add-back rows.
 3. Run the curated dev10 in small batches and classify verifier failures into
    unsupported answer number, ledger extraction gap, missing formula trace, unit
    mismatch, period mismatch, and assumption-label issues.

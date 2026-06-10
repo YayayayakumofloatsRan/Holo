@@ -461,11 +461,18 @@ def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
             ),
         )
     )
-    if base is None or not addbacks:
-        missing = ["base_value"] if base is None else []
+    adjusted = _latest_fact(facts, ("adjusted ebitda",))
+    if base is None or not addbacks or adjusted is None:
+        missing = ["base_metric"] if base is None else []
         if not addbacks:
-            missing.append("addbacks")
-        return _missing("bridge_subtotal", missing, facts=[base] if base is not None else [])
+            missing.append("addback_components")
+        if adjusted is None:
+            missing.append("adjusted_metric")
+        return _missing(
+            "bridge_subtotal",
+            missing,
+            facts=[item for item in (base, adjusted) if item is not None],
+        )
     variables: JsonObject = {"base": base.value}
     expression_parts = ["base"]
     input_facts = [base]

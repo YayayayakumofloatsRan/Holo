@@ -162,7 +162,13 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
         "dio": ["inventory_begin", "inventory_end", "cogs", "fiscal_days"],
         "ev_revenue": ["equity_value_or_market_cap", "debt", "cash", "revenue"],
         "ev_ebitda": ["enterprise_value_or_market_cap", "debt", "cash", "ebitda_or_ebitda_components"],
-        "bridge_subtotal": ["base_metric", "addback_components", "deduction_components", "adjusted_metric"],
+        "bridge_subtotal": [
+            "base_metric",
+            "addback_components",
+            "adjusted_metric",
+            "period_series",
+            "source_table",
+        ],
         "margin": ["margin_numerator", "revenue_denominator"],
         "bps_difference": ["prior_rate_or_margin", "current_rate_or_margin"],
         "yoy_growth": ["prior_period_value", "current_period_value"],
@@ -182,6 +188,15 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
 def _optional_slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
     if formula_name in {"ev_revenue", "ev_ebitda"}:
         return [SlotSpec(name="short_term_investments", requirement="optional", accepted_attributes=["short-term investments", "short term investments"])]
+    if formula_name == "bridge_subtotal":
+        return [
+            SlotSpec(
+                name="deduction_components",
+                requirement="optional",
+                accepted_attributes=_accepted_attributes_for_slot("deduction_components"),
+                source_requirements=["finance_fact_ledger"],
+            )
+        ]
     return []
 
 
@@ -189,6 +204,12 @@ def _slot_fills(specs: list[SlotSpec], claims: list[Claim]) -> list[SlotFill]:
     fills: list[SlotFill] = []
     used_claim_ids: set[str] = set()
     for spec in specs:
+        special_fill = _special_slot_fill(spec, claims, used_claim_ids=used_claim_ids)
+        if special_fill is not None:
+            fills.append(special_fill)
+            if special_fill.claim_id is not None:
+                used_claim_ids.add(special_fill.claim_id)
+            continue
         accepted = {item.lower() for item in spec.accepted_attributes}
         for claim in claims:
             if claim.claim_id in used_claim_ids:
@@ -210,6 +231,64 @@ def _slot_fills(specs: list[SlotSpec], claims: list[Claim]) -> list[SlotFill]:
     return fills
 
 
+def _special_slot_fill(spec: SlotSpec, claims: list[Claim], *, used_claim_ids: set[str]) -> SlotFill | None:
+    if spec.name == "period_series":
+        period_claims = [claim for claim in claims if _claim_period_key(claim)]
+        distinct_periods = _ordered_unique([_claim_period_key(claim) for claim in period_claims])
+        if len(distinct_periods) < 2:
+            return None
+        claim = next((item for item in period_claims if item.claim_id not in used_claim_ids), period_claims[0])
+        return SlotFill(
+            slot_name=spec.name,
+            claim_id=claim.claim_id,
+            value=", ".join(distinct_periods[:8]),
+            source_ref=claim.source_ref,
+            confidence=claim.confidence,
+            metadata={"period_count": len(distinct_periods), "periods": distinct_periods[:16]},
+        )
+    if spec.name == "source_table":
+        table_claims = [
+            claim
+            for claim in claims
+            if any(marker in _claim_text(claim) for marker in ("reconciliation", "non-gaap", "non gaap", "adjusted ebitda", "addback", "add-back"))
+        ]
+        if not table_claims:
+            return None
+        claim = next((item for item in table_claims if item.claim_id not in used_claim_ids), table_claims[0])
+        return SlotFill(
+            slot_name=spec.name,
+            claim_id=claim.claim_id,
+            value=claim.metadata.get("source_title") or claim.source_ref,
+            source_ref=claim.source_ref,
+            confidence=claim.confidence,
+            metadata={"source_title": claim.metadata.get("source_title"), "source_uri": claim.metadata.get("source_uri")},
+        )
+    return None
+
+
+def _claim_period_key(claim: Claim) -> str:
+    fiscal_year = claim.metadata.get("fiscal_year") if isinstance(claim.metadata, dict) else None
+    if fiscal_year is not None:
+        return str(fiscal_year)
+    return str(claim.time_period or "").strip()
+
+
+def _claim_text(claim: Claim) -> str:
+    metadata = claim.metadata if isinstance(claim.metadata, dict) else {}
+    return " ".join(
+        str(value or "")
+        for value in (
+            claim.attribute,
+            claim.value,
+            claim.unit,
+            claim.time_period,
+            metadata.get("source_title"),
+            metadata.get("source_uri"),
+            metadata.get("supported_metric"),
+        )
+    ).lower()
+
+
 def _accepted_attributes_for_slot(name: str) -> list[str]:
     mapping = {
         "beginning_value": ["revenue", "net sales", "net income", "ebitda"],
@@ -229,6 +308,8 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "addback_components": ["addback", "interest expense", "tax", "depreciation and amortization", "other expense"],
         "deduction_components": ["deduction", "other income", "general corporate expenses"],
         "adjusted_metric": ["adjusted ebitda"],
+        "period_series": ["period", "fiscal year"],
+        "source_table": ["reconciliation", "non-gaap reconciliation", "source table"],
         "margin_numerator": ["net income", "operating income", "adjusted ebitda", "ebitda"],
         "revenue_denominator": ["revenue", "net sales", "net revenues", "total revenues"],
         "prior_rate_or_margin": ["margin", "rate", "yield"],
