@@ -441,6 +441,7 @@ class RetrievalOperator:
                         max_count=remaining_fetch_budget,
                         groups=[
                             _priority_sec_filing_discovery_sources(expanded_ranked_all),
+                            _priority_sec_filing_document_sources(expanded_fetchable_ranked),
                             expanded_fetchable_ranked,
                         ],
                     )
@@ -1643,6 +1644,41 @@ def _priority_sec_filing_discovery_sources(sources: list[RankedSource]) -> list[
     ]
     result.sort(key=lambda source: (0 if _ranked_source_kind(source) == "sec_submissions_json" else 1, source.rank))
     return result
+
+
+def _priority_sec_filing_document_sources(sources: list[RankedSource]) -> list[RankedSource]:
+    result = [
+        source
+        for source in sources
+        if _ranked_source_kind(source) in {"sec_primary_filing_document", "sec_complete_submission_text"}
+    ]
+    result.sort(
+        key=lambda source: (
+            _sec_filing_document_form_rank(source),
+            _safe_rank_int(source.metadata.get("filing_index"), default=10_000),
+            0 if _ranked_source_kind(source) == "sec_complete_submission_text" else 1,
+            source.rank,
+        )
+    )
+    return result
+
+
+def _sec_filing_document_form_rank(source: RankedSource) -> int:
+    form = str(source.metadata.get("sec_form") or "").upper().replace(" ", "")
+    if form in {"10-K", "20-F", "40-F"}:
+        return 0
+    if form == "10-Q":
+        return 1
+    if form in {"8-K", "6-K"}:
+        return 3
+    return 2
+
+
+def _safe_rank_int(value: object, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _priority_issuer_event_sources(goal: SearchGoal, sources: list[RankedSource]) -> list[RankedSource]:

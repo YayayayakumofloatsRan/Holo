@@ -398,8 +398,9 @@ Post-dev10 EV/EBITDA iteration:
   isolated benchmark-only metrics.
 - The current real-task capability is measurable but not yet reliable enough to
   claim Finance Agent v2 competence. Representative live successes now include
-  `fabv2-hd-low-dio`, `fabv2-khc-adjusted-ebitda-bridge`, and
-  `fabv2-pfe-sgen-transaction-multiple`: each has closed at least once with
+  `fabv2-hd-low-dio`, `fabv2-khc-adjusted-ebitda-bridge`,
+  `fabv2-pfe-sgen-transaction-multiple`, and
+  `fabv2-wsc-adjusted-ebitda-addback-trend`: each has closed at least once with
   retrieval evidence, structured finance facts, calculator/formula traces, and
   numeric verification.
 - The latest WSC add-back trend work deliberately tightened evidence gates so
@@ -421,19 +422,28 @@ Post-dev10 EV/EBITDA iteration:
   reconciliation evidence, and the formula planner now reports missing bridge
   inputs with the same slot names used by `SlotFrame` instead of separate
   internal labels.
-- The latest live WSC rerun did not close. It produced an answer-present
-  failure report rather than a hallucinated report: `retrieval_runs=1`,
-  `fetches=8`, `download_mb=9.1`, `processor_call_count=4`,
-  `processor_error_count=3`, `finance_fact_count=0`,
-  `calculator_call_count=0`, `numeric_verifier_status=null`. The stopped reason
-  was `model_planner_processor_failed` after repeated planner JSON decode
-  failures and all accepted evidence being rejected. This is a prompt/context
-  and filing-acquisition problem, not a missing network-permission problem.
-- The next concrete live validation should rerun WSC/KHC bridge cases to see
-  whether the new substrate-driven acquisition finds actual reconciliation
-  tables under the same `finance-fact-fast` lane. If it still fails, classify
-  the failure as source acquisition, fetch/parser, fact-ledger extraction, or
-  model-planner JSON repair before adding any new heuristic.
+- The latest WSC live rerun now closes the substrate path. The run
+  `run_wsc_after_fallback_noise_fix` used `finance-fact-fast`, mission off,
+  live retrieval, model planner, fake evaluator, and model synthesizer. It
+  produced `retrieval_runs=1`, `fetches=8`, `download_mb=0.3` with cache hits,
+  `finance_fact_count=108`, `calculator_call_count=1`, `formula_trace_count=1`,
+  `numeric_verifier_status=passed`, `answer_numeric_support_rate=100%`,
+  `citation_present_rate=100%`, and post-run dev annotation `overall_score=1.0`.
+  This succeeded only after two fixes: SEC primary filing extraction now reads
+  enough of large filing HTML to reach late non-GAAP tables, and finance
+  fallback finalization produces a conservative cited answer when model
+  synthesis returns invalid JSON.
+- The WSC work also exposed a remaining design constraint: the first improved
+  live run found `facts=186`, `calculator=1`, and `formula=1`, but failed
+  because model synthesis returned invalid JSON and the fallback answer
+  included noisy truncated evidence numbers. The fix keeps verifier standards
+  intact by removing raw long evidence snippets from fallback answers, leaving
+  numeric claims to calculator traces and ledger-backed facts.
+- The next concrete live validation should rerun KHC/WSC/PFE-SGEN together and
+  then expand to the harder dev10 items. If a case fails, classify the failure
+  as source acquisition, fetch/parser, fact-ledger extraction, formula binding,
+  verifier policy, or model-synthesis/JSON repair before adding any new
+  task-specific heuristic.
 - Fast-lane cost is still high. Successful single-item runs often consume
   60k-90k tokens, and hard cases can fail after model JSON repair issues. The
   next executor work should shrink planner/evaluator context for finance facts,
@@ -442,9 +452,9 @@ Post-dev10 EV/EBITDA iteration:
 
 ## Next Steps
 
-1. Rerun WSC/KHC bridge cases live with `finance-fact-fast` and inspect whether
-   annual/quarterly filing candidates are fetched before event 8-Ks and market
-   pages. Keep the gold/dev annotations out of prompts.
+1. Rerun KHC/WSC/PFE-SGEN as a small live batch and confirm that each item
+   records evidence, facts, formula traces, citations, and numeric verification.
+   Keep the gold/dev annotations out of prompts.
 2. Map reconciliation `period_series` / `source_table` gaps into more explicit
    ledger extraction diagnostics and missing-slot replan hints, especially when
    the source contains a table but the fact ledger extracts no add-back rows.

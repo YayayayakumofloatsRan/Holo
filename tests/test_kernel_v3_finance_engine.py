@@ -274,6 +274,36 @@ def test_finance_slot_frame_fills_reconciliation_period_series_and_source_table(
     assert "source_table" not in frame.missing_slots
 
 
+def test_finance_bridge_planner_accepts_income_from_continuing_operations_base() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="wsc-continuing-ops-bridge",
+            title="WillScot Mobile Mini 2023 Form 10-K complete submission text",
+            uri="https://www.sec.gov/Archives/edgar/data/1647088/example/wsc-20231231.htm",
+            text=(
+                "The following table provides unaudited reconciliations of Income from continuing "
+                "operations to Adjusted EBITDA: Year Ended December 31, (in thousands) 2023 2022 2021 "
+                "Income from continuing operations $ 341,844 $ 276,341 $ 114,895 "
+                "Interest expense 205,040 146,278 116,358 "
+                "Depreciation and amortization 338,654 319,099 280,567 "
+                "Adjusted EBITDA $ 885,538 $ 741,718 $ 511,820"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-wsc-continuing-ops")]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    metrics = {fact.metric for fact in facts}
+    plan = plan_finance_formula(question="Investigate the adjusted EBITDA add-back trend.", facts=facts)
+    frame = finance_slot_frame(question="Investigate the adjusted EBITDA add-back trend.", facts=facts, plan=plan)
+
+    assert "income from continuing operations" in metrics
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["variables"]["base"] == "341844000"
+    assert "base_metric" not in frame.missing_slots
+
+
 def test_finance_fact_ledger_does_not_extract_dividend_per_share_as_ebitda() -> None:
     evidence = [
         _finance_evidence(

@@ -111,11 +111,11 @@ finance benchmark work and handoff status are tracked in
 v1 finance substrate with structured finance facts, deterministic calculator
 traces, numeric verification, FAB v2 public/dev10 import and scoring, and
 fast-lane budget controls. It has closed representative live tasks such as
-HD/LOW DIO, KHC adjusted EBITDA bridge, and PFE/Seagen transaction multiple,
-but it should not yet be described as a stable Finance Agent v2 solver. The
-main open gap is robust acquisition and extraction for harder filing tasks such
-as add-back/non-GAAP reconciliation trends, DCF/LBO, fixed-charge coverage, and
-purchase-price-allocation analysis.
+HD/LOW DIO, KHC adjusted EBITDA bridge, PFE/Seagen transaction multiple, and
+WSC adjusted EBITDA add-back trend, but it should not yet be described as a
+stable Finance Agent v2 solver. The main open gap is robust generalization to
+harder filing/modeling tasks such as DCF/LBO, fixed-charge coverage, MLR,
+valuation multiples, and purchase-price-allocation analysis.
 The newest substrate work starts lifting finance lessons into domain-general
 kernel primitives: `ClaimLedger`, `SlotFrame`, `EvidencePolicy`,
 `TransformPlan`, and `VerifierGateResult`. Finance now projects its fact ledger,
@@ -1146,7 +1146,7 @@ score, calculator usage, formula trace count, finance fact count, numeric
 verifier status, answer numeric support rate, and finance numeric failure
 taxonomy.
 
-Latest live smoke status: two curated FAB v2-style items now close through the
+Latest live smoke status: several curated FAB v2-style items now close through the
 finance substrate. `fabv2-hd-low-dio` retrieves SEC companyfacts for HD and LOW,
 projects 36 finance facts, runs 4 calculator traces, passes numeric
 verification, and reaches 100% post-run dev annotation score. After SEC
@@ -1154,20 +1154,24 @@ complete-submission expansion, per-share binding fixes, and SEC identifier
 noise filtering, `fabv2-pfe-sgen-transaction-multiple` retrieves the Pfizer /
 Seagen 8-K and Exhibit 99.1 evidence, projects 17 finance facts, runs one
 EV/Revenue calculator trace, passes numeric verification with 100% numeric
-support, and reaches 100% post-run dev annotation score. These are real live
+support, and reaches 100% post-run dev annotation score. The WSC adjusted
+EBITDA add-back trend smoke now retrieves SEC 10-K evidence, extracts 108
+finance facts, runs one bridge-subtotal calculator trace, passes
+`finance.verify_numeric` with 100% answer numeric support, keeps citation
+coverage, and reaches 100% post-run dev annotation score. These are real live
 runs, not fixed-answer tests.
 
-The full curated dev10 is still not solved. A live run with
+The full curated dev10 is still not solved. An earlier live run with
 `finance-fact-fast`, mission disabled, live retrieval, model planner, fake
 evaluator, model synthesizer, and parallel 2 produced: overall dev annotation
 score 0.8111, behavior score 0.8667, substrate score 0.5667,
 calculator-used rate 0.20, formula-trace present rate 0.20,
 numeric-verifier pass rate 0.50, and average answer numeric support 70.56%.
-The main failure mode is `required_trace_missing` on bridge/modeling/coverage
-tasks: KHC adjusted EBITDA bridge, WSC adjusted EBITDA trend, CRM DCF, EPAM
-LBO, TGT/WMT fixed-charge coverage, LULU/VSCO EV/EBITDA, CNC MLR, and
-purchase-price-allocation cases often gather some evidence but do not yet
-compile a host-side formula or run numeric verification. The next work is to
+The main failure mode is still `required_trace_missing` on harder
+modeling/coverage tasks: CRM DCF, EPAM LBO, TGT/WMT fixed-charge coverage,
+LULU/VSCO EV/EBITDA, CNC MLR, and purchase-price-allocation cases often gather
+some evidence but do not yet compile a host-side formula or run numeric
+verification. The next work is to
 expand `FinanceFormulaPlanner`, ledger extraction, and optional LLM-assisted
 fact/noise review for those task families while keeping the deterministic
 numeric gate intact.

@@ -835,6 +835,37 @@ class AgentRuntime:
             recipe=recipe,
         )
         if synthesized.status != "ok" or synthesized.answer is None:
+            fallback_final = None
+            if _finance_numeric_verifier_required(recipe) and evidence and citations:
+                fallback_final = _finance_retrieval_fallback_final(
+                    journal=self.journal,
+                    task_id=task_id,
+                    run_id=run_id,
+                    recipe=recipe,
+                    evidence=evidence,
+                    citations=citations,
+                    synthesis_error=synthesized.error or "synthesis_failed",
+                )
+            if fallback_final is not None:
+                verification = self._append_finance_numeric_verification(
+                    fallback_final,
+                    recipe=recipe,
+                    evidence=evidence,
+                    citations=citations,
+                )
+                if verification.status == "failed":
+                    missing = _finance_numeric_missing_evidence(verification)
+                    return None, self._failure(
+                        task_id,
+                        run_id,
+                        "finance_numeric_verification_failed",
+                        missing_evidence=missing or ["supported_finance_numeric_values"],
+                        next_action="collect_supported_finance_facts_or_run_calculator",
+                        recipe=recipe,
+                    )
+                final = self._append_final(fallback_final)
+                self._maybe_propose_research_memory(final, recipe=recipe)
+                return final, None
             return None, self._failure(
                 task_id,
                 run_id,
@@ -7633,6 +7664,57 @@ def _grounded_answer(*, report: RetrievalReport, evidence: list[EvidenceItem], c
     if citations:
         return f"{preview} [{citations[0].citation_id}]"
     return preview or report.preview
+
+
+def _finance_retrieval_fallback_final(
+    *,
+    journal: JournalStore,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    synthesis_error: str,
+) -> FinalAnswer | None:
+    citation_ids = [item.citation_id for item in citations if item.citation_id]
+    if not citation_ids:
+        return None
+    traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    lines = [
+        "模型最终合成输出格式失败，因此以下为 Holo host 基于已验证证据和计算轨迹生成的保守回答。",
+    ]
+    goal = _root_goal_from_recipe(recipe)
+    if goal:
+        lines.append(f"任务目标：{goal}")
+    if traces:
+        lines.append("已完成的确定性计算：")
+        for trace in traces[:3]:
+            formatted = str(trace.diagnostics.get("formatted_value") or "").strip()
+            value = formatted or f"{trace.result_value} {trace.unit or ''}".strip()
+            lines.append(f"- {trace.formula_name}: {value}，公式 `{trace.expression}`。")
+    if evidence:
+        lines.append("可审计证据摘要：")
+        for item, citation in zip(evidence[:4], citations[:4]):
+            source_label = _shorten_for_fallback_answer(item.title or item.uri or "retrieval evidence", limit=120)
+            lines.append(f"- {source_label} [{citation.citation_id}]")
+    lines.append(f"局限：原 synthesizer 失败原因为 `{synthesis_error}`；上面的结论只覆盖当前证据和 calculator trace 支持的部分。")
+    return FinalAnswer(
+        answer="\n".join(lines),
+        citation_refs=citation_ids,
+        used_evidence=[item.evidence_id for item in evidence],
+        limitations=[f"synthesizer_fallback:{synthesis_error}", "conservative_finance_answer"],
+        confidence=0.55 if traces else 0.35,
+        task_id=task_id,
+        run_id=run_id,
+        trace_refs=_trace_refs(journal, task_id),
+    )
+
+
+def _shorten_for_fallback_answer(text: str, *, limit: int) -> str:
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: max(0, limit - 3)].rstrip()}..."
 
 
 def _report_with_task_goal(

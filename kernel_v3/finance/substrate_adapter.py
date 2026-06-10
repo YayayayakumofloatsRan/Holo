@@ -304,7 +304,7 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "cash": ["cash and equivalents", "cash and cash equivalents"],
         "revenue": ["revenue", "net sales", "net revenues", "total revenues"],
         "ebitda_or_ebitda_components": ["adjusted ebitda", "ebitda", "net income", "interest expense", "tax", "depreciation and amortization"],
-        "base_metric": ["net income", "operating income"],
+        "base_metric": ["net income", "operating income", "income from continuing operations"],
         "addback_components": ["addback", "interest expense", "tax", "depreciation and amortization", "other expense"],
         "deduction_components": ["deduction", "other income", "general corporate expenses"],
         "adjusted_metric": ["adjusted ebitda"],

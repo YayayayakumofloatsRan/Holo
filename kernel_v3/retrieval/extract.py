@@ -22,7 +22,8 @@ from kernel_v3.retrieval.finance_metrics import (
 )
 
 READABLE_TEXT_LIMIT = 200_000
-SEC_COMPLETE_SUBMISSION_TEXT_LIMIT = 1_200_000
+SEC_FILING_TEXT_LIMIT = 4_000_000
+SEC_COMPLETE_SUBMISSION_TEXT_LIMIT = SEC_FILING_TEXT_LIMIT
 SPAN_BEFORE_CHARS = 120
 SPAN_AFTER_CHARS = 520
 HTML_MIME_MARKERS = ("html", "xhtml")
@@ -321,8 +322,8 @@ def readable_document_text(body: str, *, document: FetchedDocument) -> tuple[str
 
 def _readable_text_limit_for_document(document: FetchedDocument) -> int:
     source_kind = _document_source_kind(document)
-    if source_kind == "sec_complete_submission_text":
-        return SEC_COMPLETE_SUBMISSION_TEXT_LIMIT
+    if source_kind in {"sec_complete_submission_text", "sec_primary_filing_document"}:
+        return SEC_FILING_TEXT_LIMIT
     return READABLE_TEXT_LIMIT
 
 
@@ -1920,6 +1921,8 @@ def _terms(text: str, *, goal: SearchGoal | None = None) -> list[str]:
         profile = resolve_goal_research_profile(goal)
         for alias in profile_extraction_aliases(goal=goal, research_profile=profile):
             add(alias)
+        for alias in _finance_bridge_extraction_aliases(goal):
+            add(alias)
     intent = finance_metric_intent(text)
     for phrase in intent.preferred_phrases:
         cleaned = phrase
@@ -1929,6 +1932,61 @@ def _terms(text: str, *, goal: SearchGoal | None = None) -> list[str]:
             continue
         add(cleaned)
     return terms
+
+
+def _finance_bridge_extraction_aliases(goal: SearchGoal) -> tuple[str, ...]:
+    query = f"{goal.query or ''} {_metadata_intent_text(goal.metadata)}".lower()
+    compact = "".join(ch for ch in query if ch.isalnum())
+    wants_bridge = any(
+        marker in query or marker in compact
+        for marker in (
+            "adjusted ebitda",
+            "adjustedebitda",
+            "non-gaap",
+            "nongaap",
+            "reconciliation",
+            "add-back",
+            "addback",
+            "add back",
+            "bridge",
+        )
+    )
+    if not wants_bridge:
+        return ()
+    return (
+        "reconciliation of",
+        "income from continuing operations",
+        "adjusted ebitda",
+        "depreciation and amortization",
+        "stock-based compensation",
+        "stock based compensation",
+        "restructuring",
+        "transaction costs",
+    )
+
+
+def _metadata_intent_text(metadata: object) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    parts: list[str] = []
+    for key in ("root_goal", "user_goal", "original_goal"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    mission = metadata.get("research_mission")
+    if isinstance(mission, dict) and isinstance(mission.get("root_goal"), str):
+        parts.append(mission["root_goal"])
+    policy = metadata.get("evidence_policy")
+    if isinstance(policy, dict):
+        for item in policy.get("required_terms") or []:
+            if isinstance(item, str):
+                parts.append(item)
+    slot_frame = metadata.get("slot_frame")
+    if isinstance(slot_frame, dict):
+        for item in slot_frame.get("missing_slots") or []:
+            if isinstance(item, str):
+                parts.append(item)
+    return " ".join(parts)
 
 
 def _normalize_span(text: str) -> str:

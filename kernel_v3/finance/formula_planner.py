@@ -430,7 +430,7 @@ def _plan_dio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
 
 
 def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
-    base = _latest_fact(facts, ("net income", "operating income"))
+    base = _latest_fact(facts, ("net income", "operating income", "income from continuing operations"))
     addbacks = _first_fact_per_metric(
         _facts_for_metric(
             facts,

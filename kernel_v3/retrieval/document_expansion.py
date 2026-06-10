@@ -294,10 +294,13 @@ def _source_from_link(
         "sec_items",
         "report_date",
         "filing_date",
+        "filing_index",
         "expanded_from_submission_archive",
     ):
         value = link.get(key)
         if isinstance(value, str) and value:
+            metadata[key] = value
+        elif isinstance(value, int):
             metadata[key] = value
         elif isinstance(value, bool):
             metadata[key] = value
@@ -585,7 +588,11 @@ def _select_bridge_reconciliation_candidates(candidates: list[JsonObject]) -> li
             other_documents.append(candidate)
     ordered: list[JsonObject] = []
     seen: set[str] = set()
-    for bucket in (filing_reports, other_documents, event_filings):
+    for bucket in (
+        _sort_sec_candidates_by_recent_index(filing_reports),
+        _sort_sec_candidates_by_recent_index(other_documents),
+        _sort_sec_candidates_by_recent_index(event_filings),
+    ):
         for candidate in bucket:
             url = str(candidate.get("url") or "")
             if url in seen:
@@ -593,6 +600,17 @@ def _select_bridge_reconciliation_candidates(candidates: list[JsonObject]) -> li
             seen.add(url)
             ordered.append(candidate)
     return ordered
+
+
+def _sort_sec_candidates_by_recent_index(candidates: list[JsonObject]) -> list[JsonObject]:
+    return sorted(
+        candidates,
+        key=lambda item: (
+            _safe_int(item.get("filing_index"), default=10_000),
+            -float(item.get("score") or 0.0),
+            str(item.get("url") or ""),
+        ),
+    )
 
 
 def _sec_submission_link_title(

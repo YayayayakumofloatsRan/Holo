@@ -1140,6 +1140,137 @@ def test_bridge_reconciliation_metadata_prefers_annual_filing_even_with_target_y
         assert fetch_uris.index(tenk_url) < fetch_uris.index(eightk_url)
 
 
+def test_bridge_reconciliation_prefers_recent_annual_filings_with_no_target_year():
+    submissions = SearchSource(
+        source_id="wsc-submissions-recent",
+        uri="https://data.sec.gov/submissions/CIK0001647088.json",
+        title="SEC submissions JSON for CIK 0001647088",
+        snippet="Official SEC submissions metadata and primary document chronology.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "structured_regulatory_data",
+            "authority_level": "primary",
+            "source_kind": "sec_submissions_json",
+            "sec_cik": "0001647088",
+        },
+    )
+    recent_url = "https://www.sec.gov/Archives/edgar/data/1647088/000164708825000009/wsc-20241231.htm"
+    old_url = "https://www.sec.gov/Archives/edgar/data/1647088/000164708818000006/wsc123117-10k.htm"
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider({"WSC adjusted EBITDA add-back reconciliation": [submissions]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                submissions.uri: json.dumps(
+                    {
+                        "cik": "1647088",
+                        "filings": {
+                            "recent": {
+                                "accessionNumber": [
+                                    "0001647088-25-000009",
+                                    "0001647088-18-000006",
+                                ],
+                                "form": ["10-K", "10-K"],
+                                "primaryDocument": ["wsc-20241231.htm", "wsc123117-10k.htm"],
+                                "primaryDocDescription": ["10-K annual report", "10-K annual report"],
+                                "items": ["", ""],
+                                "reportDate": ["2024-12-31", "2017-12-31"],
+                                "filingDate": ["2025-02-20", "2018-03-16"],
+                            }
+                        },
+                    }
+                ),
+                recent_url: (
+                    "WillScot 2024 Form 10-K. Reconciliation of Income from continuing operations "
+                    "to Adjusted EBITDA with add-back components."
+                ),
+                old_url: (
+                    "WillScot 2017 Form 10-K. Older reconciliation of Income from continuing operations "
+                    "to Adjusted EBITDA."
+                ),
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-wsc-bridge-recent",
+            query="WSC adjusted EBITDA add-back reconciliation",
+            max_sources=5,
+            max_fetches=3,
+            max_spans_per_document=4,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "root_goal": "Investigate WSC adjusted EBITDA add-back trend across relevant public filings.",
+                "required_evidence_terms": ["reconciliation", "non-GAAP", "add-back"],
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-wsc-bridge-recent",
+        run_id="run-1",
+    )
+
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-wsc-bridge-recent", kind="retrieval_fetch_attempt")
+    ]
+    assert recent_url in fetch_uris
+    if old_url in fetch_uris:
+        assert fetch_uris.index(recent_url) < fetch_uris.index(old_url)
+
+
+def test_sec_primary_filing_extraction_finds_late_adjusted_ebitda_bridge_table():
+    filler = "<p>Risk factors and business overview without non-GAAP bridge detail.</p>" * 5000
+    bridge_table = """
+    <table>
+      <tr><th>Reconciliation of Income from continuing operations to Adjusted EBITDA</th></tr>
+      <tr><td>Income from continuing operations</td><td>$341.8</td><td>$276.3</td></tr>
+      <tr><td>Depreciation and amortization</td><td>$513.0</td><td>$482.0</td></tr>
+      <tr><td>Stock-based compensation</td><td>$73.0</td><td>$68.0</td></tr>
+      <tr><td>Restructuring and transaction costs</td><td>$40.0</td><td>$32.0</td></tr>
+      <tr><td>Adjusted EBITDA</td><td>$967.8</td><td>$858.3</td></tr>
+    </table>
+    """
+    body = f"<html><body>{filler}{bridge_table}</body></html>"
+
+    spans = extract_spans(
+        goal=SearchGoal(
+            goal_id="goal-wsc-late-bridge-table",
+            query="WSC adjusted EBITDA add-back trend reconciliation",
+            max_sources=5,
+            max_fetches=5,
+            max_spans_per_document=4,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "root_goal": "Investigate WSC adjusted EBITDA add-back trend from relevant filings.",
+            },
+        ),
+        document=FetchedDocument(
+            document_id="doc-wsc-10k-late-table",
+            goal_id="goal-wsc-late-bridge-table",
+            source_id="source-wsc-10k-late-table",
+            uri="https://www.sec.gov/Archives/edgar/data/1647088/000164708825000009/wsc-20241231.htm",
+            title="WillScot Holdings 2024 Form 10-K",
+            artifact_id="artifact-wsc-10k-late-table",
+            payload_hash="hash-wsc-10k-late-table",
+            preview="WillScot Holdings 2024 Form 10-K",
+            size_bytes=len(body),
+            metadata={
+                "source_kind": "sec_primary_filing_document",
+                "source_family": "regulatory_filing",
+                "mime_type": "text/html",
+            },
+        ),
+        body=body,
+    )
+
+    text = " ".join(span.text for span in spans).lower()
+    assert "income from continuing operations" in text
+    assert "adjusted ebitda" in text
+    assert "depreciation and amortization" in text
+
+
 def test_transaction_retrieval_fetches_issuer_event_page_under_tight_budget():
     submissions = SearchSource(
         source_id="pfe-submissions",
