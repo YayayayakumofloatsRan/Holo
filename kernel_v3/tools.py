@@ -252,11 +252,7 @@ class ToolRegistry:
             return _tool_result(
                 executable_action,
                 "failed",
-                {
-                    "error": "tool_execution_failed",
-                    "tool": tool_name,
-                    "error_type": type(exc).__name__,
-                },
+                _tool_exception_diagnostics(executable_action, tool_name=tool_name, exc=exc),
                 kind="tool_result",
             )
         result = raw if isinstance(raw, ToolResult) else _result_from_observation(raw)
@@ -266,6 +262,35 @@ class ToolRegistry:
             observation=result.observation,
             artifact_refs=[_artifact_for_observation(result.observation)],
         )
+
+
+def _tool_exception_diagnostics(action: CandidateAction, *, tool_name: str, exc: Exception) -> JsonObject:
+    payload = action.payload if isinstance(action.payload, dict) else {}
+    diagnostics: JsonObject = {
+        "error": "tool_execution_failed",
+        "tool": tool_name,
+        "error_type": type(exc).__name__,
+        "error_message": str(exc)[:500],
+        "action_id": action.action_id,
+        "payload_keys": sorted(str(key) for key in payload.keys())[:64],
+    }
+    query = payload.get("query")
+    if isinstance(query, str) and query:
+        diagnostics["query"] = query[:500]
+    queries = payload.get("queries")
+    if isinstance(queries, list):
+        diagnostics["queries"] = [str(item)[:500] for item in queries[:12] if str(item)]
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    source_urls: list[str] = []
+    for key in ("source_url", "source_urls", "url", "urls"):
+        value = metadata.get(key, payload.get(key))
+        if isinstance(value, str) and value:
+            source_urls.append(value)
+        elif isinstance(value, list):
+            source_urls.extend(str(item) for item in value if str(item))
+    if source_urls:
+        diagnostics["source_urls"] = list(dict.fromkeys(source_urls))[:24]
+    return diagnostics
 
 
 def _tool_name_for_action(action: CandidateAction) -> str | None:

@@ -7,6 +7,7 @@ from pathlib import Path
 from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.execution_profile import execution_profile, execution_profile_runtime_metadata
 from kernel_v3.agent.runtime import (
+    _RecipeBoundPlanner,
     _RecipeEvaluator,
     _apply_recipe_profile_defaults,
     _finance_missing_fact_retrieval_action,
@@ -34,6 +35,7 @@ from kernel_v3.journal import JournalStore
 from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, FetchedDocument, RetrievalReport
 from kernel_v3.retrieval.extract import readable_document_text
+from kernel_v3.retrieval.targeting import target_entity_phrases
 from kernel_v3.tools import ToolRegistry
 
 
@@ -119,6 +121,83 @@ def test_finance_fact_ledger_extracts_transaction_value_from_filing_text() -> No
     assert "revenue" in metrics
     assert any(fact.value == "43000000000" for fact in facts)
     assert any(fact.value == "2200000000" for fact in facts)
+
+
+def test_planner_processor_failure_rescues_to_targeted_finance_retrieval() -> None:
+    class FailedPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-processor-failed",
+                kind="respond",
+                name="respond",
+                description="processor failed",
+                score=0.0,
+                payload={"error": "processor_failed"},
+                reasons=["processor_failed"],
+                side_effect_class="none",
+            )
+
+    profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **profile_metadata,
+            "semantic_intake": {
+                "goal": "For Pfizer's acquisition of Seagen, compute transaction value / Seagen revenue.",
+            },
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=FailedPlanner(),
+        goal="For Pfizer's acquisition of Seagen, compute transaction value / Seagen revenue.",
+        recipe=recipe,
+        journal=JournalStore.in_memory(),
+    )
+    context = ContextBundle(
+        context_id="ctx-pfe-rescue",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-pfe",
+            "run_id": "run-pfe",
+            "sections": [
+                {
+                    "name": "recent_observations",
+                    "content": [
+                        {
+                            "source": "tool:retrieval.run",
+                            "status": "failed",
+                            "content": {
+                                "error": "tool_execution_failed",
+                                "query": "Pfizer Seagen transaction value",
+                                "source_urls": ["https://www.sec.gov/Archives/example/pfe-8k.htm"],
+                            },
+                        }
+                    ],
+                }
+            ],
+        },
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "retrieval.run"
+    assert action.kind == "tool"
+    assert "host_planner_failure_rescue" in action.reasons
+    assert action.payload["metadata"]["host_rescue"] is True
+    assert action.payload["metadata"]["source_urls"] == ["https://www.sec.gov/Archives/example/pfe-8k.htm"]
+    assert "Pfizer" in action.payload["query"]
+    assert action.payload["max_sources"] >= 24
+
+
+def test_target_entity_extraction_does_not_bind_leading_for_as_entity() -> None:
+    phrases = target_entity_phrases(
+        "For Pfizer's acquisition of Seagen, calculate the transaction EV / revenue multiple."
+    )
+
+    assert "For Pfizer" not in phrases
 
 
 def test_finance_fact_ledger_extracts_enterprise_value_phrase_from_filing_text() -> None:

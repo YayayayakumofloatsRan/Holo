@@ -111,11 +111,14 @@ finance benchmark work and handoff status are tracked in
 v1 finance substrate with structured finance facts, deterministic calculator
 traces, numeric verification, FAB v2 public/dev10 import and scoring, and
 fast-lane budget controls. It has closed representative live tasks such as
-HD/LOW DIO, KHC adjusted EBITDA bridge, PFE/Seagen transaction multiple, and
-WSC adjusted EBITDA add-back trend, but it should not yet be described as a
-stable Finance Agent v2 solver. The main open gap is robust generalization to
-harder filing/modeling tasks such as DCF/LBO, fixed-charge coverage, MLR,
-valuation multiples, and purchase-price-allocation analysis.
+HD/LOW DIO, KHC adjusted EBITDA bridge, and WSC adjusted EBITDA add-back trend,
+but it should not yet be described as a stable Finance Agent v2 solver.
+PFE/Seagen transaction multiple has closed in earlier live smokes but is not
+repeatable: newer reruns expose retrieval/tool-observation failures, planner
+JSON repair failures, unbound acquisition-source templates, and transaction
+evidence acceptance gaps. The main open gap is robust generalization to harder
+filing/modeling tasks such as DCF/LBO, fixed-charge coverage, MLR, valuation
+multiples, transaction multiples, and purchase-price-allocation analysis.
 The newest substrate work starts lifting finance lessons into domain-general
 kernel primitives: `ClaimLedger`, `SlotFrame`, `EvidencePolicy`,
 `TransformPlan`, and `VerifierGateResult`. Finance now projects its fact ledger,
@@ -1167,7 +1170,11 @@ showed this PFE/SGEN case is not repeatably closed yet: one batch hit a
 DeepSeek SSL EOF before tools, and one single-item retry reached
 `retrieval.run` but failed the retrieval observation and subsequent planner JSON
 repair. Treat it as an important unstable transaction-multiple target, not as a
-solved case. The WSC adjusted
+solved case. A newer PFE-only rerun after planner-failure rescue still failed
+to produce facts/claims/calculator traces: it exposed an SEC parser assertion
+(`unknown status keyword 'BZ' in marked section`), then fell into acquisition
+source queries containing unbound placeholders such as `{ticker}` and exhausted
+fast-lane tool calls. The WSC adjusted
 EBITDA add-back trend smoke now retrieves SEC 10-K evidence, extracts 108
 finance facts, runs one bridge-subtotal calculator trace, passes
 `finance.verify_numeric` with 100% answer numeric support, keeps citation
@@ -1196,6 +1203,11 @@ fix reached one retrieval run, one calculator trace, 218 finance facts,
 dev annotation score. The user-visible answer is still a host fallback when the
 model synthesizer includes unsupported numbers, so product-quality synthesis is
 still a follow-up; the reliability gate is now doing the right thing.
+The synthesizer prompt and retrieval-report diagnostics now state the finance
+numeric-claim policy explicitly: material finance numbers must come from
+calculator traces, finance/claim ledger facts, or explicitly labeled
+assumptions; unsupported numbers must be omitted or moved into limitations
+before the host verifier checks them again.
 The main failure mode is still `required_trace_missing` on harder
 modeling/coverage tasks: CRM DCF, EPAM LBO, TGT/WMT fixed-charge coverage,
 LULU/VSCO EV/EBITDA, CNC MLR, and purchase-price-allocation cases often gather

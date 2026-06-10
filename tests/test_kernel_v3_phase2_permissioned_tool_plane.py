@@ -99,7 +99,11 @@ def test_tool_executor_exception_becomes_failed_observation():
         name="unstable.tool",
         description="unstable tool",
         score=1.0,
-        payload={},
+        payload={
+            "query": "Pfizer Seagen transaction value revenue",
+            "queries": ["Pfizer Seagen 8-K", "Seagen revenue 2022"],
+            "metadata": {"source_urls": ["https://www.sec.gov/example"]},
+        },
         reasons=[],
         side_effect_class="read",
     )
@@ -108,11 +112,14 @@ def test_tool_executor_exception_becomes_failed_observation():
 
     assert result.observation.status == "failed"
     assert result.observation.kind == "tool_result"
-    assert result.observation.content == {
-        "error": "tool_execution_failed",
-        "tool": "unstable.tool",
-        "error_type": "TimeoutError",
-    }
+    assert result.observation.content["error"] == "tool_execution_failed"
+    assert result.observation.content["tool"] == "unstable.tool"
+    assert result.observation.content["error_type"] == "TimeoutError"
+    assert result.observation.content["error_message"] == "tool did not respond"
+    assert result.observation.content["action_id"] == "act-timeout"
+    assert result.observation.content["query"] == "Pfizer Seagen transaction value revenue"
+    assert result.observation.content["queries"] == ["Pfizer Seagen 8-K", "Seagen revenue 2022"]
+    assert result.observation.content["source_urls"] == ["https://www.sec.gov/example"]
     assert result.artifact_refs
 
 

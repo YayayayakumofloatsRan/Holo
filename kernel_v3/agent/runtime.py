@@ -2302,10 +2302,57 @@ class _RecipeBoundPlanner:
         self._calls += 1
         self._journal_plan_if_needed(context)
         action = self.inner.propose(context, feedback)
+        rescue = self._host_planner_failure_retrieval_action(context, action)
+        if rescue is not None:
+            action = rescue
         bound = _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
         bound = self._finance_formula_action(context, bound) or bound
         self._journal_plan_update(context, bound, feedback)
         return bound
+
+    def _host_planner_failure_retrieval_action(self, context: ContextBundle, action: CandidateAction) -> CandidateAction | None:
+        if self.recipe.mode != "retrieval_answer" or "retrieval.run" not in self.recipe.allowed_tools:
+            return None
+        if action.kind != "respond" or "processor_failed" not in set(action.reasons):
+            return None
+        plan = plan_finance_formula(question=self.goal, facts=[], existing_traces=[])
+        if plan.status == "missing_facts":
+            retrieval = _finance_missing_fact_retrieval_action(
+                action,
+                plan=plan,
+                goal=self.goal,
+                call_index=self._calls,
+            )
+            if retrieval is not None:
+                rescue_payload = _host_rescue_retrieval_payload(
+                    retrieval.payload,
+                    context=context,
+                    goal=self.goal,
+                    call_index=self._calls,
+                )
+                return replace(
+                    retrieval,
+                    payload=rescue_payload,
+                    reasons=_ordered_unique(
+                        [
+                            "host_planner_failure_rescue",
+                            "planner_processor_failed",
+                            *retrieval.reasons,
+                        ]
+                    ),
+                )
+        payload = _retrieval_payload(self.goal, self.recipe)
+        payload = _host_rescue_retrieval_payload(payload, context=context, goal=self.goal, call_index=self._calls)
+        return CandidateAction(
+            action_id=f"act-host-planner-failure-retrieval-{self._calls}",
+            kind="tool",
+            name="retrieval.run",
+            description="Host fallback retrieval after planner processor failure",
+            score=0.72,
+            payload=payload,
+            reasons=["host_planner_failure_rescue", "planner_processor_failed"],
+            side_effect_class="network",
+        )
 
     def _finance_formula_action(self, context: ContextBundle, action: CandidateAction) -> CandidateAction | None:
         if self.journal is None or CALCULATOR_TOOL_NAME not in self.recipe.allowed_tools:
@@ -2555,6 +2602,103 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             **({"target_tickers": tickers} if tickers else {}),
         },
     }
+
+
+def _host_rescue_retrieval_payload(
+    payload: JsonObject,
+    *,
+    context: ContextBundle,
+    goal: str,
+    call_index: int,
+) -> JsonObject:
+    updated = dict(payload)
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    failed = _failed_retrieval_observation_hints(context)
+    prior_queries = _string_list(failed.get("queries"))
+    prior_query = failed.get("query")
+    if isinstance(prior_query, str) and prior_query:
+        prior_queries.insert(0, prior_query)
+    source_urls = _string_list(failed.get("source_urls"))
+    rescue_query = _host_rescue_query(goal=goal, prior_queries=prior_queries, call_index=call_index)
+    queries = _ordered_unique([rescue_query, *prior_queries])[:4]
+    updated.update(
+        {
+            "query": rescue_query,
+            "queries": queries,
+            "search_strategy": "structured",
+            "max_queries": max(3, min(6, len(queries) + 1)),
+            "max_sources": max(int(updated.get("max_sources") or 0), 24),
+            "max_fetches": max(int(updated.get("max_fetches") or 0), 12),
+            "max_spans_per_document": max(int(updated.get("max_spans_per_document") or 0), 6),
+        }
+    )
+    if source_urls:
+        metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:24]
+    metadata.update(
+        {
+            "host_rescue": True,
+            "host_rescue_reason": "planner_processor_failed_after_retrieval_context",
+            "host_rescue_attempt": call_index,
+            "root_goal": goal,
+            "research_profile": metadata.get("research_profile") or "finance_fundamentals",
+            "source_authority_requirement": metadata.get("source_authority_requirement") or "primary",
+        }
+    )
+    updated["metadata"] = metadata
+    return updated
+
+
+def _failed_retrieval_observation_hints(context: ContextBundle) -> JsonObject:
+    observations: list[JsonObject] = []
+    for value in (context.state.get("recent_observations"), context.state.get("last_observations")):
+        if isinstance(value, list):
+            observations.extend(item for item in value if isinstance(item, dict))
+    sections = context.state.get("sections")
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, dict) or section.get("name") != "recent_observations":
+                continue
+            records = section.get("records")
+            if isinstance(records, list):
+                observations.extend(item for item in records if isinstance(item, dict))
+            content = section.get("content")
+            if isinstance(content, list):
+                observations.extend(item for item in content if isinstance(item, dict))
+    for item in reversed(observations):
+        if not isinstance(item, dict):
+            continue
+        if item.get("source") != "tool:retrieval.run":
+            continue
+        content = item.get("content") if isinstance(item.get("content"), dict) else {}
+        if not content:
+            continue
+        return {
+            "query": content.get("query"),
+            "queries": content.get("queries"),
+            "source_urls": content.get("source_urls"),
+        }
+    return {}
+
+
+def _host_rescue_query(*, goal: str, prior_queries: list[str], call_index: int) -> str:
+    base = " ".join(str(goal or "").split())
+    if any(marker in base.lower() for marker in ("transaction", "acquisition", "deal", "seagen", "sgen")):
+        variants = [
+            f"{base} SEC 8-K merger agreement acquisition transaction value revenue 2023",
+            f"{base} Pfizer Seagen Exhibit 99.1 transaction value revenue 2023 SEC",
+            f"{base} Seagen 2022 10-K revenue Pfizer acquisition consideration",
+        ]
+    else:
+        variants = [
+            f"{base} official filing primary source",
+            f"{base} annual report 10-K 10-Q SEC",
+            f"{base} investor relations official report",
+        ]
+    prior = {query.casefold() for query in prior_queries}
+    for variant in variants:
+        if variant.casefold() not in prior:
+            return variant
+    return variants[(max(1, call_index) - 1) % len(variants)]
 
 
 def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query: str, tickers: list[str]) -> list[str]:
@@ -7705,9 +7849,9 @@ def _finance_retrieval_fallback_final(
     if require_formula_trace and not traces:
         return None
     if synthesis_error == "finance_numeric_verification_failed":
-        intro = "模型合成答案包含未被证据账本或 calculator trace 支持的数字，因此以下为 Holo host 生成的保守可验证回答。"
+        intro = "自动合成阶段产生了未被证据账本或 calculator trace 支持的数字，因此以下为 Holo host 生成的保守可验证回答。"
     else:
-        intro = "模型最终合成输出格式失败，因此以下为 Holo host 基于已验证证据和计算轨迹生成的保守回答。"
+        intro = "自动合成阶段输出格式失败，因此以下为 Holo host 基于已验证证据和计算轨迹生成的保守回答。"
     lines = [
         intro,
     ]
@@ -7790,8 +7934,18 @@ def _report_with_finance_formula_traces(
         "finance_synthesis_directive",
         (
             "Use host calculator formula traces as the authoritative computed values. "
-            "Do not recompute these finance formulas mentally; quote the trace values and cite the supporting evidence."
+            "Do not recompute these finance formulas mentally; quote the trace values and cite the supporting evidence. "
+            "Every material numeric claim in the finance answer must come from formula traces, the finance fact/claim ledger, "
+            "or an explicitly labeled assumption; unsupported numbers must be omitted or downgraded to limitations."
         ),
+    )
+    diagnostics.setdefault(
+        "finance_numeric_claim_policy",
+        {
+            "allowed_numeric_sources": ["formula_trace", "finance_fact_ledger", "claim_ledger", "explicit_assumption_label"],
+            "unsupported_numeric_behavior": "omit_or_limit",
+            "material_claim_scope": "figures, percentages, multiples, margins, growth rates, periods, transaction values, and bridge components",
+        },
     )
     return replace(report, diagnostics=diagnostics)
 

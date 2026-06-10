@@ -492,20 +492,30 @@ Post-dev10 EV/EBITDA iteration:
 - 2026-06-10 stable3 rerun status after adding generic substrate metrics:
   `fabv2-khc-adjusted-ebitda-bridge` and
   `fabv2-wsc-adjusted-ebitda-addback-trend` are currently repeatable positive
-  substrate examples. KHC in the stable3 batch produced `retrieval_runs=1`,
+  substrate examples. A later `run_stable3_after_rescue` live batch produced
+  `overall_score=0.8651`, behavior score `0.9524`, substrate score `0.7778`,
+  average retrieval runs `1.0`, calculator-used rate `0.6667`, claim-ledger
+  present rate `0.6667`, and verifier-gate pass rate `1.0` on items that
+  reached verification. KHC in that batch produced `retrieval_runs=1`,
   `calculator_call_count=1`, `formula_trace_count=1`,
-  `finance_fact_count=218`, `claim_count=218`, `slot_frame_present=true`,
+  `finance_fact_count=156`, `claim_count=156`, `slot_frame_present=true`,
   `transform_plan_count=2`, `numeric_verifier_status=passed`,
   `verifier_gate_status=passed`, and 100% answer numeric support. WSC in the
-  single-item retry produced `retrieval_runs=1`, `calculator_call_count=1`,
+  same batch produced `retrieval_runs=1`, `calculator_call_count=1`,
   `formula_trace_count=1`, `finance_fact_count=186`, `claim_count=186`,
   `slot_frame_present=true`, `transform_plan_count=1`,
   `numeric_verifier_status=passed`, `verifier_gate_status=passed`, and 100%
-  post-run dev annotation score. `fabv2-pfe-sgen-transaction-multiple` is not
-  repeatably closed yet: the stable3 batch hit a DeepSeek SSL EOF before tools,
-  and the single-item retry reached `retrieval.run` but the retrieval
-  observation failed, then planner JSON repair failed with `JSONDecodeError`.
-  This should be treated as a retrieval/tool-observation plus planner-repair
+  answer numeric support. `fabv2-pfe-sgen-transaction-multiple` is not
+  repeatably closed yet. In `run_stable3_after_rescue` it reached live
+  retrieval but produced no facts/claims/formula traces and reported
+  `required_trace_missing`. A follow-up PFE-only rerun after planner-failure
+  rescue still had `facts=0`, `claims=0`, `calculator_call_count=0`, and no
+  verifier gate. The concrete failure chain was: some retrieval actions failed
+  with a parser assertion (`unknown status keyword 'BZ' in marked section`),
+  later acquisition fallback queries included unbound templates such as
+  `{ticker}`, and the fast lane exhausted tool calls before a usable
+  transaction evidence ledger existed. This should be treated as a
+  retrieval/tool-observation, acquisition compiler, and planner-repair
   stability gap, not as a solved transaction-multiple case.
 - The latest WSC add-back trend work deliberately tightened evidence gates so
   market-statistics snippets such as `EBITDA Margin` plus `Dividend Per Share`
@@ -543,11 +553,18 @@ Post-dev10 EV/EBITDA iteration:
   included noisy truncated evidence numbers. The fix keeps verifier standards
   intact by removing raw long evidence snippets from fallback answers, leaving
   numeric claims to calculator traces and ledger-backed facts.
-- The next concrete live validation should rerun KHC/WSC/PFE-SGEN together and
-  then expand to the harder dev10 items. If a case fails, classify the failure
-  as source acquisition, fetch/parser, fact-ledger extraction, formula binding,
-  verifier policy, or model-synthesis/JSON repair before adding any new
-  task-specific heuristic.
+- The latest rescue pass adds richer tool failure diagnostics (`error_message`,
+  action id, payload keys, queries, and source URLs), host retrieval rescue after
+  planner `processor_failed`, a leading-preposition target-parser repair so
+  `For Pfizer` is not treated as an entity phrase, and an explicit finance
+  numeric-claim policy in the synthesizer packet. These are generic reliability
+  changes, not PFE answer tables.
+- The next concrete live validation should first fix acquisition compiler
+  placeholder binding and SEC parser robustness for the PFE/SGEN path, then
+  rerun PFE/SGEN and finally rerun KHC/WSC/PFE-SGEN together. If a case fails,
+  classify the failure as source acquisition, fetch/parser, fact-ledger
+  extraction, formula binding, verifier policy, or model-synthesis/JSON repair
+  before adding any new task-specific heuristic.
 - Fast-lane cost is still high. Successful single-item runs often consume
   60k-90k tokens, and hard cases can fail after model JSON repair issues. The
   next executor work should shrink planner/evaluator context for finance facts,

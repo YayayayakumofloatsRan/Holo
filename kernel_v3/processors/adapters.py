@@ -282,6 +282,7 @@ def _synthesizer_prompt(
             "If the evidence does not support a required section, include that section with a clear limitation instead of collapsing the whole answer into a short summary.",
             "For finance research, distinguish facts, source-backed metrics, analysis, risks, and limitations; do not rely on generic product or encyclopedia pages as if they were financial statements.",
             "For finance calculations, if retrieval_report.diagnostics.finance_formula_traces is present, use those host calculator results as authoritative computed values and do not recompute them mentally.",
+            "For finance answers, every material numeric claim must be supported by retrieval_report.diagnostics.finance_formula_traces, finance fact or claim ledger evidence, or an explicit assumption label. Omit unsupported numbers or move them into limitations; do not invent bridging figures, multiples, growth rates, margins, or dates.",
             "Use host_situation as the source of truth for whether live retrieval, tools, permissions, and finance research are available.",
             "Do not say live retrieval, network access, or finance research is unavailable unless host_situation.retrieval or host_situation.failure says so.",
             "If host_situation says retrieval was attempted but evidence is insufficient, describe the real failure as search/fetch/extraction/citation/coverage quality instead of a permission problem.",
@@ -653,6 +654,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             },
             "host_situation": _compact_prompt_value(host_situation),
             "finance_synthesis_directive": diagnostics.get("finance_synthesis_directive"),
+            "finance_numeric_claim_policy": _json_object(diagnostics.get("finance_numeric_claim_policy")),
             "finance_formula_traces": _compact_list_for_provider(finance_formula_traces, limit=16),
         },
     }

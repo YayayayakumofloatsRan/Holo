@@ -38,6 +38,7 @@ GENERIC_QUERY_TERMS = {
     "financials",
     "find",
     "flow",
+    "for",
     "fundamental",
     "fundamentals",
     "how",
