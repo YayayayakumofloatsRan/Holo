@@ -4,12 +4,15 @@ from pathlib import Path
 from kernel_v3 import cli
 from kernel_v3.bench import (
     FinanceBenchmarkItem,
+    FinanceBenchmarkResult,
     convert_public_finance_benchmark,
     load_finance_benchmark_items,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
+    score_finance_dev_annotations,
     score_finance_answer,
 )
+from kernel_v3.bench.finance import trace_metrics
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.journal import JournalStore
 
@@ -297,12 +300,31 @@ def test_finance_benchmark_cli_scores_prediction_file(tmp_path: Path) -> None:
     predictions = tmp_path / "predictions.jsonl"
     output = tmp_path / "results.jsonl"
     summary = tmp_path / "summary.json"
+    dev_gold = tmp_path / "dev_gold.jsonl"
     dataset.write_text(
         json.dumps({"id": "Q1", "question": "Revenue?", "numeric_value": 10_000_000, "tolerance": 1}) + "\n",
         encoding="utf-8",
     )
     predictions.write_text(
-        json.dumps({"id": "Q1", "answer": "Revenue was 10,000,000.", "trace_metrics": {"total_tokens": 123}}) + "\n",
+        json.dumps(
+            {
+                "id": "Q1",
+                "answer": "Revenue was 10,000,000.",
+                "trace_metrics": {"total_tokens": 123, "calculator_call_count": 1},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    dev_gold.write_text(
+        json.dumps(
+            {
+                "item_id": "Q1",
+                "expected_numeric": [{"name": "revenue", "value": 10_000_000, "tolerance": 1}],
+                "required_trace": ["calculator.compute"],
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -318,6 +340,8 @@ def test_finance_benchmark_cli_scores_prediction_file(tmp_path: Path) -> None:
             str(output),
             "--summary-output",
             str(summary),
+            "--dev-gold",
+            str(dev_gold),
         ]
     )
 
@@ -326,7 +350,135 @@ def test_finance_benchmark_cli_scores_prediction_file(tmp_path: Path) -> None:
     assert payload["schema"] == "holo.kernel_v3.finance_benchmark_summary.v1"
     assert payload["passed_count"] == 1
     assert payload["numeric_accuracy"] == 1.0
+    assert payload["dev_annotation_score"]["numeric_score"] == 1.0
+    assert payload["dev_annotation_score"]["substrate_score"] == 1.0
     assert output.exists()
+
+
+def test_finance_dev_annotation_scorer_keeps_gold_post_run(tmp_path: Path) -> None:
+    annotation = tmp_path / "dev_gold.jsonl"
+    annotation.write_text(
+        json.dumps(
+            {
+                "item_id": "fabv2-hd-low-dio",
+                "expected_answer_contains": ["Home Depot", "DIO", "days"],
+                "expected_numeric": [{"name": "HD_DIO", "value": 77.6, "tolerance": 1.0}],
+                "required_trace": ["retrieval.run", "calculator.compute", "finance_numeric_verification"],
+                "required_sources": ["sec.gov", "10-K"],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = FinanceBenchmarkResult(
+        item_id="fabv2-hd-low-dio",
+        status="ungraded",
+        question="Calculate HD DIO.",
+        answer="Home Depot DIO was 77.6 days, based on the 10-K from sec.gov.",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        scorecard={"status": "ungraded"},
+        trace_metrics={
+            "retrieval_run_count": 1,
+            "calculator_call_count": 1,
+            "formula_trace_count": 1,
+            "finance_fact_count": 4,
+            "numeric_verifier_status": "passed",
+            "source_hosts": ["www.sec.gov"],
+            "finance_source_forms": ["10-K"],
+        },
+        trace_refs=["ledger-1"],
+        final_answer=None,
+        failure_report=None,
+    )
+
+    score = score_finance_dev_annotations([result], annotation_path=annotation)
+
+    assert score["scored_item_count"] == 1
+    assert score["behavior_score"] == 1.0
+    assert score["numeric_score"] == 1.0
+    assert score["substrate_score"] == 1.0
+
+
+def test_finance_dev_annotation_scorer_accepts_localized_units(tmp_path: Path) -> None:
+    annotation = tmp_path / "dev_gold.jsonl"
+    annotation.write_text(
+        json.dumps(
+            {
+                "item_id": "fabv2-hd-low-dio",
+                "expected_answer_contains": ["Home Depot", "DIO", "days"],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = FinanceBenchmarkResult(
+        item_id="fabv2-hd-low-dio",
+        status="ungraded",
+        question="Calculate HD DIO.",
+        answer="Home Depot 的 DIO 约为 76.3 天。",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        scorecard={"status": "ungraded"},
+        trace_metrics={},
+        trace_refs=["ledger-1"],
+        final_answer=None,
+        failure_report=None,
+    )
+
+    score = score_finance_dev_annotations([result], annotation_path=annotation)
+
+    assert score["behavior_score"] == 1.0
+
+
+def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="observation",
+        data={
+            "source": "tool:calculator.compute",
+            "status": "ok",
+            "content": {"formula_trace": {"formula_id": "formula-1", "result_value": "77.6"}},
+        },
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="finance_fact_ledger",
+        data={"fact_count": 4, "facts": [{"metadata": {"form": "10-K"}}]},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="finance_numeric_verification",
+        data={"status": "passed", "matched_values": [{}], "diagnostics": {"answer_numeric_count": 1}},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="retrieval_citation",
+        data={"uri": "https://www.sec.gov/Archives/example", "citation_id": "cite-1"},
+    )
+
+    metrics = trace_metrics(journal, task_id="task-fin")
+
+    assert metrics["calculator_call_count"] == 1
+    assert metrics["formula_trace_count"] == 1
+    assert metrics["finance_fact_count"] == 4
+    assert metrics["numeric_verifier_status"] == "passed"
+    assert metrics["answer_numeric_support_rate"] == 1.0
+    assert metrics["source_hosts"] == ["www.sec.gov"]
+    assert metrics["finance_source_forms"] == ["10-K"]
 
 
 def test_finance_benchmark_cli_imports_public_dataset(tmp_path: Path) -> None:

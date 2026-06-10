@@ -4,6 +4,7 @@ import json
 import math
 import re
 import time
+import urllib.parse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -91,8 +92,17 @@ class FinanceBenchmarkSummary(Contract):
     average_duration_ms: float
     average_retrieval_runs: float
     average_query_repetition_rate: float
+    calculator_used_rate: float
+    average_calculator_calls: float
+    formula_trace_present_rate: float
+    average_formula_traces: float
+    average_finance_facts: float
+    numeric_verifier_pass_rate: float | None
+    average_answer_numeric_support_rate: float | None
+    finance_numeric_failure_reason_counts: JsonObject
     status_counts: JsonObject
     output_path: str | None = None
+    dev_annotation_score: JsonObject | None = None
 
 
 FinanceBenchmarkResultCallback = Callable[[int, FinanceBenchmarkItem, FinanceBenchmarkResult], None]
@@ -342,13 +352,29 @@ def score_finance_prediction_file(
     return results
 
 
-def summarize_finance_benchmark(results: list[FinanceBenchmarkResult], *, output_path: Path | None = None) -> FinanceBenchmarkSummary:
+def summarize_finance_benchmark(
+    results: list[FinanceBenchmarkResult],
+    *,
+    output_path: Path | None = None,
+    annotation_path: Path | str | None = None,
+) -> FinanceBenchmarkSummary:
     status_counts = Counter(result.status for result in results)
     scored = [result for result in results if bool(result.scorecard.get("scored"))]
     numeric_scored = [
         result for result in results if isinstance(result.scorecard.get("numeric"), dict) and result.scorecard["numeric"].get("scored")
     ]
     adversarial_scored = [result for result in results if bool(result.scorecard.get("gold_sentinel"))]
+    verifier_scored = [result for result in results if result.trace_metrics.get("numeric_verifier_status") in {"passed", "failed"}]
+    support_rates = [
+        float(result.trace_metrics["answer_numeric_support_rate"])
+        for result in results
+        if isinstance(result.trace_metrics.get("answer_numeric_support_rate"), (int, float))
+    ]
+    numeric_failure_reasons = Counter(
+        str(result.trace_metrics.get("finance_numeric_failure_reason"))
+        for result in results
+        if result.trace_metrics.get("finance_numeric_failure_reason") not in (None, "")
+    )
     return FinanceBenchmarkSummary(
         schema="holo.kernel_v3.finance_benchmark_summary.v1",
         status="ok",
@@ -376,8 +402,24 @@ def summarize_finance_benchmark(results: list[FinanceBenchmarkResult], *, output
         average_duration_ms=_average_metric(results, "processor_duration_ms"),
         average_retrieval_runs=_average_metric(results, "retrieval_run_count"),
         average_query_repetition_rate=_average_metric(results, "query_repetition_rate"),
+        calculator_used_rate=_rate(sum(1 for result in results if int(result.trace_metrics.get("calculator_call_count") or 0) > 0), len(results)),
+        average_calculator_calls=_average_metric(results, "calculator_call_count"),
+        formula_trace_present_rate=_rate(sum(1 for result in results if int(result.trace_metrics.get("formula_trace_count") or 0) > 0), len(results)),
+        average_formula_traces=_average_metric(results, "formula_trace_count"),
+        average_finance_facts=_average_metric(results, "finance_fact_count"),
+        numeric_verifier_pass_rate=_rate(
+            sum(1 for result in verifier_scored if result.trace_metrics.get("numeric_verifier_status") == "passed"),
+            len(verifier_scored),
+        )
+        if verifier_scored
+        else None,
+        average_answer_numeric_support_rate=_average(support_rates) if support_rates else None,
+        finance_numeric_failure_reason_counts=dict(numeric_failure_reasons),
         status_counts=dict(status_counts),
         output_path=str(output_path) if output_path is not None else None,
+        dev_annotation_score=score_finance_dev_annotations(results, annotation_path=annotation_path)
+        if annotation_path is not None
+        else None,
     )
 
 
@@ -386,6 +428,7 @@ def write_finance_benchmark_outputs(
     *,
     output_path: Path | str | None,
     summary_path: Path | str | None = None,
+    annotation_path: Path | str | None = None,
     journal: JournalStore | None = None,
 ) -> FinanceBenchmarkSummary:
     output = Path(output_path) if output_path is not None else None
@@ -395,7 +438,7 @@ def write_finance_benchmark_outputs(
             "\n".join(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True) for result in results) + "\n",
             encoding="utf-8",
         )
-    summary = summarize_finance_benchmark(results, output_path=output)
+    summary = summarize_finance_benchmark(results, output_path=output, annotation_path=annotation_path)
     if summary_path is not None:
         path = Path(summary_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -412,6 +455,45 @@ def write_finance_benchmark_outputs(
     return summary
 
 
+def score_finance_dev_annotations(
+    results: list[FinanceBenchmarkResult],
+    *,
+    annotation_path: Path | str,
+) -> JsonObject:
+    annotations = _annotation_map(_load_records(Path(annotation_path)))
+    item_scores: list[JsonObject] = []
+    for result in results:
+        annotation = annotations.get(result.item_id)
+        if annotation is None:
+            continue
+        item_scores.append(_score_dev_annotation(result, annotation))
+    behavior_scores = [float(item["behavior_score"]) for item in item_scores if isinstance(item.get("behavior_score"), (int, float))]
+    numeric_scores = [float(item["numeric_score"]) for item in item_scores if isinstance(item.get("numeric_score"), (int, float))]
+    substrate_scores = [float(item["substrate_score"]) for item in item_scores if isinstance(item.get("substrate_score"), (int, float))]
+    behavior_score = _average(behavior_scores) if behavior_scores else None
+    numeric_score = _average(numeric_scores) if numeric_scores else None
+    substrate_score = _average(substrate_scores) if substrate_scores else None
+    component_scores = [score for score in (behavior_score, numeric_score, substrate_score) if isinstance(score, float)]
+    failure_reasons = Counter(
+        str(reason)
+        for item in item_scores
+        for reason in item.get("failure_reasons", [])
+        if isinstance(reason, str) and reason
+    )
+    return {
+        "schema": "holo.kernel_v3.finance_dev_annotation_score.v1",
+        "annotation_path": str(annotation_path),
+        "annotated_item_count": len(annotations),
+        "scored_item_count": len(item_scores),
+        "behavior_score": behavior_score,
+        "numeric_score": numeric_score,
+        "substrate_score": substrate_score,
+        "overall_score": _average(component_scores) if component_scores else None,
+        "failure_reason_counts": dict(failure_reasons),
+        "items": item_scores,
+    }
+
+
 def finance_benchmark_run_id() -> str:
     return "finbench-" + str(int(time.time() * 1000))
 
@@ -422,6 +504,11 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     records = journal.records(task_id=task_id)
     processor_results = [record.data for record in records if record.kind == "processor_result"]
     actions = [record.data for record in records if record.kind == "action"]
+    observations = [record.data for record in records if record.kind == "observation"]
+    finance_ledgers = [record.data for record in records if record.kind == "finance_fact_ledger"]
+    numeric_verifications = [record.data for record in records if record.kind == "finance_numeric_verification"]
+    retrieval_evidence_records = [record.data for record in records if record.kind == "retrieval_evidence"]
+    retrieval_citation_records = [record.data for record in records if record.kind == "retrieval_citation"]
     retrieval = retrieval_behavior_benchmark(journal, task_id)
     total_tokens = 0
     duration_ms = 0
@@ -432,6 +519,29 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         duration_ms += _int_value(item.get("duration_ms"))
         if item.get("status") != "ok":
             processor_errors += 1
+    calculator_observations = [
+        item for item in observations
+        if item.get("source") == "tool:calculator.compute"
+    ]
+    formula_trace_ids = set()
+    for item in calculator_observations:
+        content = item.get("content") if isinstance(item.get("content"), dict) else {}
+        trace = content.get("formula_trace") if isinstance(content.get("formula_trace"), dict) else {}
+        formula_id = trace.get("formula_id")
+        if isinstance(formula_id, str) and formula_id:
+            formula_trace_ids.add(formula_id)
+    latest_ledger = finance_ledgers[-1] if finance_ledgers else {}
+    latest_verification = numeric_verifications[-1] if numeric_verifications else {}
+    latest_verification = latest_verification if isinstance(latest_verification, dict) else {}
+    verification_diagnostics = latest_verification.get("diagnostics") if isinstance(latest_verification.get("diagnostics"), dict) else {}
+    answer_numeric_count = _int_value(verification_diagnostics.get("answer_numeric_count"))
+    matched_values = latest_verification.get("matched_values") if isinstance(latest_verification.get("matched_values"), list) else []
+    issue_codes = _finance_numeric_issue_codes(latest_verification)
+    numeric_verifier_status = latest_verification.get("status") if isinstance(latest_verification.get("status"), str) else None
+    answer_numeric_support_rate = _rate(len(matched_values), answer_numeric_count) if answer_numeric_count else None
+    source_uris = _source_uris([*retrieval_evidence_records, *retrieval_citation_records])
+    source_hosts = _source_hosts(source_uris)
+    finance_source_forms = _finance_source_forms(finance_ledgers)
     return {
         "schema": "holo.kernel_v3.finance_trace_metrics.v1",
         "record_count": len(records),
@@ -453,10 +563,203 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "download_budget_block_count": retrieval.get("download_budget_block_count", 0),
         "evidence_count": retrieval.get("evidence_count", 0),
         "citation_count": retrieval.get("citation_count", 0),
+        "calculator_used": bool(calculator_observations),
+        "calculator_call_count": len(calculator_observations),
+        "formula_trace_present": bool(formula_trace_ids),
+        "formula_trace_count": len(formula_trace_ids),
+        "finance_fact_count": _int_value(latest_ledger.get("fact_count")) if isinstance(latest_ledger, dict) else 0,
+        "numeric_verifier_status": numeric_verifier_status,
+        "numeric_verifier_passed": numeric_verifier_status == "passed" if numeric_verifier_status else None,
+        "numeric_verifier_pass_rate": 1.0 if numeric_verifier_status == "passed" else 0.0 if numeric_verifier_status == "failed" else None,
+        "answer_numeric_support_rate": answer_numeric_support_rate,
+        "finance_numeric_failure_reason": issue_codes[0] if issue_codes else None,
+        "finance_numeric_failure_reasons": issue_codes,
+        "source_hosts": source_hosts[:64],
+        "source_uris": source_uris[:64],
+        "finance_source_forms": finance_source_forms[:64],
         "final_answer_chars": retrieval.get("final_answer_chars", 0),
         "latest_failure_mode": retrieval.get("latest_failure_mode"),
         "latest_next_strategy_hint": retrieval.get("latest_next_strategy_hint"),
     }
+
+
+def _finance_numeric_issue_codes(verification: JsonObject) -> list[str]:
+    issues = verification.get("issues") if isinstance(verification.get("issues"), list) else []
+    codes: list[str] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        code = issue.get("code")
+        if isinstance(code, str) and code:
+            codes.append(code)
+    return list(dict.fromkeys(codes))
+
+
+def _annotation_map(records: list[JsonObject]) -> dict[str, JsonObject]:
+    mapped: dict[str, JsonObject] = {}
+    for index, record in enumerate(records, start=1):
+        item_id = _coerce_text(_first_present(record, "item_id", "id", "question_id", "benchmark_id", "qid")) or f"item-{index}"
+        mapped[item_id] = dict(record)
+    return mapped
+
+
+def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject) -> JsonObject:
+    answer = result.answer or ""
+    haystack = _annotation_haystack(result)
+    expected_contains = _string_list(annotation.get("expected_answer_contains"))
+    contains_hits = [item for item in expected_contains if _expected_contains_met(answer, item)]
+    numeric_expectations = _expected_numeric_annotations(annotation.get("expected_numeric"))
+    numeric_matches = [_score_expected_numeric(answer, expectation) for expectation in numeric_expectations]
+    required_trace = _string_list(annotation.get("required_trace"))
+    trace_hits = [name for name in required_trace if _trace_requirement_met(name, result)]
+    required_sources = _string_list(annotation.get("required_sources"))
+    source_hits = [name for name in required_sources if name.casefold() in haystack.casefold()]
+    behavior_denominator = len(expected_contains) + len(required_sources)
+    behavior_numerator = len(contains_hits) + len(source_hits)
+    numeric_denominator = len(numeric_matches)
+    numeric_numerator = sum(1 for item in numeric_matches if item.get("passed") is True)
+    substrate_denominator = len(required_trace)
+    substrate_numerator = len(trace_hits)
+    failure_reasons: list[str] = []
+    if len(contains_hits) < len(expected_contains):
+        failure_reasons.append("expected_answer_content_missing")
+    if len(source_hits) < len(required_sources):
+        failure_reasons.append("required_source_missing")
+    if numeric_denominator and numeric_numerator < numeric_denominator:
+        failure_reasons.append("expected_numeric_mismatch")
+    if substrate_denominator and substrate_numerator < substrate_denominator:
+        failure_reasons.append("required_trace_missing")
+    return {
+        "item_id": result.item_id,
+        "behavior_score": _rate(behavior_numerator, behavior_denominator) if behavior_denominator else None,
+        "numeric_score": _rate(numeric_numerator, numeric_denominator) if numeric_denominator else None,
+        "substrate_score": _rate(substrate_numerator, substrate_denominator) if substrate_denominator else None,
+        "expected_contains_count": len(expected_contains),
+        "expected_contains_hit_count": len(contains_hits),
+        "expected_numeric_count": len(numeric_expectations),
+        "expected_numeric_hit_count": numeric_numerator,
+        "required_trace_count": len(required_trace),
+        "required_trace_hit_count": len(trace_hits),
+        "required_source_count": len(required_sources),
+        "required_source_hit_count": len(source_hits),
+        "numeric_matches": numeric_matches,
+        "missing_trace": [name for name in required_trace if name not in trace_hits],
+        "missing_sources": [name for name in required_sources if name not in source_hits],
+        "failure_reasons": failure_reasons,
+    }
+
+
+def _expected_contains_met(answer: str, expected: str) -> bool:
+    normalized_answer = answer.casefold()
+    normalized_expected = expected.casefold()
+    if normalized_expected in normalized_answer:
+        return True
+    for alias in _expected_contains_aliases(normalized_expected):
+        if alias in normalized_answer:
+            return True
+    return False
+
+
+def _expected_contains_aliases(expected: str) -> tuple[str, ...]:
+    aliases = {
+        "days": ("天", "日", "days inventory outstanding", "dio"),
+        "dio": ("库存周转天数", "days inventory outstanding"),
+        "bridge": ("桥接", "调节", "调整"),
+        "add": ("加回", "add-back", "addback"),
+        "multiple": ("倍数",),
+        "enterprise value": ("企业价值", "ev"),
+        "assumption": ("假设",),
+        "return": ("回报", "收益"),
+        "formula": ("公式",),
+        "period": ("期间", "周期"),
+        "goodwill": ("商誉",),
+    }
+    return aliases.get(expected, ())
+
+
+def _annotation_haystack(result: FinanceBenchmarkResult) -> str:
+    parts: list[str] = [result.answer, json.dumps(result.trace_metrics, ensure_ascii=False, sort_keys=True)]
+    if result.final_answer is not None:
+        parts.append(json.dumps(result.final_answer, ensure_ascii=False, sort_keys=True))
+    if result.failure_report is not None:
+        parts.append(json.dumps(result.failure_report, ensure_ascii=False, sort_keys=True))
+    return "\n".join(parts)
+
+
+def _expected_numeric_annotations(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    result: list[JsonObject] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        expected = _optional_float(item.get("value"))
+        if expected is None:
+            continue
+        result.append(
+            {
+                "name": _coerce_text(item.get("name")) or f"numeric-{len(result) + 1}",
+                "value": expected,
+                "tolerance": _optional_float(item.get("tolerance")),
+            }
+        )
+    return result
+
+
+def _score_expected_numeric(answer: str, expectation: JsonObject) -> JsonObject:
+    expected = _optional_float(expectation.get("value"))
+    tolerance = _optional_float(expectation.get("tolerance"))
+    numeric = _score_numeric(answer, expected, tolerance)
+    return {"name": expectation.get("name"), **numeric}
+
+
+def _trace_requirement_met(name: str, result: FinanceBenchmarkResult) -> bool:
+    normalized = name.strip().lower()
+    metrics = result.trace_metrics
+    if normalized == "retrieval.run":
+        return _int_value(metrics.get("retrieval_run_count")) > 0
+    if normalized == "calculator.compute":
+        return _int_value(metrics.get("calculator_call_count")) > 0
+    if normalized in {"finance_numeric_verification", "finance.verify_numeric", "numeric_verifier"}:
+        return isinstance(metrics.get("numeric_verifier_status"), str) and bool(metrics.get("numeric_verifier_status"))
+    if normalized in {"finance_fact_ledger", "finance.extract_facts"}:
+        return _int_value(metrics.get("finance_fact_count")) > 0
+    trace_text = json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True).casefold()
+    return normalized in trace_text
+
+
+def _source_uris(records: list[JsonObject]) -> list[str]:
+    uris: list[str] = []
+    for record in records:
+        uri = record.get("uri")
+        if isinstance(uri, str) and uri:
+            uris.append(uri)
+    return _ordered_unique(uris)
+
+
+def _source_hosts(uris: list[str]) -> list[str]:
+    hosts: list[str] = []
+    for uri in uris:
+        host = urllib.parse.urlparse(uri).hostname
+        if host:
+            hosts.append(host.lower())
+    return _ordered_unique(hosts)
+
+
+def _finance_source_forms(ledgers: list[JsonObject]) -> list[str]:
+    forms: list[str] = []
+    for ledger in ledgers:
+        facts = ledger.get("facts") if isinstance(ledger, dict) else None
+        if not isinstance(facts, list):
+            continue
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            metadata = fact.get("metadata") if isinstance(fact.get("metadata"), dict) else {}
+            form = metadata.get("form")
+            if isinstance(form, str) and form:
+                forms.append(form)
+    return _ordered_unique(forms)
 
 
 def _load_records(path: Path) -> list[JsonObject]:
@@ -788,8 +1091,12 @@ def _average_metric(results: list[FinanceBenchmarkResult], key: str) -> float:
     values = []
     for result in results:
         value = result.trace_metrics.get(key)
-        if isinstance(value, (int, float)):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
             values.append(float(value))
+    return _average(values)
+
+
+def _average(values: list[float]) -> float:
     if not values:
         return 0.0
     return round(sum(values) / len(values), 4)
@@ -807,3 +1114,14 @@ def _int_value(value: object) -> int:
     if isinstance(value, (int, float)):
         return int(value)
     return 0
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result

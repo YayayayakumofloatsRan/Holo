@@ -7,6 +7,7 @@ import urllib.parse
 from kernel_v3.contracts import JsonObject
 from kernel_v3.privacy import contains_secret_like_content
 from kernel_v3.research import identity_template_values, resolve_issuer_identity, source_directory_for_profile
+from kernel_v3.research.issuer_registry import builtin_issuers_for_text
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 from kernel_v3.retrieval.source_directory_rank import rank_source_directory_sources
 
@@ -36,21 +37,28 @@ class ResearchSourceQuerySearchProvider:
             }
             return []
 
-        values = _template_values(query, goal.metadata)
+        value_sets = _template_value_sets(query, goal.metadata)
         rendered_sources: list[SearchSource] = []
         seen_uris: set[str] = set()
         skipped = 0
         for entry in source_directory_for_profile(profile_id):
             templates = _query_templates(entry.metadata)
-            for template_index, template in enumerate(templates):
-                rendered = _render_source(entry=entry, template=template, values=values, template_index=template_index)
-                if rendered is None:
-                    skipped += 1
-                    continue
-                if rendered.uri in seen_uris:
-                    continue
-                seen_uris.add(rendered.uri)
-                rendered_sources.append(rendered)
+            for value_set_index, values in enumerate(value_sets):
+                for template_index, template in enumerate(templates):
+                    rendered = _render_source(
+                        entry=entry,
+                        template=template,
+                        values=values,
+                        template_index=template_index,
+                        value_set_index=value_set_index,
+                    )
+                    if rendered is None:
+                        skipped += 1
+                        continue
+                    if rendered.uri in seen_uris:
+                        continue
+                    seen_uris.add(rendered.uri)
+                    rendered_sources.append(rendered)
         ranked_sources = rank_source_directory_sources(rendered_sources, query=query, metadata=goal.metadata)
         sources = ranked_sources[: max(0, int(goal.max_sources))]
 
@@ -59,6 +67,7 @@ class ResearchSourceQuerySearchProvider:
             "research_profile": profile_id,
             "source_count": len(sources),
             "candidate_source_count": len(rendered_sources),
+            "template_value_set_count": len(value_sets),
             "ranked_candidate_count": len(ranked_sources),
             "skipped_template_count": skipped,
             "query_aware_ranking": True,
@@ -82,6 +91,7 @@ def _render_source(
     template: JsonObject,
     values: dict[str, str],
     template_index: int,
+    value_set_index: int = 0,
 ) -> SearchSource | None:
     if not _template_matches(template, values):
         return None
@@ -116,6 +126,7 @@ def _render_source(
             "source_kind": source_kind,
             "template_id": template_id,
             "source_directory_template_index": template_index,
+            "source_directory_value_set_index": value_set_index,
             "source_directory_rank_text": _rank_text(entry=entry, template=template),
             **(
                 {"template_match_any": [str(item) for item in match_any if isinstance(item, str)]}
@@ -193,6 +204,109 @@ def _template_values(query: str, metadata: JsonObject) -> dict[str, str]:
     raw["stock_code_or_ticker"] = raw.get("stock_code") or raw.get("asx_code") or raw.get("ticker") or raw["query"]
     raw["metric_or_query"] = raw.get("metric") or raw.get("indicator") or raw["query"]
 
+    values: dict[str, str] = {}
+    for key, value in raw.items():
+        if not value:
+            continue
+        values[key] = value
+        values[f"{key}_url"] = urllib.parse.quote(value, safe="")
+        lowered = value.lower()
+        values[f"{key}_lower"] = lowered
+        values[f"{key}_lower_url"] = urllib.parse.quote(lowered, safe="")
+    return values
+
+
+def _template_value_sets(query: str, metadata: JsonObject) -> list[dict[str, str]]:
+    base = _template_values(query, metadata)
+    value_sets: list[dict[str, str]] = [base]
+    seen: set[tuple[str, str, str]] = {
+        (
+            base.get("ticker", ""),
+            base.get("sec_cik", ""),
+            base.get("investor_relations_url", ""),
+        )
+    }
+    for ticker in _metadata_target_tickers(metadata):
+        values = dict(base)
+        values["ticker"] = ticker
+        values["ticker_or_query"] = ticker
+        values["stock_code_or_ticker"] = ticker
+        values = _url_augment_values(values)
+        identity_key = (
+            values.get("ticker", ""),
+            values.get("sec_cik", ""),
+            values.get("investor_relations_url", ""),
+        )
+        if identity_key in seen:
+            continue
+        seen.add(identity_key)
+        value_sets.append(values)
+    intent_text = _issuer_intent_text(query, metadata)
+    for issuer in builtin_issuers_for_text(intent_text):
+        values = dict(base)
+        for key, raw in issuer.items():
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            normalized_key = "sec_cik" if key == "sec_cik" else key
+            values[normalized_key] = _compact(raw)
+        if values.get("ticker"):
+            values["ticker"] = values["ticker"].upper()
+        if values.get("company") and not values.get("company_or_query"):
+            values["company_or_query"] = values["company"]
+        values = _url_augment_values(values)
+        identity_key = (
+            values.get("ticker", ""),
+            values.get("sec_cik", ""),
+            values.get("investor_relations_url", ""),
+        )
+        if identity_key in seen:
+            continue
+        seen.add(identity_key)
+        value_sets.append(values)
+    return value_sets
+
+
+def _metadata_target_tickers(metadata: JsonObject) -> list[str]:
+    values: list[str] = []
+    for key in ("target_tickers", "tickers"):
+        raw = metadata.get(key)
+        if isinstance(raw, list):
+            values.extend(str(item).upper().strip() for item in raw if str(item).strip())
+        elif isinstance(raw, str) and raw.strip():
+            values.extend(part.upper().strip() for part in re_split_tickers(raw) if part.strip())
+    ticker = metadata.get("ticker")
+    if isinstance(ticker, str) and ticker.strip():
+        values.append(ticker.upper().strip())
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        compact = "".join(ch for ch in value if ch.isalnum() or ch in {".", "-"}).upper()
+        if not compact or compact in seen:
+            continue
+        seen.add(compact)
+        result.append(compact)
+    return result
+
+
+def re_split_tickers(value: str) -> list[str]:
+    return [part for chunk in str(value or "").split(",") for part in chunk.split()]
+
+
+def _issuer_intent_text(query: str, metadata: JsonObject) -> str:
+    parts = [str(query or "")]
+    for key in ("root_goal", "task_goal", "original_goal", "user_goal"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    mission = metadata.get("research_mission")
+    if isinstance(mission, dict):
+        value = mission.get("root_goal")
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return "\n".join(parts)
+
+
+def _url_augment_values(raw: dict[str, str]) -> dict[str, str]:
     values: dict[str, str] = {}
     for key, value in raw.items():
         if not value:

@@ -12,6 +12,8 @@ from kernel_v3.retrieval import (
     SearchGoal,
 )
 import kernel_v3.retrieval.source_query_provider as source_query_module
+from kernel_v3.retrieval.rank import rank_sources
+from kernel_v3.research.profiles import profile_by_id
 
 
 def test_phase99_source_query_provider_expands_official_companies_house_search_url():
@@ -141,6 +143,33 @@ def test_phase99_source_query_provider_expands_builtin_issuer_ir_urls():
     assert annual.metadata["source_kind"] == "issuer_annual_reports"
 
 
+def test_phase99_source_query_provider_renders_multiple_issuer_ir_urls_for_transaction_query():
+    provider = ResearchSourceQuerySearchProvider()
+
+    sources = provider.search(
+        "Pfizer Seagen acquisition transaction EV revenue multiple public deal disclosures",
+        goal=SearchGoal(
+            goal_id="goal-source-query-multi-issuer-ir",
+            query="Pfizer Seagen acquisition transaction EV revenue multiple public deal disclosures",
+            max_sources=30,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "root_goal": "Pfizer acquisition of Seagen transaction multiple",
+            },
+        ),
+        plan=_plan(),
+    )
+
+    urls = {source.uri for source in sources}
+    assert "https://investors.pfizer.com/" in urls
+    assert "https://www.pfizer.com/about/programs-policies/pfizer-seagen" in urls
+    seagen_page = next(source for source in sources if source.uri.endswith("/pfizer-seagen"))
+    assert seagen_page.metadata["source_family"] == "company_ir"
+    assert seagen_page.metadata["authority_level"] == "primary"
+    assert seagen_page.metadata["source_kind"] == "issuer_investor_relations"
+    assert provider.search_diagnostics()["template_value_set_count"] >= 2
+
+
 def test_phase99_source_query_provider_expands_common_market_data_portals():
     provider = ResearchSourceQuerySearchProvider()
 
@@ -160,12 +189,85 @@ def test_phase99_source_query_provider_expands_common_market_data_portals():
 
     urls = {source.uri for source in sources}
     assert "https://finance.yahoo.com/quote/AAPL" in urls
+    assert "https://finance.yahoo.com/quote/AAPL/key-statistics/" in urls
     assert "https://finance.yahoo.com/lookup?s=AAPL" in urls
     assert "https://www.nasdaq.com/market-activity/stocks/aapl" in urls
+    assert "https://api.nasdaq.com/api/quote/AAPL/summary?assetclass=stocks" in urls
     assert "https://www.marketwatch.com/investing/stock/aapl" in urls
+    assert "https://stockanalysis.com/stocks/aapl/" in urls
+    assert "https://stockanalysis.com/stocks/aapl/statistics/" in urls
     market_sources = [source for source in sources if source.metadata["source_family"] == "market_data_provider"]
     assert market_sources
     assert all(source.metadata["authority_level"] == "secondary" for source in market_sources)
+
+
+def test_phase99_source_query_provider_prioritizes_key_statistics_for_ev_ebitda():
+    provider = ResearchSourceQuerySearchProvider()
+
+    sources = provider.search(
+        "LULU EV/EBITDA market cap enterprise value debt cash EBITDA",
+        goal=SearchGoal(
+            goal_id="goal-source-query-ev-ebitda",
+            query="LULU EV/EBITDA market cap enterprise value debt cash EBITDA",
+            max_sources=8,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "ticker": "LULU",
+                "research_task_kind": "valuation",
+            },
+        ),
+        plan=_plan(),
+    )
+
+    urls = [source.uri for source in sources]
+    assert "https://finance.yahoo.com/quote/LULU/key-statistics/" in urls
+    assert "https://api.nasdaq.com/api/quote/LULU/summary?assetclass=stocks" in urls
+    assert "https://stockanalysis.com/stocks/lulu/" in urls
+    assert "https://stockanalysis.com/stocks/lulu/statistics/" in urls
+    statistics = next(source for source in sources if source.uri.endswith("/key-statistics/"))
+    assert statistics.metadata["source_family"] == "market_data_provider"
+    assert statistics.metadata["source_kind"] == "market_data_statistics"
+    assert statistics.metadata["source_directory_relevance_score"] >= sources[-1].metadata["source_directory_relevance_score"]
+
+
+def test_phase99_source_query_provider_expands_target_tickers_for_market_data():
+    provider = ResearchSourceQuerySearchProvider()
+    goal = SearchGoal(
+        goal_id="goal-source-query-target-tickers",
+        query="EV/EBITDA market cap enterprise value debt cash EBITDA",
+        max_sources=20,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "valuation",
+            "target_tickers": ["LULU", "VSCO"],
+            "preferred_source_families": ["market_data_provider", "structured_regulatory_data"],
+        },
+    )
+
+    sources = provider.search(
+        "EV/EBITDA market cap enterprise value debt cash EBITDA",
+        goal=goal,
+        plan=_plan(),
+    )
+
+    urls = {source.uri for source in sources}
+    assert "https://api.nasdaq.com/api/quote/LULU/summary?assetclass=stocks" in urls
+    assert "https://api.nasdaq.com/api/quote/VSCO/summary?assetclass=stocks" in urls
+    assert "https://stockanalysis.com/stocks/lulu/" in urls
+    assert "https://stockanalysis.com/stocks/vsco/" in urls
+    assert "https://stockanalysis.com/stocks/lulu/statistics/" in urls
+    assert "https://stockanalysis.com/stocks/vsco/statistics/" in urls
+    ranked = rank_sources(goal, sources, research_profile=profile_by_id(FINANCE_FUNDAMENTALS_PROFILE_ID))
+    nasdaq_ranks = [
+        item.rank
+        for item in ranked
+        if item.uri in {
+            "https://api.nasdaq.com/api/quote/LULU/summary?assetclass=stocks",
+            "https://api.nasdaq.com/api/quote/VSCO/summary?assetclass=stocks",
+        }
+    ]
+    assert nasdaq_ranks
+    assert max(nasdaq_ranks) <= 12
 
 
 def test_phase99_source_query_provider_expands_reputable_market_news_sources():
@@ -385,9 +487,19 @@ def test_phase99_agent_can_use_source_query_provider_for_multi_step_finance_rese
         fetch_provider=FakeFetchProvider(
             {
                 "https://find-and-update.company-information.service.gov.uk/search?q=Acme%20plc": (
-                    "Acme plc Companies House accounts filing history includes official accounts and revenue filings."
+                    '<a href="https://find-and-update.company-information.service.gov.uk/company/12345678/filing-history/accounts-annual-report.html">'
+                    "Acme plc annual accounts report"
+                    "</a>"
+                ),
+                "https://find-and-update.company-information.service.gov.uk/company/12345678/filing-history/accounts-annual-report.html": (
+                    "Acme plc Companies House accounts annual report includes official accounts and revenue filings."
                 ),
                 "https://fred.stlouisfed.org/searchresults/?search_type=series&search=CPI": (
+                    '<a href="https://fred.stlouisfed.org/series/CPIAUCSL/annual-report.html">'
+                    "FRED CPI inflation annual report"
+                    "</a>"
+                ),
+                "https://fred.stlouisfed.org/series/CPIAUCSL/annual-report.html": (
                     "FRED CPI inflation macro series provides official CPI context for rates and macro analysis."
                 ),
             }
@@ -492,14 +604,29 @@ def test_phase99_agent_can_use_exchange_query_provider_for_multi_step_finance_re
         fetch_provider=FakeFetchProvider(
             {
                 asx_url: (
+                    '<a href="https://www.asx.com.au/asxpdf/20250220/pdf/bhp-annual-report.pdf">'
+                    "ASX BHP annual report announcement"
+                    "</a>"
+                ),
+                "https://www.asx.com.au/asxpdf/20250220/pdf/bhp-annual-report.pdf": (
                     "ASX BHP annual report announcement includes primary exchange filing evidence. "
                     "The annual report states revenue was $55.7 billion."
                 ),
                 hkex_url: (
+                    '<a href="https://www1.hkexnews.hk/listedco/listconews/sehk/2025/0320/00700-annual-report.pdf">'
+                    "HKEX 00700 annual report announcement"
+                    "</a>"
+                ),
+                "https://www1.hkexnews.hk/listedco/listconews/sehk/2025/0320/00700-annual-report.pdf": (
                     "HKEX 00700 annual report announcement includes primary exchange filing evidence. "
                     "The annual report states revenue was RMB 609.0 billion."
                 ),
                 sgx_url: (
+                    '<a href="https://www.sgx.com/research-education/annual-reports/D05-financial-results.pdf">'
+                    "SGX D05 financial results announcement"
+                    "</a>"
+                ),
+                "https://www.sgx.com/research-education/annual-reports/D05-financial-results.pdf": (
                     "SGX D05 financial results announcement includes primary exchange filing evidence. "
                     "The financial results announcement states net income was SGD 10.3 billion."
                 ),

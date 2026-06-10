@@ -289,11 +289,17 @@ def _source_from_link(
         "sec_accession_compact",
         "sec_primary_document",
         "sec_form",
+        "sec_cik",
+        "sec_primary_doc_description",
+        "sec_items",
         "report_date",
         "filing_date",
+        "expanded_from_submission_archive",
     ):
         value = link.get(key)
         if isinstance(value, str) and value:
+            metadata[key] = value
+        elif isinstance(value, bool):
             metadata[key] = value
     if source.metadata.get("source_directory_id"):
         metadata["source_directory_id"] = source.metadata["source_directory_id"]
@@ -337,29 +343,59 @@ def _sec_submission_document_links(
         return []
     filings = payload.get("filings")
     recent = filings.get("recent") if isinstance(filings, dict) else None
+    if not isinstance(recent, dict) and isinstance(payload.get("accessionNumber"), list):
+        recent = payload
     if not isinstance(recent, dict):
         return []
     accessions = _json_list(recent.get("accessionNumber"))
     forms = _json_list(recent.get("form"))
     primary_documents = _json_list(recent.get("primaryDocument"))
+    primary_descriptions = _json_list(recent.get("primaryDocDescription"))
+    items = _json_list(recent.get("items"))
     report_dates = _json_list(recent.get("reportDate"))
     filing_dates = _json_list(recent.get("filingDate"))
     cik = _sec_cik_from_payload(payload, document=document, source=source)
     if not cik:
         return []
     target_years = [term for term in query_terms if term.isdigit() and len(term) == 4]
+    intent_terms = [*query_terms, *_metadata_goal_terms(goal.metadata)]
     wants_annual = _query_wants_annual_report(query_terms)
+    wants_bridge_reconciliation = _query_wants_bridge_reconciliation(intent_terms)
+    wants_transaction_event = _query_wants_transaction_event(intent_terms)
+    wants_transaction_or_bridge = wants_transaction_event or wants_bridge_reconciliation
     candidates: list[JsonObject] = []
-    for index, accession in enumerate(accessions[:200]):
+    candidates.extend(
+        _sec_submission_archive_file_links(
+            goal=goal,
+            document=document,
+            source=source,
+            payload=payload,
+            wants_transaction_or_bridge=wants_transaction_or_bridge,
+            target_years=target_years,
+        )
+    )
+    scan_limit = _sec_submission_recent_scan_limit(
+        wants_transaction_or_bridge=wants_transaction_or_bridge,
+        target_years=target_years,
+        accession_count=len(accessions),
+    )
+    for index, accession in enumerate(accessions[:scan_limit]):
         accession_number = str(accession or "").strip()
         compact = accession_number.replace("-", "")
         primary_document = _safe_sec_document_name(_list_get(primary_documents, index))
         form = str(_list_get(forms, index) or "").strip().upper()
+        primary_description = str(_list_get(primary_descriptions, index) or "").strip()
+        filing_items = str(_list_get(items, index) or "").strip()
         report_date = str(_list_get(report_dates, index) or "").strip()
         filing_date = str(_list_get(filing_dates, index) or "").strip()
         if not compact or not primary_document or not form:
             continue
-        if not _sec_form_is_document_candidate(form=form, wants_annual=wants_annual):
+        if not _sec_form_is_document_candidate(
+            form=form,
+            wants_annual=wants_annual,
+            wants_transaction_event=wants_transaction_event,
+            wants_bridge_reconciliation=wants_bridge_reconciliation,
+        ):
             continue
         base_uri = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{compact}"
         title = _sec_submission_link_title(
@@ -367,13 +403,21 @@ def _sec_submission_document_links(
             report_date=report_date,
             filing_date=filing_date,
             primary_document=primary_document,
+            primary_description=primary_description,
+            filing_items=filing_items,
         )
         score = _sec_submission_candidate_score(
             form=form,
+            primary_document=primary_document,
+            primary_description=primary_description,
+            filing_items=filing_items,
             report_date=report_date,
             filing_date=filing_date,
+            query_terms=query_terms,
             target_years=target_years,
             wants_annual=wants_annual,
+            wants_transaction_event=wants_transaction_event,
+            wants_bridge_reconciliation=wants_bridge_reconciliation,
         )
         if score <= 0:
             continue
@@ -381,10 +425,13 @@ def _sec_submission_document_links(
             "score": score,
             "matched_terms": _ordered_unique([form.lower(), *target_years, "sec", "filing", "10-k"])[:16],
             "source_family": "regulatory_filing",
+            "filing_index": index,
             "sec_accession_number": accession_number,
             "sec_accession_compact": compact,
             "sec_primary_document": primary_document,
             "sec_form": form,
+            "sec_primary_doc_description": primary_description,
+            "sec_items": filing_items,
             "report_date": report_date,
             "filing_date": filing_date,
         }
@@ -405,16 +452,167 @@ def _sec_submission_document_links(
                 "score": max(0.1, score - 0.08),
             }
         )
+    candidates = _select_sec_submission_candidates(
+        candidates,
+        wants_transaction_event=wants_transaction_event,
+        wants_bridge_reconciliation=wants_bridge_reconciliation,
+        target_years=target_years,
+    )
+    return candidates[:48 if wants_transaction_or_bridge else 24]
+
+
+def _sec_submission_archive_file_links(
+    *,
+    goal: SearchGoal,
+    document: FetchedDocument,
+    source: SearchSource,
+    payload: JsonObject,
+    wants_transaction_or_bridge: bool,
+    target_years: list[str],
+) -> list[JsonObject]:
+    filings = payload.get("filings")
+    files = filings.get("files") if isinstance(filings, dict) else None
+    if not isinstance(files, list) or not files:
+        return []
+    base = "https://data.sec.gov/submissions/"
+    result: list[JsonObject] = []
+    for index, item in enumerate(files[:24]):
+        if not isinstance(item, dict):
+            continue
+        name = _safe_sec_submission_file_name(item.get("name"))
+        if not name:
+            continue
+        filing_from = str(item.get("filingFrom") or "")
+        filing_to = str(item.get("filingTo") or "")
+        year_range = " ".join(re.findall(r"(?:19|20)\d{2}", f"{filing_from} {filing_to}"))
+        score = 0.95
+        if wants_transaction_or_bridge:
+            score += 1.25
+        if target_years:
+            if any(year in year_range for year in target_years):
+                score += 2.0
+            else:
+                score -= 0.25
+        result.append(
+            {
+                "url": urllib.parse.urljoin(base, name),
+                "text": _bounded(
+                    f"SEC submissions archive file {name} filingFrom={filing_from} filingTo={filing_to}",
+                    240,
+                ),
+                "score": score,
+                "matched_terms": _ordered_unique(["sec", "submissions", "filing", *target_years])[:16],
+                "source_family": "structured_regulatory_data",
+                "source_kind": "sec_submissions_json",
+                "filing_index": -1000 + index,
+                "expanded_from_submission_archive": True,
+                "research_profile": source.metadata.get("research_profile") or goal.metadata.get("research_profile"),
+                "research_profile_id": source.metadata.get("research_profile_id") or goal.metadata.get("research_profile_id"),
+                "authority_level": source.metadata.get("authority_level") or "primary",
+                "sec_cik": source.metadata.get("sec_cik") or document.metadata.get("sec_cik"),
+            }
+        )
+    return result
+
+
+def _safe_sec_submission_file_name(value: object) -> str:
+    text = str(value or "").strip().split("/")[-1]
+    if not re.fullmatch(r"CIK\d{10}-submissions-\d{3}\.json", text):
+        return ""
+    return text
+
+
+def _select_sec_submission_candidates(
+    candidates: list[JsonObject],
+    *,
+    wants_transaction_event: bool,
+    wants_bridge_reconciliation: bool,
+    target_years: list[str],
+) -> list[JsonObject]:
     candidates.sort(key=lambda item: (-float(item.get("score") or 0.0), str(item.get("url") or "")))
-    return candidates[:24]
+    if wants_bridge_reconciliation and not target_years:
+        return _select_bridge_reconciliation_candidates(candidates)
+    if not wants_transaction_event or target_years:
+        return candidates
+    by_year: dict[str, list[JsonObject]] = {}
+    for candidate in sorted(candidates, key=lambda item: _safe_int(item.get("filing_index"), default=10_000)):
+        form = str(candidate.get("sec_form") or "").upper().replace(" ", "")
+        if form not in {"8-K", "6-K", "10-K", "20-F", "40-F"}:
+            continue
+        year = _year_from_date(str(candidate.get("filing_date") or "")) or _year_from_date(str(candidate.get("report_date") or ""))
+        year = year or "unknown"
+        by_year.setdefault(year, []).append(candidate)
+    if len(by_year) <= 1:
+        return candidates
+    result: list[JsonObject] = []
+    seen: set[str] = set()
+    years = sorted(by_year, reverse=True)
+    for _round in range(8):
+        for year in years:
+            bucket = by_year.get(year) or []
+            if not bucket:
+                continue
+            candidate = bucket.pop(0)
+            key = str(candidate.get("url") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(candidate)
+            if len(result) >= 48:
+                return result
+    for candidate in candidates:
+        key = str(candidate.get("url") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+        if len(result) >= 48:
+            break
+    return result
 
 
-def _sec_submission_link_title(*, form: str, report_date: str, filing_date: str, primary_document: str) -> str:
+def _select_bridge_reconciliation_candidates(candidates: list[JsonObject]) -> list[JsonObject]:
+    filing_reports: list[JsonObject] = []
+    other_documents: list[JsonObject] = []
+    event_filings: list[JsonObject] = []
+    for candidate in candidates:
+        form = str(candidate.get("sec_form") or "").upper().replace(" ", "")
+        if form in {"10-K", "10-Q", "20-F", "40-F"}:
+            filing_reports.append(candidate)
+        elif form in {"8-K", "6-K"}:
+            event_filings.append(candidate)
+        else:
+            other_documents.append(candidate)
+    ordered: list[JsonObject] = []
+    seen: set[str] = set()
+    for bucket in (filing_reports, other_documents, event_filings):
+        for candidate in bucket:
+            url = str(candidate.get("url") or "")
+            if url in seen:
+                continue
+            seen.add(url)
+            ordered.append(candidate)
+    return ordered
+
+
+def _sec_submission_link_title(
+    *,
+    form: str,
+    report_date: str,
+    filing_date: str,
+    primary_document: str,
+    primary_description: str = "",
+    filing_items: str = "",
+) -> str:
     pieces = [f"SEC {form} primary filing document"]
     if report_date:
         pieces.append(f"reportDate={report_date}")
     if filing_date:
         pieces.append(f"filed={filing_date}")
+    if primary_description:
+        pieces.append(f"description={primary_description}")
+    if filing_items:
+        pieces.append(f"items={filing_items}")
     pieces.append(primary_document)
     return " ".join(pieces)
 
@@ -422,10 +620,16 @@ def _sec_submission_link_title(*, form: str, report_date: str, filing_date: str,
 def _sec_submission_candidate_score(
     *,
     form: str,
+    primary_document: str,
+    primary_description: str,
+    filing_items: str,
     report_date: str,
     filing_date: str,
+    query_terms: list[str],
     target_years: list[str],
     wants_annual: bool,
+    wants_transaction_event: bool,
+    wants_bridge_reconciliation: bool,
 ) -> float:
     normalized_form = form.upper().replace(" ", "")
     score = 0.8
@@ -433,7 +637,16 @@ def _sec_submission_candidate_score(
         score += 1.1
     elif normalized_form == "10-Q":
         score += 0.35
-    if wants_annual and normalized_form not in {"10-K", "20-F", "40-F"}:
+    elif normalized_form in {"8-K", "6-K"} and wants_transaction_event:
+        score += 1.25
+    if wants_bridge_reconciliation:
+        if normalized_form in {"10-K", "20-F", "40-F"}:
+            score += 1.25
+        elif normalized_form == "10-Q":
+            score += 0.55
+        elif normalized_form in {"8-K", "6-K"}:
+            score -= 0.35
+    if wants_annual and not wants_transaction_event and normalized_form not in {"10-K", "20-F", "40-F"}:
         score -= 0.65
     report_year = _year_from_date(report_date)
     filing_year = _year_from_date(filing_date)
@@ -444,22 +657,148 @@ def _sec_submission_candidate_score(
             score += 0.35
         else:
             score -= 0.65
+    if wants_transaction_event:
+        score += _sec_event_metadata_score(
+            form=normalized_form,
+            primary_document=primary_document,
+            primary_description=primary_description,
+            filing_items=filing_items,
+            query_terms=query_terms,
+        )
     return score
 
 
-def _sec_form_is_document_candidate(*, form: str, wants_annual: bool) -> bool:
+def _sec_event_metadata_score(
+    *,
+    form: str,
+    primary_document: str,
+    primary_description: str,
+    filing_items: str,
+    query_terms: list[str],
+) -> float:
+    haystack = f"{primary_document} {primary_description} {filing_items}".lower()
+    if not haystack.strip():
+        return 0.0
+    score = 0.0
+    event_terms = {
+        "acquisition",
+        "acquire",
+        "merger",
+        "transaction",
+        "agreement",
+        "definitive",
+        "purchase",
+        "consideration",
+        "disposition",
+        "business",
+        "combination",
+    }
+    matched_query_terms = [
+        term
+        for term in query_terms
+        if len(term) >= 4 and term not in STOPWORDS and term in haystack
+    ]
+    score += min(1.6, 0.35 * len(matched_query_terms))
+    if any(term in haystack for term in event_terms):
+        score += 1.1
+    if form in {"8-K", "6-K"}:
+        if any(item in haystack for item in ("1.01", "2.01")):
+            score += 2.15
+        elif "8.01" in haystack:
+            score += 0.85
+        if "9.01" in haystack:
+            score += 0.25
+        if any(item in haystack for item in ("2.02", "2.05")):
+            score -= 0.75
+    if any(marker in haystack for marker in ("earnings release", "financial results", "quarter results")):
+        score -= 0.7
+    return score
+
+
+def _sec_form_is_document_candidate(
+    *,
+    form: str,
+    wants_annual: bool,
+    wants_transaction_event: bool = False,
+    wants_bridge_reconciliation: bool = False,
+) -> bool:
     normalized = form.upper().replace(" ", "")
     if normalized in {"10-K", "10-Q", "20-F", "40-F"}:
+        return True
+    if (wants_transaction_event or wants_bridge_reconciliation) and normalized in {"8-K", "6-K"}:
         return True
     if wants_annual:
         return False
     return normalized in {"8-K", "6-K"}
 
 
+def _sec_submission_recent_scan_limit(
+    *,
+    wants_transaction_or_bridge: bool,
+    target_years: list[str],
+    accession_count: int,
+) -> int:
+    if target_years:
+        return min(max(200, int(accession_count)), 1200)
+    if wants_transaction_or_bridge:
+        return min(max(400, int(accession_count)), 1200)
+    return min(200, int(accession_count))
+
+
 def _query_wants_annual_report(query_terms: list[str]) -> bool:
     return any(term in query_terms for term in {"annual", "fiscal", "fy2024", "10", "10k", "10-k"}) or any(
         term.isdigit() and len(term) == 4 for term in query_terms
     )
+
+
+def _query_wants_transaction_event(query_terms: list[str]) -> bool:
+    normalized = " ".join(query_terms).lower()
+    compact = "".join(ch for ch in normalized if ch.isalnum())
+    return any(
+        marker in normalized or marker in compact
+        for marker in (
+            "8-k",
+            "8k",
+            "merger",
+            "acquisition",
+            "transaction",
+            "deal",
+            "purchase",
+            "consideration",
+        )
+    )
+
+
+def _query_wants_bridge_reconciliation(query_terms: list[str]) -> bool:
+    normalized = " ".join(query_terms).lower()
+    compact = "".join(ch for ch in normalized if ch.isalnum())
+    return any(
+        marker in normalized or marker in compact
+        for marker in (
+            "adjusted ebitda",
+            "adjustedebitda",
+            "non gaap",
+            "nongaap",
+            "bridge",
+            "reconciliation",
+            "addback",
+            "add back",
+        )
+    )
+
+
+def _metadata_goal_terms(metadata: JsonObject) -> list[str]:
+    parts: list[str] = []
+    for key in ("root_goal", "task_goal", "original_goal", "user_goal"):
+        value = metadata.get(key) if isinstance(metadata, dict) else None
+        if isinstance(value, str) and value.strip():
+            parts.extend(value.replace("-", " ").split())
+    mission = metadata.get("research_mission") if isinstance(metadata, dict) else None
+    if isinstance(mission, dict):
+        value = mission.get("root_goal")
+        if isinstance(value, str) and value.strip():
+            parts.extend(value.replace("-", " ").split())
+    return parts
 
 
 def _sec_cik_from_payload(payload: JsonObject, *, document: FetchedDocument, source: SearchSource) -> str:
@@ -493,6 +832,13 @@ def _list_get(values: list[object], index: int) -> object:
 def _year_from_date(value: str) -> str:
     match = re.match(r"^((?:19|20)\d{2})-", str(value or ""))
     return match.group(1) if match else ""
+
+
+def _safe_int(value: object, *, default: int = 0) -> int:
+    try:
+        return int(str(value or "").strip())
+    except ValueError:
+        return default
 
 
 def _candidate_source_kind(*, source: SearchSource, url: str, text: str) -> str:

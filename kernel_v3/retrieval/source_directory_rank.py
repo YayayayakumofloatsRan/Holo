@@ -212,10 +212,25 @@ def source_directory_task_boost(*, family: str, task_text: str, candidate_text: 
             boost += 0.45
         elif "news" in candidate_text:
             boost += 0.15
-    if "market_data" in task_text or "quote" in task_text or "price" in task_text:
+    if (
+        "market_data" in task_text
+        or "quote" in task_text
+        or "price" in task_text
+        or "valuation" in task_text
+        or "market" in task_text and "cap" in task_text
+        or "enterprise" in task_text and "value" in task_text
+        or "ebitda" in task_text
+        or "ev" in task_text
+    ):
         if family == "market_data_provider":
             boost += 0.45
-        elif "market data" in candidate_text or "quote" in candidate_text:
+        elif (
+            "market data" in candidate_text
+            or "quote" in candidate_text
+            or "valuation" in candidate_text
+            or "enterprise value" in candidate_text
+            or "ebitda" in candidate_text
+        ):
             boost += 0.15
     if "transcript" in task_text or "earnings_call" in task_text or "management" in task_text:
         if family == "earnings_transcript":

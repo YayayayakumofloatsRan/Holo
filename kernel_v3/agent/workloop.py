@@ -546,6 +546,21 @@ def assess_evidence_sufficiency(
         missing = [item for item in missing if item not in soft_missing]
         sufficient = True
         reason = str(adaptive_completion.get("reason") or "open_research_soft_subgoals_can_be_limited")
+    if (
+        recipe.mode == "retrieval_answer"
+        and _calculator_formula_trace_available(journal, task_id=task_id, run_id=run_id)
+        and retrieval_evidence
+        and citation_refs
+    ):
+        soft_missing = {
+            "sufficient_retrieval_evidence",
+            *[item for item in missing if str(item).startswith("retrieval_subgoal:")],
+            *[item for item in missing if str(item).startswith("query_facet:")],
+            *[item for item in missing if str(item).startswith("finance_facet:")],
+        }
+        missing = [item for item in missing if item not in soft_missing]
+        sufficient = True
+        reason = "formula_trace_with_retrieval_evidence"
     if recipe.mode == "workspace_answer" and not workspace_observation_count:
         sufficient = False
         missing.append("workspace_observation")
@@ -1263,6 +1278,18 @@ def _latest_missing_evidence(journal: JournalStore, *, task_id: str, run_id: str
 
 def _dict_or_empty(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _calculator_formula_trace_available(journal: JournalStore, *, task_id: str, run_id: str) -> bool:
+    for record in journal.records(task_id=task_id, run_id=run_id, kind="observation"):
+        if str(record.data.get("source") or "") != "tool:calculator.compute":
+            continue
+        if record.data.get("status") != "ok":
+            continue
+        content = record.data.get("content")
+        if isinstance(content, dict) and isinstance(content.get("formula_trace"), dict):
+            return True
+    return False
 
 
 def _string_or_empty(value: object) -> str:

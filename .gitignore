@@ -3,6 +3,7 @@ __pycache__/
 *.swp
 .venv/
 kernel_v3/.holo-v3-journal.*
+kernel_v3/.holo-v3-artifacts.*
 .holo_host.toml
 .holo_runtime/
 .state/

@@ -102,6 +102,25 @@ def build_next_tool_actions(
             )
         )
     if failure_mode == "fetch_failed_or_empty" or any(item.get("status") != "ok" for item in fetch_summaries):
+        failed_event_sources = _failed_event_sources(goal=goal, fetch_summaries=fetch_summaries)
+        if failed_event_sources:
+            actions.append(
+                RetrievalNextAction(
+                    action_id=f"next-{goal.goal_id}-alternate-event-source",
+                    action="find_alternate_event_source",
+                    tool_hint="retrieval.run",
+                    reason=(
+                        "a high-value issuer event source failed to fetch; search for an alternate press release, "
+                        "transaction page, event filing, or direct document URL instead of repeating the same fetch"
+                    ),
+                    payload_hint={
+                        "goal_id": goal.goal_id,
+                        "failed_sources": failed_event_sources[:8],
+                        "strategy": "event_source_fallback",
+                        "query_hints": _event_fallback_query_hints(goal),
+                    },
+                )
+            )
         actions.append(
             RetrievalNextAction(
                 action_id=f"next-{goal.goal_id}-alternate-fetch",
@@ -133,6 +152,72 @@ def build_next_tool_actions(
             )
         )
     return _dedupe_actions(actions)
+
+
+def _failed_event_sources(*, goal: SearchGoal, fetch_summaries: list[JsonObject]) -> list[JsonObject]:
+    intent = _intent_text(goal).lower()
+    event_intent = _has_event_intent(intent)
+    result: list[JsonObject] = []
+    for item in fetch_summaries:
+        if item.get("status") == "ok":
+            continue
+        family = str(item.get("source_family") or "")
+        kind = str(item.get("source_kind") or "")
+        haystack = f"{item.get('uri') or ''} {item.get('title') or ''} {item.get('reason') or ''}".lower()
+        if family != "company_ir" and kind not in {"issuer_investor_relations", "issuer_earnings_releases"}:
+            continue
+        if not event_intent and not _has_event_intent(haystack):
+            continue
+        result.append(
+            {
+                "source_id": item.get("source_id"),
+                "uri": item.get("uri"),
+                "host": item.get("host") or _host(str(item.get("uri") or "")),
+                "title": item.get("title"),
+                "reason": item.get("reason"),
+            }
+        )
+    return result
+
+
+def _event_fallback_query_hints(goal: SearchGoal) -> list[str]:
+    base = _intent_text(goal)
+    if not base:
+        return []
+    return [
+        f"{base} press release transaction value",
+        f"{base} acquisition announcement consideration",
+        f"{base} merger agreement Form 8-K",
+    ]
+
+
+def _intent_text(goal: SearchGoal) -> str:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    parts = [goal.query]
+    for key in ("original_query", "user_goal", "root_goal", "intent"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value)
+    return " ".join(parts)
+
+
+def _has_event_intent(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "acquisition",
+            "acquire",
+            "merger",
+            "transaction",
+            "deal",
+            "purchase",
+            "consideration",
+            "tender offer",
+            "收购",
+            "并购",
+            "交易",
+        )
+    )
 
 
 def build_research_graph(

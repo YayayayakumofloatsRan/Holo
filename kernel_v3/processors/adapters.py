@@ -158,6 +158,35 @@ class Synthesizer:
             },
         )
         if outcome.parsed is None:
+            retry = self.fabric.run_json(
+                task_type="synthesizer.answer",
+                task_id=task_id,
+                run_id=run_id,
+                context_id=f"{context_id}-json-repair",
+                prompt=_synthesizer_prompt(
+                    report,
+                    evidence,
+                    citations,
+                    retry_instruction=(
+                        "Previous synthesizer output was not valid JSON. "
+                        "Return exactly one valid JSON object matching synthesizer.answer. "
+                        "Do not include markdown fences or prose outside JSON. "
+                        "Keep answer concise enough to avoid truncation while preserving required evidence, "
+                        "calculator results, caveats, citation_refs, and used_evidence."
+                    ),
+                ),
+                schema=SYNTHESIZER_SCHEMA,
+                provider=self.provider,
+                model=self.model,
+                parameters={
+                    "adapter": "Synthesizer",
+                    "retrieval_report_id": report.report_id,
+                    "repair_reason": "invalid_json",
+                    **budget_parameters,
+                },
+            )
+            if retry.parsed is not None:
+                return _final_answer_from_json(retry.parsed, citations=citations, evidence=evidence)
             return FinalAnswer(
                 status="failed",
                 answer=None,
@@ -252,6 +281,7 @@ def _synthesizer_prompt(
             "If answer_profile.format is detailed_report, deep_report, or memo, write a sectioned report that covers answer_profile.target_sections and answer_profile.minimum_coverage.",
             "If the evidence does not support a required section, include that section with a clear limitation instead of collapsing the whole answer into a short summary.",
             "For finance research, distinguish facts, source-backed metrics, analysis, risks, and limitations; do not rely on generic product or encyclopedia pages as if they were financial statements.",
+            "For finance calculations, if retrieval_report.diagnostics.finance_formula_traces is present, use those host calculator results as authoritative computed values and do not recompute them mentally.",
             "Use host_situation as the source of truth for whether live retrieval, tools, permissions, and finance research are available.",
             "Do not say live retrieval, network access, or finance research is unavailable unless host_situation.retrieval or host_situation.failure says so.",
             "If host_situation says retrieval was attempted but evidence is insufficient, describe the real failure as search/fetch/extraction/citation/coverage quality instead of a permission problem.",
@@ -577,6 +607,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
     answer_profile = _json_object(diagnostics.get("answer_profile"))
     research_mission = _json_object(diagnostics.get("research_mission"))
     host_situation = _json_object(diagnostics.get("host_situation"))
+    finance_formula_traces = diagnostics.get("finance_formula_traces")
     return {
         "report_id": report.report_id,
         "goal_id": report.goal_id,
@@ -621,6 +652,8 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
                 "target_entities": _string_list(research_mission.get("target_entities"))[:12],
             },
             "host_situation": _compact_prompt_value(host_situation),
+            "finance_synthesis_directive": diagnostics.get("finance_synthesis_directive"),
+            "finance_formula_traces": _compact_list_for_provider(finance_formula_traces, limit=16),
         },
     }
 

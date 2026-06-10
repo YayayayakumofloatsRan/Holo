@@ -140,6 +140,8 @@ _MARKET_DATA_DOMAINS = {
     "www.markets.businessinsider.com",
     "macrotrends.net",
     "www.macrotrends.net",
+    "stockanalysis.com",
+    "www.stockanalysis.com",
     "tradingview.com",
     "www.tradingview.com",
 }

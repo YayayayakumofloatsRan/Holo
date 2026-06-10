@@ -11,7 +11,7 @@ from kernel_v3.agent.execution_profile import (
     profile_mission_enabled,
     profile_processor_mode,
 )
-from kernel_v3.agent.runtime import _with_runtime_loop_budget
+from kernel_v3.agent.runtime import _disabled_workmethod_state, _with_runtime_loop_budget
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
@@ -30,7 +30,7 @@ def test_finance_fact_fast_profile_is_short_lane() -> None:
     assert profile_processor_mode(profile, "semantic_intake", "model", online=True) == "fake"
     assert metadata["agent_loop"]["max_steps"] == 4
     assert metadata["retrieval"]["max_fetches"] == 8
-    assert metadata["processor_budget"]["max_calls_per_task"] == 4
+    assert metadata["processor_budget"]["max_calls_per_task"] == 6
 
 
 def test_long_mission_profile_preserves_heavy_supervision() -> None:
@@ -90,6 +90,21 @@ def test_fast_execution_profile_loop_budget_is_hard_cap_for_model_planner() -> N
 
     assert bounded.max_steps == 4
     assert bounded.max_tool_calls == 3
+
+
+def test_fast_execution_profile_disabled_workmethod_state_is_constructible() -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
+
+    state = _disabled_workmethod_state(
+        goal="Investigate AAPL fundamentals.",
+        thread_id="thread-fast",
+        task_plan=SimpleNamespace(plan_id="plan-fast", selected_mode="retrieval_answer"),
+        execution_metadata=metadata,
+    )
+
+    assert state.source == "disabled_by_execution_profile"
+    assert state.frame["work_type"] == "execution_profile_fast_lane"
+    assert state.method["method_name"] == "fast_lane_without_workmethod"
 
 
 def test_long_mission_without_profile_still_allows_dynamic_model_loop_budget() -> None:

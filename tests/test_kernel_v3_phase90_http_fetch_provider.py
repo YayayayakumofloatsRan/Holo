@@ -68,6 +68,20 @@ def test_phase90_http_fetch_provider_allows_host_bounded_discovery_expansion() -
     assert response.diagnostics["host_allowed_by"] == "discovery_expansion"
 
 
+def test_phase90_http_fetch_provider_uses_browser_headers_for_nasdaq_api() -> None:
+    transport = _Transport(response=HttpTransportResponse(status_code=200, body=b'{"data":{}}', mime_type="application/json"))
+    provider = HttpFetchProvider(enabled=True, allowed_hosts=["api.nasdaq.com"], transport=transport)
+
+    response = provider.fetch(_source("https://api.nasdaq.com/api/quote/LULU/summary?assetclass=stocks"))
+
+    assert response.status == "ok"
+    headers = transport.calls[0]["headers"]
+    assert "Mozilla/5.0" in headers["User-Agent"]
+    assert headers["Accept"] == "application/json,text/plain,*/*"
+    assert headers["Origin"] == "https://www.nasdaq.com"
+    assert headers["Referer"] == "https://www.nasdaq.com/"
+
+
 def test_phase90_http_fetch_provider_fails_closed_when_disabled() -> None:
     transport = _Transport()
     provider = HttpFetchProvider(allowed_hosts=["example.com"], transport=transport)

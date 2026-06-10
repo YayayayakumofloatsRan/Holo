@@ -106,6 +106,17 @@ digest and SEC companyfacts extraction pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-08_MEMORY_DIGEST_SEC_EXTRACTION.md`. The
 2026-06-09 public-benchmark import and behavior-graph pass is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-09_BENCHMARK_GRAPH.md`. The current
+finance benchmark work and handoff status are tracked in
+`docs/KERNEL_V3_FINANCE_BENCHMARK_TRACK.md`. As of 2026-06-10, Kernel v3 has a
+v1 finance substrate with structured finance facts, deterministic calculator
+traces, numeric verification, FAB v2 public/dev10 import and scoring, and
+fast-lane budget controls. It has closed representative live tasks such as
+HD/LOW DIO, KHC adjusted EBITDA bridge, and PFE/Seagen transaction multiple,
+but it should not yet be described as a stable Finance Agent v2 solver. The
+main open gap is robust acquisition and extraction for harder filing tasks such
+as add-back/non-GAAP reconciliation trends, DCF/LBO, fixed-charge coverage, and
+purchase-price-allocation analysis.
+The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
 payloads before processor calls, mission continuations preserve the original
@@ -563,6 +574,24 @@ Kernel v3 currently contains the infrastructure for:
   candidate source URLs; network fetch still requires live retrieval permission
   plus either curated/source-search allowlists, discovered web-search result
   permission, or an explicit smoke-test override.
+- Finance deterministic substrate for benchmark work: retrieval evidence can be
+  projected into a `FinanceFactLedger`, common analyst formulas can be compiled
+  into host-run `calculator.compute` traces, and finance final answers can pass
+  through `finance.verify_numeric` before delivery. FAB v2 curated dev10 support
+  and post-run annotation scoring are documented in
+  `docs/KERNEL_V3_FINANCE_BENCHMARK_TRACK.md`.
+- Transaction/acquisition retrieval now treats issuer event pages and SEC 8-K
+  event filings as first-class acquisition paths. The source layer can render
+  multi-issuer company IR candidates, the operator critic emits
+  `find_alternate_event_source` when a high-value issuer event page fails, SEC
+  submission expansion ranks merger/agreement 8-Ks ahead of earnings/cost
+  action 8-Ks, and extraction prioritizes M&A cash-consideration spans under
+  tight span budgets. SEC complete submission bundles now use a larger readable
+  window so exhibit content beyond the old prefix limit can enter the fact
+  ledger. This now closes the PFE/SGEN-style FAB v2 transaction-multiple smoke
+  with retrieval, ledger, calculator, and numeric verification; broader
+  transaction-accounting and purchase-price-allocation coverage still needs
+  more fact-ledger and formula-planner work.
 - empty retrieval observations with zero evidence and zero citations no longer
   count as loop progress. The failed/empty fact is journaled and re-enters the
   workloop, but progress, repetition, evidence sufficiency, and termination are
@@ -1066,12 +1095,73 @@ Finance lanes also include a deterministic finance substrate:
 - `FinanceFactLedger` turns retrieval evidence, especially SEC companyfacts
   spans, into structured finance facts with metric, fiscal period, value, unit,
   evidence ref, and citation ref.
+- `FinanceFormulaPlanner` is a host-side compiler for common analyst formulas
+  such as CAGR, DIO, margin, basis-point deltas, EV/Revenue, YoY growth, and
+  bridge subtotals. It binds formulas to fact-ledger inputs when enough facts
+  exist; otherwise it emits missing-fact diagnostics for the next loop.
 - `calculator.compute` is a host tool using Decimal arithmetic and an AST
   whitelist; the model proposes the formula, the host executes it.
 - `finance.verify_numeric` runs as a host final gate for finance profiles that
   require numeric verification. Unsupported answer numbers, unit/scale
-  mismatches, period mismatches, and missing formula support become structured
-  failure reports instead of polished but unsupported answers.
+  mismatches, period mismatches, missing formula traces, missing fact ledgers,
+  assumption-label gaps, and ledger extraction gaps become structured failure
+  reports instead of polished but unsupported answers.
+
+The repo includes a small FAB v2-style development slice:
+
+```bash
+holo-v3 bench finance \
+  --dataset data/bench/finance/fabv2_dev10.jsonl \
+  --dev-gold data/bench/finance/fabv2_dev10.gold.jsonl \
+  --predictions artifacts/finance_predictions.jsonl \
+  --output artifacts/fabv2_dev10_results.jsonl \
+  --summary-output artifacts/fabv2_dev10_summary.json
+```
+
+`--dev-gold` is post-run scoring material only. It is never inserted into the
+agent prompt. The summary reports behavior score, numeric score, substrate
+score, calculator usage, formula trace count, finance fact count, numeric
+verifier status, answer numeric support rate, and finance numeric failure
+taxonomy.
+
+Latest live smoke status: two curated FAB v2-style items now close through the
+finance substrate. `fabv2-hd-low-dio` retrieves SEC companyfacts for HD and LOW,
+projects 36 finance facts, runs 4 calculator traces, passes numeric
+verification, and reaches 100% post-run dev annotation score. After SEC
+complete-submission expansion, per-share binding fixes, and SEC identifier
+noise filtering, `fabv2-pfe-sgen-transaction-multiple` retrieves the Pfizer /
+Seagen 8-K and Exhibit 99.1 evidence, projects 17 finance facts, runs one
+EV/Revenue calculator trace, passes numeric verification with 100% numeric
+support, and reaches 100% post-run dev annotation score. These are real live
+runs, not fixed-answer tests.
+
+The full curated dev10 is still not solved. A live run with
+`finance-fact-fast`, mission disabled, live retrieval, model planner, fake
+evaluator, model synthesizer, and parallel 2 produced: overall dev annotation
+score 0.8111, behavior score 0.8667, substrate score 0.5667,
+calculator-used rate 0.20, formula-trace present rate 0.20,
+numeric-verifier pass rate 0.50, and average answer numeric support 70.56%.
+The main failure mode is `required_trace_missing` on bridge/modeling/coverage
+tasks: KHC adjusted EBITDA bridge, WSC adjusted EBITDA trend, CRM DCF, EPAM
+LBO, TGT/WMT fixed-charge coverage, LULU/VSCO EV/EBITDA, CNC MLR, and
+purchase-price-allocation cases often gather some evidence but do not yet
+compile a host-side formula or run numeric verification. The next work is to
+expand `FinanceFormulaPlanner`, ledger extraction, and optional LLM-assisted
+fact/noise review for those task families while keeping the deterministic
+numeric gate intact.
+
+EV/EBITDA has since been promoted into the formula planner. The host can now
+recognize EV/EBITDA intent, compute it from direct EBITDA or from complete
+EBITDA components, group comparison tasks by entity, and compile a targeted
+missing-fact retrieval action when market cap / enterprise value, debt, cash,
+or EBITDA inputs are absent. `FinanceFactLedger` also extracts market-data-page
+facts such as market cap, enterprise value, total debt, total cash, and EBITDA
+from natural text, so those facts can feed host calculator traces when acquired.
+Source-query generation now includes Yahoo Finance key-statistics pages and
+ranks them first for EV/EBITDA valuation missing-fact queries.
+A live LULU/VSCO rerun still did not close because the acquired evidence lacked
+those inputs, but the failure is now explicit `missing_facts` instead of
+`no_supported_formula_intent`.
 
 Use `--execution-profile long-mission` only when the task is intended to
 exercise the full resident loop.

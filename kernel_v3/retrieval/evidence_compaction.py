@@ -43,8 +43,24 @@ def compact_evidence_candidates(
     selected: list[EvidenceCandidate] = []
     selected_ids: set[str] = set()
     source_counts: dict[str, int] = {}
-    if bool(policy.get("prefer_facet_coverage", True)) and required_facets:
+    target_entities = _target_entity_markers(goal)
+    if target_entities:
+        for target in target_entities:
+            candidate = _best_candidate_for_target(
+                ordered,
+                target=target,
+                selected_ids=selected_ids,
+                source_counts=source_counts,
+                per_source_limit=per_source_limit,
+            )
+            if candidate is not None:
+                _select_candidate(candidate, selected, selected_ids, source_counts)
+            if len(selected) >= effective_limit:
+                break
+    if bool(policy.get("prefer_facet_coverage", True)) and required_facets and len(selected) < effective_limit:
         for facet in required_facets:
+            if len(selected) >= effective_limit:
+                break
             candidate = _best_candidate_for_facet(
                 ordered,
                 facet=facet,
@@ -125,6 +141,24 @@ def _best_candidate_for_facet(
     return None
 
 
+def _best_candidate_for_target(
+    candidates: list[EvidenceCandidate],
+    *,
+    target: str,
+    selected_ids: set[str],
+    source_counts: dict[str, int],
+    per_source_limit: int,
+) -> EvidenceCandidate | None:
+    for candidate in candidates:
+        if candidate.evidence.evidence_id in selected_ids:
+            continue
+        if source_counts.get(candidate.evidence.source_id, 0) >= per_source_limit:
+            continue
+        if _candidate_matches_target(candidate, target):
+            return candidate
+    return None
+
+
 def _select_candidate(
     candidate: EvidenceCandidate,
     selected: list[EvidenceCandidate],
@@ -141,7 +175,7 @@ def _candidate_sort_key(
     *,
     goal: SearchGoal,
     required_facets: list[str],
-) -> tuple[float, float, float, float, float, float, float, int, str]:
+) -> tuple[float, float, float, float, float, float, float, float, int, str]:
     evidence = candidate.evidence
     qualification = evidence.diagnostics.get("qualification")
     facets = _candidate_facets(candidate)
@@ -152,7 +186,9 @@ def _candidate_sort_key(
     metric_intent_score = finance_metric_intent_score(evidence.text, query=goal.query)
     metric_density = _metric_density(evidence.text)
     structured_summary_bonus = 1.0 if _looks_like_structured_finance_summary(evidence.text) else 0.0
+    market_valuation_bonus = _market_valuation_bonus(candidate, goal=goal)
     return (
+        -market_valuation_bonus,
         -authority,
         -float(specific_overlap),
         -float(metric_intent_score),
@@ -162,6 +198,93 @@ def _candidate_sort_key(
         -float(len(facets)),
         len(evidence.text),
         evidence.evidence_id,
+    )
+
+
+def _market_valuation_bonus(candidate: EvidenceCandidate, *, goal: SearchGoal) -> float:
+    goal_text = f"{goal.query} {_metadata_text(goal.metadata)}".lower()
+    compact_goal = "".join(ch for ch in goal_text if ch.isalnum())
+    if not any(
+        marker in goal_text or marker in compact_goal
+        for marker in (
+            "ev/ebitda",
+            "evebitda",
+            "ev/revenue",
+            "evrevenue",
+            "enterprise value",
+            "market cap",
+            "market capitalization",
+            "valuation multiple",
+            "trading multiple",
+        )
+    ):
+        return 0.0
+    assessment = candidate.evidence.diagnostics.get("source_assessment")
+    assessment = assessment if isinstance(assessment, dict) else {}
+    family = str(assessment.get("source_family") or "").strip().lower()
+    if family != "market_data_provider":
+        return 0.0
+    text = str(candidate.evidence.text or "").lower()
+    if any(marker in text for marker in ("metric=market cap", "metric=enterprise value", "market cap", "enterprise value")):
+        return 2.0
+    return 0.5
+
+
+def _metadata_text(value: object) -> str:
+    if isinstance(value, dict):
+        return " ".join(_metadata_text(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(_metadata_text(item) for item in value)
+    return str(value or "")
+
+
+def _target_entity_markers(goal: SearchGoal) -> list[str]:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    raw_items: list[object] = []
+    for key in ("target_tickers", "tickers"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            raw_items.extend(value)
+        elif isinstance(value, str):
+            raw_items.extend(value.replace(";", ",").split(","))
+    for key in ("ticker", "sec_ticker"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            raw_items.append(value)
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        marker = str(item or "").strip()
+        if not marker:
+            continue
+        normalized = marker.upper()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(marker)
+    return result
+
+
+def _candidate_matches_target(candidate: EvidenceCandidate, target: str) -> bool:
+    target_norm = str(target or "").strip().lower()
+    if not target_norm:
+        return False
+    compact_target = "".join(ch for ch in target_norm if ch.isalnum())
+    haystack = " ".join(
+        str(value or "")
+        for value in (
+            candidate.evidence.title,
+            candidate.evidence.uri,
+            candidate.evidence.text,
+        )
+    ).lower()
+    compact_haystack = "".join(ch for ch in haystack if ch.isalnum())
+    return (
+        f"ticker={target_norm}" in haystack
+        or f"/{target_norm}/" in haystack
+        or f"stocks/{target_norm}" in haystack
+        or f"quote/{target_norm}" in haystack
+        or compact_target in compact_haystack
     )
 
 

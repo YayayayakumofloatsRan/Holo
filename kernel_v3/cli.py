@@ -654,6 +654,11 @@ def main(argv: list[str] | None = None) -> int:
     finance_bench.add_argument("--predictions", default=None)
     finance_bench.add_argument("--output", default=".state/kernel_v3/bench/finance/latest.jsonl")
     finance_bench.add_argument("--summary-output", default=".state/kernel_v3/bench/finance/latest.summary.json")
+    finance_bench.add_argument(
+        "--dev-gold",
+        default=None,
+        help="Optional JSON/JSONL dev annotation file used only for post-run scoring; never included in prompts.",
+    )
     finance_bench.add_argument("--limit", type=int, default=None)
     finance_bench.add_argument("--offset", type=int, default=0)
     finance_bench.add_argument("--thread-prefix", default="finance-bench")
@@ -2127,6 +2132,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             results,
             output_path=output_path,
             summary_path=summary_path,
+            annotation_path=args.dev_gold,
             journal=journal,
         )
         return {
@@ -2216,6 +2222,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         results,
         output_path=output_path,
         summary_path=summary_path,
+        annotation_path=args.dev_gold,
         journal=journal,
     )
     return {
@@ -2258,6 +2265,12 @@ def _finance_benchmark_progress_callback(
         cache_hits = metrics.get("cache_hit_count")
         budget_blocks = metrics.get("download_budget_block_count")
         duration_ms = metrics.get("processor_duration_ms")
+        calculator_calls = metrics.get("calculator_call_count")
+        formula_traces = metrics.get("formula_trace_count")
+        finance_facts = metrics.get("finance_fact_count")
+        verifier_status = metrics.get("numeric_verifier_status")
+        support_rate = metrics.get("answer_numeric_support_rate")
+        numeric_failure = metrics.get("finance_numeric_failure_reason")
         reason = result.scorecard.get("reason") if isinstance(result.scorecard, dict) else None
         print(
             "[bench] "
@@ -2268,12 +2281,24 @@ def _finance_benchmark_progress_callback(
             f"cache_hits={cache_hits if cache_hits is not None else '-'} "
             f"budget_blocks={budget_blocks if budget_blocks is not None else '-'} "
             f"retrieval_runs={retrieval_runs if retrieval_runs is not None else '-'} "
+            f"calc={calculator_calls if calculator_calls is not None else '-'} "
+            f"formula={formula_traces if formula_traces is not None else '-'} "
+            f"facts={finance_facts if finance_facts is not None else '-'} "
+            f"verifier={verifier_status or '-'} "
+            f"num_support={_percent_for_progress(support_rate)} "
+            f"num_fail={numeric_failure or '-'} "
             f"processor_ms={duration_ms if duration_ms is not None else '-'}",
             file=sys.stderr,
             flush=True,
         )
 
     return on_result
+
+
+def _percent_for_progress(value: object) -> str:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "-"
+    return f"{value * 100:.1f}%"
 
 
 def _mb(value: object) -> str:

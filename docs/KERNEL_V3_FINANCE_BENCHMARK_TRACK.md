@@ -113,6 +113,11 @@ Finance execution substrate:
 
 - `FinanceFactLedger` converts retrieval evidence into structured facts with
   metric, period, value, unit, evidence ref, and citation ref.
+- `FinanceFormulaPlanner` compiles common analyst calculations from fact-ledger
+  inputs into `calculator.compute` payloads. The first supported templates are
+  CAGR, DIO, margin, basis-point difference, EV/Revenue, YoY growth, and bridge
+  subtotal. If required facts are absent, it journals missing-fact diagnostics
+  instead of guessing.
 - `calculator.compute` is a host-validated Decimal calculator. It accepts a
   formula expression, variables, optional unit, and input fact ids, then journals
   a `FormulaTrace`.
@@ -120,6 +125,26 @@ Finance execution substrate:
   that require numeric verification. It checks material answer numbers against
   fact ledger entries or formula traces and blocks unsupported finance numbers
   before final answer delivery.
+
+Curated FAB v2 development slice:
+
+```bash
+./holo-v3 bench finance \
+  --dataset data/bench/finance/fabv2_dev10.jsonl \
+  --dev-gold data/bench/finance/fabv2_dev10.gold.jsonl \
+  --limit 10 \
+  --execution-profile finance-fact-fast \
+  --mission off \
+  --online \
+  --research-profile finance_fundamentals \
+  --live-retrieval
+```
+
+The curated dev10 slice is a development harness, not a replacement for the
+official Vals split. The gold annotation file is used only after a run to score
+behavior, numeric expectations, and substrate usage. It must not be placed into
+`--question-prefix`, prompt context, memory, or any runtime context sent to a
+model.
 
 Score existing predictions without running Holo:
 
@@ -165,7 +190,10 @@ The summary reports:
 - calculator-used rate,
 - numeric-verifier pass rate,
 - formula-trace present rate,
+- finance fact count,
 - answer numeric support rate,
+- finance numeric failure taxonomy,
+- optional dev annotation behavior/numeric/substrate score,
 - adversarial/unavailable-answer accuracy,
 - average token use,
 - average processor duration,
@@ -181,10 +209,233 @@ The report renderer turns item results into Markdown, HTML, or JSON with:
 
 ## Next Steps
 
-1. Add optional authenticated download helpers for HuggingFace-hosted datasets, while keeping
-   import/scoring runnable from local exports.
-2. Add claim-level citation judge for answers whose gold target is not purely numeric.
-3. Add source-support scoring against benchmark evidence excerpts.
-4. Promote calculator/numeric-verifier rates into the finance benchmark summary and report.
-5. Add PPT-ready rendering presets for task and benchmark graphs.
-6. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo retrieval plus memory.
+## Live Smoke Notes
+
+2026-06-10 live smoke and repeat smoke on `fabv2-hd-low-dio` with `finance-fact-fast`,
+mission disabled, live retrieval, model planner, fake evaluator, and model
+synthesizer:
+
+- retrieval runs: 1
+- processor calls: 3
+- total tokens: about 78k
+- processor duration: 46,941 ms on the repeat cached run; the first uncached
+  successful run took 198,351 ms
+- fetched SEC companyfacts sources: HD and LOW
+- finance facts: 36
+- calculator calls: 4
+- formula traces: 4
+- numeric verifier: passed
+- answer numeric support rate: 100%
+- dev annotation behavior/numeric/substrate/overall score after post-run
+  scoring: 1.0 / 1.0 / 1.0 / 1.0
+
+This confirms the deterministic finance substrate can close a real FAB v2 style
+DIO task with SEC facts, host calculator traces, and numeric verification. It
+does not yet prove the full curated dev10. The remaining engineering pressure is
+cost and breadth: token use and wall time are still too high, and bridge,
+transaction multiple, DCF/LBO, MLR, and purchase-price-allocation cases still
+need live calibration.
+
+Small-batch live calibration on the first three curated items showed the next
+weak spots:
+
+- `fabv2-hd-low-dio`: stable after adding Chinese hundred-million display
+  support in the numeric verifier. Repeat run: verifier passed, 100% numeric
+  support, overall dev annotation score 1.0.
+- `fabv2-khc-adjusted-ebitda-bridge`: retrieval found KHC SEC companyfacts, but
+  companyfacts alone did not expose non-GAAP adjusted EBITDA bridge components;
+  calculator did not run because the fact ledger lacked add-back inputs.
+- `fabv2-pfe-sgen-transaction-multiple`: retrieval over companyfacts did not
+  acquire transaction-specific facts such as deal value and target revenue from
+  8-K / merger / acquisition-note sources; numeric verifier correctly blocked
+  unsupported answer numbers.
+
+After the first transaction failures, the acquisition layer was strengthened so
+transaction/bridge tasks prioritize SEC submissions metadata, expand primary
+filing links before generic search pages, diversify event filings across years,
+and recurse once through SEC `filings.files` archive chunks. Local regressions
+cover all of these behaviors, including older-event 8-K discovery from an
+archive submissions file.
+
+Live PFE/SGEN smoke after those changes still did not close:
+
+- `smoke07`: answer present with SEC citations, but `finance_fact_count=0`,
+  `calculator_call_count=0`, `formula_trace_count=0`, 3 retrieval runs,
+  136k tokens, 32 fetches. The agent cited unrelated Pfizer 2025 8-K filings.
+- `smoke08`: same failure shape after source-order fixes, 134k tokens,
+  32 fetches.
+- `smoke09`: fetches dropped to 24 and tokens to 106k after archive expansion,
+  but evidence/citations/facts were still zero and the run stopped at the fast
+  tool-call cap. The final failure was evidence coverage, not a permission or
+  live-retrieval configuration issue.
+- `smoke10`: after reserving fetch budget for second-depth archive expansion,
+  the run acquired Seagen companyfacts and produced 12 finance facts with
+  numeric verification passing, but it still missed the Pfizer transaction
+  value, so `calculator.compute` did not run.
+- `smoke12`: after raising SEC `recent` scan depth and avoiding the accidental
+  `target revenue` -> `TGT` issuer match, the run still fetched unrelated
+  Pfizer 2021/2022 8-K documents and produced `finance_fact_count=0`. This
+  confirms that the remaining gap is event/accession resolution, not only
+  generic ranking or budget.
+- `smoke15` through `smoke17`: the transaction path now selects multi-issuer
+  source-directory entries, records failed issuer event pages as
+  `find_alternate_event_source`, and ranks the Pfizer March 2023 merger 8-K
+  (`0001193125-23-068538`) ahead of unrelated earnings/cost-action 8-Ks. The
+  numeric verifier no longer treats SEC Item codes such as `7.01` and `8.01`
+  as unsupported answer numbers. A direct live SEC extractor check now places
+  the `$229.00 in cash` consideration span inside a tight
+  `max_spans_per_document=4` budget, and the fact ledger can classify that span
+  as `purchase price`. The full PFE/SGEN benchmark run still does not close:
+  it satisfies required source families but does not yet produce the needed
+  `calculator.compute` trace because the accepted evidence-to-ledger handoff
+  still misses enough transaction value / target revenue facts for EV/Revenue.
+- `smoke18` direct SEC extraction check: the extractor now treats SEC complete
+  submission text as a large filing bundle even when it is detected as HTML, so
+  exhibit content beyond the old 200k-character prefix can be searched. A live
+  check against Pfizer's official `0001193125-23-068538.txt` filing produced
+  top spans containing both `$229 per Seagen share` and `total enterprise value
+  of approximately $43 billion`; the finance ledger projected those spans into
+  `transaction value=43000000000`, `purchase price=229`, and revenue facts while
+  filtering non-facts such as SEC item numbers, exhibit IDs, dates, and call
+  times. This validates the document-to-ledger substrate on the real filing, but
+  the full PFE/SGEN benchmark loop still needs a fresh end-to-end run before it
+  can be marked solved.
+- `smoke19` full-loop PFE/SGEN rerun: after fixing per-share binding and SEC
+  document-identifier noise in the numeric verifier, the full benchmark loop
+  acquired the official SEC 8-K / Exhibit 99.1 evidence, projected 17 finance
+  facts, ran one `calculator.compute` formula trace, and passed
+  `finance.verify_numeric` with 100% answer numeric support. Post-run dev
+  annotation scored behavior/substrate/overall as 1.0 / 1.0 / 1.0 for this
+  item. This is the first transaction-multiple item where the retrieval,
+  ledger, calculator, and verifier substrate closed end to end without using
+  gold answers in prompts.
+
+Curated dev10 live run after `smoke19`:
+
+- command profile: `finance-fact-fast`, mission off, live retrieval, model
+  planner, fake evaluator, model synthesizer, parallel 2;
+- overall dev annotation score: 0.8111;
+- behavior score: 0.8667;
+- substrate score: 0.5667;
+- calculator-used rate: 0.20;
+- formula-trace present rate: 0.20;
+- numeric-verifier pass rate: 0.50;
+- average answer numeric support rate: 70.56%;
+- average retrieval runs: 1.1;
+- average token use: 62,482.3;
+- strongest items: `fabv2-hd-low-dio` and
+  `fabv2-pfe-sgen-transaction-multiple`, both with behavior/substrate score
+  1.0 and passing numeric verification;
+- main failure modes: `required_trace_missing` on 8/10 items,
+  `expected_answer_content_missing` on 4/10 items, and one required-source miss
+  on the CRM DCF task.
+
+The current bottleneck is no longer only source acquisition. The strongest
+evidence is that DIO and transaction-multiple questions close with calculator
+traces, while bridge, DCF/LBO, fixed-charge coverage, EV/EBITDA, MLR, and
+purchase-price-allocation questions often gather evidence but do not compile a
+host formula or run numeric verification. The next improvement should expand
+`FinanceFormulaPlanner` and the fact ledger for those task families, and add an
+LLM-assisted fact/noise reviewer as an advisory layer without weakening the
+host deterministic numeric gate.
+
+Post-dev10 EV/EBITDA iteration:
+
+- `FinanceFormulaPlanner` now recognizes `EV/EBITDA` / enterprise-value-to-
+  EBITDA intent, can bind direct EBITDA facts, or derive EBITDA from net income,
+  interest expense, tax expense, and depreciation/amortization when all inputs
+  are available.
+- `FinanceFactLedger` now extracts market-data-page style facts such as market
+  cap, enterprise value, total debt, total cash, and EBITDA from natural text.
+  This makes secondary market-data sources usable as formula inputs instead of
+  leaving them as unstructured answer context.
+- Multi-entity preflight now supports `ev_ebitda` in addition to DIO, so
+  comparison tasks can emit per-company formula traces instead of a single
+  collapsed formula.
+- Missing-fact fallback now covers `ev_ebitda`; when enterprise value / market
+  cap, debt, cash, EBITDA, or EBITDA components are absent, the host can compile
+  a targeted `retrieval.run` action for those missing facts even if the model
+  planner fails JSON repair.
+- A targeted live rerun of `fabv2-lulu-vsco-ev-ebitda` confirmed the new
+  formula intent is active: journaled `finance_formula_plan` records changed
+  from `not_applicable` to `missing_facts` with explicit missing inputs
+  (`enterprise_value_or_market_cap`, `debt`, `cash`,
+  `ebitda_or_ebitda_components`). The item still did not pass because the
+  acquired SEC evidence lacked market-value and EBITDA inputs, but the failure
+  is now actionable at the retrieval/fact-acquisition layer rather than hidden
+  as an unsupported formula.
+- Local substrate replay with market-page style text now produces a complete
+  EV/EBITDA formula trace from market cap, debt, cash, and EBITDA. The remaining
+  live gap is acquiring those market-data facts reliably in the benchmark loop.
+- Source-directory acquisition for EV/EBITDA missing facts now includes Yahoo
+  Finance key-statistics pages and boosts market-data providers for valuation,
+  market cap, enterprise value, debt, cash, EBITDA, and EV/EBITDA queries. A
+  source-query replay for `LULU EV/EBITDA market cap enterprise value debt cash
+  EBITDA` ranks `https://finance.yahoo.com/quote/LULU/key-statistics/` first,
+  followed by quote/market-data pages. This improves candidate acquisition, but
+  live parsing of market-data pages still needs benchmark validation.
+
+2026-06-10 handoff status:
+
+- GPT 5.5 Pro's requested finance substrate is implemented at v1 scope:
+  `calculator.compute`, `FinanceFactLedger`, `FinanceFormulaPlanner`,
+  deterministic `finance.verify_numeric`, FAB v2 public/dev10 import and
+  annotation scoring, substrate trace metrics, verifier failure taxonomy, and
+  fast-lane hard budgets are all present in the code path.
+- The current real-task capability is measurable but not yet reliable enough to
+  claim Finance Agent v2 competence. Representative live successes now include
+  `fabv2-hd-low-dio`, `fabv2-khc-adjusted-ebitda-bridge`, and
+  `fabv2-pfe-sgen-transaction-multiple`: each has closed at least once with
+  retrieval evidence, structured finance facts, calculator/formula traces, and
+  numeric verification.
+- The latest WSC add-back trend work deliberately tightened evidence gates so
+  market-statistics snippets such as `EBITDA Margin` plus `Dividend Per Share`
+  are no longer accepted as add-back/reconciliation evidence, and the natural
+  fact ledger no longer projects those dividend/per-share snippets as EBITDA
+  facts. The local regression set now covers these failures.
+- The latest live WSC rerun did not close. It produced an answer-present
+  failure report rather than a hallucinated report: `retrieval_runs=1`,
+  `fetches=8`, `download_mb=9.1`, `processor_call_count=4`,
+  `processor_error_count=3`, `finance_fact_count=0`,
+  `calculator_call_count=0`, `numeric_verifier_status=null`. The stopped reason
+  was `model_planner_processor_failed` after repeated planner JSON decode
+  failures and all accepted evidence being rejected. This is a prompt/context
+  and filing-acquisition problem, not a missing network-permission problem.
+- The next concrete fix should prioritize annual/quarterly filing and issuer
+  annual-report acquisition for `add-back` / `non-GAAP reconciliation` /
+  `bridge` queries. Recent 8-K event documents and generic market-stat pages
+  should not be allowed to satisfy add-back trend tasks unless they contain
+  actual reconciliation/add-back components. This is a general task-family rule,
+  not a WSC-specific answer table.
+- Fast-lane cost is still high. Successful single-item runs often consume
+  60k-90k tokens, and hard cases can fail after model JSON repair issues. The
+  next executor work should shrink planner/evaluator context for finance facts,
+  keep retrieval diagnostics compact, and make processor budget failures return
+  actionable host replan hints instead of repeated `respond` fallbacks.
+
+## Next Steps
+
+1. Fix add-back / non-GAAP reconciliation acquisition: prefer 10-K, 10-Q,
+   20-F/40-F, complete submission text, and issuer annual-report pages before
+   event 8-Ks or market-stat pages; require actual add-back/reconciliation terms
+   in accepted evidence.
+2. Run the curated dev10 in small batches and classify verifier failures into
+   unsupported answer number, ledger extraction gap, missing formula trace, unit
+   mismatch, period mismatch, and assumption-label issues.
+3. Expand the finance fact ledger and formula planner for bridge, transaction
+   multiple, fixed-charge coverage, DCF/LBO, MLR, and purchase price allocation
+   cases. EV/EBITDA now has formula intent and missing-fact fallback; it still
+   needs stronger acquisition for market cap, total debt, cash, and EBITDA
+   components.
+4. Add an event-aware finance filing resolver for transaction questions:
+   identify issuer/target, likely announcement/closing periods, SEC accession
+   candidates, and whether the task needs 8-K, merger agreement, 10-K note, or
+   investor/press-release evidence.
+5. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
+   structured retrieval results more directly, and avoiding synthesis context
+   duplication.
+6. Add claim-level citation judging for non-numeric assertions.
+7. Add source-support scoring against benchmark evidence excerpts.
+8. Add PPT-ready rendering presets for task and benchmark graphs.
+9. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
+   retrieval plus memory.

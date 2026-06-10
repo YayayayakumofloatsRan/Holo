@@ -267,6 +267,12 @@ def build_benchmark_result_graph(
                     "downloaded_bytes": _number(trace_metrics.get("downloaded_bytes")),
                     "query_repetition_rate": _number(trace_metrics.get("query_repetition_rate")),
                     "processor_errors": _number(trace_metrics.get("processor_error_count")),
+                    "calculator_calls": _number(trace_metrics.get("calculator_call_count")),
+                    "formula_traces": _number(trace_metrics.get("formula_trace_count")),
+                    "finance_facts": _number(trace_metrics.get("finance_fact_count")),
+                    "numeric_verifier_status": _text(trace_metrics.get("numeric_verifier_status")),
+                    "answer_numeric_support_rate": _number(trace_metrics.get("answer_numeric_support_rate")),
+                    "finance_numeric_failure_reason": _text(trace_metrics.get("finance_numeric_failure_reason")),
                     "final_answer_chars": _number(trace_metrics.get("final_answer_chars")),
                     "latest_failure_mode": _text(trace_metrics.get("latest_failure_mode")),
                 }
@@ -624,6 +630,7 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
     status_counts: dict[str, int] = {}
     reason_counts: dict[str, int] = {}
     failure_mode_counts: dict[str, int] = {}
+    finance_numeric_failure_reason_counts: dict[str, int] = {}
     values: dict[str, list[float]] = {
         "total_tokens": [],
         "retrieval_run_count": [],
@@ -631,11 +638,19 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         "downloaded_bytes": [],
         "query_repetition_rate": [],
         "final_answer_chars": [],
+        "calculator_call_count": [],
+        "formula_trace_count": [],
+        "finance_fact_count": [],
+        "answer_numeric_support_rate": [],
     }
     answer_present = 0
     citation_present = 0
     numeric_scored = 0
     numeric_passed = 0
+    calculator_used = 0
+    formula_trace_present = 0
+    verifier_scored = 0
+    verifier_passed = 0
     scored = 0
     passed = 0
     for result in results:
@@ -659,9 +674,29 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
             if numeric.get("passed") is True:
                 numeric_passed += 1
         trace_metrics = _dict(result.get("trace_metrics"))
+        calculator_calls = _number(trace_metrics.get("calculator_call_count"))
+        formula_traces = _number(trace_metrics.get("formula_trace_count"))
+        if isinstance(calculator_calls, (int, float)) and calculator_calls > 0:
+            calculator_used += 1
+        if isinstance(formula_traces, (int, float)) and formula_traces > 0:
+            formula_trace_present += 1
+        verifier_status = _text(trace_metrics.get("numeric_verifier_status"))
+        if verifier_status in {"passed", "failed"}:
+            verifier_scored += 1
+            if verifier_status == "passed":
+                verifier_passed += 1
         failure_mode = _text(trace_metrics.get("latest_failure_mode"))
         if failure_mode:
             failure_mode_counts[failure_mode] = failure_mode_counts.get(failure_mode, 0) + 1
+        finance_failure_reason = _text(trace_metrics.get("finance_numeric_failure_reason"))
+        if finance_failure_reason:
+            finance_numeric_failure_reason_counts[finance_failure_reason] = (
+                finance_numeric_failure_reason_counts.get(finance_failure_reason, 0) + 1
+            )
+            failure_mode_counts[f"finance_numeric:{finance_failure_reason}"] = failure_mode_counts.get(
+                f"finance_numeric:{finance_failure_reason}",
+                0,
+            ) + 1
         for key in values:
             value = trace_metrics.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -671,6 +706,7 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         "status_counts": status_counts,
         "reason_counts": reason_counts,
         "failure_mode_counts": failure_mode_counts,
+        "finance_numeric_failure_reason_counts": finance_numeric_failure_reason_counts,
         "item_count": item_count,
         "scored_count": scored,
         "passed_count": passed,
@@ -684,6 +720,15 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         "average_downloaded_bytes": _average(values["downloaded_bytes"]),
         "average_query_repetition_rate": _average(values["query_repetition_rate"]),
         "average_final_answer_chars": _average(values["final_answer_chars"]),
+        "calculator_used_rate": _rate(calculator_used, item_count),
+        "formula_trace_present_rate": _rate(formula_trace_present, item_count),
+        "numeric_verifier_pass_rate": _rate(verifier_passed, verifier_scored) if verifier_scored else None,
+        "average_calculator_calls": _average(values["calculator_call_count"]),
+        "average_formula_traces": _average(values["formula_trace_count"]),
+        "average_finance_facts": _average(values["finance_fact_count"]),
+        "average_answer_numeric_support_rate": _average(values["answer_numeric_support_rate"])
+        if values["answer_numeric_support_rate"]
+        else None,
     }
 
 
@@ -695,6 +740,11 @@ def _benchmark_metric_nodes(summary: JsonObject) -> list[BehaviorGraphNode]:
         ("average_retrieval_runs", "Avg retrieval runs"),
         ("average_fetches", "Avg fetches"),
         ("average_query_repetition_rate", "Avg query repetition"),
+        ("calculator_used_rate", "Calculator used"),
+        ("numeric_verifier_pass_rate", "Verifier pass"),
+        ("average_formula_traces", "Avg formula traces"),
+        ("average_finance_facts", "Avg finance facts"),
+        ("average_answer_numeric_support_rate", "Avg numeric support"),
         ("average_final_answer_chars", "Avg answer chars"),
     ]
     nodes: list[BehaviorGraphNode] = []

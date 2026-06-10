@@ -219,7 +219,24 @@ def query_facets(query: str) -> list[str]:
             facet
             for facet, triggers in QUERY_FACET_TRIGGERS.items()
             if any(trigger.lower() in normalized for trigger in triggers)
+            and not (facet == "pricing" and _pricing_trigger_is_accounting_cost_context(normalized))
         ]
+    )
+
+
+def _pricing_trigger_is_accounting_cost_context(normalized_query: str) -> bool:
+    if any(term in normalized_query for term in ("pricing", "price", "billing", "bill", "定价", "价格", "费用", "计费")):
+        return False
+    return any(
+        phrase in normalized_query
+        for phrase in (
+            "cost of goods",
+            "cost of revenue",
+            "cost of sales",
+            "cost of services",
+            "cost of products",
+            "cogs",
+        )
     )
 
 

@@ -10,12 +10,19 @@ from kernel_v3.retrieval import (
 )
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator
 from kernel_v3.retrieval.targeting import target_entity_phrases
+from kernel_v3.research.profile_policy import query_facets
 
 
 def test_phase97_target_entity_detection_ignores_direct_url_tokens():
     query = "https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json RevenueFromContractWithCustomerExcludingAssessedTax NetIncomeLoss"
 
     assert target_entity_phrases(query) == []
+
+
+def test_query_facets_do_not_treat_accounting_cost_inputs_as_pricing():
+    assert "pricing" not in query_facets("HD 2024 inventory cost of goods sold companyfacts")
+    assert "pricing" not in query_facets("LOW cost of revenue fiscal 2024 10-K")
+    assert "pricing" in query_facets("DeepSeek API pricing and billing")
 
 
 def test_phase97_target_entity_detection_ignores_technical_facet_terms():

@@ -122,6 +122,64 @@ def finance_metric_intent(query: str) -> FinanceMetricIntent:
             demoted_phrases=("investing activities", "financing activities"),
         )
 
+    if "dio" in normalized or "days inventory" in normalized or _has_all(normalized, "inventory", "cost"):
+        return FinanceMetricIntent(
+            metric_family="days_inventory_outstanding",
+            preferred_phrases=(
+                "metric=inventory",
+                "concept=inventorynet",
+                "merchandise inventories",
+                "metric=cost of revenue",
+                "concept=costofrevenue",
+                "metric=cost of goods sold",
+                "concept=costofgoodsandservicessold",
+                "cost of sales",
+            ),
+            required_phrases=("inventory",),
+            demoted_phrases=(
+                "deferred tax",
+                "valuation reserves",
+                "cash flow hedge",
+                "interest income",
+                "interest expense",
+                "revenue from contract",
+                "net income",
+            ),
+        )
+
+    if (
+        _has_any(normalized, "ev/ebitda", "ev / ebitda", "enterprise value to ebitda")
+        or _has_all(normalized, "enterprise", "value", "ebitda")
+        or _has_all(normalized, "ev", "ebitda")
+    ):
+        return FinanceMetricIntent(
+            metric_family="ev_ebitda",
+            preferred_phrases=(
+                "metric=enterprise value",
+                "enterprise value",
+                "metric=market cap",
+                "market cap",
+                "metric=debt",
+                "metric=long-term debt",
+                "metric=short-term debt",
+                "metric=cash and cash equivalents",
+                "cash and cash equivalents",
+                "metric=ebitda",
+                "metric=net income",
+                "metric=interest expense",
+                "metric=income tax expense",
+                "metric=depreciation and amortization",
+                "depreciation and amortization",
+            ),
+            required_phrases=("value",),
+            demoted_phrases=(
+                "inventory",
+                "cost of goods",
+                "cost of sales",
+                "revenue from contract",
+            ),
+        )
+
     if _has_any(normalized, "net income", "net profit"):
         return FinanceMetricIntent(
             metric_family="net_income",

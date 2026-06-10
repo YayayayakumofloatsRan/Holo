@@ -1,4 +1,5 @@
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, resolve_issuer_identity
+from kernel_v3.research.issuer_registry import builtin_issuers_for_text
 from kernel_v3.retrieval import QueryPlan, SearchGoal, SecEdgarSearchProvider
 
 
@@ -89,6 +90,52 @@ def test_phase100_issuer_identity_ignores_finance_acronyms_as_us_tickers():
     assert identity.confidence == 0.0
 
 
+def test_issuer_identity_ignores_finance_formula_acronyms_as_us_tickers():
+    identity = resolve_issuer_identity(
+        "Compare Home Depot and Lowe's fiscal 2024 DIO using SEC 10-K companyfacts.",
+        {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+    )
+
+    assert identity.ticker == "HD"
+    assert identity.cik == "0000354950"
+    assert identity.company == "The Home Depot, Inc."
+
+
+def test_builtin_issuer_registry_does_not_match_lowercase_finance_words_as_tickers():
+    matches = builtin_issuers_for_text("HD 2024 inventory cost of revenue and cost of goods sold")
+
+    assert [match["ticker"] for match in matches] == ["HD"]
+
+
+def test_sec_edgar_provider_returns_structured_sources_for_all_requested_issuers():
+    provider = SecEdgarSearchProvider()
+    query = "For NYSE: HD and NYSE: LOW, calculate FY2024 DIO using inventory and cost of goods sold."
+    goal = SearchGoal(
+        goal_id="goal-hd-low-sec",
+        query=query,
+        max_sources=8,
+        metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+    )
+
+    sources = provider.search(
+        query,
+        goal=goal,
+        plan=QueryPlan(
+            plan_id="plan-hd-low-sec",
+            goal_id=goal.goal_id,
+            queries=[query],
+            max_sources=8,
+            max_fetches=8,
+        ),
+    )
+    uris = [source.uri for source in sources]
+
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000354950.json" in uris
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000060667.json" in uris
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000909832.json" not in uris
+    assert provider.search_diagnostics()["issuer_candidate_count"] == 2
+
+
 def test_phase100_issuer_identity_extracts_exchange_codes_for_non_us_sources():
     asx = resolve_issuer_identity("ASX:BHP annual report")
     hk = resolve_issuer_identity("HKEX 700 annual report")
@@ -157,3 +204,14 @@ def test_phase100_sec_edgar_provider_uses_shared_identity_resolution():
     assert diagnostics["ticker"] == "MSFT"
     assert diagnostics["cik_present"] is True
     assert "metadata_ticker_cik_map" in diagnostics["identity_sources"]
+
+
+def test_phase100_target_revenue_does_not_resolve_to_target_corporation():
+    issuers = builtin_issuers_for_text(
+        "Pfizer Seagen acquisition transaction value enterprise value target revenue"
+    )
+
+    tickers = {str(item.get("ticker")) for item in issuers}
+    assert "PFE" in tickers
+    assert "SGEN" in tickers
+    assert "TGT" not in tickers

@@ -87,6 +87,11 @@ def _render_markdown(report: FinanceBenchmarkReport) -> str:
         f"| Avg retrieval runs | {_number(summary.get('average_retrieval_runs'))} |",
         f"| Avg fetches | {_number(summary.get('average_fetches'))} |",
         f"| Avg query repetition | {_percent(summary.get('average_query_repetition_rate'))} |",
+        f"| Calculator-used rate | {_percent(summary.get('calculator_used_rate'))} |",
+        f"| Numeric verifier pass rate | {_percent(summary.get('numeric_verifier_pass_rate'))} |",
+        f"| Avg formula traces | {_number(summary.get('average_formula_traces'))} |",
+        f"| Avg finance facts | {_number(summary.get('average_finance_facts'))} |",
+        f"| Avg answer numeric support | {_percent(summary.get('average_answer_numeric_support_rate'))} |",
         f"| Avg answer chars | {_number(summary.get('average_final_answer_chars'))} |",
         "",
         "## Status Counts",
@@ -96,6 +101,10 @@ def _render_markdown(report: FinanceBenchmarkReport) -> str:
         "## Failure Modes",
         "",
         _counts_table(summary.get("failure_mode_counts")),
+        "",
+        "## Finance Numeric Failure Reasons",
+        "",
+        _counts_table(summary.get("finance_numeric_failure_reason_counts")),
         "",
         "## Score Reasons",
         "",
@@ -203,6 +212,11 @@ def _weak_items(results: list[JsonObject], *, max_items: int) -> list[JsonObject
                 "retrieval_runs": _raw_number(metrics.get("retrieval_run_count")),
                 "fetches": _raw_number(metrics.get("fetch_attempt_count")),
                 "query_repetition_rate": _raw_number(metrics.get("query_repetition_rate")),
+                "calculator_calls": _raw_number(metrics.get("calculator_call_count")),
+                "formula_traces": _raw_number(metrics.get("formula_trace_count")),
+                "finance_facts": _raw_number(metrics.get("finance_fact_count")),
+                "numeric_verifier_status": _text(metrics.get("numeric_verifier_status")),
+                "finance_numeric_failure_reason": _text(metrics.get("finance_numeric_failure_reason")),
                 "final_answer_chars": _raw_number(metrics.get("final_answer_chars")),
             }
         )
@@ -216,6 +230,9 @@ def _recommendations(summary: JsonObject, weak_items: list[JsonObject]) -> list[
     citation_rate = _float(summary.get("citation_present_rate"))
     repetition = _float(summary.get("average_query_repetition_rate"))
     answer_chars = _float(summary.get("average_final_answer_chars"))
+    calculator_rate = _float(summary.get("calculator_used_rate"))
+    verifier_rate = _float(summary.get("numeric_verifier_pass_rate"))
+    support_rate = _float(summary.get("average_answer_numeric_support_rate"))
     failure_modes = _dict(summary.get("failure_mode_counts"))
     reasons = _dict(summary.get("reason_counts"))
     if pass_rate < 0.8:
@@ -226,6 +243,12 @@ def _recommendations(summary: JsonObject, weak_items: list[JsonObject]) -> list[
         recommendations.append("Inspect repeated-query loops and improve strategy-shift directives for failed retrieval attempts.")
     if answer_chars and answer_chars < 600:
         recommendations.append("Review answer-profile enforcement; detailed research tasks may be ending with under-developed synthesis.")
+    if calculator_rate < 0.7:
+        recommendations.append("Increase calculator usage on numeric finance tasks; inspect planner hints and formula planner coverage.")
+    if verifier_rate is not None and verifier_rate < 0.7:
+        recommendations.append("Classify numeric verifier failures into correct block, ledger miss, and policy miss before widening the benchmark slice.")
+    if support_rate is not None and support_rate < 0.7:
+        recommendations.append("Improve fact ledger extraction and formula trace binding; answer numeric support rate is below target.")
     failure_modes = {key: value for key, value in failure_modes.items() if str(key).lower() not in {"", "none", "unknown"}}
     if failure_modes:
         primary = max(failure_modes.items(), key=lambda item: int(item[1]) if isinstance(item[1], int) else 0)[0]
@@ -260,8 +283,8 @@ def _weak_items_table(rows: list[JsonObject]) -> str:
     if not rows:
         return "_No weak items selected._"
     lines = [
-        "| Item | Status | Reason | Failure | Citations | Retrieval | Repetition | Answer chars |",
-        "|---|---|---|---|---:|---:|---:|---:|",
+        "| Item | Status | Reason | Failure | Citations | Calc | Traces | Facts | Verifier | Numeric reason | Retrieval | Repetition | Answer chars |",
+        "|---|---|---|---|---:|---:|---:|---:|---|---|---:|---:|---:|",
     ]
     for row in rows:
         lines.append(
@@ -273,6 +296,11 @@ def _weak_items_table(rows: list[JsonObject]) -> str:
                     _escape_md(_preview(_text(row.get("reason")), 48)),
                     _escape_md(_preview(_text(row.get("failure_mode")), 48)),
                     _value(row.get("citation_present")),
+                    _number(row.get("calculator_calls")),
+                    _number(row.get("formula_traces")),
+                    _number(row.get("finance_facts")),
+                    _escape_md(_preview(_text(row.get("numeric_verifier_status")), 32)),
+                    _escape_md(_preview(_text(row.get("finance_numeric_failure_reason")), 48)),
                     _number(row.get("retrieval_runs")),
                     _percent(row.get("query_repetition_rate")),
                     _number(row.get("final_answer_chars")),

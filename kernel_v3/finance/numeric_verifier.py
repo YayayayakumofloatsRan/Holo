@@ -10,7 +10,7 @@ from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem
 
 NUMERIC_PATTERN = re.compile(
     r"(?P<prefix>[$€£¥])?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
-    r"(?P<unit>%|bps|basis\s+points|million|billion|trillion|thousand|mn|bn|m|b|亿|万)?",
+    r"(?P<unit>%|bps|basis\s+points|million|billion|trillion|thousand|mn|bn|m|b|x|亿|万)?",
     re.IGNORECASE,
 )
 FY_PATTERN = re.compile(r"\b(?:FY|fiscal\s+year\s*)?(?P<year>20\d{2}|19\d{2})\b", re.IGNORECASE)
@@ -96,23 +96,44 @@ def verify_finance_answer(
             missing.append(candidate)
         else:
             matched.append({**candidate, "support": match})
+    missing = _suppress_duplicate_display_missing(missing, matched)
     issues: list[JsonObject] = []
     if missing:
         issues.append(
             {
-                "code": "unsupported_numeric_value",
+                "code": "unsupported_answer_number",
                 "message": "answer contains numeric values not found in finance facts or formula traces",
                 "values": missing[:16],
             }
         )
+        if facts:
+            issues.append(
+                {
+                    "code": "ledger_extraction_gap",
+                    "message": "finance fact ledger exists but did not support every material answer number",
+                    "missing_value_count": len(missing),
+                    "fact_count": len(facts),
+                }
+            )
+        if _formula_trace_required(answer=answer, question=question) and not traces:
+            issues.append(
+                {
+                    "code": "missing_formula_trace",
+                    "message": "question or answer appears to require calculation but no calculator formula trace is available",
+                }
+            )
     unit_mismatches = _unit_mismatches(candidates, support_values)
     period_mismatches = _period_mismatches(answer=answer, question=question, facts=facts)
+    assumption_issues = _assumption_issues(answer=answer, traces=traces)
     issues.extend(unit_mismatches)
     issues.extend(period_mismatches)
+    issues.extend(assumption_issues)
     status = "passed" if matched and not missing and not unit_mismatches and not period_mismatches else "failed"
+    if assumption_issues:
+        status = "failed"
     if not support_values:
         status = "failed"
-        issues.append({"code": "missing_finance_fact_ledger", "message": "no finance facts or formula traces available"})
+        issues.append({"code": "missing_fact_ledger", "message": "no finance facts or formula traces available"})
     return NumericVerification(
         status=status,
         issues=issues,
@@ -135,18 +156,37 @@ def _answer_numeric_candidates(answer: str) -> list[JsonObject]:
     result: list[JsonObject] = []
     text = answer or ""
     for match in NUMERIC_PATTERN.finditer(text):
-        if _embedded_identifier_or_citation(text, match.start(), match.end()):
-            continue
+        number_start = match.start("number")
+        number_end = match.end("number")
         raw = match.group("number")
         unit = match.group("unit") or ""
         prefix = match.group("prefix") or ""
+        if _embedded_identifier_or_citation(text, number_start, number_end, unit=unit):
+            continue
         value = _scaled_decimal(raw, unit)
         if value is None or _looks_like_year(value):
             continue
+        if _looks_like_date_component(text, number_start, number_end, value=value):
+            continue
+        if _looks_like_sec_item_number(text, number_start, number_end, value=value):
+            continue
+        if _looks_like_sec_form_code(text, number_start, number_end, value=value):
+            continue
+        if _looks_like_sec_exhibit_number(text, number_start, number_end, value=value):
+            continue
+        if _looks_like_reference_or_list_marker(
+            text,
+            number_start,
+            number_end,
+            value=value,
+            unit=unit,
+            prefix=prefix,
+        ):
+            continue
         if not _looks_material_numeric_claim(
             text,
-            match.start(),
-            match.end(),
+            number_start,
+            number_end,
             value=value,
             unit=unit,
             prefix=prefix,
@@ -168,30 +208,26 @@ def _support_values(facts: list[FinanceFact], traces: list[FormulaTrace]) -> lis
         value = _decimal_or_none(fact.value)
         if value is None:
             continue
-        values.append(
-            {
-                "kind": "finance_fact",
-                "ref": fact.fact_id,
-                "metric": fact.metric,
-                "value": _decimal_string(value),
-                "unit": _normalize_unit(fact.unit or ""),
-                "fiscal_year": fact.fiscal_year,
-                "citation_ref": fact.citation_ref,
-            }
-        )
+        base = {
+            "kind": "finance_fact",
+            "ref": fact.fact_id,
+            "metric": fact.metric,
+            "unit": _normalize_unit(fact.unit or ""),
+            "fiscal_year": fact.fiscal_year,
+            "citation_ref": fact.citation_ref,
+        }
+        values.extend(_display_support_values(value, base))
     for trace in traces:
         value = _decimal_or_none(trace.result_value)
         if value is None:
             continue
-        values.append(
-            {
-                "kind": "formula_trace",
-                "ref": trace.formula_id,
-                "formula_name": trace.formula_name,
-                "value": _decimal_string(value),
-                "unit": _normalize_unit(trace.unit or ""),
-            }
-        )
+        base = {
+            "kind": "formula_trace",
+            "ref": trace.formula_id,
+            "formula_name": trace.formula_name,
+            "unit": _normalize_unit(trace.unit or ""),
+        }
+        values.extend(_display_support_values(value, base))
         if _normalize_unit(trace.unit or "") == "percent":
             values.append(
                 {
@@ -201,6 +237,181 @@ def _support_values(facts: list[FinanceFact], traces: list[FormulaTrace]) -> lis
                     "value": _decimal_string(value * Decimal(100)),
                     "unit": "percent",
                     "derived_display_value": True,
+                }
+            )
+        diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+        variables = diagnostics.get("variables")
+        if isinstance(variables, dict):
+            for name, raw_value in variables.items():
+                variable_value = _decimal_or_none(raw_value)
+                if variable_value is None:
+                    continue
+                values.extend(
+                    _display_support_values(
+                        variable_value,
+                        {
+                            "kind": "formula_variable",
+                            "ref": trace.formula_id,
+                            "formula_name": trace.formula_name,
+                            "variable": str(name),
+                            "unit": _formula_variable_unit(str(name), trace),
+                        },
+                    )
+                )
+            average_inventory = _average_variable(variables, "inventory_begin", "inventory_end")
+            if average_inventory is not None:
+                values.extend(
+                    _display_support_values(
+                        average_inventory,
+                        {
+                            "kind": "formula_intermediate",
+                            "ref": trace.formula_id,
+                            "formula_name": trace.formula_name,
+                            "variable": "average_inventory",
+                            "unit": "",
+                        },
+                    )
+                )
+        if "/" in str(trace.expression or ""):
+            values.append(
+                {
+                    "kind": "formula_constant",
+                    "ref": trace.formula_id,
+                    "formula_name": trace.formula_name,
+                    "value": "2",
+                    "unit": "",
+                }
+            )
+    values.extend(_formula_comparison_support_values(traces))
+    return values
+
+
+def _suppress_duplicate_display_missing(missing: list[JsonObject], matched: list[JsonObject]) -> list[JsonObject]:
+    if not missing or not matched:
+        return missing
+    matched_raws = [str(item.get("raw") or "") for item in matched]
+    result: list[JsonObject] = []
+    for item in missing:
+        raw = str(item.get("raw") or "").strip()
+        value = _decimal_or_none(item.get("value"))
+        if not raw or value is None:
+            result.append(item)
+            continue
+        duplicate = False
+        for matched_item, matched_raw in zip(matched, matched_raws):
+            matched_value = _decimal_or_none(matched_item.get("value"))
+            if matched_value is None or not _within_tolerance(value, matched_value):
+                continue
+            if raw != matched_raw and raw in matched_raw:
+                duplicate = True
+                break
+        if not duplicate:
+            result.append(item)
+    return result
+
+
+def _formula_comparison_support_values(traces: list[FormulaTrace]) -> list[JsonObject]:
+    values: list[JsonObject] = []
+    usable: list[tuple[FormulaTrace, Decimal]] = []
+    for trace in traces:
+        value = _decimal_or_none(trace.result_value)
+        if value is not None:
+            usable.append((trace, value))
+    for left_index, (left, left_value) in enumerate(usable):
+        for right, right_value in usable[left_index + 1 :]:
+            if str(left.formula_name or "") != str(right.formula_name or ""):
+                continue
+            left_unit = _normalize_unit(left.unit or "")
+            right_unit = _normalize_unit(right.unit or "")
+            if left_unit != right_unit:
+                continue
+            values.extend(
+                _display_support_values(
+                    left_value - right_value,
+                    {
+                        "kind": "formula_comparison",
+                        "ref": f"{left.formula_id}:{right.formula_id}:difference",
+                        "formula_name": left.formula_name,
+                        "unit": left_unit,
+                        "comparison": "left_minus_right",
+                    },
+                )
+            )
+            values.extend(
+                _display_support_values(
+                    right_value - left_value,
+                    {
+                        "kind": "formula_comparison",
+                        "ref": f"{right.formula_id}:{left.formula_id}:difference",
+                        "formula_name": left.formula_name,
+                        "unit": left_unit,
+                        "comparison": "right_minus_left",
+                    },
+                )
+            )
+    return values
+
+
+def _formula_variable_unit(name: str, trace: FormulaTrace) -> str:
+    normalized = str(name or "").lower()
+    if normalized in {"fiscal_days"}:
+        return "days"
+    if normalized in {
+        "equity_value",
+        "enterprise_value",
+        "market_cap",
+        "debt",
+        "cash",
+        "investments",
+        "revenue",
+        "beginning_value",
+        "ending_value",
+        "numerator",
+        "denominator",
+        "base",
+    } or normalized.startswith(("addback_", "deduction_")):
+        return "usd"
+    if "inventory" in normalized or normalized in {"cogs", "prior_value", "current_value"}:
+        return "usd"
+    if "rate" in normalized or "margin" in normalized:
+        return "percent"
+    return _normalize_unit(trace.unit or "")
+
+
+def _display_support_values(value: Decimal, base: JsonObject) -> list[JsonObject]:
+    values: list[JsonObject] = [{**base, "value": _decimal_string(value)}]
+    if value < 0:
+        values.append({**base, "value": _decimal_string(abs(value)), "absolute_display_value": True})
+    scale_candidates = (
+        ("thousand", Decimal(1_000)),
+        ("million", Decimal(1_000_000)),
+        ("billion", Decimal(1_000_000_000)),
+        ("trillion", Decimal(1_000_000_000_000)),
+        ("hundred_million", Decimal(100_000_000)),
+        ("ten_thousand", Decimal(10_000)),
+    )
+    for scale, divisor in scale_candidates:
+        if abs(value) < divisor:
+            continue
+        scaled = value / divisor
+        values.append(
+            {
+                **base,
+                "value": _decimal_string(scaled),
+                "unit": scale,
+                "derived_display_value": True,
+                "scale_divisor": _decimal_string(divisor),
+            }
+        )
+        if value < 0:
+            values.append(
+                {
+                    **base,
+                    "value": _decimal_string(abs(scaled)),
+                    "unit": scale,
+                    "derived_display_value": True,
+                    "absolute_display_value": True,
+                    "scale_divisor": _decimal_string(divisor),
                 }
             )
     return values
@@ -264,6 +475,51 @@ def _period_mismatches(*, answer: str, question: str, facts: list[FinanceFact]) 
             }
         ]
     return []
+
+
+def _formula_trace_required(*, answer: str, question: str) -> bool:
+    text = f"{question}\n{answer}".lower()
+    return any(
+        marker in text
+        for marker in (
+            "calculate",
+            "computed",
+            "cagr",
+            "dio",
+            "days inventory",
+            "ev/revenue",
+            "ev / revenue",
+            "multiple",
+            "margin",
+            "bps",
+            "basis point",
+            "growth",
+            "bridge",
+            "dcf",
+            "lbo",
+            "计算",
+            "增长率",
+            "利润率",
+            "倍数",
+        )
+    )
+
+
+def _assumption_issues(*, answer: str, traces: list[FormulaTrace]) -> list[JsonObject]:
+    answer_text = str(answer or "").lower()
+    if not traces:
+        return []
+    trace_text = " ".join(str(trace.diagnostics or {}).lower() for trace in traces)
+    if "assumption" not in trace_text and "assumed" not in trace_text:
+        return []
+    if any(marker in answer_text for marker in ("assumption", "assume", "assumed", "假设", "假定")):
+        return []
+    return [
+        {
+            "code": "assumption_not_labeled",
+            "message": "calculator formula trace includes an assumption that is not labeled in the answer",
+        }
+    ]
 
 
 def _scaled_decimal(raw: str, unit: str) -> Decimal | None:
@@ -337,7 +593,107 @@ def _looks_like_year(value: Decimal) -> bool:
     return value == value.to_integral_value() and Decimal(1900) <= value <= Decimal(2100)
 
 
-def _embedded_identifier_or_citation(text: str, start: int, end: int) -> bool:
+def _looks_like_date_component(text: str, start: int, end: int, *, value: Decimal) -> bool:
+    if value != value.to_integral_value() or value < 1 or value > 31:
+        return False
+    window = text[max(0, start - 32) : min(len(text), end + 32)].lower()
+    if re.search(
+        r"\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b",
+        window,
+    ):
+        return True
+    if "月" in window or "日" in window:
+        return True
+    if re.search(r"\b20\d{2}\s*[-/年]\s*\d{1,2}\s*[-/月]\s*\d{1,2}", window):
+        return True
+    return False
+
+
+def _looks_like_sec_item_number(text: str, start: int, end: int, *, value: Decimal) -> bool:
+    """SEC filing item codes are not finance values and should not gate answers."""
+
+    if value <= 0 or value >= 20:
+        return False
+    before = text[max(0, start - 24) : start].lower()
+    after = text[end : min(len(text), end + 24)].lower()
+    window = f"{before}{text[start:end]}{after}"
+    if re.search(r"\bitem\s*$", before):
+        return True
+    if re.search(r"\bitem\s+\d{1,2}(?:\.\d{1,2})?\b", window):
+        return True
+    if re.search(r"\b(?:form\s*)?8-k\b", window) and re.search(r"\b\d{1,2}\.\d{1,2}\b", window):
+        return True
+    if "sec" in window and "item" in window and re.search(r"\b\d{1,2}\.\d{1,2}\b", window):
+        return True
+    return False
+
+
+def _looks_like_sec_form_code(text: str, start: int, end: int, *, value: Decimal) -> bool:
+    """SEC form numbers such as 8-K and 10-Q are document identifiers."""
+
+    if value != value.to_integral_value() or value <= 0 or value > 40:
+        return False
+    window = text[max(0, start - 24) : min(len(text), end + 24)].lower()
+    form_pattern = r"\b(?:form\s*)?(?:6|8|10|20|40)\s*[-‑–—]\s*(?:k|q|f)\b"
+    return bool(re.search(form_pattern, window))
+
+
+def _looks_like_sec_exhibit_number(text: str, start: int, end: int, *, value: Decimal) -> bool:
+    """Exhibit numbers such as Exhibit 99.1 are document identifiers."""
+
+    if value <= 0 or value >= 200:
+        return False
+    before = text[max(0, start - 24) : start].lower()
+    after = text[end : min(len(text), end + 24)].lower()
+    window = f"{before}{text[start:end]}{after}"
+    if re.search(r"\b(?:exhibit|ex)\s*[-:]?\s*$", before):
+        return True
+    if re.search(r"\b(?:exhibit|ex)\s*[-:]?\s*\d{1,3}(?:\.\d{1,3})?\b", window):
+        return True
+    return False
+
+
+def _looks_like_reference_or_list_marker(
+    text: str,
+    start: int,
+    end: int,
+    *,
+    value: Decimal,
+    unit: str,
+    prefix: str,
+) -> bool:
+    """Ignore structural one-digit markers without weakening material numbers."""
+
+    if unit or prefix:
+        return False
+    if value != value.to_integral_value() or value < 1 or value > 9:
+        return False
+
+    prev = text[start - 1] if start > 0 else ""
+    nxt = text[end] if end < len(text) else ""
+    if prev in {"[", "(", "（", "【"} and nxt in {"]", ")", "）", "】"}:
+        return True
+
+    line_start = text.rfind("\n", 0, start) + 1
+    line_prefix = text[line_start:start]
+    if nxt in {".", "、", ")"} and line_prefix.strip() in {"", "-", "*"}:
+        return True
+
+    before = text[max(0, start - 32) : start].lower()
+    after = text[end : min(len(text), end + 32)].lower()
+    window = f"{before}{text[start:end]}{after}"
+    if re.search(r"(?:cite|citation|source|ref|reference|evidence|引用|来源|证据)\s*[:#\[（(]*\s*$", before):
+        return True
+    if re.search(r"^\s*[\]）)]", after) and any(
+        marker in before for marker in ("cite", "citation", "source", "ref", "引用", "来源", "证据")
+    ):
+        return True
+    if "trace_refs" in window or "citation" in window or "evidence" in window:
+        return True
+    return False
+
+
+def _embedded_identifier_or_citation(text: str, start: int, end: int, *, unit: str = "") -> bool:
     before = text[max(0, start - 32) : start]
     after = text[end : min(len(text), end + 32)]
     token_start = start
@@ -354,6 +710,8 @@ def _embedded_identifier_or_citation(text: str, start: int, end: int) -> bool:
         return True
     prev = text[start - 1] if start > 0 else ""
     nxt = text[end] if end < len(text) else ""
+    if (prev.isascii() and prev.isalpha()) or (nxt.isascii() and nxt.isalpha() and not unit):
+        return True
     if prev in {"-", "_", "/", ":"} or nxt in {"-", "_", "/", ":"}:
         return True
     if nxt == "." and (end + 1 >= len(text) or text[end + 1].isspace()):
@@ -388,3 +746,11 @@ def _decimal_string(value: Decimal) -> str:
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text or "0"
+
+
+def _average_variable(variables: JsonObject, left: str, right: str) -> Decimal | None:
+    left_value = _decimal_or_none(variables.get(left))
+    right_value = _decimal_or_none(variables.get(right))
+    if left_value is None or right_value is None:
+        return None
+    return (left_value + right_value) / Decimal(2)

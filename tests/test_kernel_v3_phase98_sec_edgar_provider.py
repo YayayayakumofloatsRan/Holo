@@ -40,11 +40,11 @@ def test_phase98_sec_edgar_provider_builds_structured_sources_from_cik_metadata(
     )
 
     assert [source.uri for source in sources] == [
+        "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+        "https://data.sec.gov/submissions/CIK0000320193.json",
+        "https://www.sec.gov/edgar/browse/?CIK=0000320193",
         "https://www.sec.gov/files/company_tickers_exchange.json",
         "https://www.sec.gov/edgar/search/#/q=AAPL",
-        "https://data.sec.gov/submissions/CIK0000320193.json",
-        "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
-        "https://www.sec.gov/edgar/browse/?CIK=0000320193",
     ]
     assert all(source.metadata["authority_level"] == "primary" for source in sources)
     assert provider.search_diagnostics()["cik_present"] is True
@@ -68,6 +68,25 @@ def test_phase98_sec_companyfacts_ranks_before_submissions_for_finance_evidence(
     ranked_kinds = [item.metadata["source_kind"] for item in ranked]
 
     assert ranked_kinds.index("sec_companyfacts_json") < ranked_kinds.index("sec_submissions_json")
+
+
+def test_sec_edgar_provider_uses_root_goal_for_issuer_candidates():
+    provider = SecEdgarSearchProvider()
+    goal = SearchGoal(
+        goal_id="goal-root-issuer",
+        query="target revenue 2022",
+        max_sources=10,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "root_goal": "Pfizer acquisition of Seagen transaction EV revenue multiple",
+        },
+    )
+
+    sources = provider.search(goal.query, goal=goal, plan=_plan())
+    ciks = {source.metadata.get("sec_cik") for source in sources}
+
+    assert "0000078003" in ciks
+    assert "0001060736" in ciks
 
 
 def test_phase98_sec_companyfacts_extracts_latest_annual_metric_summary_before_old_facts():
@@ -106,6 +125,74 @@ def test_phase98_sec_companyfacts_extracts_latest_annual_metric_summary_before_o
     assert "metric=diluted earnings per share" in first
     assert "value=6.08" in first
     assert "fy=2017" not in first
+
+
+def test_sec_companyfacts_extracts_inventory_and_cost_inputs_for_dio():
+    goal = SearchGoal(
+        goal_id="goal-sec-companyfacts-dio",
+        query="HD LOW FY2024 DIO inventory cost of goods sold companyfacts",
+        max_spans_per_document=4,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-companyfacts-dio",
+        goal_id=goal.goal_id,
+        source_id="source-sec-companyfacts-dio",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000354950.json",
+        title="SEC companyfacts JSON for CIK 0000354950",
+        artifact_id="artifact-sec-companyfacts-dio",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_retail_companyfacts_json())
+    text = "\n".join(span.text for span in spans)
+
+    assert "metric=inventory" in text
+    assert "value=23511000000" in text
+    assert "metric=cost of goods sold" in text
+    assert "value=101899000000" in text
+
+
+def test_sec_companyfacts_extracts_ev_ebitda_component_inputs():
+    goal = SearchGoal(
+        goal_id="goal-sec-companyfacts-ev-ebitda",
+        query="EV/EBITDA market cap debt cash net income tax depreciation amortization companyfacts",
+        max_spans_per_document=8,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "valuation",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-companyfacts-ev-ebitda",
+        goal_id=goal.goal_id,
+        source_id="source-sec-companyfacts-ev-ebitda",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000354950.json",
+        title="SEC companyfacts JSON for CIK 0000354950",
+        artifact_id="artifact-sec-companyfacts-ev-ebitda",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_retail_companyfacts_json())
+    text = "\n".join(span.text for span in spans)
+
+    assert "metric=cash and cash equivalents" in text
+    assert "val=2800000000" in text
+    assert "metric=debt" in text
+    assert "val=12000000000" in text
+    assert "metric=depreciation and amortization" in text
+    assert "val=2600000000" in text
+    assert "metric=income tax expense" in text
+    assert "val=2100000000" in text
 
 
 def test_phase98_sec_companyfacts_extracts_financial_sector_revenue_concepts():
@@ -901,6 +988,39 @@ def _apple_companyfacts_json() -> str:
         "]}},"
         '"Assets":{"label":"Assets","units":{"USD":['
         '{"val":371082000000,"fy":2026,"fp":"Q2","form":"10-Q","filed":"2026-05-01","end":"2026-03-28","frame":"CY2026Q1I","accn":"0000320193-26-000013"}'
+        "]}}"
+        "}}}"
+    )
+
+
+def _retail_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"HOME DEPOT, INC.",'
+        '"cik":354950,'
+        '"facts":{"us-gaap":{'
+        '"InventoryNet":{"label":"Merchandise inventories","units":{"USD":['
+        '{"val":22119000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2024-03-15","end":"2024-02-01","accn":"0000354950-24-000010"},'
+        '{"val":23511000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-03-14","end":"2025-02-01","accn":"0000354950-25-000010"}'
+        "]}},"
+        '"CostOfGoodsAndServicesSold":{"label":"Cost of goods sold","units":{"USD":['
+        '{"val":95520000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2024-03-15","end":"2024-02-01","accn":"0000354950-24-000010"},'
+        '{"val":101899000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-03-14","end":"2025-02-01","accn":"0000354950-25-000010"}'
+        "]}},"
+        '"RevenueFromContractWithCustomerExcludingAssessedTax":{"label":"Net sales","units":{"USD":['
+        '{"val":157403000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-03-14","end":"2025-02-01","accn":"0000354950-25-000010"}'
+        "]}},"
+        '"CashAndCashEquivalentsAtCarryingValue":{"label":"Cash and cash equivalents","units":{"USD":['
+        '{"val":2800000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-03-14","end":"2025-02-01","accn":"0000354950-25-000010"}'
+        "]}},"
+        '"DebtLongtermAndShorttermCombinedAmount":{"label":"Debt, long-term and short-term combined amount","units":{"USD":['
+        '{"val":12000000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-03-14","end":"2025-02-01","accn":"0000354950-25-000010"}'
+        "]}},"
+        '"DepreciationDepletionAndAmortization":{"label":"Depreciation, depletion and amortization","units":{"USD":['
+        '{"val":2600000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-03-14","end":"2025-02-01","accn":"0000354950-25-000010"}'
+        "]}},"
+        '"IncomeTaxExpenseBenefit":{"label":"Income tax expense","units":{"USD":['
+        '{"val":2100000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-03-14","end":"2025-02-01","accn":"0000354950-25-000010"}'
         "]}}"
         "}}}"
     )

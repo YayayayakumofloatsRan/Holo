@@ -94,9 +94,46 @@ Implemented after the execution-profile hard caps:
 - `bench finance-import --benchmark finance_agent_v2_public` normalizes the Vals
   Finance Agent v2 public text set into local Holo benchmark JSONL.
 
+## Finance Substrate Metrics and Dev10
+
+Follow-up work now promotes finance substrate behavior into benchmark
+diagnostics:
+
+- `trace_metrics()` records `calculator_call_count`, `formula_trace_count`,
+  `finance_fact_count`, `numeric_verifier_status`,
+  `answer_numeric_support_rate`, source hosts/URIs, and finance source forms.
+- `FinanceBenchmarkSummary`, `bench finance-report`, `bench finance-graph`, and
+  progress stderr lines surface calculator usage, formula traces, fact counts,
+  numeric verifier pass rate, answer numeric support rate, and finance numeric
+  failure reasons.
+- `--dev-gold` adds post-run dev annotation scoring for behavior, numeric, and
+  substrate expectations. Gold annotations are scoring-only and are never sent
+  to model prompts.
+- `data/bench/finance/fabv2_dev10.jsonl` and
+  `data/bench/finance/fabv2_dev10.gold.jsonl` provide a small FAB v2-style
+  development slice covering inventory efficiency, adjusted EBITDA bridge,
+  transaction multiples, DCF/LBO, coverage, EV/EBITDA, MLR rebate, and purchase
+  price allocation.
+
+The numeric verifier taxonomy now distinguishes:
+
+- `unsupported_answer_number`
+- `missing_fact_ledger`
+- `missing_formula_trace`
+- `unit_mismatch`
+- `period_mismatch`
+- `assumption_not_labeled`
+- `ledger_extraction_gap`
+
+`FinanceFormulaPlanner` v1 binds fact-ledger entries to common analyst formulas
+and compiles `calculator.compute` payloads when enough facts exist. It currently
+supports CAGR, DIO, margin, basis-point differences, EV/Revenue, YoY growth, and
+bridge subtotals. Missing inputs are journaled as diagnostics for the next loop
+instead of being guessed.
+
 Remaining work:
 
+- Run live FAB v2 dev10 with finance-fact-fast and classify failures into
+  correct verifier blocks, ledger extraction misses, and policy misses.
 - Add per-item process timeout/failure row support for public live benchmark
   batches.
-- Promote calculator/numeric-verifier rates into benchmark summaries and report
-  renderers.

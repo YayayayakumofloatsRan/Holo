@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from kernel_v3.contracts import JsonObject
@@ -133,6 +134,14 @@ BUILTIN_US_ISSUERS: tuple[BuiltinIssuerEntry, ...] = (
         investor_relations_url="https://investors.pfizer.com/",
     ),
     BuiltinIssuerEntry(
+        ticker="SGEN",
+        cik="0001060736",
+        company="Seagen Inc.",
+        aliases=("seagen", "seagen inc", "seattle genetics", "seattle genetics inc"),
+        market="NASDAQ",
+        investor_relations_url="https://www.pfizer.com/about/programs-policies/pfizer-seagen",
+    ),
+    BuiltinIssuerEntry(
         ticker="CVX",
         cik="0000093410",
         company="Chevron Corporation",
@@ -179,6 +188,78 @@ BUILTIN_US_ISSUERS: tuple[BuiltinIssuerEntry, ...] = (
         aliases=("salesforce", "salesforce inc", "salesforce.com", "salesforce com"),
         market="NYSE",
         investor_relations_url="https://investor.salesforce.com/",
+    ),
+    BuiltinIssuerEntry(
+        ticker="HD",
+        cik="0000354950",
+        company="The Home Depot, Inc.",
+        aliases=("home depot", "the home depot", "home depot inc", "the home depot inc"),
+        market="NYSE",
+        investor_relations_url="https://ir.homedepot.com/",
+    ),
+    BuiltinIssuerEntry(
+        ticker="LOW",
+        cik="0000060667",
+        company="Lowe's Companies, Inc.",
+        aliases=("lowe's", "lowes", "lowe's companies", "lowes companies", "lowe's companies inc"),
+        market="NYSE",
+        investor_relations_url="https://corporate.lowes.com/investors",
+    ),
+    BuiltinIssuerEntry(
+        ticker="TGT",
+        cik="0000027419",
+        company="Target Corporation",
+        aliases=("target", "target corporation", "target corp"),
+        market="NYSE",
+        investor_relations_url="https://investors.target.com/",
+    ),
+    BuiltinIssuerEntry(
+        ticker="LULU",
+        cik="0001397187",
+        company="lululemon athletica inc.",
+        aliases=("lululemon", "lululemon athletica", "lululemon athletica inc"),
+        market="NASDAQ",
+        investor_relations_url="https://corporate.lululemon.com/investors",
+    ),
+    BuiltinIssuerEntry(
+        ticker="VSCO",
+        cik="0001856437",
+        company="Victoria's Secret & Co.",
+        aliases=("victoria's secret", "victorias secret", "victoria's secret & co", "victoria secret"),
+        market="NYSE",
+        investor_relations_url="https://www.victoriassecretandco.com/investors/",
+    ),
+    BuiltinIssuerEntry(
+        ticker="CNC",
+        cik="0001071739",
+        company="Centene Corporation",
+        aliases=("centene", "centene corporation", "centene corp"),
+        market="NYSE",
+        investor_relations_url="https://investors.centene.com/",
+    ),
+    BuiltinIssuerEntry(
+        ticker="EPAM",
+        cik="0001352010",
+        company="EPAM Systems, Inc.",
+        aliases=("epam", "epam systems", "epam systems inc"),
+        market="NYSE",
+        investor_relations_url="https://investors.epam.com/",
+    ),
+    BuiltinIssuerEntry(
+        ticker="KHC",
+        cik="0001637459",
+        company="The Kraft Heinz Company",
+        aliases=("kraft heinz", "the kraft heinz company", "kraft heinz company"),
+        market="NASDAQ",
+        investor_relations_url="https://ir.kraftheinzcompany.com/",
+    ),
+    BuiltinIssuerEntry(
+        ticker="WSC",
+        cik="0001647088",
+        company="WillScot Holdings Corporation",
+        aliases=("willscot", "willscot holdings", "willscot holdings corporation", "willscot mobile mini"),
+        market="NASDAQ",
+        investor_relations_url="https://investors.willscot.com/",
     ),
     BuiltinIssuerEntry(
         ticker="UNH",
@@ -296,16 +377,56 @@ BUILTIN_US_ISSUERS: tuple[BuiltinIssuerEntry, ...] = (
 
 
 def builtin_issuer_for_text(text: str) -> JsonObject:
+    matches = builtin_issuers_for_text(text)
+    return matches[0] if matches else {}
+
+
+def builtin_issuers_for_text(text: str) -> list[JsonObject]:
     normalized = _normalize_text(text)
     if not normalized:
-        return {}
+        return []
+    matches: list[JsonObject] = []
+    seen: set[str] = set()
     for entry in BUILTIN_US_ISSUERS:
-        if entry.ticker.lower() in normalized.split():
-            return _entry_payload(entry, matched=entry.ticker)
+        if _ticker_present(str(text or ""), entry.ticker):
+            _append_match(matches, seen=seen, entry=entry, matched=entry.ticker)
+            continue
         for alias in entry.aliases:
-            if _phrase_present(normalized, _normalize_text(alias)):
-                return _entry_payload(entry, matched=alias)
-    return {}
+            normalized_alias = _normalize_text(alias)
+            if _ambiguous_alias_in_non_issuer_context(normalized=normalized, alias=normalized_alias, entry=entry):
+                continue
+            if _phrase_present(normalized, normalized_alias):
+                _append_match(matches, seen=seen, entry=entry, matched=alias)
+                break
+    return matches
+
+
+def _ambiguous_alias_in_non_issuer_context(*, normalized: str, alias: str, entry: BuiltinIssuerEntry) -> bool:
+    if entry.ticker == "TGT" and alias == "target":
+        if _phrase_present(normalized, "target corporation") or _phrase_present(normalized, "target corp"):
+            return False
+        return any(
+            _phrase_present(normalized, phrase)
+            for phrase in (
+                "target revenue",
+                "target company",
+                "target business",
+                "target ebitda",
+                "target assets",
+                "target enterprise value",
+                "acquisition target",
+                "merger target",
+            )
+        )
+    return False
+
+
+def _append_match(matches: list[JsonObject], *, seen: set[str], entry: BuiltinIssuerEntry, matched: str) -> None:
+    key = entry.cik or entry.ticker
+    if key in seen:
+        return
+    seen.add(key)
+    matches.append(_entry_payload(entry, matched=matched))
 
 
 def _entry_payload(entry: BuiltinIssuerEntry, *, matched: str) -> JsonObject:
@@ -315,6 +436,7 @@ def _entry_payload(entry: BuiltinIssuerEntry, *, matched: str) -> JsonObject:
         "company": entry.company,
         "market": entry.market,
         "matched_alias": matched,
+        "aliases": list(entry.aliases),
     }
     for key, value in {
         "investor_relations_url": entry.investor_relations_url,
@@ -330,6 +452,16 @@ def _phrase_present(normalized: str, phrase: str) -> bool:
     if not phrase:
         return False
     return f" {phrase} " in f" {normalized} "
+
+
+def _ticker_present(text: str, ticker: str) -> bool:
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9])(?:NYSE|NASDAQ|AMEX|NYSEARCA|OTC)?\s*[:：]?\s*({re.escape(ticker)})(?![A-Za-z0-9])"
+    )
+    for match in pattern.finditer(text):
+        if match.group(1) == ticker:
+            return True
+    return False
 
 
 def _normalize_text(text: str) -> str:

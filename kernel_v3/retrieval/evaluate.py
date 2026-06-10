@@ -24,6 +24,7 @@ from kernel_v3.research.profiles import (
     FINANCE_NUMERIC_FACT_FACETS,
 )
 from kernel_v3.research.identity import resolve_issuer_identity
+from kernel_v3.research.issuer_registry import builtin_issuers_for_text
 from kernel_v3.research.source_policy import (
     assess_evidence_source,
     source_authority_summary,
@@ -60,7 +61,19 @@ def qualify_evidence_candidate(
         result["required_target_phrases"] = target_diagnostics.get("required_target_phrases", [])
         result["matched_target_phrases"] = target_diagnostics.get("matched_target_phrases", [])
         result["missing_target_phrases"] = target_diagnostics.get("missing_target_phrases", [])
-        if not bool(target_diagnostics.get("target_entity_satisfied")):
+        finance_requested_issuer_match = _is_finance_profile(
+            goal=goal,
+            research_profile=research_profile,
+        ) and _finance_evidence_matches_requested_issuer(goal=goal, evidence=evidence)
+        if finance_requested_issuer_match:
+            result["target_entity"] = {
+                **target_diagnostics,
+                "target_entity_satisfied": True,
+                "finance_requested_issuer_match": True,
+            }
+            result["matched_target_phrases"] = target_diagnostics.get("matched_target_phrases", [])
+            result["missing_target_phrases"] = []
+        elif not bool(target_diagnostics.get("target_entity_satisfied")):
             result["accepted"] = False
             result["reason"] = "target_entity_mismatch"
     if _is_finance_profile(goal=goal, research_profile=research_profile):
@@ -144,10 +157,15 @@ class EvidenceEvaluator:
         period_diagnostics: dict[str, object] | None = None
         if _is_finance_profile(goal=goal, research_profile=research_profile):
             diagnostics.update(_finance_coverage_compatibility(profile_diagnostics))
+            issuer_coverage = _finance_requested_issuer_coverage(goal=goal, evidence=evidence)
+            diagnostics["finance_requested_issuer_coverage"] = issuer_coverage
             period_diagnostics = _finance_target_period_diagnostics(goal=goal, evidence=evidence)
             diagnostics["finance_target_period"] = period_diagnostics
             specialized_query_diagnostics = _finance_specialized_query_coverage(goal=goal, evidence=evidence)
             diagnostics["finance_specialized_query_coverage"] = specialized_query_diagnostics
+            if sufficient and issuer_coverage["required"] and not issuer_coverage["satisfied"]:
+                sufficient = False
+                reason = "finance_requested_issuer_missing"
             if (
                 sufficient
                 and specialized_query_diagnostics["required"]
@@ -275,6 +293,19 @@ def _finance_companyfacts_entity_mismatch(*, goal: SearchGoal, evidence: Evidenc
     entity = _companyfacts_entity_name(text)
     if not entity:
         return None
+    requested = _requested_issuer_entries(goal)
+    if requested:
+        if _companyfacts_entity_matches_any_issuer(entity, _companyfacts_cik(text), requested):
+            return None
+        return {
+            "target_entity_required": True,
+            "target_entity_satisfied": False,
+            "expected_companies": [str(item.get("company") or item.get("ticker") or "") for item in requested],
+            "expected_ciks": [str(item.get("sec_cik") or "") for item in requested if item.get("sec_cik")],
+            "observed_companyfacts_entity": entity,
+            "observed_companyfacts_cik": _companyfacts_cik(text),
+            "reason": "companyfacts_entity_not_requested_issuer",
+        }
     identity = resolve_issuer_identity(goal.query, goal.metadata)
     target = identity.company or _metadata_company(goal.metadata)
     if not target:
@@ -309,6 +340,219 @@ def _companyfacts_entity_name(text: str) -> str | None:
     if not match:
         return None
     return " ".join(match.group(1).replace(",", " ").split())
+
+
+def _companyfacts_cik(text: str) -> str | None:
+    match = re.search(r"\bcik=0*([0-9]{1,10})\b", str(text or ""), flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).zfill(10)
+
+
+def _finance_evidence_matches_requested_issuer(*, goal: SearchGoal, evidence: EvidenceItem) -> bool:
+    requested = _requested_issuer_entries(goal)
+    if not requested:
+        return False
+    text = " ".join(str(value or "") for value in (evidence.title, evidence.uri, evidence.text))
+    entity = _companyfacts_entity_name(text)
+    cik = _companyfacts_cik(text)
+    if entity and _companyfacts_entity_matches_any_issuer(entity, cik, requested):
+        return True
+    normalized = _entity_key(text)
+    for issuer in requested:
+        if _issuer_matches_text(issuer, normalized):
+            return True
+    return False
+
+
+def _requested_issuer_entries(goal: SearchGoal) -> list[dict[str, object]]:
+    text = _goal_target_text(goal)
+    metadata = goal.metadata or {}
+    registered = builtin_issuers_for_text(text)
+    explicit = _issuer_payload_from_metadata(metadata)
+    if explicit:
+        registered.insert(0, explicit)
+    seen: set[str] = set()
+    result: list[dict[str, object]] = []
+    for issuer in registered:
+        key = str(issuer.get("sec_cik") or issuer.get("ticker") or issuer.get("company") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(dict(issuer))
+    return result
+
+
+def _goal_target_text(goal: SearchGoal) -> str:
+    parts = [str(goal.query or "")]
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    for key in ("root_goal", "task_goal", "original_goal", "user_goal", "goal"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    research_mission = metadata.get("research_mission")
+    if isinstance(research_mission, dict):
+        for key in ("root_goal", "goal", "task_goal"):
+            value = research_mission.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+    answer_profile = metadata.get("answer_profile")
+    if isinstance(answer_profile, dict):
+        for key in ("root_goal", "task_goal"):
+            value = answer_profile.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+    return " ".join(item for item in parts if item.strip())
+
+
+def _issuer_payload_from_metadata(metadata: dict[str, object]) -> dict[str, object]:
+    company = _metadata_company(metadata)
+    ticker = _metadata_string(metadata, "ticker", "sec_ticker")
+    cik = _metadata_string(metadata, "sec_cik", "cik", "company_cik")
+    if not any((company, ticker, cik)):
+        return {}
+    payload: dict[str, object] = {}
+    if company:
+        payload["company"] = company
+    if ticker:
+        payload["ticker"] = ticker.upper()
+    normalized_cik = _normalize_cik(cik)
+    if normalized_cik:
+        payload["sec_cik"] = normalized_cik
+    return payload
+
+
+def _metadata_string(metadata: dict[str, object], *keys: str) -> str | None:
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())
+    nested = metadata.get("metadata")
+    if isinstance(nested, dict):
+        return _metadata_string(nested, *keys)
+    return None
+
+
+def _companyfacts_entity_matches_any_issuer(
+    entity: str,
+    cik: str | None,
+    requested: list[dict[str, object]],
+) -> bool:
+    normalized_cik = _normalize_cik(cik)
+    entity_key = _entity_key(entity)
+    for issuer in requested:
+        issuer_cik = _normalize_cik(issuer.get("sec_cik"))
+        if normalized_cik and issuer_cik and normalized_cik == issuer_cik:
+            return True
+        if _companyfacts_entity_matches_issuer(entity_key, issuer):
+            return True
+    return False
+
+
+def _companyfacts_entity_matches_issuer(entity_key: str, issuer: dict[str, object]) -> bool:
+    entity_tokens = set(entity_key.split())
+    for candidate in _issuer_name_candidates(issuer):
+        candidate_key = _entity_key(candidate)
+        if not candidate_key:
+            continue
+        candidate_tokens = set(candidate_key.split())
+        if candidate_tokens and candidate_tokens.issubset(entity_tokens):
+            if _has_unrequested_subsidiary_terms(entity_tokens, target_tokens=candidate_tokens):
+                continue
+            return True
+        if entity_tokens and entity_tokens.issubset(candidate_tokens):
+            return True
+        if candidate_key in entity_key and not _has_unrequested_subsidiary_terms(
+            entity_tokens,
+            target_tokens=candidate_tokens,
+        ):
+            return True
+    return False
+
+
+def _issuer_matches_text(issuer: dict[str, object], normalized_text: str) -> bool:
+    for candidate in _issuer_name_candidates(issuer, include_ticker=True):
+        candidate_key = _entity_key(candidate)
+        if not candidate_key:
+            continue
+        candidate_tokens = set(candidate_key.split())
+        text_tokens = set(normalized_text.split())
+        if candidate_key in normalized_text:
+            return True
+        if candidate_tokens and candidate_tokens.issubset(text_tokens):
+            return True
+    return False
+
+
+def _issuer_name_candidates(issuer: dict[str, object], *, include_ticker: bool = False) -> list[str]:
+    candidates: list[str] = []
+    keys = ("company", "matched_alias", "ticker") if include_ticker else ("company", "matched_alias")
+    for key in keys:
+        value = issuer.get(key)
+        if isinstance(value, str):
+            candidates.append(value)
+    aliases = issuer.get("aliases")
+    if isinstance(aliases, list):
+        candidates.extend(value for value in aliases if isinstance(value, str))
+    return candidates
+
+
+def _finance_requested_issuer_coverage(*, goal: SearchGoal, evidence: list[EvidenceItem]) -> dict[str, object]:
+    requested = _requested_issuer_entries(goal)
+    if len(requested) < 2:
+        return {
+            "required": False,
+            "satisfied": True,
+            "requested": [
+                _issuer_label(issuer)
+                for issuer in requested
+            ],
+            "covered": [],
+            "missing": [],
+        }
+    covered: list[str] = []
+    refs: dict[str, list[str]] = {}
+    for issuer in requested:
+        label = _issuer_label(issuer)
+        matching_refs = [
+            item.evidence_id
+            for item in evidence
+            if _finance_evidence_matches_issuer(evidence=item, issuer=issuer)
+        ]
+        if matching_refs:
+            covered.append(label)
+            refs[label] = matching_refs[:8]
+    covered_set = set(covered)
+    requested_labels = [_issuer_label(issuer) for issuer in requested]
+    missing = [label for label in requested_labels if label not in covered_set]
+    return {
+        "required": True,
+        "satisfied": not missing,
+        "requested": requested_labels,
+        "covered": covered,
+        "missing": missing,
+        "evidence_refs": refs,
+    }
+
+
+def _finance_evidence_matches_issuer(*, evidence: EvidenceItem, issuer: dict[str, object]) -> bool:
+    text = " ".join(str(value or "") for value in (evidence.title, evidence.uri, evidence.text))
+    entity = _companyfacts_entity_name(text)
+    cik = _companyfacts_cik(text)
+    if entity and _companyfacts_entity_matches_any_issuer(entity, cik, [issuer]):
+        return True
+    return _issuer_matches_text(issuer, _entity_key(text))
+
+
+def _issuer_label(issuer: dict[str, object]) -> str:
+    return str(issuer.get("ticker") or issuer.get("company") or issuer.get("sec_cik") or "issuer")
+
+
+def _normalize_cik(value: object) -> str | None:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if not digits:
+        return None
+    return digits[-10:].zfill(10)
 
 
 def _metadata_company(metadata: dict[str, object]) -> str | None:
@@ -382,19 +626,32 @@ def _finance_specialized_query_coverage(*, goal: SearchGoal, evidence: list[Evid
     corpus = "\n".join(f"{item.title} {item.uri} {item.text}" for item in evidence).lower()
     matched = [term for term in terms if term in corpus]
     required_count = 1 if len(terms) == 1 else min(2, len(terms))
+    transaction_required_terms = _finance_transaction_required_terms(goal)
+    transaction_matched = [term for term in transaction_required_terms if term in corpus]
+    addback_required_terms = _finance_addback_trend_required_terms(goal)
+    addback_matched = [term for term in addback_required_terms if term in corpus]
     missing = [term for term in terms if term not in set(matched)]
+    satisfied = len(matched) >= required_count
+    if transaction_required_terms and not transaction_matched:
+        satisfied = False
+    if addback_required_terms and not addback_matched:
+        satisfied = False
     return {
         "required": True,
-        "satisfied": len(matched) >= required_count,
+        "satisfied": satisfied,
         "terms": terms,
         "matched_terms": matched,
         "missing_terms": missing,
         "required_match_count": required_count,
+        "transaction_required_terms": transaction_required_terms,
+        "transaction_matched_terms": transaction_matched,
+        "addback_required_terms": addback_required_terms,
+        "addback_matched_terms": addback_matched,
     }
 
 
 def _finance_specialized_query_terms(goal: SearchGoal) -> list[str]:
-    query = str(goal.query or "").lower()
+    query = _finance_specialized_query_text(goal)
     if not _finance_query_has_specialized_scope(query):
         return []
     stopwords = set(_FINANCE_SPECIALIZED_QUERY_STOPWORDS)
@@ -420,6 +677,46 @@ def _finance_specialized_query_terms(goal: SearchGoal) -> list[str]:
         seen.add(token)
         terms.append(token)
     return terms[:8]
+
+
+def _finance_transaction_required_terms(goal: SearchGoal) -> list[str]:
+    query = _finance_specialized_query_text(goal)
+    if not any(marker in query for marker in ("transaction", "acquisition", "deal disclosure", "merger agreement", "8-k", "ev / revenue", "ev revenue")):
+        return []
+    return ["transaction", "acquisition", "deal", "merger", "8-k", "form 8-k", "consideration"]
+
+
+def _finance_addback_trend_required_terms(goal: SearchGoal) -> list[str]:
+    query = _finance_specialized_query_text(goal)
+    if not (
+        any(marker in query for marker in ("add-back", "addback", "add back", "add-backs", "add backs"))
+        and any(marker in query for marker in ("trend", "bridge", "reconciliation", "non-gaap", "non gaap", "adjusted ebitda"))
+    ):
+        return []
+    return [
+        "add-back",
+        "add back",
+        "addback",
+        "add-backs",
+        "add backs",
+        "reconciliation",
+        "non-gaap",
+        "non gaap",
+        "adjusted ebitda reconciliation",
+    ]
+
+
+def _finance_specialized_query_text(goal: SearchGoal) -> str:
+    root_goal = ""
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    for key in ("root_goal", "user_goal", "original_goal"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            root_goal = f"{root_goal} {value.strip()}"
+    mission = metadata.get("research_mission")
+    if isinstance(mission, dict) and isinstance(mission.get("root_goal"), str):
+        root_goal = f"{root_goal} {mission['root_goal']}"
+    return f"{goal.query or ''} {root_goal}".lower()
 
 
 def _finance_query_has_specialized_scope(query: str) -> bool:
@@ -740,17 +1037,31 @@ _SUBSIDIARY_ENTITY_TOKENS = {
 }
 
 _SPECIALIZED_QUERY_SCOPE_MARKERS = {
+    "add-back",
+    "addback",
+    "adjusted ebitda",
     "artificial intelligence",
+    "bridge",
     "business unit",
     "capital expenditure",
     "cloud",
+    "deal disclosure",
+    "deal disclosures",
     "family of apps",
     "infrastructure",
     "investment",
+    "merger agreement",
+    "multiple",
+    "non gaap",
+    "non-gaap",
     "operating segment",
     "reportable segment",
+    "reconciliation",
     "segment",
     "segment reporting",
+    "transaction",
+    "transaction multiple",
+    "transaction value",
     "分部",
     "板块",
     "业务线",
@@ -760,13 +1071,23 @@ _SPECIALIZED_QUERY_SCOPE_MARKERS = {
 }
 
 _SPECIALIZED_QUERY_PHRASES = (
+    "adjusted ebitda",
     "artificial intelligence",
     "business unit",
     "capital expenditure",
+    "deal disclosure",
+    "deal disclosures",
     "family of apps",
+    "merger agreement",
+    "non gaap",
+    "non-gaap",
     "operating segment",
     "reportable segment",
+    "reconciliation",
     "segment reporting",
+    "transaction",
+    "transaction multiple",
+    "transaction value",
 )
 
 _FINANCE_SPECIALIZED_QUERY_STOPWORDS = {

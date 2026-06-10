@@ -34,8 +34,11 @@ from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback,
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
+    FinanceFact,
     FormulaTrace,
     build_finance_fact_ledger,
+    compute_formula,
+    plan_finance_formula,
     register_finance_tools,
     verify_finance_answer,
 )
@@ -57,6 +60,7 @@ from kernel_v3.research import (
     resolve_issuer_identity,
     source_directory_for_profile,
 )
+from kernel_v3.research.issuer_registry import builtin_issuers_for_text
 from kernel_v3.retrieval import (
     CorpusFetchProvider,
     CorpusSearchProvider,
@@ -609,7 +613,7 @@ class AgentRuntime:
             if self.processor_fabric is None:
                 raise ValueError("model evaluator requires processor_fabric")
             return ModelEvaluator(fabric=self.processor_fabric)
-        return _RecipeEvaluator(recipe)
+        return _RecipeEvaluator(recipe, journal=self.journal)
 
     def _finalize(
         self,
@@ -703,11 +707,15 @@ class AgentRuntime:
                 evidence_count=len(evidence),
                 citation_count=len(citations),
             )
-            if adaptive_completion.get("sufficient") is True or _can_synthesize_partial_retrieval(
+            if (
+                _can_attempt_finance_numeric_finalization(recipe=recipe, evidence=evidence, citations=citations)
+                or adaptive_completion.get("sufficient") is True
+                or _can_synthesize_partial_retrieval(
                 terminal_reason=terminal_reason,
                 evidence=evidence,
                 citations=citations,
                 recipe=recipe,
+                )
             ):
                 report = _report_with_partial_retrieval_limitations(
                     report,
@@ -739,6 +747,23 @@ class AgentRuntime:
                 recipe=recipe,
             )
         if report.status != "sufficient":
+            if _can_attempt_finance_numeric_finalization(recipe=recipe, evidence=evidence, citations=citations):
+                report = _report_with_partial_retrieval_limitations(
+                    report,
+                    planned_coverage=planned_coverage,
+                    missing_evidence=["sufficient_retrieval_evidence", f"retrieval_status:{report.status}"],
+                    terminal_reason=terminal_reason or f"retrieval_{report.status}",
+                    adaptive_completion={"sufficient": False, "limitations": [f"retrieval_status:{report.status}"]},
+                )
+                return self._synthesize_retrieval_final(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    report=report,
+                    evidence=evidence,
+                    citations=citations,
+                    synthesizer_mode=synthesizer_mode,
+                )
             reason = terminal_reason or f"retrieval_{report.status}"
             return None, self._failure(
                 task_id,
@@ -782,6 +807,15 @@ class AgentRuntime:
         citations: list[CitationItem],
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
+        if _finance_numeric_verifier_required(recipe):
+            self._run_finance_numeric_preflight(
+                task_id,
+                run_id,
+                recipe=recipe,
+                evidence=evidence,
+                citations=citations,
+            )
+            report = _report_with_finance_formula_traces(self.journal, report, task_id=task_id, run_id=run_id)
         report = _report_with_task_goal(
             report,
             recipe,
@@ -1302,24 +1336,14 @@ class AgentRuntime:
         evidence: list[EvidenceItem],
         citations: list[CitationItem],
     ):
-        facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
-        trace_refs = _trace_refs(self.journal, answer.task_id)
-        ledger_record = self.journal.append(
-            task_id=answer.task_id,
-            run_id=answer.run_id,
-            step_id=None,
-            kind="finance_fact_ledger",
-            data=redact_journal_data(
-                {
-                    "schema": "holo.kernel_v3.finance_fact_ledger.v1",
-                    "fact_count": len(facts),
-                    "facts": [fact.to_dict() for fact in facts[:512]],
-                    "evidence_count": len(evidence),
-                    "citation_count": len(citations),
-                }
-            ),
-            state_delta={"finance_fact_count": len(facts)},
+        facts, ledger_record = self._append_finance_fact_ledger(
+            answer.task_id,
+            answer.run_id,
+            evidence=evidence,
+            citations=citations,
+            purpose="verification",
         )
+        trace_refs = _trace_refs(self.journal, answer.task_id)
         formula_traces = _calculator_formula_traces(self.journal, task_id=answer.task_id, run_id=answer.run_id)
         verification = verify_finance_answer(
             answer=answer.answer,
@@ -1345,6 +1369,245 @@ class AgentRuntime:
             state_delta={"finance_numeric_verification": verification.status},
         )
         return verification
+
+    def _run_finance_numeric_preflight(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+    ) -> None:
+        facts, ledger_record = self._append_finance_fact_ledger(
+            task_id,
+            run_id,
+            evidence=evidence,
+            citations=citations,
+            purpose="preflight",
+        )
+        existing = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
+        plans = _finance_formula_preflight_plans(
+            question=_root_goal_from_recipe(recipe),
+            facts=facts,
+            existing_traces=existing,
+        )
+        if not plans:
+            return
+        computed_traces = list(existing)
+        for index, plan in enumerate(plans, start=1):
+            plan_record = self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="finance_formula_plan",
+                data=redact_journal_data(
+                    {
+                        **plan.to_dict(),
+                        "schema": "holo.kernel_v3.finance_formula_plan.v1",
+                        "source": "pre_finalization",
+                        "ledger_ref": ledger_record.record_id,
+                    }
+                ),
+                state_delta={"finance_formula_plan": plan.status},
+            )
+            if plan.status != "ready" or not isinstance(plan.payload, dict):
+                continue
+            planned_input_fact_ids = _string_list(plan.payload.get("input_fact_ids"))
+            if _formula_trace_covers_inputs(existing, planned_input_fact_ids):
+                continue
+            action_id = f"act-finance-preflight-calculator-{index}"
+            try:
+                trace = compute_formula(
+                    expression=str(plan.payload.get("expression") or ""),
+                    variables=plan.payload.get("variables") if isinstance(plan.payload.get("variables"), dict) else {},
+                    unit=str(plan.payload.get("unit")) if isinstance(plan.payload.get("unit"), str) else None,
+                    formula_name=str(plan.payload.get("formula_name") or plan.formula_name or "finance_formula"),
+                    input_fact_ids=planned_input_fact_ids,
+                )
+                observation = Observation(
+                    observation_id=f"obs-{action_id}",
+                    run_id=run_id,
+                    kind="calculator_result",
+                    status="ok",
+                    source=f"tool:{CALCULATOR_TOOL_NAME}",
+                    content={
+                        "formula_trace": trace.to_dict(),
+                        "result_value": trace.result_value,
+                        "unit": trace.unit,
+                        "formatted_value": trace.diagnostics.get("formatted_value"),
+                        "source": "finance_numeric_preflight",
+                    },
+                    observed_at_ms=0,
+                    action_id=action_id,
+                    tool_call_id=None,
+                )
+                computed_traces.append(trace)
+            except Exception as exc:
+                observation = Observation(
+                    observation_id=f"obs-{action_id}",
+                    run_id=run_id,
+                    kind="calculator_result",
+                    status="failed",
+                    source=f"tool:{CALCULATOR_TOOL_NAME}",
+                    content={
+                        "error": "calculator_failed",
+                        "reason": str(exc),
+                        "error_type": type(exc).__name__,
+                        "source": "finance_numeric_preflight",
+                    },
+                    observed_at_ms=0,
+                    action_id=action_id,
+                    tool_call_id=None,
+                )
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="observation",
+                data=redact_journal_data(observation.to_dict()),
+                action_ref=action_id,
+                observation_ref=observation.observation_id,
+                feedback_ref=plan_record.record_id,
+                state_delta={"observation_status": observation.status},
+            )
+        self._append_finance_derived_formula_traces(
+            task_id,
+            run_id,
+            source_traces=computed_traces,
+            source_ledger_ref=ledger_record.record_id,
+        )
+
+    def _append_finance_derived_formula_traces(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        source_traces: list,
+        source_ledger_ref: str,
+    ) -> None:
+        dio_traces = [trace for trace in source_traces if str(trace.formula_name or "").lower().startswith("dio:")]
+        if len(dio_traces) < 2:
+            return
+        existing = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
+        if any(str(trace.formula_name or "").lower().startswith("dio_difference") for trace in existing):
+            return
+        left, right = dio_traces[0], dio_traces[1]
+        plan_record = self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="finance_formula_plan",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.finance_formula_plan.v1",
+                    "status": "ready",
+                    "formula_name": "dio_difference",
+                    "input_fact_ids": [left.formula_id, right.formula_id],
+                    "missing_facts": [],
+                    "payload": {
+                        "expression": "max(left - right, right - left)",
+                        "formula_name": "dio_difference",
+                        "variables": {
+                            "left": left.result_value,
+                            "right": right.result_value,
+                        },
+                        "unit": "days",
+                        "input_fact_ids": [left.formula_id, right.formula_id],
+                    },
+                    "diagnostics": {
+                        "source_formula_ids": [left.formula_id, right.formula_id],
+                        "source_formula_names": [left.formula_name, right.formula_name],
+                    },
+                    "source": "pre_finalization_derived",
+                    "ledger_ref": source_ledger_ref,
+                }
+            ),
+            state_delta={"finance_formula_plan": "ready"},
+        )
+        action_id = "act-finance-preflight-calculator-dio-difference"
+        try:
+            trace = compute_formula(
+                expression="max(left - right, right - left)",
+                variables={"left": left.result_value, "right": right.result_value},
+                unit="days",
+                formula_name="dio_difference",
+                input_fact_ids=[left.formula_id, right.formula_id],
+            )
+            observation = Observation(
+                observation_id=f"obs-{action_id}",
+                run_id=run_id,
+                kind="calculator_result",
+                status="ok",
+                source=f"tool:{CALCULATOR_TOOL_NAME}",
+                content={
+                    "formula_trace": trace.to_dict(),
+                    "result_value": trace.result_value,
+                    "unit": trace.unit,
+                    "formatted_value": trace.diagnostics.get("formatted_value"),
+                    "source": "finance_numeric_preflight",
+                },
+                observed_at_ms=0,
+                action_id=action_id,
+                tool_call_id=None,
+            )
+        except Exception as exc:
+            observation = Observation(
+                observation_id=f"obs-{action_id}",
+                run_id=run_id,
+                kind="calculator_result",
+                status="failed",
+                source=f"tool:{CALCULATOR_TOOL_NAME}",
+                content={
+                    "error": "calculator_failed",
+                    "reason": str(exc),
+                    "error_type": type(exc).__name__,
+                    "source": "finance_numeric_preflight",
+                },
+                observed_at_ms=0,
+                action_id=action_id,
+                tool_call_id=None,
+            )
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="observation",
+            data=redact_journal_data(observation.to_dict()),
+            action_ref=action_id,
+            observation_ref=observation.observation_id,
+            feedback_ref=plan_record.record_id,
+            state_delta={"observation_status": observation.status},
+        )
+
+    def _append_finance_fact_ledger(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+        purpose: str,
+    ):
+        facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+        ledger_record = self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="finance_fact_ledger",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.finance_fact_ledger.v1",
+                    "purpose": purpose,
+                    "fact_count": len(facts),
+                    "facts": [fact.to_dict() for fact in facts[:512]],
+                    "evidence_count": len(evidence),
+                    "citation_count": len(citations),
+                }
+            ),
+            state_delta={"finance_fact_count": len(facts)},
+        )
+        return facts, ledger_record
 
     def _append_final_quality_check(
         self,
@@ -1897,8 +2160,64 @@ class _RecipeBoundPlanner:
         self._journal_plan_if_needed(context)
         action = self.inner.propose(context, feedback)
         bound = _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
+        bound = self._finance_formula_action(context, bound) or bound
         self._journal_plan_update(context, bound, feedback)
         return bound
+
+    def _finance_formula_action(self, context: ContextBundle, action: CandidateAction) -> CandidateAction | None:
+        if self.journal is None or CALCULATOR_TOOL_NAME not in self.recipe.allowed_tools:
+            return None
+        if action.name == CALCULATOR_TOOL_NAME:
+            return None
+        task_id = str(context.state.get("task_id") or "")
+        run_id = str(context.state.get("run_id") or "")
+        if not task_id or not run_id:
+            return None
+        evidence = _retrieval_evidence(self.journal, task_id, run_id)
+        if not evidence:
+            return None
+        citations = _retrieval_citations(self.journal, task_id, run_id)
+        facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+        existing_traces = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
+        plan = plan_finance_formula(question=self.goal, facts=facts, existing_traces=existing_traces)
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=str(context.state.get("step_id") or ""),
+            kind="finance_formula_plan",
+            data=redact_journal_data(
+                {
+                    **plan.to_dict(),
+                    "source_action": _action_plan_preview(action),
+                    "fact_count": len(facts),
+                    "existing_formula_trace_count": len(existing_traces),
+                }
+            ),
+            state_delta={"finance_formula_plan": plan.status},
+        )
+        if plan.status != "ready" or not isinstance(plan.payload, dict):
+            return _finance_missing_fact_retrieval_action(
+                action,
+                plan=plan,
+                goal=self.goal,
+                call_index=self._calls,
+            )
+        if _formula_trace_covers_inputs(existing_traces, _string_list(plan.payload.get("input_fact_ids"))):
+            return None
+        return CandidateAction(
+            action_id=f"act-finance-formula-{self._calls}",
+            kind="tool",
+            name=CALCULATOR_TOOL_NAME,
+            description=f"Compute {plan.formula_name or 'finance formula'} from finance fact ledger",
+            score=max(float(action.score or 0.0), 0.92),
+            payload=dict(plan.payload),
+            reasons=[
+                "finance_formula_planner",
+                "calculator_required_before_final",
+                f"source_action:{action.name}",
+            ],
+            side_effect_class="read",
+        )
 
     def _journal_plan_if_needed(self, context: ContextBundle) -> None:
         if self.journal is None:
@@ -1963,6 +2282,165 @@ class _RecipeBoundPlanner:
             action_ref=action.action_id,
             state_delta={"agent_work_plan_revision": self._calls},
         )
+
+
+def _finance_missing_fact_retrieval_action(
+    source_action: CandidateAction,
+    *,
+    plan: object,
+    goal: str,
+    call_index: int,
+) -> CandidateAction | None:
+    formula_name = str(getattr(plan, "formula_name", "") or "")
+    missing = [str(item) for item in getattr(plan, "missing_facts", []) or [] if str(item)]
+    if not _finance_missing_fact_retrieval_needed(formula_name=formula_name, missing=missing, goal=goal):
+        return None
+    payload = dict(source_action.payload) if isinstance(source_action.payload, dict) else {}
+    payload.update(_finance_missing_fact_retrieval_payload(formula_name=formula_name, missing=missing, goal=goal))
+    return CandidateAction(
+        action_id=f"act-finance-missing-facts-retrieval-{call_index}",
+        kind="tool",
+        name="retrieval.run",
+        description=f"Retrieve missing finance facts for {formula_name}",
+        score=max(float(source_action.score or 0.0), 0.9),
+        payload=payload,
+        reasons=[
+            "finance_formula_planner_missing_facts",
+            f"formula:{formula_name}",
+            *[f"missing:{item}" for item in missing[:6]],
+            f"source_action:{source_action.name}",
+        ],
+        side_effect_class="network",
+    )
+
+
+def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[str], goal: str) -> bool:
+    text = f"{goal} {' '.join(missing)} {formula_name}".lower()
+    if formula_name == "ev_revenue" and any(item in missing for item in ("equity_value_or_market_cap", "revenue")):
+        return any(marker in text for marker in ("transaction", "acquisition", "deal", "purchase", "consideration", "ev/revenue"))
+    if formula_name == "ev_ebitda" and any(
+        item in missing for item in ("enterprise_value_or_market_cap", "debt", "cash", "ebitda_or_ebitda_components")
+    ):
+        return any(marker in text for marker in ("ev/ebitda", "enterprise value", "market cap", "ebitda", "valuation"))
+    if formula_name == "bridge_subtotal" and missing:
+        return any(marker in text for marker in ("adjusted ebitda", "bridge", "addback", "add-back", "add back", "non-gaap"))
+    return False
+
+
+def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[str], goal: str) -> JsonObject:
+    base_query = " ".join(str(goal or "").split())
+    tickers = _finance_goal_tickers(base_query)
+    if formula_name == "ev_revenue":
+        query = (
+            f"{base_query} SEC 8-K merger agreement acquisition transaction value "
+            "consideration purchase price enterprise value target revenue"
+        )
+    elif formula_name == "ev_ebitda":
+        ticker_text = " ".join(tickers)
+        query = " ".join(
+            part
+            for part in (
+                ticker_text,
+                "EV EBITDA market cap enterprise value total debt total cash EBITDA key statistics 10-K",
+            )
+            if part
+        )
+    elif formula_name == "bridge_subtotal":
+        query = (
+            f"{base_query} SEC 10-K adjusted EBITDA reconciliation non-GAAP bridge "
+            "add-backs deductions subtotal"
+        )
+    else:
+        query = f"{base_query} SEC filing missing finance facts {' '.join(missing)}"
+    queries = _finance_missing_fact_queries(
+        formula_name=formula_name,
+        goal=base_query,
+        primary_query=query,
+        tickers=tickers,
+    )
+    max_queries = 3
+    max_fetches = 12
+    if formula_name == "ev_ebitda" and len(tickers) > 1:
+        max_queries = min(8, max(4, len(queries)))
+        max_fetches = 24
+    return {
+        "query": query,
+        "queries": queries[:max_queries],
+        "search_strategy": "structured",
+        "max_queries": max_queries,
+        "max_sources": 24,
+        "max_fetches": max_fetches,
+        "max_spans_per_document": 8,
+        "metadata": {
+            "root_goal": base_query,
+            "finance_formula_missing_facts": missing,
+            "finance_formula_name": formula_name,
+            "source_authority_requirement": _finance_missing_fact_authority_requirement(formula_name),
+            "preferred_source_families": _finance_missing_fact_preferred_families(formula_name),
+            "research_profile": "finance_fundamentals",
+            **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda"} else {}),
+            **({"target_tickers": tickers} if tickers else {}),
+        },
+    }
+
+
+def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query: str, tickers: list[str]) -> list[str]:
+    queries: list[str] = []
+
+    def add(query: str) -> None:
+        normalized = " ".join(str(query or "").split())
+        if normalized and normalized not in queries:
+            queries.append(normalized)
+
+    add(primary_query)
+    if formula_name == "ev_ebitda" and tickers:
+        add(" ".join(f"{ticker} key statistics enterprise value market cap EBITDA total debt total cash" for ticker in tickers))
+        for ticker in tickers:
+            add(f"{ticker} key statistics enterprise value market cap EBITDA total debt total cash")
+            add(f"{ticker} 10-K EBITDA debt cash SEC")
+    else:
+        add(_finance_missing_fact_secondary_query(formula_name=formula_name, goal=goal))
+        add(_finance_missing_fact_tertiary_query(formula_name=formula_name, goal=goal))
+    return queries
+
+
+def _finance_missing_fact_authority_requirement(formula_name: str) -> str:
+    if formula_name == "ev_ebitda":
+        return "secondary_or_better"
+    return "primary"
+
+
+def _finance_missing_fact_preferred_families(formula_name: str) -> list[str]:
+    if formula_name == "ev_ebitda":
+        return ["market_data_provider", "structured_regulatory_data", "regulatory_filing"]
+    return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
+
+
+def _finance_goal_tickers(goal: str) -> list[str]:
+    tickers: list[str] = []
+    seen: set[str] = set()
+    for issuer in builtin_issuers_for_text(goal):
+        ticker = str(issuer.get("ticker") or "").upper().strip()
+        if ticker and ticker not in seen:
+            seen.add(ticker)
+            tickers.append(ticker)
+    return tickers
+
+
+def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> str:
+    if formula_name == "ev_ebitda":
+        return f"{goal} 10-K EBITDA debt cash market cap enterprise value"
+    if formula_name == "bridge_subtotal":
+        return f"{goal} 10-K adjusted EBITDA reconciliation add backs"
+    return f"{goal} SEC Archives 8-K 10-K consideration revenue"
+
+
+def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str:
+    if formula_name == "ev_ebitda":
+        return f"{goal} official filing adjusted EBITDA market capitalization total debt cash equivalents"
+    if formula_name == "bridge_subtotal":
+        return f"{goal} earnings release non-GAAP adjusted EBITDA reconciliation"
+    return f"{goal} official filing transaction value revenue"
 
 
 class _RecipePlanner:
@@ -2047,8 +2525,9 @@ class _RecipePlanner:
 
 
 class _RecipeEvaluator:
-    def __init__(self, recipe: TaskRecipe) -> None:
+    def __init__(self, recipe: TaskRecipe, *, journal: JournalStore | None = None) -> None:
         self.recipe = recipe
+        self.journal = journal
         self.calls = 0
         self.expected_action_count = _expected_action_count(recipe)
 
@@ -2092,10 +2571,59 @@ class _RecipeEvaluator:
             report = _nested(observation.content, "report")
             if isinstance(report, dict) and report.get("status") != "sufficient":
                 return _feedback(run_id, self.calls, "failed", "insufficient_evidence", None, ["sufficient retrieval evidence"])
+            if _finance_formula_work_required_before_final(
+                self.journal,
+                recipe=self.recipe,
+                context=context,
+            ):
+                return _feedback(
+                    run_id,
+                    self.calls,
+                    "continue",
+                    None,
+                    None,
+                    ["finance_formula_trace_required"],
+                )
         answer = None
         if isinstance(observation.content, dict):
             answer = observation.content.get("text")
         return _feedback(run_id, self.calls, "final_answer_ready", "completed", answer if isinstance(answer, str) else None, [])
+
+
+def _finance_formula_work_required_before_final(
+    journal: JournalStore | None,
+    *,
+    recipe: TaskRecipe,
+    context: ContextBundle,
+) -> bool:
+    if journal is None:
+        return False
+    if recipe.mode != "retrieval_answer" or CALCULATOR_TOOL_NAME not in recipe.allowed_tools:
+        return False
+    if not _finance_numeric_verifier_required(recipe):
+        return False
+    task_id = str(context.state.get("task_id") or "")
+    run_id = str(context.state.get("run_id") or "")
+    if not task_id or not run_id:
+        return False
+    evidence = _retrieval_evidence(journal, task_id, run_id)
+    if not evidence:
+        return False
+    citations = _retrieval_citations(journal, task_id, run_id)
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    existing_traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    plan = plan_finance_formula(question=_root_goal_from_recipe(recipe), facts=facts, existing_traces=existing_traces)
+    if plan.status == "not_applicable":
+        return False
+    if plan.status == "ready" and isinstance(plan.payload, dict):
+        input_fact_ids = _string_list(plan.payload.get("input_fact_ids"))
+        return not _formula_trace_covers_inputs(existing_traces, input_fact_ids)
+    missing = [str(item) for item in plan.missing_facts if str(item)]
+    return _finance_missing_fact_retrieval_needed(
+        formula_name=str(plan.formula_name or ""),
+        missing=missing,
+        goal=_root_goal_from_recipe(recipe),
+    )
 
 
 def _planner_allowed_tool_names(recipe: TaskRecipe) -> set[str]:
@@ -5333,6 +5861,11 @@ def _disabled_workmethod_state(
     )
 
 
+def _short_hash(*parts: object) -> str:
+    payload = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def _pending_answer_prefers_semantic_mode(
     metadata: JsonObject | None,
     intake: SemanticIntake,
@@ -5464,6 +5997,10 @@ def _runtime_retrieval_capabilities(operator: RetrievalOperator | None) -> JsonO
 
 
 def _research_profile_id(recipe: TaskRecipe) -> str | None:
+    for key in ("research_profile_id", "research_profile"):
+        value = recipe.metadata.get(key)
+        if isinstance(value, str) and value:
+            return value
     metadata = _execution_metadata(recipe)
     retrieval = metadata.get("retrieval")
     if isinstance(retrieval, dict):
@@ -5881,14 +6418,22 @@ def _apply_finance_capability_defaults(payload: JsonObject, capabilities: set[st
     updated = dict(payload)
     metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
     metadata.setdefault("research_profile", FINANCE_FUNDAMENTALS_PROFILE_ID)
-    if capabilities.intersection({"finance.market_news", "finance.market_data", "finance.competitive_landscape"}):
-        metadata.setdefault("source_authority_requirement", "secondary_or_better")
+    market_valuation = _finance_payload_needs_market_data(updated, metadata=metadata)
+    if capabilities.intersection({"finance.market_news", "finance.market_data", "finance.competitive_landscape"}) or market_valuation:
+        metadata["source_authority_requirement"] = "secondary_or_better"
+        if market_valuation:
+            preferred = _string_list(metadata.get("preferred_source_families"))
+            metadata["preferred_source_families"] = _ordered_unique(
+                ["market_data_provider", *preferred, "structured_regulatory_data", "regulatory_filing"]
+            )
         updated.setdefault("max_queries", 1)
         updated.setdefault("query_templates", ["{query}"])
         if "finance.market_news" in capabilities:
             metadata.setdefault("research_task_kind", "market_news")
         elif "finance.market_data" in capabilities:
             metadata.setdefault("research_task_kind", "market_data")
+        elif market_valuation:
+            metadata.setdefault("research_task_kind", "valuation")
         else:
             metadata.setdefault("research_task_kind", "competitive_landscape")
     elif "finance.macro_data" in capabilities:
@@ -5899,6 +6444,39 @@ def _apply_finance_capability_defaults(payload: JsonObject, capabilities: set[st
         updated.setdefault("query_templates", ["{query}"])
     updated["metadata"] = metadata
     return updated
+
+
+def _finance_payload_needs_market_data(payload: JsonObject, *, metadata: JsonObject) -> bool:
+    text = " ".join(
+        str(item or "")
+        for item in (
+            payload.get("query"),
+            metadata.get("root_goal"),
+            metadata.get("task_goal"),
+            metadata.get("original_goal"),
+            metadata.get("user_goal"),
+            metadata.get("research_task_kind"),
+        )
+    ).lower()
+    compact = "".join(ch for ch in text if ch.isalnum())
+    return any(
+        marker in text or marker in compact
+        for marker in (
+            "ev/ebitda",
+            "evebitda",
+            "ev/revenue",
+            "evrevenue",
+            "enterprise value",
+            "market cap",
+            "market capitalization",
+            "valuation multiple",
+            "trading multiple",
+            "stock price",
+            "share price",
+            "p/e",
+            "pe ratio",
+        )
+    )
 
 
 def _apply_technical_documentation_capability_defaults(payload: JsonObject, capabilities: set[str]) -> JsonObject:
@@ -6964,6 +7542,29 @@ def _report_with_task_goal(
     return replace(report, diagnostics=diagnostics)
 
 
+def _report_with_finance_formula_traces(
+    journal: JournalStore,
+    report: RetrievalReport,
+    *,
+    task_id: str,
+    run_id: str,
+) -> RetrievalReport:
+    traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    if not traces:
+        return report
+    diagnostics = dict(report.diagnostics)
+    diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in traces[:16]]
+    diagnostics["finance_formula_trace_count"] = len(traces)
+    diagnostics.setdefault(
+        "finance_synthesis_directive",
+        (
+            "Use host calculator formula traces as the authoritative computed values. "
+            "Do not recompute these finance formulas mentally; quote the trace values and cite the supporting evidence."
+        ),
+    )
+    return replace(report, diagnostics=diagnostics)
+
+
 def _can_synthesize_partial_retrieval(
     *,
     terminal_reason: str | None,
@@ -6972,6 +7573,21 @@ def _can_synthesize_partial_retrieval(
     recipe: TaskRecipe,
 ) -> bool:
     if terminal_reason not in PARTIAL_RETRIEVAL_TERMINAL_REASONS:
+        return False
+    if not evidence:
+        return False
+    if recipe.citations_required and not citations:
+        return False
+    return True
+
+
+def _can_attempt_finance_numeric_finalization(
+    *,
+    recipe: TaskRecipe,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+) -> bool:
+    if not _finance_numeric_verifier_required(recipe):
         return False
     if not evidence:
         return False
@@ -7101,6 +7717,65 @@ def _calculator_formula_traces(journal: JournalStore, *, task_id: str, run_id: s
     return traces
 
 
+def _finance_formula_preflight_plans(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    existing_traces: list[FormulaTrace],
+):
+    plan = plan_finance_formula(question=question, facts=facts, existing_traces=existing_traces)
+    if plan.formula_name in {"dio", "ev_ebitda"}:
+        grouped = _finance_facts_by_entity(facts)
+        ready = []
+        if len(grouped) > 1:
+            for entity, entity_facts in grouped.items():
+                entity_plan = plan_finance_formula(question=question, facts=entity_facts, existing_traces=None)
+                if entity_plan.status != "ready" or not isinstance(entity_plan.payload, dict):
+                    continue
+                payload = dict(entity_plan.payload)
+                if _formula_trace_covers_inputs(existing_traces, _string_list(payload.get("input_fact_ids"))):
+                    continue
+                payload["formula_name"] = f"{entity_plan.formula_name}:{entity}"
+                ready.append(
+                    replace(
+                        entity_plan,
+                        payload=payload,
+                        diagnostics={**entity_plan.diagnostics, "entity": entity},
+                    )
+                )
+            if ready:
+                return ready
+    return [plan]
+
+
+def _formula_trace_covers_inputs(traces: list[FormulaTrace], input_fact_ids: list[str]) -> bool:
+    wanted = {str(item) for item in input_fact_ids if str(item)}
+    if not wanted:
+        return False
+    for trace in traces:
+        current = {str(item) for item in trace.input_fact_ids if str(item)}
+        if current == wanted:
+            return True
+    return False
+
+
+def _finance_facts_by_entity(facts: list[FinanceFact]) -> dict[str, list[FinanceFact]]:
+    grouped: dict[str, list[FinanceFact]] = {}
+    for fact in facts:
+        entity = _finance_fact_entity_label(fact)
+        if not entity:
+            continue
+        grouped.setdefault(entity, []).append(fact)
+    return grouped
+
+
+def _finance_fact_entity_label(fact: FinanceFact) -> str:
+    for value in (fact.ticker, fact.entity, fact.metadata.get("cik"), fact.metadata.get("entityName")):
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())
+    return ""
+
+
 def _finance_numeric_missing_evidence(verification) -> list[str]:
     missing: list[str] = []
     for issue in list(getattr(verification, "issues", []) or []):
@@ -7112,7 +7787,7 @@ def _finance_numeric_missing_evidence(verification) -> list[str]:
             continue
         raw = str(value.get("raw") or value.get("value") or "").strip()
         if raw:
-            missing.append(f"unsupported_numeric_value:{raw}")
+            missing.append(f"unsupported_answer_number:{raw}")
     return _ordered_unique(missing)
 
 

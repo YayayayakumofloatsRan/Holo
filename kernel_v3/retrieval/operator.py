@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Protocol
 
@@ -323,9 +324,10 @@ class RetrievalOperator:
             fetch_queue = ranked_all
         else:
             fetch_queue = []
+        initial_fetch_limit = _initial_fetch_limit(goal, ranked=fetch_queue)
         fetch_jobs = [
             (index, ranked_source, source_by_id[ranked_source.source_id])
-            for index, ranked_source in enumerate(fetch_queue[: goal.max_fetches], start=1)
+            for index, ranked_source in enumerate(fetch_queue[:initial_fetch_limit], start=1)
             if ranked_source.source_id in source_by_id
         ]
         (
@@ -434,7 +436,15 @@ class RetrievalOperator:
                     ).to_dict(),
                     action_ref=action_ref,
                 )
-                if expanded_fetchable_ranked:
+                if _wants_sec_filing_text(goal):
+                    expansion_fetch_queue = _merge_ranked_sources(
+                        max_count=remaining_fetch_budget,
+                        groups=[
+                            _priority_sec_filing_discovery_sources(expanded_ranked_all),
+                            expanded_fetchable_ranked,
+                        ],
+                    )
+                elif expanded_fetchable_ranked:
                     expansion_fetch_queue = expanded_fetchable_ranked
                 elif _should_fetch_rejected_sources(
                     goal,
@@ -444,10 +454,16 @@ class RetrievalOperator:
                     expansion_fetch_queue = expanded_ranked_all
                 else:
                     expansion_fetch_queue = []
+                expansion_fetch_limit = _document_expansion_fetch_limit(
+                    goal,
+                    fetch_queue=expansion_fetch_queue,
+                    remaining_fetch_budget=remaining_fetch_budget,
+                    depth=1,
+                )
                 expanded_fetch_jobs = [
                     (index, ranked_source, source_by_id[ranked_source.source_id])
                     for index, ranked_source in enumerate(
-                        expansion_fetch_queue[:remaining_fetch_budget],
+                        expansion_fetch_queue[:expansion_fetch_limit],
                         start=len(fetch_attempt_ids) + 1,
                     )
                     if ranked_source.source_id in source_by_id
@@ -472,6 +488,105 @@ class RetrievalOperator:
                 fetch_summaries.extend(extra_fetch_summaries)
                 all_fetch_jobs.extend(expanded_fetch_jobs)
                 ranked_all = rank_sources(goal, _dedupe_sources(sources), research_profile=research_profile)
+                remaining_fetch_budget = max(0, goal.max_fetches - len(fetch_attempt_ids))
+                if extra_documents and remaining_fetch_budget > 0:
+                    second_expanded_sources, second_expansions, second_actions = expand_document_links(
+                        goal=goal,
+                        documents=extra_documents,
+                        source_by_id=source_by_id,
+                        max_candidates=min(remaining_fetch_budget, max(1, goal.max_sources * 4), 128),
+                    )
+                    if second_expansions:
+                        discovery_expansions.extend(second_expansions)
+                        expansion_actions.extend(second_actions)
+                        _append(
+                            journal,
+                            task_id,
+                            run_id,
+                            f"{step_id_prefix}-document-expansion-2",
+                            "retrieval_document_expansion",
+                            {
+                                "goal_id": goal.goal_id,
+                                "expanded_source_count": len(second_expanded_sources),
+                                "expansion_count": len(second_expansions),
+                                "expansions": [item.to_dict() for item in second_expansions[:64]],
+                                "diagnostics": {
+                                    "truncated": len(second_expansions) > 64,
+                                    "next_tool_action_count": len(second_actions),
+                                    "remaining_fetch_budget": remaining_fetch_budget,
+                                    "expansion_depth": 2,
+                                },
+                            },
+                            action_ref=action_ref,
+                        )
+                    if second_expanded_sources:
+                        sources.extend(second_expanded_sources)
+                        for source in second_expanded_sources:
+                            source_by_id[source.source_id] = source
+                            if research_profile is not None:
+                                source_assessments[source.source_id] = assess_search_source(source, profile=research_profile)
+                        second_ranked_all = rank_sources(goal, second_expanded_sources, research_profile=research_profile)
+                        second_fetchable_ranked, second_source_rejections = _fetchable_ranked_sources(goal, second_ranked_all)
+                        source_rejections.extend(second_source_rejections)
+                        _append(
+                            journal,
+                            task_id,
+                            run_id,
+                            f"{step_id_prefix}-rank-document-expansion-2",
+                            "retrieval_rank_sources",
+                            RankSources(
+                                ranking_id=f"rank-{goal.goal_id}-document-expansion-2",
+                                goal_id=goal.goal_id,
+                                ranked_sources=[_safe_source_dict(source) for source in second_ranked_all],
+                                diagnostics={
+                                    "ranked_source_count": len(second_ranked_all),
+                                    "raw_ranked_source_count": len(second_ranked_all),
+                                    "rejected_ranked_source_count": len(second_source_rejections),
+                                    "max_sources": goal.max_sources,
+                                    "ranking_scope": "document_expansion",
+                                    "expansion_depth": 2,
+                                },
+                            ).to_dict(),
+                            action_ref=action_ref,
+                        )
+                        if _wants_sec_filing_text(goal):
+                            second_fetch_queue = _merge_ranked_sources(
+                                max_count=remaining_fetch_budget,
+                                groups=[
+                                    _priority_sec_filing_discovery_sources(second_ranked_all),
+                                    second_fetchable_ranked,
+                                ],
+                            )
+                        else:
+                            second_fetch_queue = second_fetchable_ranked
+                        second_fetch_jobs = [
+                            (index, ranked_source, source_by_id[ranked_source.source_id])
+                            for index, ranked_source in enumerate(
+                                second_fetch_queue[:remaining_fetch_budget],
+                                start=len(fetch_attempt_ids) + 1,
+                            )
+                            if ranked_source.source_id in source_by_id
+                        ]
+                        (
+                            second_documents,
+                            second_fetch_attempt_ids,
+                            second_fetch_summaries,
+                        ) = self._fetch_jobs_and_record(
+                            second_fetch_jobs,
+                            goal=goal,
+                            journal=journal,
+                            artifact_store=artifact_store,
+                            task_id=task_id,
+                            run_id=run_id,
+                            step_id_prefix=step_id_prefix,
+                            action_ref=action_ref,
+                            source_assessments=source_assessments,
+                        )
+                        documents.extend(second_documents)
+                        fetch_attempt_ids.extend(second_fetch_attempt_ids)
+                        fetch_summaries.extend(second_fetch_summaries)
+                        all_fetch_jobs.extend(second_fetch_jobs)
+                        ranked_all = rank_sources(goal, _dedupe_sources(sources), research_profile=research_profile)
 
         spans = []
         evidence_candidates: list[EvidenceCandidate] = []
@@ -910,6 +1025,11 @@ class RetrievalOperator:
                     "fetch_id": fetch_id,
                     "source_id": source.source_id,
                     "uri": source.uri,
+                    "title": _preview(source.title, 160),
+                    "provider": source.provider,
+                    "source_kind": _search_source_kind(source),
+                    "source_family": _search_source_family(source),
+                    "host": _uri_host(source.uri),
                     "status": attempt.status,
                     "size_bytes": attempt.size_bytes,
                     "reason": attempt.diagnostics.get("reason") or attempt.diagnostics.get("error"),
@@ -1140,6 +1260,85 @@ def _goal_budget(goal: SearchGoal) -> JsonObject:
         "max_fetches": goal.max_fetches,
         "max_spans_per_document": goal.max_spans_per_document,
     }
+
+
+def _initial_fetch_limit(goal: SearchGoal, *, ranked: list[RankedSource]) -> int:
+    max_fetches = max(0, int(goal.max_fetches))
+    if max_fetches <= 2:
+        return max_fetches
+    if not _should_reserve_document_expansion_budget(goal, ranked=ranked):
+        return max_fetches
+    return max(1, max_fetches // 2)
+
+
+def _should_reserve_document_expansion_budget(goal: SearchGoal, *, ranked: list[RankedSource]) -> bool:
+    if not _wants_sec_filing_text(goal):
+        return False
+    return any(
+        isinstance(item.metadata, dict) and item.metadata.get("source_kind") == "sec_submissions_json"
+        for item in ranked[: max(4, min(len(ranked), goal.max_fetches))]
+    )
+
+
+def _wants_sec_filing_text(goal: SearchGoal) -> bool:
+    query = _goal_intent_text(goal).lower()
+    compact = "".join(ch for ch in query if ch.isalnum())
+    return any(
+        marker in query or marker in compact
+        for marker in (
+            "8-k",
+            "8k",
+            "merger",
+            "acquisition",
+            "transaction",
+            "deal value",
+            "purchase price",
+            "consideration",
+            "adjusted ebitda",
+            "non-gaap",
+            "nongaap",
+            "bridge",
+            "addback",
+            "add back",
+            "purchase price allocation",
+        )
+    )
+
+
+def _wants_market_valuation_data(goal: SearchGoal) -> bool:
+    query = _goal_intent_text(goal).lower()
+    compact = "".join(ch for ch in query if ch.isalnum())
+    return any(
+        marker in query or marker in compact
+        for marker in (
+            "ev/ebitda",
+            "evebitda",
+            "ev/revenue",
+            "evrevenue",
+            "enterprise value",
+            "market cap",
+            "market capitalization",
+            "valuation multiple",
+            "trading multiple",
+            "stock price",
+            "share price",
+        )
+    )
+
+
+def _goal_intent_text(goal: SearchGoal) -> str:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    parts = [str(goal.query or "")]
+    for key in ("root_goal", "task_goal", "original_goal", "user_goal"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    mission = metadata.get("research_mission")
+    if isinstance(mission, dict):
+        value = mission.get("root_goal")
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return "\n".join(parts)
 
 
 def _search_candidate_limit(goal: SearchGoal) -> int:
@@ -1378,6 +1577,42 @@ def _initial_fetch_queue_with_discovery_supplements(
         ranked_all=ranked_all,
         research_profile=research_profile,
     )
+    if _wants_sec_filing_text(goal):
+        priority_discovery = _priority_sec_filing_discovery_sources(discovery)
+        priority_event_sources = _priority_issuer_event_sources(goal, discovery)
+        priority_market_sources = _priority_market_data_sources(goal, ranked_all)
+        if _wants_transaction_filing_evidence(goal):
+            return _merge_ranked_sources(
+                max_count=goal.max_fetches,
+                groups=[
+                    priority_discovery,
+                    priority_event_sources,
+                    priority_market_sources,
+                    fetchable_ranked,
+                    [
+                        source
+                        for source in discovery
+                        if source.source_id
+                        not in {item.source_id for item in [*priority_discovery, *priority_event_sources, *priority_market_sources]}
+                    ],
+                ],
+            )
+        if priority_discovery or priority_market_sources:
+            return _merge_ranked_sources(
+                max_count=goal.max_fetches,
+                groups=[
+                    priority_market_sources,
+                    priority_discovery,
+                    priority_event_sources,
+                    fetchable_ranked,
+                    [
+                        source
+                        for source in discovery
+                        if source.source_id
+                        not in {item.source_id for item in [*priority_market_sources, *priority_discovery, *priority_event_sources]}
+                    ],
+                ],
+            )
     if not discovery:
         return fetchable_ranked
     reserved = min(len(discovery), _supplemental_discovery_fetch_limit(goal, research_profile=research_profile))
@@ -1397,6 +1632,133 @@ def _initial_fetch_queue_with_discovery_supplements(
         queue.append(source)
         seen.add(source.uri)
     return queue
+
+
+def _priority_sec_filing_discovery_sources(sources: list[RankedSource]) -> list[RankedSource]:
+    priority_kinds = {"sec_submissions_json", "sec_edgar_browse"}
+    result = [
+        source
+        for source in sources
+        if _ranked_source_kind(source) in priority_kinds
+    ]
+    result.sort(key=lambda source: (0 if _ranked_source_kind(source) == "sec_submissions_json" else 1, source.rank))
+    return result
+
+
+def _priority_issuer_event_sources(goal: SearchGoal, sources: list[RankedSource]) -> list[RankedSource]:
+    intent = _goal_intent_text(goal).lower()
+    event_markers = {
+        "acquisition",
+        "acquire",
+        "merger",
+        "transaction",
+        "deal",
+        "purchase",
+        "consideration",
+        "press release",
+        "announcement",
+    }
+    query_terms = [term for term in intent.replace("-", " ").replace("/", " ").split() if len(term) >= 4]
+    result: list[RankedSource] = []
+    for source in sources:
+        family = str(source.metadata.get("source_family") or "")
+        kind = _ranked_source_kind(source)
+        if family != "company_ir" and kind not in {"issuer_investor_relations", "issuer_earnings_releases"}:
+            continue
+        haystack = f"{source.uri} {source.title} {source.snippet}".lower()
+        if not any(marker in haystack or marker in intent for marker in event_markers):
+            continue
+        if not any(term in haystack for term in query_terms):
+            continue
+        result.append(source)
+    result.sort(key=lambda source: source.rank)
+    return result[:4]
+
+
+def _priority_market_data_sources(goal: SearchGoal, sources: list[RankedSource]) -> list[RankedSource]:
+    if not _wants_market_valuation_data(goal):
+        return []
+    result: list[RankedSource] = []
+    for source in sources:
+        family = str(source.metadata.get("source_family") or "")
+        assessment = _dict_or_empty(source.metadata.get("source_assessment"))
+        family = family or str(assessment.get("source_family") or "")
+        uri = source.uri.lower()
+        if family != "market_data_provider" and not any(
+            host in uri
+            for host in (
+                "finance.yahoo.com",
+                "api.nasdaq.com",
+                "marketwatch.com",
+                "companiesmarketcap.com",
+                "macrotrends.net",
+            )
+        ):
+            continue
+        result.append(source)
+    result.sort(key=lambda source: (0 if _market_data_source_is_key_statistics(source) else 1, source.rank))
+    return result[:4]
+
+
+def _wants_transaction_filing_evidence(goal: SearchGoal) -> bool:
+    intent = _goal_intent_text(goal).lower()
+    return any(
+        marker in intent
+        for marker in (
+            "transaction",
+            "acquisition",
+            "merger",
+            "deal disclosure",
+            "deal disclosures",
+            "merger agreement",
+            "8-k",
+            "form 8-k",
+            "consideration",
+            "purchase price allocation",
+        )
+    )
+
+
+def _market_data_source_is_key_statistics(source: RankedSource) -> bool:
+    haystack = f"{source.uri} {source.title} {source.snippet}".lower()
+    return any(
+        marker in haystack
+        for marker in ("key-statistics", "key statistics", "statistics", "valuation", "summary?assetclass=stocks")
+    )
+
+
+def _merge_ranked_sources(*, max_count: int, groups: list[list[RankedSource]]) -> list[RankedSource]:
+    result: list[RankedSource] = []
+    seen: set[str] = set()
+    for group in groups:
+        for source in group:
+            key = source.source_id or source.uri
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(source)
+            if len(result) >= max_count:
+                return result
+    return result
+
+
+def _document_expansion_fetch_limit(
+    goal: SearchGoal,
+    *,
+    fetch_queue: list[RankedSource],
+    remaining_fetch_budget: int,
+    depth: int,
+) -> int:
+    budget = max(0, int(remaining_fetch_budget))
+    if budget <= 0:
+        return 0
+    if depth != 1 or not _wants_sec_filing_text(goal):
+        return budget
+    if not any(_ranked_source_kind(source) == "sec_submissions_json" for source in fetch_queue):
+        return budget
+    if budget <= 2:
+        return 1
+    return max(1, budget // 2)
 
 
 def _supplemental_discovery_ranked_sources(
@@ -1499,6 +1861,32 @@ def _ranked_source_kind(source: RankedSource) -> str:
     metadata = _dict_or_empty(assessment.get("metadata"))
     raw = metadata.get("source_kind")
     return raw.strip() if isinstance(raw, str) and raw.strip() else ""
+
+
+def _search_source_kind(source: SearchSource) -> str:
+    raw = source.metadata.get("source_kind")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    assessment = _dict_or_empty(source.metadata.get("source_assessment"))
+    metadata = _dict_or_empty(assessment.get("metadata"))
+    raw = metadata.get("source_kind")
+    return raw.strip() if isinstance(raw, str) and raw.strip() else ""
+
+
+def _search_source_family(source: SearchSource) -> str:
+    raw = source.metadata.get("source_family")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    assessment = _dict_or_empty(source.metadata.get("source_assessment"))
+    raw = assessment.get("source_family")
+    return raw.strip() if isinstance(raw, str) and raw.strip() else ""
+
+
+def _uri_host(uri: str) -> str:
+    try:
+        return urllib.parse.urlparse(uri).netloc.lower()
+    except Exception:
+        return ""
 
 
 def _ranked_source_target_exempt(source: RankedSource) -> bool:

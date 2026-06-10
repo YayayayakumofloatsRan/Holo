@@ -493,6 +493,44 @@ def test_phase5_synthesizer_repairs_missing_citation_refs_with_known_refs():
     assert len(journal.records(task_id="task-synth-repair", kind="processor_request")) == 2
 
 
+def test_phase5_synthesizer_retries_invalid_json_once():
+    report, evidence, citation = _retrieval_contracts()
+    provider = MalformedThenJsonProvider(
+        {
+            "answer": "Kernel v3 cites evidence after JSON retry.",
+            "citation_refs": ["cite-1"],
+            "confidence": 0.81,
+            "limitations": [],
+            "used_evidence": ["ev-1"],
+        }
+    )
+    journal = JournalStore.in_memory()
+
+    answer = Synthesizer(
+        fabric=ProcessorFabric(
+            providers={"fake_repair": provider},
+            router=ProcessorRouter(default_provider="fake_repair", default_model="fake-repair"),
+            journal=journal,
+        )
+    ).synthesize(
+        task_id="task-synth-json-repair",
+        run_id="run-synth-json-repair",
+        context_id="ctx-synth-json-repair",
+        report=report,
+        evidence=[evidence],
+        citations=[citation],
+    )
+
+    retry_prompt = json.loads(provider.prompts[-1])
+    assert answer.status == "ok"
+    assert answer.answer == "Kernel v3 cites evidence after JSON retry."
+    assert answer.citation_refs == ["cite-1"]
+    assert len(provider.prompts) == 2
+    assert "Previous synthesizer output was not valid JSON" in retry_prompt["retry_instruction"]
+    results = journal.records(task_id="task-synth-json-repair", kind="processor_result")
+    assert [item.data["status"] for item in results] == ["failed", "ok"]
+
+
 def test_phase5_timeout_provider_produces_failed_processor_result():
     journal = JournalStore.in_memory()
 
@@ -1653,3 +1691,29 @@ class CapturingFakeJsonProvider(FakeJsonProvider):
         self.last_prompt = request.prompt
         self.prompts.append(request.prompt)
         return super().run(request)
+
+
+class MalformedThenJsonProvider:
+    name = "fake_repair"
+    model = "fake-repair"
+
+    def __init__(self, repaired_response):
+        self.repaired_response = dict(repaired_response)
+        self.prompts = []
+        self.calls = 0
+
+    def run(self, request):
+        self.prompts.append(request.prompt)
+        self.calls += 1
+        if self.calls == 1:
+            text = '{"answer": "unterminated'
+        else:
+            text = json.dumps(self.repaired_response, ensure_ascii=False, sort_keys=True)
+        return ProcessorResult(
+            result_id=f"result-{request.request_id}",
+            request_id=request.request_id,
+            status="ok",
+            output={"text": text, "provider": self.name, "model": self.model},
+            usage={"prompt_tokens": len(request.prompt), "completion_tokens": len(text), "total_tokens": len(request.prompt) + len(text)},
+            error=None,
+        )

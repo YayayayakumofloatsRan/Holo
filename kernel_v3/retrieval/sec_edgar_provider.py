@@ -4,6 +4,7 @@ import hashlib
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID, resolve_issuer_identity
+from kernel_v3.research.issuer_registry import builtin_issuers_for_text
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 
 
@@ -31,21 +32,21 @@ class SecEdgarSearchProvider:
                 "plan_id": plan.plan_id,
             }
             return []
+        identities = _issuer_identifier_candidates(query, goal.metadata)
         identity = resolve_issuer_identity(query, goal.metadata)
-        identifiers = {
-            "ticker": identity.ticker,
-            "cik": identity.cik,
-        }
+        identifiers = identities[0] if identities else {"ticker": identity.ticker, "cik": identity.cik}
         filing = _filing_metadata(goal.metadata)
         if identifiers.get("cik") is None and filing.get("sec_accession_compact"):
             identifiers["cik"] = _normalize_cik(str(filing["sec_accession_compact"])[:10])
-        sources = _sources_for_identifiers(identifiers, max_sources=goal.max_sources, filing=filing)
+        sources = _sources_for_identifier_set(identities or [identifiers], max_sources=goal.max_sources, filing=filing)
         resolved_cik = identifiers.get("cik") or _first_source_cik(sources)
         self._last_search_diagnostics = {
             "status": "ok" if sources else "empty",
             "reason": "ok" if sources else "missing_sec_identifier",
             "ticker": identifiers.get("ticker"),
             "cik_present": bool(resolved_cik),
+            "issuer_candidate_count": len(identities) if identities else int(bool(identifiers.get("ticker") or identifiers.get("cik"))),
+            "issuer_candidates": identities[:8],
             "accession_present": bool(filing.get("sec_accession_number")),
             "primary_document_present": bool(filing.get("sec_primary_document")),
             "identity_confidence": identity.confidence,
@@ -60,6 +61,72 @@ class SecEdgarSearchProvider:
         return dict(self._last_search_diagnostics)
 
 
+def _issuer_identifier_candidates(query: str, metadata: JsonObject) -> list[JsonObject]:
+    candidates: list[JsonObject] = []
+    seen: set[tuple[str | None, str | None]] = set()
+    intent_text = _issuer_intent_text(query, metadata)
+    for issuer in builtin_issuers_for_text(intent_text):
+        identifiers = {
+            "ticker": _string_or_none(issuer.get("ticker")),
+            "cik": _normalize_cik(issuer.get("sec_cik")),
+        }
+        key = (identifiers["ticker"], identifiers["cik"])
+        if key in seen or not any(key):
+            continue
+        seen.add(key)
+        candidates.append({key: value for key, value in identifiers.items() if value})
+    identity = resolve_issuer_identity(intent_text, metadata)
+    identifiers = {
+        "ticker": identity.ticker,
+        "cik": identity.cik,
+    }
+    key = (identifiers["ticker"], identifiers["cik"])
+    if any(key) and key not in seen:
+        candidates.insert(0, {key: value for key, value in identifiers.items() if value})
+    return candidates
+
+
+def _issuer_intent_text(query: str, metadata: JsonObject) -> str:
+    parts = [str(query or "")]
+    for key in ("root_goal", "task_goal", "original_goal", "user_goal"):
+        value = metadata.get(key) if isinstance(metadata, dict) else None
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    mission = metadata.get("research_mission") if isinstance(metadata, dict) else None
+    if isinstance(mission, dict):
+        value = mission.get("root_goal")
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return "\n".join(parts)
+
+
+def _sources_for_identifier_set(
+    identities: list[JsonObject],
+    *,
+    max_sources: int,
+    filing: JsonObject | None = None,
+) -> list[SearchSource]:
+    sources: list[SearchSource] = []
+    seen_uris: set[str] = set()
+    per_issuer_limit = max(5, int(max_sources))
+    buckets = [
+        _sources_for_identifiers(identifiers, max_sources=per_issuer_limit, filing=filing)
+        for identifiers in identities
+    ]
+    for index in range(max((len(bucket) for bucket in buckets), default=0)):
+        for bucket in buckets:
+            if index >= len(bucket):
+                continue
+            source = bucket[index]
+            if source.uri in seen_uris:
+                continue
+            seen_uris.add(source.uri)
+            sources.append(source)
+            if len(sources) >= max(0, int(max_sources)):
+                return sources
+    return sources[: max(0, int(max_sources))]
+
+
 def _sources_for_identifiers(
     identifiers: JsonObject,
     *,
@@ -72,6 +139,37 @@ def _sources_for_identifiers(
     sources: list[SearchSource] = []
     if cik:
         _append_filing_document_sources(sources, ticker=ticker, cik=cik, filing=filing)
+        padded = str(cik)
+        _append_source(
+            sources,
+            uri=f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json",
+            title=f"SEC companyfacts JSON for CIK {padded}",
+            snippet="Official SEC XBRL companyfacts JSON for reported fundamentals with filing provenance.",
+            source_family="structured_regulatory_data",
+            source_kind="sec_companyfacts_json",
+            ticker=ticker,
+            cik=padded,
+        )
+        _append_source(
+            sources,
+            uri=f"https://data.sec.gov/submissions/CIK{padded}.json",
+            title=f"SEC submissions JSON for CIK {padded}",
+            snippet="Official SEC submissions metadata, filing chronology, forms, accession numbers, and report periods.",
+            source_family="structured_regulatory_data",
+            source_kind="sec_submissions_json",
+            ticker=ticker,
+            cik=padded,
+        )
+        _append_source(
+            sources,
+            uri=f"https://www.sec.gov/edgar/browse/?CIK={padded}",
+            title=f"SEC EDGAR browse page for CIK {padded}",
+            snippet="Official SEC EDGAR browse page for primary filing documents and filing detail pages.",
+            source_family="regulatory_filing",
+            source_kind="sec_edgar_browse",
+            ticker=ticker,
+            cik=padded,
+        )
     if ticker:
         _append_source(
             sources,
@@ -92,38 +190,6 @@ def _sources_for_identifiers(
             source_kind="sec_edgar_search",
             ticker=ticker,
             cik=cik,
-        )
-    if cik:
-        padded = str(cik)
-        _append_source(
-            sources,
-            uri=f"https://data.sec.gov/submissions/CIK{padded}.json",
-            title=f"SEC submissions JSON for CIK {padded}",
-            snippet="Official SEC submissions metadata, filing chronology, forms, accession numbers, and report periods.",
-            source_family="structured_regulatory_data",
-            source_kind="sec_submissions_json",
-            ticker=ticker,
-            cik=padded,
-        )
-        _append_source(
-            sources,
-            uri=f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json",
-            title=f"SEC companyfacts JSON for CIK {padded}",
-            snippet="Official SEC XBRL companyfacts JSON for reported fundamentals with filing provenance.",
-            source_family="structured_regulatory_data",
-            source_kind="sec_companyfacts_json",
-            ticker=ticker,
-            cik=padded,
-        )
-        _append_source(
-            sources,
-            uri=f"https://www.sec.gov/edgar/browse/?CIK={padded}",
-            title=f"SEC EDGAR browse page for CIK {padded}",
-            snippet="Official SEC EDGAR browse page for primary filing documents and filing detail pages.",
-            source_family="regulatory_filing",
-            source_kind="sec_edgar_browse",
-            ticker=ticker,
-            cik=padded,
         )
     return sources[: max(0, int(max_sources))]
 

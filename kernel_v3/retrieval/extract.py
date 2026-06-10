@@ -16,18 +16,20 @@ from kernel_v3.research.profile_policy import (
 )
 from kernel_v3.retrieval.contracts import ExtractedSpan, FetchedDocument, SearchGoal
 from kernel_v3.retrieval.finance_metrics import (
+    finance_metric_intent,
     finance_metric_intent_diagnostics,
     finance_metric_intent_score,
 )
 
 READABLE_TEXT_LIMIT = 200_000
+SEC_COMPLETE_SUBMISSION_TEXT_LIMIT = 1_200_000
 SPAN_BEFORE_CHARS = 120
-SPAN_AFTER_CHARS = 280
+SPAN_AFTER_CHARS = 520
 HTML_MIME_MARKERS = ("html", "xhtml")
 PDF_MIME_MARKERS = ("pdf", "application/pdf")
 JSON_MIME_MARKERS = ("json", "application/json")
 CSV_MIME_MARKERS = ("csv", "comma-separated-values")
-STRUCTURED_LINE_LIMIT = 2_000
+STRUCTURED_LINE_LIMIT = 4_000
 STRUCTURED_VALUE_LIMIT = 240
 SCHOLARLY_RECORD_LIMIT = 80
 SCHOLARLY_ABSTRACT_LIMIT = 700
@@ -98,14 +100,32 @@ SEC_COMPANYFACTS_CONCEPTS = (
     ("InterestAndDividendIncomeOperating", "interest and dividend income"),
     ("InterestIncomeOperating", "interest income"),
     ("InterestExpenseOperating", "interest expense"),
+    ("InterestExpense", "interest expense"),
+    ("InterestExpenseNonoperating", "interest expense"),
     ("NoninterestIncome", "noninterest income"),
     ("ProvisionForLoanLeaseAndOtherLosses", "provision for credit losses"),
     ("NetIncomeLoss", "net income"),
     ("NetIncomeLossAvailableToCommonStockholdersBasic", "net income available to common shareholders"),
     ("NetIncomeLossAttributableToParent", "net income attributable to parent"),
     ("ProfitLoss", "net income"),
+    ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "pretax income"),
+    ("IncomeLossFromContinuingOperationsBeforeIncomeTaxes", "pretax income"),
+    ("IncomeTaxExpenseBenefit", "income tax expense"),
     ("OperatingIncomeLoss", "operating income"),
     ("GrossProfit", "gross profit"),
+    ("Depreciation", "depreciation and amortization"),
+    ("DepreciationDepletionAndAmortization", "depreciation and amortization"),
+    ("DepreciationDepletionAndAmortizationPropertyPlantAndEquipment", "depreciation and amortization"),
+    ("AmortizationOfIntangibleAssets", "depreciation and amortization"),
+    ("InventoryNet", "inventory"),
+    ("InventoryFinishedGoodsNetOfReserves", "inventory"),
+    ("InventoryRawMaterialsAndSupplies", "inventory"),
+    ("MerchandiseInventories", "inventory"),
+    ("CostOfRevenue", "cost of revenue"),
+    ("CostOfGoodsAndServicesSold", "cost of goods sold"),
+    ("CostOfGoodsSold", "cost of goods sold"),
+    ("CostOfSales", "cost of sales"),
+    ("CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization", "cost of goods sold"),
     ("NetCashProvidedByUsedInOperatingActivities", "operating cash flow"),
     ("CashAndCashEquivalentsAtCarryingValue", "cash and cash equivalents"),
     ("Assets", "assets"),
@@ -115,6 +135,9 @@ SEC_COMPANYFACTS_CONCEPTS = (
     ("CommonStocksIncludingAdditionalPaidInCapital", "common stock and additional paid-in capital"),
     ("LongTermDebt", "long-term debt"),
     ("LongTermDebtCurrent", "current long-term debt"),
+    ("LongTermDebtNoncurrent", "long-term debt"),
+    ("DebtCurrent", "short-term debt"),
+    ("DebtLongtermAndShorttermCombinedAmount", "debt"),
     ("LongTermDebtAndFinanceLeaseObligations", "long-term debt and finance lease obligations"),
     ("LongTermDebtAndFinanceLeaseObligationsCurrent", "current long-term debt and finance lease obligations"),
     ("ShortTermBorrowings", "short-term borrowings"),
@@ -140,11 +163,21 @@ SEC_COMPANYFACTS_DYNAMIC_KEYWORDS = (
     "investment",
     "income",
     "loss",
+    "inventory",
+    "inventories",
+    "cost of revenue",
+    "cost of sales",
+    "cost of goods",
     "cash flow",
+    "cash",
     "assets",
     "liabilities",
     "equity",
     "debt",
+    "tax",
+    "income tax",
+    "depreciation",
+    "amortization",
     "earnings per share",
     "eps",
 )
@@ -194,6 +227,18 @@ HTML_SKIP_TAGS = {
     "svg",
     "template",
 }
+MARKET_SCRIPT_METRIC_LABELS = {
+    "marketCap": "Market Cap",
+    "marketCapitalization": "Market Cap",
+    "enterpriseValue": "Enterprise Value",
+    "totalDebt": "Total Debt",
+    "totalCash": "Total Cash",
+    "totalCashPerShare": "Total Cash Per Share",
+    "ebitda": "EBITDA",
+    "trailingEbitda": "EBITDA",
+}
+MARKET_SCRIPT_SNIPPET_LIMIT = 24
+MARKET_SCRIPT_WINDOW_CHARS = 700
 
 
 def extract_spans(
@@ -270,8 +315,15 @@ def readable_document_text(body: str, *, document: FetchedDocument) -> tuple[str
         if text:
             return text, "csv_readable_text"
     if _looks_like_html(body, mime_type=mime_type):
-        return _extract_html_readable_text(body), "html_readable_text"
-    return _normalize_span(body[:READABLE_TEXT_LIMIT]), "plain_text"
+        return _extract_html_readable_text(body, limit=_readable_text_limit_for_document(document)), "html_readable_text"
+    return _normalize_span(body[: _readable_text_limit_for_document(document)]), "plain_text"
+
+
+def _readable_text_limit_for_document(document: FetchedDocument) -> int:
+    source_kind = _document_source_kind(document)
+    if source_kind == "sec_complete_submission_text":
+        return SEC_COMPLETE_SUBMISSION_TEXT_LIMIT
+    return READABLE_TEXT_LIMIT
 
 
 def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
@@ -292,13 +344,14 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
                 snippet = _normalize_span(text[window_start:window_end])
                 matched = [candidate for candidate in terms if candidate in snippet.lower()]
                 if snippet and matched:
+                    bonus = _transaction_amount_span_bonus(snippet, terms)
                     candidates.append(
                         {
                             "start_offset": window_start,
                             "end_offset": window_end,
                             "text": snippet,
                             "matched_terms": matched,
-                            "score": min(1.0, len(matched) / max(1, len(terms))),
+                            "score": min(1.0, len(matched) / max(1, len(terms)) + bonus),
                         }
                     )
             start = index + max(1, len(term))
@@ -310,6 +363,25 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
             int(item["start_offset"]),
         ),
     )
+
+
+def _transaction_amount_span_bonus(snippet: str, terms: list[str]) -> float:
+    query_has_transaction_intent = any(
+        term in {"acquisition", "acquire", "merger", "transaction", "deal", "consideration", "purchase"}
+        for term in terms
+    )
+    if not query_has_transaction_intent:
+        return 0.0
+    text = snippet.lower()
+    if not re.search(r"[$€£¥]\s*\d|\b\d+(?:\.\d+)?\s*(?:million|billion|trillion|mn|bn)\b", text):
+        return 0.0
+    if any(marker in text for marker in ("enterprise value", "transaction value", "deal value", "total transaction")):
+        return 0.65
+    if any(marker in text for marker in ("consideration", "purchase price")):
+        return 0.45
+    if any(marker in text for marker in ("right to receive", "per share", "in cash")):
+        return 0.32
+    return 0.0
 
 
 def _ranked_structured_line_candidates(
@@ -454,8 +526,69 @@ def _extract_json_readable_text(body: str) -> str:
     except json.JSONDecodeError:
         return ""
     lines: list[str] = []
+    lines.extend(_extract_market_json_fact_lines(payload))
     _flatten_json(payload, path="", lines=lines, depth=0)
     return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
+
+
+def _extract_market_json_fact_lines(payload: object) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    summary = data.get("summaryData")
+    if not isinstance(summary, dict):
+        return []
+    ticker = str(data.get("symbol") or "").strip().upper()
+    lines: list[str] = []
+    for key, item in summary.items():
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or key or "").strip()
+        metric = _market_json_metric(label, str(key))
+        if metric is None:
+            continue
+        value = _market_json_value(item.get("value"))
+        if value is None:
+            continue
+        prefix = f"ticker={ticker} " if ticker else ""
+        lines.append(f"{prefix}metric={metric} value={value} unit=USD source=market_data_json")
+    return lines
+
+
+def _market_json_metric(label: str, key: str) -> str | None:
+    text = f"{label} {key}".lower()
+    if "market cap" in text or "marketcap" in text:
+        return "market cap"
+    if "enterprise value" in text or "enterprisevalue" in text:
+        return "enterprise value"
+    if "total debt" in text or "totaldebt" in text:
+        return "debt"
+    if "total cash" in text or "totalcash" in text:
+        return "cash and cash equivalents"
+    if "ebitda" in text:
+        return "ebitda"
+    return None
+
+
+def _market_json_value(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.upper() in {"N/A", "NA", "--"}:
+        return None
+    text = text.replace("$", "").replace(",", "").strip()
+    multiplier = 1
+    suffix = text[-1:].upper()
+    if suffix in {"K", "M", "B", "T"}:
+        text = text[:-1].strip()
+        multiplier = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000, "T": 1_000_000_000_000}[suffix]
+    try:
+        number = float(text) * multiplier
+    except ValueError:
+        return None
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:.6f}".rstrip("0").rstrip(".")
 
 
 def _looks_like_scholarly_metadata(body: str, *, document: FetchedDocument, mime_type: str) -> bool:
@@ -1020,6 +1153,16 @@ def _companyfacts_concept_specs(taxonomy: dict) -> list[tuple[str, str]]:
 def _ordered_companyfacts_metrics(metrics: dict[str, object]) -> list[tuple[str, str]]:
     order: list[tuple[str, str]] = []
     seen: set[str] = set()
+    priority_metrics = (
+        "inventory",
+        "cost of revenue",
+        "cost of goods sold",
+        "cost of sales",
+    )
+    for metric in priority_metrics:
+        if metric in metrics and metric not in seen:
+            seen.add(metric)
+            order.append(("", metric))
     for concept, metric in SEC_COMPANYFACTS_CONCEPTS:
         if metric in metrics and metric not in seen:
             seen.add(metric)
@@ -1048,6 +1191,8 @@ def _companyfacts_dynamic_metric(*, concept: str, label: str) -> str | None:
         return "net interest income"
     if "interestincomeexpensenet" in compact:
         return "net interest income"
+    if "incomelossfromcontinuingoperationsbeforeincometaxes" in compact:
+        return "pretax income"
     if "interestincome" in compact or "interest income" in lower:
         return "interest income"
     if "interestexpense" in compact or "interest expense" in lower:
@@ -1066,6 +1211,11 @@ def _companyfacts_dynamic_metric(*, concept: str, label: str) -> str | None:
         return "capital expenditures"
     if "capitalized" in lower and ("software" in lower or "cloud" in lower):
         return "capitalized software or cloud infrastructure"
+    if (
+        ("depreciation" in lower or "amortization" in lower)
+        and ("cost of goods" in lower or "costofgoods" in compact or "cost of revenue" in lower)
+    ):
+        return None
     if "revenue" in lower or "revenues" in lower or compact.endswith("sales"):
         return "revenue"
     if "earningspershare" in compact or "earnings per share" in lower:
@@ -1074,6 +1224,25 @@ def _companyfacts_dynamic_metric(*, concept: str, label: str) -> str | None:
         return "net income"
     if "operatingincomeloss" in compact or "operating income" in lower:
         return "operating income"
+    if ("deferredtax" in compact or "deferred tax" in lower) and (
+        "inventory" in compact or "inventor" in lower
+    ):
+        return None
+    if "valuationreserve" in compact or "valuation reserves" in lower:
+        return None
+    if "increasedecrease" in compact and ("inventory" in compact or "inventor" in lower):
+        return None
+    if "inventory" in compact or "inventories" in lower or "merchandise inventories" in lower:
+        return "inventory"
+    if "costofrevenue" in compact or "cost of revenue" in lower:
+        return "cost of revenue"
+    if (
+        "costofgoods" in compact
+        or "costofsales" in compact
+        or "cost of goods" in lower
+        or "cost of sales" in lower
+    ):
+        return "cost of goods sold"
     if "cashflow" in compact or "cash flow" in lower:
         return "cash flow"
     if "stockholdersequity" in compact or "shareholders equity" in lower or "stockholders equity" in lower:
@@ -1104,6 +1273,9 @@ def _companyfacts_dynamic_priority(*, concept: str, label: str, metric: str) -> 
         "operating revenues",
         "segment revenue",
         "family of apps revenue",
+        "inventory",
+        "cost of revenue",
+        "cost of goods sold",
     }:
         priority += 40
     if "abstract" in text or "policy" in text or "schedule" in text:
@@ -1577,11 +1749,118 @@ def _looks_like_readable_pdf_text(text: str) -> bool:
     return True
 
 
-def _extract_html_readable_text(body: str) -> str:
+def _extract_html_readable_text(body: str, *, limit: int = READABLE_TEXT_LIMIT) -> str:
     parser = _ReadableHtmlParser()
-    parser.feed(body[:READABLE_TEXT_LIMIT])
+    parser.feed(body[:limit])
     parser.close()
-    return _normalize_span(parser.text())
+    parsed_text = parser.text()
+    text_parts = [parsed_text]
+    visible_market_snippets = _extract_market_visible_snippets(parsed_text)
+    if visible_market_snippets:
+        text_parts.append("\nMarket data visible snippets:\n")
+        text_parts.extend(f"{line}.\n" for line in visible_market_snippets)
+    market_snippets = _extract_market_script_snippets(body[:limit])
+    if market_snippets:
+        text_parts.append("\nMarket data structured snippets:\n")
+        text_parts.extend(f"{line}.\n" for line in market_snippets)
+    return _normalize_span("".join(text_parts))
+
+
+def _extract_market_visible_snippets(text: str) -> list[str]:
+    normalized = _normalize_span(text)
+    if not normalized:
+        return []
+    labels = (
+        "Market Cap",
+        "Enterprise Value",
+        "Total Debt",
+        "Cash & Cash Equivalents",
+        "Cash and Cash Equivalents",
+        "Total Cash",
+        "EBITDA",
+        "Revenue",
+        "Net Income",
+        "Operating Income",
+    )
+    snippets: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for label in labels:
+        pattern = rf"\b{re.escape(label)}\b\s*(?P<value>[$€£¥]?\s*-?\d+(?:,\d{{3}})*(?:\.\d+)?\s*(?:K|M|B|T|million|billion|trillion|mn|bn)?)"
+        for match in re.finditer(pattern, normalized, flags=re.IGNORECASE):
+            value = _normalize_market_metric_value(match.group("value"))
+            if not value:
+                continue
+            key = (label.lower(), value.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            snippets.append(f"{label} {value}")
+            if len(snippets) >= MARKET_SCRIPT_SNIPPET_LIMIT:
+                return snippets
+    return snippets
+
+
+def _extract_market_script_snippets(body: str) -> list[str]:
+    script_texts = re.findall(r"<script\b[^>]*>(.*?)</script\s*>", body, flags=re.IGNORECASE | re.DOTALL)
+    if not script_texts:
+        return []
+    snippets: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for script in script_texts:
+        if not _script_may_contain_market_metrics(script):
+            continue
+        decoded = _decode_script_for_market_metrics(script)
+        for key, label in MARKET_SCRIPT_METRIC_LABELS.items():
+            for match in re.finditer(rf'(?:"|\\")?{re.escape(key)}(?:"|\\")?\s*:', decoded):
+                window = decoded[match.start() : match.start() + MARKET_SCRIPT_WINDOW_CHARS]
+                value = _market_metric_value_from_window(window)
+                if value is None:
+                    continue
+                normalized_value = _normalize_market_metric_value(value)
+                if not normalized_value:
+                    continue
+                dedupe_key = (label.lower(), normalized_value.lower())
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                snippets.append(f"{label} {normalized_value}")
+                if len(snippets) >= MARKET_SCRIPT_SNIPPET_LIMIT:
+                    return snippets
+    return snippets
+
+
+def _script_may_contain_market_metrics(script: str) -> bool:
+    lower = script.lower()
+    return any(key.lower() in lower for key in MARKET_SCRIPT_METRIC_LABELS)
+
+
+def _decode_script_for_market_metrics(script: str) -> str:
+    decoded = html.unescape(script)
+    decoded = decoded.replace('\\"', '"')
+    decoded = decoded.replace("\\u002F", "/").replace("\\/", "/")
+    return decoded
+
+
+def _market_metric_value_from_window(window: str) -> str | None:
+    for pattern in (
+        r'"fmt"\s*:\s*"(?P<value>[^"]{1,80})"',
+        r'"longFmt"\s*:\s*"(?P<value>[^"]{1,120})"',
+        r'"raw"\s*:\s*(?P<value>-?\d+(?:\.\d+)?)',
+        r":\s*\"(?P<value>-?\d+(?:\.\d+)?\s*(?:K|M|B|T|million|billion|trillion)?)\"",
+        r":\s*(?P<value>-?\d+(?:\.\d+)?)",
+    ):
+        match = re.search(pattern, window, flags=re.IGNORECASE)
+        if match:
+            return match.group("value")
+    return None
+
+
+def _normalize_market_metric_value(value: str) -> str:
+    normalized = " ".join(str(value or "").split()).strip()
+    normalized = normalized.replace(",", "")
+    if normalized in {"N/A", "-", "--"}:
+        return ""
+    return normalized
 
 
 class _ReadableHtmlParser(HTMLParser):
@@ -1641,6 +1920,14 @@ def _terms(text: str, *, goal: SearchGoal | None = None) -> list[str]:
         profile = resolve_goal_research_profile(goal)
         for alias in profile_extraction_aliases(goal=goal, research_profile=profile):
             add(alias)
+    intent = finance_metric_intent(text)
+    for phrase in intent.preferred_phrases:
+        cleaned = phrase
+        if cleaned.startswith("metric="):
+            cleaned = cleaned.split("=", 1)[1]
+        if cleaned.startswith("concept=") or cleaned.startswith("label="):
+            continue
+        add(cleaned)
     return terms
 
 

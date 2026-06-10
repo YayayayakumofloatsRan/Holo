@@ -122,10 +122,7 @@ class HttpFetchProvider:
         )
         if validation.get("status") != "ok":
             return FetchResponse(status="failed", body="", diagnostics=validation)
-        headers = {
-            "User-Agent": self.user_agent,
-            "Accept": "text/html,text/plain,application/xhtml+xml,application/pdf,application/json,text/csv",
-        }
+        headers = self._headers_for_source(source)
         try:
             response = self.transport(source.uri, headers, self.timeout_seconds, self.max_bytes)
         except Exception as exc:  # pragma: no cover - urllib transport has concrete containment below.
@@ -211,6 +208,20 @@ class HttpFetchProvider:
                 "source_provider": source.provider,
             }
         return {}
+
+    def _headers_for_source(self, source: SearchSource) -> dict[str, str]:
+        host = (urllib.parse.urlparse(source.uri).hostname or "").lower()
+        if host == "api.nasdaq.com":
+            return {
+                "User-Agent": _browser_user_agent(self.user_agent),
+                "Accept": "application/json,text/plain,*/*",
+                "Origin": "https://www.nasdaq.com",
+                "Referer": "https://www.nasdaq.com/",
+            }
+        return {
+            "User-Agent": self.user_agent,
+            "Accept": "text/html,text/plain,application/xhtml+xml,application/pdf,application/json,text/csv",
+        }
 
 
 class JsonHttpSearchProvider:
@@ -431,6 +442,15 @@ def _normalize_host(value: str) -> str:
 
 def _normalize_schemes(schemes: list[str]) -> tuple[str, ...]:
     return tuple(scheme.strip().lower() for scheme in schemes if scheme.strip())
+
+
+def _browser_user_agent(fallback: str) -> str:
+    if "mozilla" in str(fallback or "").lower():
+        return fallback
+    return (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    )
 
 
 def _safe_url_diagnostics(uri: str) -> JsonObject:
