@@ -2272,6 +2272,8 @@ def _finance_benchmark_progress_callback(
         missing_slots = metrics.get("missing_slot_count")
         transform_plans = metrics.get("transform_plan_count")
         verifier_gate = metrics.get("verifier_gate_status")
+        synthesis_gate = metrics.get("synthesis_gate_status")
+        synthesis_repaired = metrics.get("synthesis_gate_repaired")
         verifier_status = metrics.get("numeric_verifier_status")
         support_rate = metrics.get("answer_numeric_support_rate")
         numeric_failure = metrics.get("finance_numeric_failure_reason")
@@ -2293,6 +2295,8 @@ def _finance_benchmark_progress_callback(
             f"transforms={transform_plans if transform_plans is not None else '-'} "
             f"verifier={verifier_status or '-'} "
             f"gate={verifier_gate or '-'} "
+            f"synth_gate={synthesis_gate or '-'} "
+            f"synth_repair={synthesis_repaired if synthesis_repaired is not None else '-'} "
             f"num_support={_percent_for_progress(support_rate)} "
             f"num_fail={numeric_failure or '-'} "
             f"processor_ms={duration_ms if duration_ms is not None else '-'}",

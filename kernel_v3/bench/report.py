@@ -90,6 +90,8 @@ def _render_markdown(report: FinanceBenchmarkReport) -> str:
         f"| Calculator-used rate | {_percent(summary.get('calculator_used_rate'))} |",
         f"| Numeric verifier pass rate | {_percent(summary.get('numeric_verifier_pass_rate'))} |",
         f"| Verifier gate pass rate | {_percent(summary.get('verifier_gate_pass_rate'))} |",
+        f"| Synthesis gate pass rate | {_percent(summary.get('synthesis_gate_pass_rate'))} |",
+        f"| Synthesis gate repair rate | {_percent(summary.get('synthesis_gate_repair_rate'))} |",
         f"| Avg formula traces | {_number(summary.get('average_formula_traces'))} |",
         f"| Claim-ledger present rate | {_percent(summary.get('claim_ledger_present_rate'))} |",
         f"| Transform-plan present rate | {_percent(summary.get('transform_plan_present_rate'))} |",
@@ -98,6 +100,9 @@ def _render_markdown(report: FinanceBenchmarkReport) -> str:
         f"| Avg claims | {_number(summary.get('average_claims'))} |",
         f"| Avg finance facts | {_number(summary.get('average_finance_facts'))} |",
         f"| Avg answer numeric support | {_percent(summary.get('average_answer_numeric_support_rate'))} |",
+        f"| Unsupported numeric claim rate | {_percent(summary.get('unsupported_numeric_claim_rate'))} |",
+        f"| Missing-slot recovery rate | {_percent(summary.get('missing_slot_recovery_rate'))} |",
+        f"| Avg tokens per passed item | {_number(summary.get('average_total_tokens_per_passed_item'))} |",
         f"| Avg answer chars | {_number(summary.get('average_final_answer_chars'))} |",
         "",
         "## Status Counts",
@@ -111,6 +116,10 @@ def _render_markdown(report: FinanceBenchmarkReport) -> str:
         "## Finance Numeric Failure Reasons",
         "",
         _counts_table(summary.get("finance_numeric_failure_reason_counts")),
+        "",
+        "## Workflow Types",
+        "",
+        _counts_table(summary.get("workflow_type_counts")),
         "",
         "## Score Reasons",
         "",
@@ -220,8 +229,13 @@ def _weak_items(results: list[JsonObject], *, max_items: int) -> list[JsonObject
                 "query_repetition_rate": _raw_number(metrics.get("query_repetition_rate")),
                 "calculator_calls": _raw_number(metrics.get("calculator_call_count")),
                 "formula_traces": _raw_number(metrics.get("formula_trace_count")),
+                "claims": _raw_number(metrics.get("claim_count")),
+                "missing_slots": _raw_number(metrics.get("missing_slot_count")),
+                "transform_plans": _raw_number(metrics.get("transform_plan_count")),
                 "finance_facts": _raw_number(metrics.get("finance_fact_count")),
                 "numeric_verifier_status": _text(metrics.get("numeric_verifier_status")),
+                "verifier_gate_status": _text(metrics.get("verifier_gate_status")),
+                "synthesis_gate_status": _text(metrics.get("synthesis_gate_status")),
                 "finance_numeric_failure_reason": _text(metrics.get("finance_numeric_failure_reason")),
                 "final_answer_chars": _raw_number(metrics.get("final_answer_chars")),
             }
@@ -289,8 +303,8 @@ def _weak_items_table(rows: list[JsonObject]) -> str:
     if not rows:
         return "_No weak items selected._"
     lines = [
-        "| Item | Status | Reason | Failure | Citations | Calc | Traces | Facts | Verifier | Numeric reason | Retrieval | Repetition | Answer chars |",
-        "|---|---|---|---|---:|---:|---:|---:|---|---|---:|---:|---:|",
+        "| Item | Status | Reason | Failure | Citations | Calc | Traces | Claims | Missing slots | Transforms | Facts | Verifier | Gate | Synth gate | Numeric reason | Retrieval | Repetition | Answer chars |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---:|---:|---:|",
     ]
     for row in rows:
         lines.append(
@@ -304,8 +318,13 @@ def _weak_items_table(rows: list[JsonObject]) -> str:
                     _value(row.get("citation_present")),
                     _number(row.get("calculator_calls")),
                     _number(row.get("formula_traces")),
+                    _number(row.get("claims")),
+                    _number(row.get("missing_slots")),
+                    _number(row.get("transform_plans")),
                     _number(row.get("finance_facts")),
                     _escape_md(_preview(_text(row.get("numeric_verifier_status")), 32)),
+                    _escape_md(_preview(_text(row.get("verifier_gate_status")), 32)),
+                    _escape_md(_preview(_text(row.get("synthesis_gate_status")), 32)),
                     _escape_md(_preview(_text(row.get("finance_numeric_failure_reason")), 48)),
                     _number(row.get("retrieval_runs")),
                     _percent(row.get("query_repetition_rate")),

@@ -162,7 +162,16 @@ def convert_public_finance_benchmark(
                 "evidence_excerpt": "scoring/audit evidence excerpt",
                 "source": "public benchmark id",
                 "type": "question/category type",
-                "metadata": "provenance, prompt_context, source_refs, scoring notes",
+                "metadata": "provenance, prompt_context, source_refs, workflow annotation, scoring notes",
+                "workflow_annotation": [
+                    "metadata.workflow_type",
+                    "metadata.required_slots",
+                    "metadata.evidence_policy",
+                    "metadata.required_transforms",
+                    "metadata.dealbreakers",
+                    "metadata.expected_trace",
+                    "metadata.failure_taxonomy",
+                ],
             },
         }
         manifest_output.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -212,10 +221,12 @@ def _normalize_finance_agent_v2_public(spec: PublicFinanceBenchmarkSpec, record:
     if not question:
         raise ValueError("missing question")
     category = _finance_agent_v2_category(question)
+    workflow = _finance_agent_v2_workflow_annotation(question)
     metadata: JsonObject = _base_metadata(spec, record)
     metadata.update(
         {
             "category": category,
+            **workflow,
             "requires": _finance_agent_v2_required_capabilities(question),
             "expected_capabilities": ["retrieval.run", "calculator.compute", "finance.verify_numeric"],
             "gold_policy": "public_set_has_no_gold_answer",
@@ -423,6 +434,120 @@ def _finance_agent_v2_required_capabilities(question: str) -> list[str]:
     if any(marker in text for marker in ("share price", "closing share", "market prices", "stock price")):
         capabilities.append("market_data")
     return sorted(set(capabilities))
+
+
+def _finance_agent_v2_workflow_annotation(question: str) -> JsonObject:
+    text = question.lower()
+    base_trace = [
+        "retrieval.run",
+        "claim_ledger",
+        "slot_frame",
+        "transform_plan",
+        "verifier_gate",
+        "synthesis_gate",
+        "citation",
+    ]
+    policy: JsonObject = {
+        "required_source_families": ["sec_filings"],
+        "forbidden_source_families": ["generic_search_only"],
+        "authority": "primary_or_structured",
+    }
+    if any(marker in text for marker in ("dio", "inventory outstanding", "inventory efficiency")):
+        return {
+            "workflow_type": "multi_entity_compute_compare",
+            "required_slots": ["entity_a", "entity_b", "period", "inventory_begin", "inventory_end", "cogs", "fiscal_days"],
+            "evidence_policy": {**policy, "required_terms": ["inventory", "cost of revenue"]},
+            "required_transforms": ["dio", "difference"],
+            "dealbreakers": ["citation_required", "calculator_trace_required", "no_missing_slots", "synthesis_gate_pass_required"],
+            "expected_trace": [*base_trace, "calculator.compute", "finance_numeric_verification"],
+            "failure_taxonomy": ["source_acquisition", "slot_filling", "formula_binding", "unit_period_mismatch"],
+        }
+    if any(marker in text for marker in ("adjusted ebitda", "add-back", "addback", "bridge")):
+        return {
+            "workflow_type": "reconciliation",
+            "required_slots": ["entity", "period", "base_metric", "adjustment_items", "reconciled_metric", "source_table"],
+            "evidence_policy": {**policy, "required_terms": ["adjusted ebitda", "reconciliation"]},
+            "required_transforms": ["adjusted_ebitda_bridge"],
+            "dealbreakers": ["citation_required", "calculator_trace_required", "synthesis_gate_pass_required"],
+            "expected_trace": [*base_trace, "calculator.compute", "finance_numeric_verification"],
+            "failure_taxonomy": ["source_acquisition", "table_extraction", "formula_binding", "synthesis_gate"],
+        }
+    if any(marker in text for marker in ("acquisition", "transaction", "merger")):
+        workflow_type = "event_transaction"
+        required_slots = ["issuer", "target", "event_period", "transaction_value"]
+        transforms = ["ev_revenue"] if "revenue" in text or "multiple" in text else ["event_terms"]
+        if "purchase price allocation" in text or "goodwill" in text:
+            workflow_type = "purchase_price_allocation"
+            required_slots = ["issuer", "target", "consideration_paid", "assets_acquired", "liabilities_assumed", "goodwill_or_intangibles"]
+            transforms = ["purchase_price_allocation"]
+        return {
+            "workflow_type": workflow_type,
+            "required_slots": required_slots,
+            "evidence_policy": {**policy, "required_source_families": ["sec_filings", "transaction_disclosure"], "required_terms": ["8-k"]},
+            "required_transforms": transforms,
+            "dealbreakers": ["citation_required", "no_missing_slots", "synthesis_gate_pass_required"],
+            "expected_trace": [*base_trace, "calculator.compute", "finance_numeric_verification"],
+            "failure_taxonomy": ["event_source_resolver", "slot_filling", "formula_binding", "synthesis_gate"],
+        }
+    if any(marker in text for marker in ("dcf", "discounted cash flow")):
+        return {
+            "workflow_type": "modeling_lite",
+            "required_slots": ["entity", "base_cash_flow", "growth_assumptions", "discount_rate", "terminal_value_assumption"],
+            "evidence_policy": {**policy, "required_terms": ["cash flow"]},
+            "required_transforms": ["dcf", "assumption_separation"],
+            "dealbreakers": ["citation_required", "assumptions_labeled", "synthesis_gate_pass_required"],
+            "expected_trace": [*base_trace, "calculator.compute", "finance_numeric_verification"],
+            "failure_taxonomy": ["assumption_labeling", "formula_binding", "unsupported_numeric_claim"],
+        }
+    if any(marker in text for marker in ("lbo", "irr", "moic")):
+        return {
+            "workflow_type": "modeling_lite",
+            "required_slots": ["entity", "entry_value", "debt_assumption", "cash_flow_or_ebitda", "exit_assumption"],
+            "evidence_policy": {**policy, "required_terms": ["ebitda"]},
+            "required_transforms": ["lbo", "assumption_separation"],
+            "dealbreakers": ["citation_required", "assumptions_labeled", "synthesis_gate_pass_required"],
+            "expected_trace": [*base_trace, "calculator.compute", "finance_numeric_verification"],
+            "failure_taxonomy": ["assumption_labeling", "formula_binding", "unsupported_numeric_claim"],
+        }
+    if "fixed charge" in text or "coverage" in text:
+        return {
+            "workflow_type": "coverage_ratio",
+            "required_slots": ["entity_a", "entity_b", "period", "earnings_or_ebitdar", "fixed_charges"],
+            "evidence_policy": {**policy, "required_terms": ["interest", "lease"]},
+            "required_transforms": ["fixed_charge_coverage"],
+            "dealbreakers": ["citation_required", "calculator_trace_required", "synthesis_gate_pass_required"],
+            "expected_trace": [*base_trace, "calculator.compute", "finance_numeric_verification"],
+            "failure_taxonomy": ["slot_filling", "formula_binding", "unit_period_mismatch"],
+        }
+    if "ev / ebitda" in text or "ev/ebitda" in text:
+        return {
+            "workflow_type": "valuation_multiple",
+            "required_slots": ["entity_a", "entity_b", "market_cap", "debt", "cash", "ebitda"],
+            "evidence_policy": {**policy, "required_source_families": ["sec_filings", "market_data"], "required_terms": ["ebitda"]},
+            "required_transforms": ["ev_ebitda"],
+            "dealbreakers": ["citation_required", "calculator_trace_required", "synthesis_gate_pass_required"],
+            "expected_trace": [*base_trace, "calculator.compute", "finance_numeric_verification"],
+            "failure_taxonomy": ["source_acquisition", "market_data", "formula_binding", "unsupported_numeric_claim"],
+        }
+    if "mlr" in text or "medical loss ratio" in text:
+        return {
+            "workflow_type": "regulatory_ratio",
+            "required_slots": ["entity", "period", "ratio_definition", "numerator", "denominator", "rebate_basis"],
+            "evidence_policy": {**policy, "required_source_families": ["sec_filings", "regulatory_disclosure"], "required_terms": ["medical loss ratio"]},
+            "required_transforms": ["mlr_rebate"],
+            "dealbreakers": ["citation_required", "synthesis_gate_pass_required"],
+            "expected_trace": [*base_trace, "calculator.compute", "finance_numeric_verification"],
+            "failure_taxonomy": ["regulatory_source", "slot_filling", "formula_binding"],
+        }
+    return {
+        "workflow_type": "source_grounded_research",
+        "required_slots": ["entity", "period", "source"],
+        "evidence_policy": policy,
+        "required_transforms": [],
+        "dealbreakers": ["citation_required", "synthesis_gate_pass_required"],
+        "expected_trace": base_trace,
+        "failure_taxonomy": ["source_acquisition", "claim_extraction", "synthesis_gate"],
+    }
 
 
 def _base_metadata(spec: PublicFinanceBenchmarkSpec, record: JsonObject) -> JsonObject:

@@ -47,6 +47,38 @@ def test_finance_benchmark_loads_common_jsonl_fields(tmp_path: Path) -> None:
     assert items[0].category == "numerical_reasoning"
 
 
+def test_finance_benchmark_loads_workflow_annotations(tmp_path: Path) -> None:
+    dataset = tmp_path / "workflow.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "id": "WF1",
+                "question": "Calculate DIO.",
+                "workflow_type": "multi_entity_compute_compare",
+                "required_slots": ["inventory_begin", "inventory_end", "cogs"],
+                "evidence_policy": {"required_source_families": ["sec_filings"], "required_terms": ["inventory"]},
+                "required_transforms": ["dio"],
+                "dealbreakers": ["calculator_trace_required"],
+                "expected_trace": ["claim_ledger", "slot_frame"],
+                "failure_taxonomy": ["slot_filling"],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    item = load_finance_benchmark_items(dataset)[0]
+
+    assert item.workflow_type == "multi_entity_compute_compare"
+    assert item.required_slots == ["inventory_begin", "inventory_end", "cogs"]
+    assert item.evidence_policy["required_source_families"] == ["sec_filings"]
+    assert item.required_transforms == ["dio"]
+    assert item.dealbreakers == ["calculator_trace_required"]
+    assert item.expected_trace == ["claim_ledger", "slot_frame"]
+    assert item.failure_taxonomy == ["slot_filling"]
+
+
 def test_finance_benchmark_numeric_scoring_uses_tolerance() -> None:
     item = FinanceBenchmarkItem(
         item_id="num-1",
@@ -364,7 +396,13 @@ def test_finance_dev_annotation_scorer_keeps_gold_post_run(tmp_path: Path) -> No
                 "expected_answer_contains": ["Home Depot", "DIO", "days"],
                 "expected_numeric": [{"name": "HD_DIO", "value": 77.6, "tolerance": 1.0}],
                 "required_trace": ["retrieval.run", "calculator.compute", "finance_numeric_verification"],
+                "expected_trace": ["claim_ledger", "slot_frame", "transform_plan", "verifier_gate", "synthesis_gate"],
                 "required_sources": ["sec.gov", "10-K"],
+                "workflow_type": "multi_entity_compute_compare",
+                "required_slots": ["inventory_begin", "inventory_end", "cogs"],
+                "required_transforms": ["dio"],
+                "evidence_policy": {"required_source_families": ["sec_filings"], "required_terms": ["inventory"]},
+                "dealbreakers": ["citation_required", "calculator_trace_required", "synthesis_gate_pass_required"],
             },
             ensure_ascii=False,
         )
@@ -375,19 +413,27 @@ def test_finance_dev_annotation_scorer_keeps_gold_post_run(tmp_path: Path) -> No
         item_id="fabv2-hd-low-dio",
         status="ungraded",
         question="Calculate HD DIO.",
-        answer="Home Depot DIO was 77.6 days, based on the 10-K from sec.gov.",
+        answer="Home Depot DIO was 77.6 days, based on inventory and COGS in the 10-K from sec.gov.",
         task_id="task-1",
         run_id="run-1",
         thread_id="thread-1",
-        scorecard={"status": "ungraded"},
+        scorecard={"status": "ungraded", "citation_present": True},
         trace_metrics={
             "retrieval_run_count": 1,
             "calculator_call_count": 1,
             "formula_trace_count": 1,
             "finance_fact_count": 4,
             "numeric_verifier_status": "passed",
+            "verifier_gate_status": "passed",
+            "synthesis_gate_status": "passed",
             "source_hosts": ["www.sec.gov"],
             "finance_source_forms": ["10-K"],
+            "claim_ledger_present": True,
+            "slot_frame_present": True,
+            "missing_slots": [],
+            "missing_slot_count": 0,
+            "transform_plan_count": 1,
+            "transform_methods": ["dio"],
         },
         trace_refs=["ledger-1"],
         final_answer=None,
@@ -400,6 +446,8 @@ def test_finance_dev_annotation_scorer_keeps_gold_post_run(tmp_path: Path) -> No
     assert score["behavior_score"] == 1.0
     assert score["numeric_score"] == 1.0
     assert score["substrate_score"] == 1.0
+    assert score["workflow_score"] == 1.0
+    assert score["workflow_type_scores"]["multi_entity_compute_compare"]["workflow_score"] == 1.0
 
 
 def test_finance_dev_annotation_scorer_accepts_localized_units(tmp_path: Path) -> None:
@@ -504,6 +552,20 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
         kind="verifier_gate_result",
         data={"status": "failed", "issues": [{"code": "missing_formula_trace"}, {"code": "period_mismatch"}]},
     )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="synthesis_gate_result",
+        data={"status": "failed", "issues": [{"code": "unsupported_answer_number"}]},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="synthesis_gate_result",
+        data={"status": "passed", "issues": [], "diagnostics": {"attempt": "fallback"}},
+    )
 
     metrics = trace_metrics(journal, task_id="task-fin")
 
@@ -521,11 +583,15 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
     assert metrics["missing_slots"] == ["cogs"]
     assert metrics["transform_plan_present"] is True
     assert metrics["transform_plan_count"] == 2
+    assert "dio" in metrics["transform_methods"]
     assert metrics["ready_transform_plan_count"] == 1
     assert metrics["missing_slot_transform_plan_count"] == 1
     assert metrics["verifier_gate_status"] == "failed"
     assert metrics["verifier_gate_passed"] is False
     assert metrics["verifier_gate_issue_count"] == 2
+    assert metrics["synthesis_gate_status"] == "passed"
+    assert metrics["synthesis_gate_attempt_count"] == 2
+    assert metrics["synthesis_gate_repaired"] is True
 
 
 def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
@@ -546,6 +612,10 @@ def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
                 "missing_slot_count": 1,
                 "transform_plan_count": 2,
                 "verifier_gate_status": "passed",
+                "synthesis_gate_status": "passed",
+                "synthesis_gate_attempt_count": 2,
+                "synthesis_gate_repaired": True,
+                "finance_numeric_failure_reasons": [],
             },
             trace_refs=[],
             final_answer=None,
@@ -567,6 +637,9 @@ def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
                 "missing_slot_count": 0,
                 "transform_plan_count": 0,
                 "verifier_gate_status": "failed",
+                "synthesis_gate_status": "failed",
+                "finance_numeric_failure_reason": "unsupported_answer_number",
+                "finance_numeric_failure_reasons": ["unsupported_answer_number"],
             },
             trace_refs=[],
             final_answer=None,
@@ -582,6 +655,10 @@ def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
     assert summary.transform_plan_present_rate == 0.5
     assert summary.average_transform_plans == 1.0
     assert summary.verifier_gate_pass_rate == 0.5
+    assert summary.synthesis_gate_pass_rate == 0.5
+    assert summary.synthesis_gate_repair_rate == 1.0
+    assert summary.unsupported_numeric_claim_rate == 0.5
+    assert summary.citation_preservation_rate == 0.5
 
 
 def test_finance_benchmark_cli_imports_public_dataset(tmp_path: Path) -> None:

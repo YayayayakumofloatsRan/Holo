@@ -1,8 +1,11 @@
 # Kernel v3 Finance Benchmark Track
 
 This track turns the submitted Holo project proposal into a measurable implementation plan.
-The goal is not to demonstrate a hand-picked chat transcript, but to evaluate Holo as an
-evidence-governed financial research harness on external benchmark questions.
+The goal is not to demonstrate a hand-picked chat transcript or optimize a finance-only
+script. FAB-style tasks are treated as workflow pressure tests for Holo's general
+intellectual workflow kernel: task framing, slot decomposition, source acquisition,
+claim extraction, transform/calculation, verifier gates, synthesis gates, and failure
+recovery.
 
 ## Objective
 
@@ -18,6 +21,22 @@ Holo should answer public-finance research questions through the normal Kernel v
 
 Benchmark gold answers are used only by the scoring layer after the run. They must not be
 inserted into planner, evaluator, retrieval, memory, or synthesis prompts.
+
+Each curated benchmark item should carry workflow annotations:
+
+- `workflow_type`: the work shape being tested, such as `multi_entity_compute_compare`,
+  `reconciliation`, `event_transaction`, `valuation_multiple`, `coverage_ratio`,
+  `modeling_lite`, `regulatory_ratio`, or `disclosure_diff`.
+- `required_slots`: the facts or assumptions that must be filled before a reliable answer.
+- `evidence_policy`: required and forbidden source families, evidence terms, and authority
+  expectations.
+- `required_transforms`: calculations or reasoning transforms that should appear in the
+  trace.
+- `dealbreakers`: conditions such as citation required, calculator trace required,
+  synthesis gate pass required, or assumptions labeled.
+- `expected_trace`: trace records expected from a healthy workflow, such as
+  `claim_ledger`, `slot_frame`, `transform_plan`, `verifier_gate`, and `synthesis_gate`.
+- `failure_taxonomy`: labels used to classify failures before adding any new heuristic.
 
 ## Initial Benchmarks
 
@@ -81,6 +100,11 @@ Finance Agent v2 public import:
 The official public file lives at
 `https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt`.
 Keep it as a local input for reproducible runs and to avoid accidental repeated downloads.
+The current repository snapshot includes the downloaded public file at
+`data/raw/fabv2_public.txt` and its normalized import at
+`data/bench/finance/fabv2_public.jsonl` with `27` public questions. The public set has
+no public gold, so report behavior, substrate, workflow, cost, and failure-taxonomy
+metrics rather than official accuracy.
 
 ## CLI
 
@@ -145,6 +169,20 @@ official Vals split. The gold annotation file is used only after a run to score
 behavior, numeric expectations, and substrate usage. It must not be placed into
 `--question-prefix`, prompt context, memory, or any runtime context sent to a
 model.
+
+`data/bench/finance/fabv2_dev10.jsonl` and
+`data/bench/finance/fabv2_dev10.gold.jsonl` now include workflow annotations:
+workflow type, required slots, evidence policy, required transforms, dealbreakers,
+expected trace records, and failure taxonomy. A replay score against existing live
+outputs therefore reports both traditional behavior/substrate scores and a workflow
+score. This is intentionally stricter than answer-only scoring.
+
+The repository also includes
+`data/bench/finance/holo_finance_workflow_challenge.jsonl`, a workflow-oriented
+challenge set. It is not a gold-answer benchmark; it is a pressure suite for
+compute/compare, reconciliation, event transactions, valuation multiples, coverage
+ratios, earnings reconciliation, disclosure diff, market-event analysis, modeling-lite,
+and regulatory-ratio workflows.
 
 Score existing predictions without running Holo:
 
@@ -668,6 +706,46 @@ Post-dev10 EV/EBITDA iteration:
   PFE/Seagen purchase-price allocation. These are now best classified as
   transform-planning / formula-template / modeling-policy gaps, not source
   acquisition failures.
+- 2026-06-11 workflow-harness scoring pass:
+  curated dev10 items and scoring annotations now carry structured workflow
+  annotations. `trace_metrics`, `FinanceBenchmarkSummary`, behavior graph diagnostics,
+  CLI progress, and finance reports now expose workflow-oriented metrics including
+  synthesis-gate repair rate, citation preservation rate, unsupported numeric claim
+  rate, missing-slot recovery rate, cost per passed item, repeatability score when
+  duplicate item runs are present, workflow type counts, and workflow annotation
+  scores. Re-scoring the existing live dev10 results with
+  `run_dev10_event_resolver_v1.workflow_scored` yields `overall_score=0.9114`,
+  behavior `0.9167`, substrate `0.8889`, workflow `0.8399`, numeric `1.0`,
+  unsupported numeric claim rate `0.4`, citation preservation `0.6`, and workflow
+  type scores that identify coverage ratio, modeling-lite, and valuation multiple
+  as the next pressure points. This pass did not rerun the agent; it re-evaluated the
+  latest live outputs with the stricter workflow harness.
+- The official FAB v2 public file was downloaded to `data/raw/fabv2_public.txt` and
+  imported to `data/bench/finance/fabv2_public.jsonl` (`27` items, `0` skipped). The
+  importer now adds workflow annotations to public questions where possible, so public27
+  can be used as a behavior/substrate/cost/failure-taxonomy run without putting gold or
+  rubrics into prompts.
+- Public27 live workflow baseline:
+  `run_public27_workflow_v1` ran all 27 public questions with `finance-fact-fast`,
+  mission off, live retrieval, model planner, fake evaluator, model synthesizer,
+  compact context, and `parallel=1`. The set has no public gold, so every item is
+  `ungraded_no_gold_signal`; report it as a generalization health check, not an
+  official accuracy score. Summary: answer-present rate `1.0`, claim-ledger /
+  slot-frame / transform-plan present rates `0.6296`, calculator-used rate `0.2222`,
+  formula-trace-present rate `0.2222`, citation preservation `0.2593`,
+  numeric-verifier pass rate `0.0909`, verifier-gate pass rate `0.0909`,
+  synthesis-gate pass rate `0.1111`, unsupported numeric claim rate `0.3704`,
+  average answer numeric support `0.4456`, average retrieval runs `2.2593`,
+  average fetches `18.8148`, average downloaded bytes `43.6MB`, and average total
+  tokens `87,928.4`. Workflow type distribution: source-grounded research `14`,
+  reconciliation `7`, event transaction `3`, modeling-lite `1`,
+  multi-entity compute/compare `1`, valuation multiple `1`. The main failure modes
+  are `all_evidence_rejected`, `coverage_gap`, and
+  `finance_numeric:unsupported_answer_number`.
+- `data/bench/finance/holo_finance_workflow_challenge.jsonl` adds a compact taxonomy
+  challenge set by workflow shape instead of company. It is designed to stop the project
+  from overfitting to dev10 while still keeping every task tied to a generic workflow
+  primitive.
 - Future validation should keep the same failure taxonomy discipline: classify
   failures as source acquisition, fetch/parser, fact-ledger extraction, formula
   binding, verifier policy, synthesis gate, or model JSON repair before adding
@@ -684,33 +762,40 @@ Post-dev10 EV/EBITDA iteration:
    and WSC adjusted EBITDA add-back trend as the stable delivery showcase. These
    four demonstrate the general slot/evidence/claim/transform/verifier workflow
    in finance form.
-2. Do not broaden new architecture before addressing the dev10 failure taxonomy.
+2. Use public27 as the external generalization baseline. The next public27 iteration
+   should target two gaps only: generic source-grounded `ClaimLedger` for qualitative
+   disclosure tasks, and SynthesisGate repair for numeric tasks with partial support.
+   Because public27 has no public gold, do not call it an official accuracy score.
+3. Do not broaden new architecture before addressing the dev10 failure taxonomy.
    The next substrate work should target transform-planning / modeling-policy
    gaps that appear across several tasks: DCF, LBO, fixed-charge coverage,
    EV/EBITDA, MLR rebate, and purchase price allocation.
-3. Add domain-pack formula templates and slot schemas only when they map to a
+4. Add domain-pack formula templates and slot schemas only when they map to a
    reusable workflow primitive: valuation model, coverage ratio, regulatory
    rebate calculation, or purchase-price-allocation reconciliation. Do not add
    item-specific answer heuristics.
-4. Improve `SynthesisGate` repair so failed gates can either remove unsupported
+5. Improve `SynthesisGate` repair so failed gates can either remove unsupported
    material numbers or produce a concise limitation answer with the missing
    transform slots, instead of relying on model synthesis to self-correct.
-5. Map reconciliation `period_series` / `source_table` gaps into more explicit
+6. Map reconciliation `period_series` / `source_table` gaps into more explicit
    ledger extraction diagnostics and missing-slot replan hints, especially when
    the source contains a table but the fact ledger extracts no add-back rows.
-6. Run the curated dev10 in small batches and classify verifier failures into
+7. Run the curated dev10 in small batches and classify verifier failures into
    unsupported answer number, ledger extraction gap, missing formula trace, unit
    mismatch, period mismatch, and assumption-label issues.
-7. Expand the finance fact ledger and formula planner for bridge, transaction
+8. Expand the finance fact ledger and formula planner for bridge, transaction
    multiple, fixed-charge coverage, DCF/LBO, MLR, and purchase price allocation
    cases. EV/EBITDA now has formula intent and missing-fact fallback; it still
    needs stronger acquisition for market cap, total debt, cash, and EBITDA
    components.
-8. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
+9. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
    structured retrieval results more directly, and avoiding synthesis context
    duplication.
-9. Add claim-level citation judging for non-numeric assertions.
-10. Add source-support scoring against benchmark evidence excerpts.
-11. Add PPT-ready rendering presets for task and benchmark graphs.
-12. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
+10. Add repeated-run stability batches for stable4/dev10: each selected item should run
+   at least three times and report source-family, claim-count, slot-missing,
+   calculator-trace, verifier-gate, synthesis-gate, and final status stability.
+11. Add claim-level citation judging for non-numeric assertions.
+12. Add source-support scoring against benchmark evidence excerpts.
+13. Add PPT-ready rendering presets for task and benchmark graphs.
+14. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
    retrieval plus memory.

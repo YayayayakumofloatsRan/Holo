@@ -54,6 +54,13 @@ class FinanceBenchmarkItem(Contract):
     required_tools: list[str] = field(default_factory=list)
     category: str | None = None
     source: str | None = None
+    workflow_type: str | None = None
+    required_slots: list[str] = field(default_factory=list)
+    evidence_policy: JsonObject = field(default_factory=dict)
+    required_transforms: list[str] = field(default_factory=list)
+    dealbreakers: list[str] = field(default_factory=list)
+    expected_trace: list[str] = field(default_factory=list)
+    failure_taxonomy: list[str] = field(default_factory=list)
     metadata: JsonObject = field(default_factory=dict)
 
 
@@ -106,7 +113,15 @@ class FinanceBenchmarkSummary(Contract):
     numeric_verifier_pass_rate: float | None
     verifier_gate_pass_rate: float | None
     synthesis_gate_pass_rate: float | None
+    synthesis_gate_repair_rate: float | None
     average_answer_numeric_support_rate: float | None
+    citation_preservation_rate: float
+    unsupported_numeric_claim_rate: float
+    missing_slot_recovery_rate: float | None
+    average_total_tokens_per_passed_item: float | None
+    repeated_item_count: int
+    repeatability_score: float | None
+    workflow_type_counts: JsonObject
     finance_numeric_failure_reason_counts: JsonObject
     status_counts: JsonObject
     output_path: str | None = None
@@ -241,6 +256,13 @@ def run_finance_benchmark(
                 "category": item.category,
                 "source": item.source,
                 "required_tools": list(item.required_tools),
+                "workflow_type": item.workflow_type,
+                "required_slots": list(item.required_slots),
+                "evidence_policy": dict(item.evidence_policy),
+                "required_transforms": list(item.required_transforms),
+                "dealbreakers": list(item.dealbreakers),
+                "expected_trace": list(item.expected_trace),
+                "failure_taxonomy": list(item.failure_taxonomy),
             },
         )
         results.append(result)
@@ -354,7 +376,17 @@ def score_finance_prediction_file(
                 trace_refs=[str(ref) for ref in prediction.get("trace_refs", [])] if isinstance(prediction.get("trace_refs"), list) else [],
                 final_answer=final_answer,
                 failure_report=prediction.get("failure_report") if isinstance(prediction.get("failure_report"), dict) else None,
-                metadata={"source": "prediction_file", "category": item.category},
+                metadata={
+                    "source": "prediction_file",
+                    "category": item.category,
+                    "workflow_type": item.workflow_type,
+                    "required_slots": list(item.required_slots),
+                    "evidence_policy": dict(item.evidence_policy),
+                    "required_transforms": list(item.required_transforms),
+                    "dealbreakers": list(item.dealbreakers),
+                    "expected_trace": list(item.expected_trace),
+                    "failure_taxonomy": list(item.failure_taxonomy),
+                },
             )
         )
     return results
@@ -375,6 +407,20 @@ def summarize_finance_benchmark(
     verifier_scored = [result for result in results if result.trace_metrics.get("numeric_verifier_status") in {"passed", "failed"}]
     gate_scored = [result for result in results if result.trace_metrics.get("verifier_gate_status") in {"passed", "failed"}]
     synthesis_gate_scored = [result for result in results if result.trace_metrics.get("synthesis_gate_status") in {"passed", "failed"}]
+    synthesis_gate_repairable = [
+        result for result in results
+        if int(result.trace_metrics.get("synthesis_gate_attempt_count") or 0) > 1
+        or result.trace_metrics.get("synthesis_gate_repaired") is True
+    ]
+    missing_slot_recovery_scored = [
+        result for result in results
+        if int(result.trace_metrics.get("missing_slot_transform_plan_count") or 0) > 0
+    ]
+    passed_token_values = [
+        float(result.trace_metrics["total_tokens"])
+        for result in results
+        if result.status == "passed" and isinstance(result.trace_metrics.get("total_tokens"), (int, float))
+    ]
     support_rates = [
         float(result.trace_metrics["answer_numeric_support_rate"])
         for result in results
@@ -385,6 +431,17 @@ def summarize_finance_benchmark(
         for result in results
         if result.trace_metrics.get("finance_numeric_failure_reason") not in (None, "")
     )
+    unsupported_numeric_count = sum(
+        1
+        for result in results
+        if "unsupported_answer_number" in _string_list(result.trace_metrics.get("finance_numeric_failure_reasons"))
+        or result.trace_metrics.get("finance_numeric_failure_reason") == "unsupported_answer_number"
+    )
+    workflow_type_counts = Counter(
+        str(result.metadata.get("workflow_type") or result.metadata.get("category") or "unclassified")
+        for result in results
+    )
+    repeated_item_count, repeatability_score = _repeatability_summary(results)
     return FinanceBenchmarkSummary(
         schema="holo.kernel_v3.finance_benchmark_summary.v1",
         status="ok",
@@ -441,7 +498,25 @@ def summarize_finance_benchmark(
         )
         if synthesis_gate_scored
         else None,
+        synthesis_gate_repair_rate=_rate(
+            sum(1 for result in synthesis_gate_repairable if result.trace_metrics.get("synthesis_gate_repaired") is True),
+            len(synthesis_gate_repairable),
+        )
+        if synthesis_gate_repairable
+        else None,
         average_answer_numeric_support_rate=_average(support_rates) if support_rates else None,
+        citation_preservation_rate=_rate(_count_scorecard(results, "citation_present"), len(results)),
+        unsupported_numeric_claim_rate=_rate(unsupported_numeric_count, len(results)),
+        missing_slot_recovery_rate=_rate(
+            sum(1 for result in missing_slot_recovery_scored if int(result.trace_metrics.get("missing_slot_count") or 0) == 0),
+            len(missing_slot_recovery_scored),
+        )
+        if missing_slot_recovery_scored
+        else None,
+        average_total_tokens_per_passed_item=_average(passed_token_values) if passed_token_values else None,
+        repeated_item_count=repeated_item_count,
+        repeatability_score=repeatability_score,
+        workflow_type_counts=dict(workflow_type_counts),
         finance_numeric_failure_reason_counts=dict(numeric_failure_reasons),
         status_counts=dict(status_counts),
         output_path=str(output_path) if output_path is not None else None,
@@ -498,10 +573,15 @@ def score_finance_dev_annotations(
     behavior_scores = [float(item["behavior_score"]) for item in item_scores if isinstance(item.get("behavior_score"), (int, float))]
     numeric_scores = [float(item["numeric_score"]) for item in item_scores if isinstance(item.get("numeric_score"), (int, float))]
     substrate_scores = [float(item["substrate_score"]) for item in item_scores if isinstance(item.get("substrate_score"), (int, float))]
+    workflow_scores = [float(item["workflow_score"]) for item in item_scores if isinstance(item.get("workflow_score"), (int, float))]
     behavior_score = _average(behavior_scores) if behavior_scores else None
     numeric_score = _average(numeric_scores) if numeric_scores else None
     substrate_score = _average(substrate_scores) if substrate_scores else None
-    component_scores = [score for score in (behavior_score, numeric_score, substrate_score) if isinstance(score, float)]
+    workflow_score = _average(workflow_scores) if workflow_scores else None
+    component_scores = [
+        score for score in (behavior_score, numeric_score, substrate_score, workflow_score) if isinstance(score, float)
+    ]
+    workflow_type_scores = _workflow_type_scores(item_scores)
     failure_reasons = Counter(
         str(reason)
         for item in item_scores
@@ -516,6 +596,8 @@ def score_finance_dev_annotations(
         "behavior_score": behavior_score,
         "numeric_score": numeric_score,
         "substrate_score": substrate_score,
+        "workflow_score": workflow_score,
+        "workflow_type_scores": workflow_type_scores,
         "overall_score": _average(component_scores) if component_scores else None,
         "failure_reason_counts": dict(failure_reasons),
         "items": item_scores,
@@ -568,6 +650,11 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     latest_slot_frame = slot_frames[-1] if slot_frames else {}
     latest_verifier_gate = verifier_gates[-1] if verifier_gates else {}
     latest_synthesis_gate = synthesis_gates[-1] if synthesis_gates else {}
+    synthesis_gate_statuses = [
+        str(item.get("status"))
+        for item in synthesis_gates
+        if isinstance(item, dict) and isinstance(item.get("status"), str)
+    ]
     latest_verification = numeric_verifications[-1] if numeric_verifications else {}
     latest_verification = latest_verification if isinstance(latest_verification, dict) else {}
     verification_diagnostics = latest_verification.get("diagnostics") if isinstance(latest_verification.get("diagnostics"), dict) else {}
@@ -583,6 +670,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     source_uris = _source_uris([*retrieval_evidence_records, *retrieval_citation_records])
     source_hosts = _source_hosts(source_uris)
     finance_source_forms = _finance_source_forms(finance_ledgers)
+    transform_methods = _transform_methods(transform_plans)
     return {
         "schema": "holo.kernel_v3.finance_trace_metrics.v1",
         "record_count": len(records),
@@ -612,6 +700,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "claim_count": _int_value(latest_claim_ledger.get("claim_count")) if isinstance(latest_claim_ledger, dict) else 0,
         "transform_plan_present": bool(transform_plans),
         "transform_plan_count": len(transform_plans),
+        "transform_methods": transform_methods[:32],
         "ready_transform_plan_count": sum(1 for item in transform_plans if item.get("status") == "ready"),
         "missing_slot_transform_plan_count": sum(1 for item in transform_plans if item.get("status") == "missing_slots"),
         "slot_frame_present": bool(slot_frames),
@@ -628,6 +717,9 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "synthesis_gate_status": synthesis_gate_status,
         "synthesis_gate_passed": synthesis_gate_status == "passed" if synthesis_gate_status else None,
         "synthesis_gate_issue_count": len(synthesis_gate_issues),
+        "synthesis_gate_attempt_count": len(synthesis_gates),
+        "synthesis_gate_statuses": synthesis_gate_statuses[:16],
+        "synthesis_gate_repaired": "failed" in synthesis_gate_statuses and synthesis_gate_status == "passed",
         "answer_numeric_support_rate": answer_numeric_support_rate,
         "finance_numeric_failure_reason": issue_codes[0] if issue_codes else None,
         "finance_numeric_failure_reasons": issue_codes,
@@ -667,16 +759,44 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
     contains_hits = [item for item in expected_contains if _expected_contains_met(answer, item)]
     numeric_expectations = _expected_numeric_annotations(annotation.get("expected_numeric"))
     numeric_matches = [_score_expected_numeric(answer, expectation) for expectation in numeric_expectations]
-    required_trace = _string_list(annotation.get("required_trace"))
+    required_trace = _ordered_unique([*_string_list(annotation.get("required_trace")), *_string_list(annotation.get("expected_trace"))])
     trace_hits = [name for name in required_trace if _trace_requirement_met(name, result)]
     required_sources = _string_list(annotation.get("required_sources"))
-    source_hits = [name for name in required_sources if name.casefold() in haystack.casefold()]
+    evidence_policy = _json_object_value(annotation.get("evidence_policy"))
+    required_source_families = _string_list(evidence_policy.get("required_source_families"))
+    required_terms = _string_list(evidence_policy.get("required_terms"))
+    forbidden_source_families = _string_list(evidence_policy.get("forbidden_source_families"))
+    source_hits = [name for name in required_sources if _source_requirement_met(name, result, haystack=haystack)]
+    source_family_hits = [name for name in required_source_families if _source_requirement_met(name, result, haystack=haystack)]
+    required_term_hits = [term for term in required_terms if term.casefold() in haystack.casefold()]
+    forbidden_source_hits = [name for name in forbidden_source_families if _source_requirement_met(name, result, haystack=haystack)]
+    required_slots = _string_list(annotation.get("required_slots"))
+    slot_hits = [name for name in required_slots if _slot_requirement_met(name, result)]
+    required_transforms = _string_list(annotation.get("required_transforms"))
+    transform_hits = [name for name in required_transforms if _transform_requirement_met(name, result, haystack=haystack)]
+    dealbreakers = _string_list(annotation.get("dealbreakers"))
+    dealbreaker_matches = [_score_dealbreaker(name, result, haystack=haystack) for name in dealbreakers]
+    dealbreaker_hits = [item for item in dealbreaker_matches if item.get("passed") is True]
     behavior_denominator = len(expected_contains) + len(required_sources)
     behavior_numerator = len(contains_hits) + len(source_hits)
     numeric_denominator = len(numeric_matches)
     numeric_numerator = sum(1 for item in numeric_matches if item.get("passed") is True)
     substrate_denominator = len(required_trace)
     substrate_numerator = len(trace_hits)
+    workflow_denominator = (
+        len(required_slots)
+        + len(required_transforms)
+        + len(required_source_families)
+        + len(required_terms)
+        + len(dealbreakers)
+    )
+    workflow_numerator = (
+        len(slot_hits)
+        + len(transform_hits)
+        + len(source_family_hits)
+        + len(required_term_hits)
+        + len(dealbreaker_hits)
+    )
     failure_reasons: list[str] = []
     if len(contains_hits) < len(expected_contains):
         failure_reasons.append("expected_answer_content_missing")
@@ -686,11 +806,25 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
         failure_reasons.append("expected_numeric_mismatch")
     if substrate_denominator and substrate_numerator < substrate_denominator:
         failure_reasons.append("required_trace_missing")
+    if required_slots and len(slot_hits) < len(required_slots):
+        failure_reasons.append("required_slot_missing")
+    if required_transforms and len(transform_hits) < len(required_transforms):
+        failure_reasons.append("required_transform_missing")
+    if required_source_families and len(source_family_hits) < len(required_source_families):
+        failure_reasons.append("required_source_family_missing")
+    if required_terms and len(required_term_hits) < len(required_terms):
+        failure_reasons.append("required_evidence_term_missing")
+    if forbidden_source_hits:
+        failure_reasons.append("forbidden_source_family_present")
+    if dealbreaker_matches and len(dealbreaker_hits) < len(dealbreaker_matches):
+        failure_reasons.append("dealbreaker_failed")
     return {
         "item_id": result.item_id,
+        "workflow_type": annotation.get("workflow_type"),
         "behavior_score": _rate(behavior_numerator, behavior_denominator) if behavior_denominator else None,
         "numeric_score": _rate(numeric_numerator, numeric_denominator) if numeric_denominator else None,
         "substrate_score": _rate(substrate_numerator, substrate_denominator) if substrate_denominator else None,
+        "workflow_score": _rate(workflow_numerator, workflow_denominator) if workflow_denominator else None,
         "expected_contains_count": len(expected_contains),
         "expected_contains_hit_count": len(contains_hits),
         "expected_numeric_count": len(numeric_expectations),
@@ -699,9 +833,25 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
         "required_trace_hit_count": len(trace_hits),
         "required_source_count": len(required_sources),
         "required_source_hit_count": len(source_hits),
+        "required_slot_count": len(required_slots),
+        "required_slot_hit_count": len(slot_hits),
+        "required_transform_count": len(required_transforms),
+        "required_transform_hit_count": len(transform_hits),
+        "required_source_family_count": len(required_source_families),
+        "required_source_family_hit_count": len(source_family_hits),
+        "required_evidence_term_count": len(required_terms),
+        "required_evidence_term_hit_count": len(required_term_hits),
+        "dealbreaker_count": len(dealbreakers),
+        "dealbreaker_hit_count": len(dealbreaker_hits),
+        "dealbreaker_matches": dealbreaker_matches,
         "numeric_matches": numeric_matches,
         "missing_trace": [name for name in required_trace if name not in trace_hits],
         "missing_sources": [name for name in required_sources if name not in source_hits],
+        "missing_slots": [name for name in required_slots if name not in slot_hits],
+        "missing_transforms": [name for name in required_transforms if name not in transform_hits],
+        "missing_source_families": [name for name in required_source_families if name not in source_family_hits],
+        "missing_evidence_terms": [name for name in required_terms if name not in required_term_hits],
+        "forbidden_source_hits": forbidden_source_hits,
         "failure_reasons": failure_reasons,
     }
 
@@ -732,6 +882,113 @@ def _expected_contains_aliases(expected: str) -> tuple[str, ...]:
         "goodwill": ("商誉",),
     }
     return aliases.get(expected, ())
+
+
+def _workflow_type_scores(item_scores: list[JsonObject]) -> JsonObject:
+    buckets: dict[str, list[float]] = {}
+    for item in item_scores:
+        workflow_type = str(item.get("workflow_type") or "unclassified")
+        score = item.get("workflow_score")
+        if not isinstance(score, (int, float)):
+            continue
+        buckets.setdefault(workflow_type, []).append(float(score))
+    return {
+        workflow_type: {
+            "item_count": len(scores),
+            "workflow_score": _average(scores),
+        }
+        for workflow_type, scores in sorted(buckets.items())
+    }
+
+
+def _source_requirement_met(name: str, result: FinanceBenchmarkResult, *, haystack: str) -> bool:
+    normalized = name.strip().casefold()
+    if not normalized:
+        return False
+    metrics = result.trace_metrics
+    hosts = [str(item).casefold() for item in metrics.get("source_hosts", [])] if isinstance(metrics.get("source_hosts"), list) else []
+    forms = [str(item).casefold() for item in metrics.get("finance_source_forms", [])] if isinstance(metrics.get("finance_source_forms"), list) else []
+    source_text = " ".join([haystack.casefold(), *hosts, *forms])
+    aliases = {
+        "sec": ("sec.gov", "www.sec.gov", "sec filing", "regulatory_filing"),
+        "sec.gov": ("sec.gov", "www.sec.gov"),
+        "sec_filings": ("sec.gov", "www.sec.gov", "10-k", "10-q", "8-k"),
+        "companyfacts": ("companyfacts", "xbrl", "data.sec.gov"),
+        "10-k": ("10-k", "form 10-k"),
+        "10-q": ("10-q", "form 10-q"),
+        "8-k": ("8-k", "form 8-k"),
+        "ex-99": ("ex-99", "exhibit 99", "99.1"),
+        "market_data": ("market", "stock price", "market cap", "enterprise value", "yahoo", "google finance"),
+        "regulatory_filing": ("sec.gov", "10-k", "10-q", "8-k", "6-k"),
+    }
+    candidates = aliases.get(normalized, (normalized,))
+    return any(candidate in source_text for candidate in candidates)
+
+
+def _slot_requirement_met(name: str, result: FinanceBenchmarkResult) -> bool:
+    normalized = _norm_key(name)
+    if not normalized:
+        return False
+    metrics = result.trace_metrics
+    if not metrics.get("slot_frame_present"):
+        return False
+    missing_slots = metrics.get("missing_slots") if isinstance(metrics.get("missing_slots"), list) else []
+    normalized_missing = {_norm_key(str(item)) for item in missing_slots}
+    return normalized not in normalized_missing
+
+
+def _transform_requirement_met(name: str, result: FinanceBenchmarkResult, *, haystack: str) -> bool:
+    normalized = _norm_key(name)
+    if not normalized:
+        return False
+    metrics = result.trace_metrics
+    methods = metrics.get("transform_methods") if isinstance(metrics.get("transform_methods"), list) else []
+    normalized_methods = [_norm_key(str(item)) for item in methods]
+    if any(normalized in method or method in normalized for method in normalized_methods if method):
+        return True
+    aliases = {
+        "dio": ("days_inventory_outstanding", "inventory_efficiency"),
+        "difference": ("compare", "spread", "delta"),
+        "adjusted_ebitda_bridge": ("adjusted_ebitda", "reconciliation", "bridge"),
+        "addback_trend": ("addback", "add_back", "trend"),
+        "ev_revenue": ("enterprise_value_revenue", "transaction_multiple", "ev_to_revenue"),
+        "ev_ebitda": ("enterprise_value_ebitda", "valuation_multiple", "multiple"),
+        "fixed_charge_coverage": ("coverage_ratio", "fixed_charge"),
+        "dcf": ("discounted_cash_flow", "valuation_model"),
+        "lbo": ("leveraged_buyout", "return_model"),
+        "mlr_rebate": ("medical_loss_ratio", "regulatory_ratio"),
+        "purchase_price_allocation": ("ppa", "purchase_accounting"),
+    }
+    candidates = (normalized, *aliases.get(normalized, ()))
+    haystack_norm = _norm_key(haystack)
+    if any(candidate and candidate in haystack_norm for candidate in candidates):
+        return True
+    return normalized in {"assumption_separation", "limitation"} and bool(metrics.get("synthesis_gate_status"))
+
+
+def _score_dealbreaker(name: str, result: FinanceBenchmarkResult, *, haystack: str) -> JsonObject:
+    normalized = _norm_key(name)
+    metrics = result.trace_metrics
+    passed = False
+    if normalized in {"citation_required", "has_citation", "cite_sources"}:
+        passed = bool(result.scorecard.get("citation_present"))
+    elif normalized in {"calculator_trace_required", "calculator_required"}:
+        passed = _int_value(metrics.get("calculator_call_count")) > 0 and _int_value(metrics.get("formula_trace_count")) > 0
+    elif normalized in {"verifier_gate_pass_required", "verifier_required"}:
+        passed = metrics.get("verifier_gate_status") == "passed"
+    elif normalized in {"synthesis_gate_pass_required", "no_unsupported_numeric_claims"}:
+        passed = metrics.get("synthesis_gate_status") == "passed" or metrics.get("finance_numeric_failure_reason") != "unsupported_answer_number"
+    elif normalized in {"no_missing_slots", "slots_filled"}:
+        passed = bool(metrics.get("slot_frame_present")) and _int_value(metrics.get("missing_slot_count")) == 0
+    elif normalized in {"source_required", "source_family_required"}:
+        passed = bool(result.scorecard.get("citation_present")) or _int_value(metrics.get("citation_count")) > 0
+    elif normalized in {"assumptions_labeled", "facts_vs_assumptions_separated"}:
+        passed = "assumption" in haystack.casefold() or "假设" in haystack
+    elif normalized in {"failure_diagnostic_required", "diagnostic_failure"}:
+        passed = bool(metrics.get("latest_failure_mode") or metrics.get("finance_numeric_failure_reason") or result.failure_report)
+    else:
+        passed = name.casefold() in haystack.casefold()
+    return {"name": name, "passed": passed}
 
 
 def _annotation_haystack(result: FinanceBenchmarkResult) -> str:
@@ -781,6 +1038,18 @@ def _trace_requirement_met(name: str, result: FinanceBenchmarkResult) -> bool:
         return isinstance(metrics.get("numeric_verifier_status"), str) and bool(metrics.get("numeric_verifier_status"))
     if normalized in {"finance_fact_ledger", "finance.extract_facts"}:
         return _int_value(metrics.get("finance_fact_count")) > 0
+    if normalized == "claim_ledger":
+        return bool(metrics.get("claim_ledger_present"))
+    if normalized == "slot_frame":
+        return bool(metrics.get("slot_frame_present"))
+    if normalized == "transform_plan":
+        return _int_value(metrics.get("transform_plan_count")) > 0
+    if normalized == "verifier_gate":
+        return isinstance(metrics.get("verifier_gate_status"), str) and bool(metrics.get("verifier_gate_status"))
+    if normalized == "synthesis_gate":
+        return isinstance(metrics.get("synthesis_gate_status"), str) and bool(metrics.get("synthesis_gate_status"))
+    if normalized in {"citation", "citations", "retrieval_citation"}:
+        return bool(result.scorecard.get("citation_present")) or _int_value(metrics.get("citation_count")) > 0
     trace_text = json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True).casefold()
     return normalized in trace_text
 
@@ -817,6 +1086,48 @@ def _finance_source_forms(ledgers: list[JsonObject]) -> list[str]:
             if isinstance(form, str) and form:
                 forms.append(form)
     return _ordered_unique(forms)
+
+
+def _transform_methods(transform_plans: list[JsonObject]) -> list[str]:
+    methods: list[str] = []
+    for plan in transform_plans:
+        if not isinstance(plan, dict):
+            continue
+        for key in ("method", "formula_name", "formula_id", "transform_type", "workflow_type"):
+            value = plan.get(key)
+            if isinstance(value, str) and value:
+                methods.append(value)
+        payload = plan.get("payload") if isinstance(plan.get("payload"), dict) else {}
+        for key in ("formula_name", "operation", "expression"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                methods.append(value)
+    return _ordered_unique(methods)
+
+
+def _repeatability_summary(results: list[FinanceBenchmarkResult]) -> tuple[int, float | None]:
+    grouped: dict[str, list[FinanceBenchmarkResult]] = {}
+    for result in results:
+        grouped.setdefault(result.item_id, []).append(result)
+    repeated = {item_id: rows for item_id, rows in grouped.items() if len(rows) > 1}
+    if not repeated:
+        return 0, None
+    scores: list[float] = []
+    for rows in repeated.values():
+        statuses = {row.status for row in rows}
+        verifier_statuses = {str(row.trace_metrics.get("numeric_verifier_status")) for row in rows}
+        gate_statuses = {str(row.trace_metrics.get("verifier_gate_status")) for row in rows}
+        formula_presence = {int(row.trace_metrics.get("formula_trace_count") or 0) > 0 for row in rows}
+        citation_presence = {bool(row.scorecard.get("citation_present")) for row in rows}
+        components = [
+            len(statuses) == 1,
+            len(verifier_statuses) == 1,
+            len(gate_statuses) == 1,
+            len(formula_presence) == 1,
+            len(citation_presence) == 1,
+        ]
+        scores.append(_rate(sum(1 for item in components if item), len(components)))
+    return len(repeated), _average(scores)
 
 
 def _load_records(path: Path) -> list[JsonObject]:
@@ -882,6 +1193,13 @@ def _run_one_finance_benchmark_item(
             "category": item.category,
             "source": item.source,
             "required_tools": list(item.required_tools),
+            "workflow_type": item.workflow_type,
+            "required_slots": list(item.required_slots),
+            "evidence_policy": dict(item.evidence_policy),
+            "required_transforms": list(item.required_transforms),
+            "dealbreakers": list(item.dealbreakers),
+            "expected_trace": list(item.expected_trace),
+            "failure_taxonomy": list(item.failure_taxonomy),
             "parallel_index": index,
         },
     )
@@ -920,6 +1238,7 @@ def _item_from_record(record: JsonObject, *, index: int) -> FinanceBenchmarkItem
     for key in ("prompt_context", "rubric", "source_refs", "benchmark_homepage", "benchmark_dataset_url", "default_scoring"):
         if key in record and key not in metadata:
             metadata[key] = record[key]
+    evidence_policy = _json_object_value(_first_present(record, "evidence_policy", "source_policy") or metadata.get("evidence_policy"))
     return FinanceBenchmarkItem(
         item_id=item_id,
         question=question,
@@ -932,6 +1251,13 @@ def _item_from_record(record: JsonObject, *, index: int) -> FinanceBenchmarkItem
         required_tools=_string_list(_first_present(record, "required_tools", "tools", "tool_annotations")),
         category=_optional_text(_first_present(record, "type", "category", "task_type", "label")),
         source=_optional_text(_first_present(record, "source", "benchmark", "dataset")),
+        workflow_type=_optional_text(_first_present(record, "workflow_type", "workflow", "work_type") or metadata.get("workflow_type")),
+        required_slots=_string_list(_first_present(record, "required_slots", "slots") or metadata.get("required_slots")),
+        evidence_policy=evidence_policy,
+        required_transforms=_string_list(_first_present(record, "required_transforms", "transforms") or metadata.get("required_transforms")),
+        dealbreakers=_string_list(_first_present(record, "dealbreakers", "deal_breakers") or metadata.get("dealbreakers")),
+        expected_trace=_string_list(_first_present(record, "expected_trace", "required_trace") or metadata.get("expected_trace")),
+        failure_taxonomy=_string_list(_first_present(record, "failure_taxonomy", "failure_labels") or metadata.get("failure_taxonomy")),
         metadata=metadata,
     )
 
@@ -1130,6 +1456,10 @@ def _optional_float(value: JsonValue) -> float | None:
     return None
 
 
+def _json_object_value(value: object) -> JsonObject:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _string_list(value: JsonValue) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if item is not None]
@@ -1138,6 +1468,10 @@ def _string_list(value: JsonValue) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [part.strip() for part in value.split(",") if part.strip()]
     return []
+
+
+def _norm_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
 
 
 def _count_scorecard(results: list[FinanceBenchmarkResult], key: str) -> int:

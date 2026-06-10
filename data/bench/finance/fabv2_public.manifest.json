@@ -1,0 +1,48 @@
+{
+  "benchmark": "finance_agent_v2_public",
+  "benchmark_spec": {
+    "benchmark_id": "finance_agent_v2_public",
+    "dataset_url": "https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt",
+    "default_scoring": "behavioral_without_public_gold",
+    "display_name": "Finance Agent v2 public set",
+    "homepage_url": "https://www.vals.ai/benchmarks/fabv2",
+    "notes": [
+      "Public development questions for Finance Agent v2; no gold answer is included in the agent prompt.",
+      "Use behavior metrics such as calculator usage, numeric verifier status, citation coverage, and loop budget."
+    ]
+  },
+  "input_path": "data/raw/fabv2_public.txt",
+  "item_count": 27,
+  "manifest_path": "data/bench/finance/fabv2_public.manifest.json",
+  "normalized_schema": {
+    "evidence_excerpt": "scoring/audit evidence excerpt",
+    "gold_answer": "scoring-only reference answer",
+    "id": "stable benchmark item id",
+    "metadata": "provenance, prompt_context, source_refs, workflow annotation, scoring notes",
+    "question": "user-visible question",
+    "source": "public benchmark id",
+    "type": "question/category type",
+    "workflow_annotation": [
+      "metadata.workflow_type",
+      "metadata.required_slots",
+      "metadata.evidence_policy",
+      "metadata.required_transforms",
+      "metadata.dealbreakers",
+      "metadata.expected_trace",
+      "metadata.failure_taxonomy"
+    ]
+  },
+  "output_path": "data/bench/finance/fabv2_public.jsonl",
+  "prompt_policy": {
+    "gold_answer_in_prompt": false,
+    "provided_context_in_prompt": true,
+    "reference_reasoning_in_prompt": false,
+    "rubric_in_prompt": false
+  },
+  "schema": "holo.kernel_v3.public_finance_benchmark_import.v1",
+  "skipped_count": 0,
+  "source_format": "txt",
+  "source_url": "https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt",
+  "status": "ok",
+  "warnings": []
+}

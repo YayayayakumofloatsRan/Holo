@@ -1152,10 +1152,39 @@ holo-v3 bench finance \
 ```
 
 `--dev-gold` is post-run scoring material only. It is never inserted into the
-agent prompt. The summary reports behavior score, numeric score, substrate
-score, calculator usage, formula trace count, finance fact count, numeric
-verifier status, answer numeric support rate, and finance numeric failure
-taxonomy.
+agent prompt. The dev10 dataset and gold annotation now describe each item as a
+workflow pressure test, not just a finance question: `workflow_type`,
+`required_slots`, `evidence_policy`, `required_transforms`, `dealbreakers`,
+`expected_trace`, and `failure_taxonomy`. The summary reports behavior score,
+numeric score, substrate score, workflow score, calculator usage, formula trace
+count, claim/slot/transform coverage, verifier and synthesis gate status,
+answer numeric support rate, unsupported numeric claim rate, missing-slot
+recovery, cost per solved task, and finance numeric failure taxonomy.
+
+The repository also keeps the official Finance Agent v2 public question file as
+`data/raw/fabv2_public.txt` and its normalized local import as
+`data/bench/finance/fabv2_public.jsonl`. This public27 set has no public gold,
+so use it for behavior/substrate/cost/failure-taxonomy coverage rather than
+official accuracy claims. A separate
+`data/bench/finance/holo_finance_workflow_challenge.jsonl` file defines
+workflow-oriented challenge tasks across compute/compare, reconciliation,
+event transactions, valuation multiples, coverage ratios, disclosure diff,
+market-event analysis, modeling-lite, and regulatory-ratio workflows.
+
+Latest public27 live workflow run:
+`run_public27_workflow_v1` ran all 27 public questions with `finance-fact-fast`,
+mission disabled, live retrieval, model planner, fake evaluator, model
+synthesizer, compact context, and serial execution. Because the public file has
+no gold, the run is ungraded for accuracy. It reports behavior/substrate health:
+claim-ledger, slot-frame, and transform-plan present rates `0.6296`,
+calculator-used and formula-trace rates `0.2222`, citation preservation
+`0.2593`, numeric-verifier and verifier-gate pass rates `0.0909`,
+synthesis-gate pass rate `0.1111`, unsupported numeric claim rate `0.3704`,
+average numeric support `0.4456`, average retrieval runs `2.2593`, and average
+tokens `87,928.4`. Failure modes cluster around qualitative disclosure tasks
+that need a generic ClaimLedger and numeric tasks where SynthesisGate correctly
+blocks unsupported numbers. This is the public generalization baseline, not a
+success claim.
 
 Latest live benchmark status: the finance substrate now closes the stable4
 showcase items through the generic workflow spine. The 2026-06-10 dev10 rerun
@@ -1187,6 +1216,15 @@ cases Holo usually acquires claims and slot frames, but either does not yet
 produce a calculator trace or the SynthesisGate blocks unsupported numeric
 claims. That is the desired reliability posture: unsupported finance numbers
 should be stopped, not polished into a confident answer.
+
+After adding workflow annotations, replay-scoring the same live dev10 results
+with `run_dev10_event_resolver_v1.workflow_scored` yields
+`overall_score=0.9114`, behavior `0.9167`, substrate `0.8889`,
+workflow `0.8399`, numeric `1.0`, unsupported numeric claim rate `0.4`,
+citation preservation `0.6`, and the same core transform/modeling gaps. This is
+the more honest project metric because it checks whether the agent walked the
+expected slot/evidence/claim/transform/verifier/synthesis path, not only whether
+the final answer looked plausible.
 The latest KHC adjusted-EBITDA bridge pass improves the deterministic substrate:
 the fact ledger now keeps an `Adjusted EBITDA` amount even when the next table
 title is an EPS reconciliation, and bridge planning groups facts by

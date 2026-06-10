@@ -631,6 +631,7 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
     reason_counts: dict[str, int] = {}
     failure_mode_counts: dict[str, int] = {}
     finance_numeric_failure_reason_counts: dict[str, int] = {}
+    workflow_type_counts: dict[str, int] = {}
     values: dict[str, list[float]] = {
         "total_tokens": [],
         "retrieval_run_count": [],
@@ -641,16 +642,32 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         "calculator_call_count": [],
         "formula_trace_count": [],
         "finance_fact_count": [],
+        "claim_count": [],
+        "transform_plan_count": [],
+        "missing_slot_count": [],
         "answer_numeric_support_rate": [],
     }
+    passed_tokens: list[float] = []
     answer_present = 0
     citation_present = 0
     numeric_scored = 0
     numeric_passed = 0
     calculator_used = 0
     formula_trace_present = 0
+    claim_ledger_present = 0
+    slot_frame_present = 0
+    transform_plan_present = 0
     verifier_scored = 0
     verifier_passed = 0
+    gate_scored = 0
+    gate_passed = 0
+    synthesis_gate_scored = 0
+    synthesis_gate_passed = 0
+    synthesis_gate_repairable = 0
+    synthesis_gate_repaired = 0
+    unsupported_numeric_count = 0
+    missing_slot_recovery_scored = 0
+    missing_slot_recovered = 0
     scored = 0
     passed = 0
     for result in results:
@@ -658,6 +675,10 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         status_counts[status] = status_counts.get(status, 0) + 1
         if status == "passed":
             passed += 1
+            trace_metrics = _dict(result.get("trace_metrics"))
+            total_tokens = _number(trace_metrics.get("total_tokens"))
+            if isinstance(total_tokens, (int, float)):
+                passed_tokens.append(float(total_tokens))
         scorecard = _dict(result.get("scorecard"))
         if scorecard.get("scored") is True:
             scored += 1
@@ -674,17 +695,51 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
             if numeric.get("passed") is True:
                 numeric_passed += 1
         trace_metrics = _dict(result.get("trace_metrics"))
+        metadata = _dict(result.get("metadata"))
+        workflow_type = _text(metadata.get("workflow_type") or metadata.get("category") or "unclassified")
+        workflow_type_counts[workflow_type] = workflow_type_counts.get(workflow_type, 0) + 1
         calculator_calls = _number(trace_metrics.get("calculator_call_count"))
         formula_traces = _number(trace_metrics.get("formula_trace_count"))
         if isinstance(calculator_calls, (int, float)) and calculator_calls > 0:
             calculator_used += 1
         if isinstance(formula_traces, (int, float)) and formula_traces > 0:
             formula_trace_present += 1
+        if trace_metrics.get("claim_ledger_present") is True:
+            claim_ledger_present += 1
+        if trace_metrics.get("slot_frame_present") is True:
+            slot_frame_present += 1
+        transform_plan_count = _number(trace_metrics.get("transform_plan_count"))
+        if isinstance(transform_plan_count, (int, float)) and transform_plan_count > 0:
+            transform_plan_present += 1
         verifier_status = _text(trace_metrics.get("numeric_verifier_status"))
         if verifier_status in {"passed", "failed"}:
             verifier_scored += 1
             if verifier_status == "passed":
                 verifier_passed += 1
+        gate_status = _text(trace_metrics.get("verifier_gate_status"))
+        if gate_status in {"passed", "failed"}:
+            gate_scored += 1
+            if gate_status == "passed":
+                gate_passed += 1
+        synthesis_gate_status = _text(trace_metrics.get("synthesis_gate_status"))
+        if synthesis_gate_status in {"passed", "failed"}:
+            synthesis_gate_scored += 1
+            if synthesis_gate_status == "passed":
+                synthesis_gate_passed += 1
+        synthesis_gate_attempt_count = _number(trace_metrics.get("synthesis_gate_attempt_count"))
+        if (
+            isinstance(synthesis_gate_attempt_count, (int, float))
+            and synthesis_gate_attempt_count > 1
+        ) or trace_metrics.get("synthesis_gate_repaired") is True:
+            synthesis_gate_repairable += 1
+            if trace_metrics.get("synthesis_gate_repaired") is True:
+                synthesis_gate_repaired += 1
+        missing_slot_transform_count = _number(trace_metrics.get("missing_slot_transform_plan_count"))
+        if isinstance(missing_slot_transform_count, (int, float)) and missing_slot_transform_count > 0:
+            missing_slot_recovery_scored += 1
+            missing_slot_count = _number(trace_metrics.get("missing_slot_count"))
+            if isinstance(missing_slot_count, (int, float)) and missing_slot_count == 0:
+                missing_slot_recovered += 1
         failure_mode = _text(trace_metrics.get("latest_failure_mode"))
         if failure_mode:
             failure_mode_counts[failure_mode] = failure_mode_counts.get(failure_mode, 0) + 1
@@ -697,6 +752,8 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
                 f"finance_numeric:{finance_failure_reason}",
                 0,
             ) + 1
+            if finance_failure_reason == "unsupported_answer_number":
+                unsupported_numeric_count += 1
         for key in values:
             value = trace_metrics.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -707,12 +764,14 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         "reason_counts": reason_counts,
         "failure_mode_counts": failure_mode_counts,
         "finance_numeric_failure_reason_counts": finance_numeric_failure_reason_counts,
+        "workflow_type_counts": workflow_type_counts,
         "item_count": item_count,
         "scored_count": scored,
         "passed_count": passed,
         "pass_rate": _rate(passed, scored),
         "answer_present_rate": _rate(answer_present, item_count),
         "citation_present_rate": _rate(citation_present, item_count),
+        "citation_preservation_rate": _rate(citation_present, item_count),
         "numeric_accuracy": _rate(numeric_passed, numeric_scored) if numeric_scored else None,
         "average_total_tokens": _average(values["total_tokens"]),
         "average_retrieval_runs": _average(values["retrieval_run_count"]),
@@ -722,10 +781,22 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         "average_final_answer_chars": _average(values["final_answer_chars"]),
         "calculator_used_rate": _rate(calculator_used, item_count),
         "formula_trace_present_rate": _rate(formula_trace_present, item_count),
+        "claim_ledger_present_rate": _rate(claim_ledger_present, item_count),
+        "slot_frame_present_rate": _rate(slot_frame_present, item_count),
+        "transform_plan_present_rate": _rate(transform_plan_present, item_count),
         "numeric_verifier_pass_rate": _rate(verifier_passed, verifier_scored) if verifier_scored else None,
+        "verifier_gate_pass_rate": _rate(gate_passed, gate_scored) if gate_scored else None,
+        "synthesis_gate_pass_rate": _rate(synthesis_gate_passed, synthesis_gate_scored) if synthesis_gate_scored else None,
+        "synthesis_gate_repair_rate": _rate(synthesis_gate_repaired, synthesis_gate_repairable) if synthesis_gate_repairable else None,
+        "unsupported_numeric_claim_rate": _rate(unsupported_numeric_count, item_count),
+        "missing_slot_recovery_rate": _rate(missing_slot_recovered, missing_slot_recovery_scored) if missing_slot_recovery_scored else None,
         "average_calculator_calls": _average(values["calculator_call_count"]),
         "average_formula_traces": _average(values["formula_trace_count"]),
         "average_finance_facts": _average(values["finance_fact_count"]),
+        "average_claims": _average(values["claim_count"]),
+        "average_transform_plans": _average(values["transform_plan_count"]),
+        "average_missing_slots": _average(values["missing_slot_count"]),
+        "average_total_tokens_per_passed_item": _average(passed_tokens) if passed_tokens else None,
         "average_answer_numeric_support_rate": _average(values["answer_numeric_support_rate"])
         if values["answer_numeric_support_rate"]
         else None,
@@ -742,9 +813,16 @@ def _benchmark_metric_nodes(summary: JsonObject) -> list[BehaviorGraphNode]:
         ("average_query_repetition_rate", "Avg query repetition"),
         ("calculator_used_rate", "Calculator used"),
         ("numeric_verifier_pass_rate", "Verifier pass"),
+        ("verifier_gate_pass_rate", "Verifier gate"),
+        ("synthesis_gate_pass_rate", "Synthesis gate"),
         ("average_formula_traces", "Avg formula traces"),
+        ("claim_ledger_present_rate", "Claim ledger"),
+        ("slot_frame_present_rate", "Slot frame"),
+        ("transform_plan_present_rate", "Transform plan"),
         ("average_finance_facts", "Avg finance facts"),
+        ("average_claims", "Avg claims"),
         ("average_answer_numeric_support_rate", "Avg numeric support"),
+        ("unsupported_numeric_claim_rate", "Unsupported numeric"),
         ("average_final_answer_chars", "Avg answer chars"),
     ]
     nodes: list[BehaviorGraphNode] = []

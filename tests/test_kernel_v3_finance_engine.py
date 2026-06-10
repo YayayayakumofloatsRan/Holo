@@ -1866,9 +1866,17 @@ def test_finance_agent_v2_public_imports_plain_text_without_gold(tmp_path: Path)
     assert items[0].gold_answer is None
     assert items[0].required_tools == ["retrieval.run", "calculator.compute", "finance.verify_numeric"]
     assert items[0].metadata["expected_capabilities"] == ["retrieval.run", "calculator.compute", "finance.verify_numeric"]
+    assert items[0].workflow_type == "multi_entity_compute_compare"
+    assert "inventory_begin" in items[0].required_slots
+    assert items[0].evidence_policy["required_source_families"] == ["sec_filings"]
+    assert "dio" in items[0].required_transforms
+    assert "synthesis_gate" in items[0].expected_trace
     assert items[1].metadata["category"] == "financial_modeling"
+    assert items[1].workflow_type == "modeling_lite"
+    assert "assumptions_labeled" in items[1].dealbreakers
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["prompt_policy"]["gold_answer_in_prompt"] is False
+    assert "workflow_annotation" in manifest_payload["normalized_schema"]
 
 
 def _runtime_with_synthesizer(journal: JournalStore, *, answer: str) -> AgentRuntime:
