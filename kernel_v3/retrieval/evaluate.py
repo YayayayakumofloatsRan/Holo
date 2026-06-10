@@ -628,10 +628,12 @@ def _finance_specialized_query_coverage(*, goal: SearchGoal, evidence: list[Evid
             "required_match_count": 0,
         }
     corpus = "\n".join(f"{item.title} {item.uri} {item.text}" for item in evidence).lower()
-    matched = [term for term in terms if term in corpus]
+    matched = [term for term in terms if term in corpus or _finance_specialized_term_matches(term, corpus)]
     required_count = 1 if len(terms) == 1 else min(2, len(terms))
     transaction_required_terms = _finance_transaction_required_terms(goal)
-    transaction_matched = [term for term in transaction_required_terms if term in corpus]
+    transaction_matched = [
+        term for term in transaction_required_terms if term in corpus or _finance_specialized_term_matches(term, corpus)
+    ]
     addback_required_terms = _finance_addback_trend_required_terms(goal)
     addback_matched = [term for term in addback_required_terms if term in corpus]
     missing = [term for term in terms if term not in set(matched)]
@@ -652,6 +654,22 @@ def _finance_specialized_query_coverage(*, goal: SearchGoal, evidence: list[Evid
         "addback_required_terms": addback_required_terms,
         "addback_matched_terms": addback_matched,
     }
+
+
+def _finance_specialized_term_matches(term: str, corpus: str) -> bool:
+    normalized = str(term or "").strip().lower()
+    if not normalized:
+        return False
+    synonym_groups = {
+        "transaction": ("transaction", "acquisition", "acquire", "acquires", "acquired", "merger"),
+        "acquisition": ("acquisition", "acquire", "acquires", "acquired", "transaction", "merger"),
+        "deal": ("deal", "transaction", "acquisition", "merger"),
+        "deal disclosure": ("deal disclosure", "press release", "form 8-k", "8-k", "transaction", "acquisition"),
+        "deal disclosures": ("deal disclosures", "press release", "form 8-k", "8-k", "transaction", "acquisition"),
+        "transaction value": ("transaction value", "enterprise value", "equity value"),
+        "ev": ("enterprise value", "transaction value", "equity value"),
+    }
+    return any(marker in corpus for marker in synonym_groups.get(normalized, ()))
 
 
 def _finance_specialized_query_terms(goal: SearchGoal) -> list[str]:
@@ -687,7 +705,7 @@ def _finance_transaction_required_terms(goal: SearchGoal) -> list[str]:
     query = _finance_specialized_query_text(goal)
     if not any(marker in query for marker in ("transaction", "acquisition", "deal disclosure", "merger agreement", "8-k", "ev / revenue", "ev revenue")):
         return []
-    return ["transaction", "acquisition", "deal", "merger", "8-k", "form 8-k", "consideration"]
+    return ["transaction", "acquisition", "acquire", "acquired", "deal", "merger", "8-k", "form 8-k", "consideration"]
 
 
 def _finance_complementary_fact_source(*, goal: SearchGoal, evidence: EvidenceItem) -> bool:
@@ -1141,6 +1159,7 @@ _FINANCE_SPECIALIZED_QUERY_STOPWORDS = {
     "inc",
     "incorporated",
     "net",
+    "public",
     "ratio",
     "revenue",
     "revenues",

@@ -925,6 +925,198 @@ def test_sec_complete_submission_extracts_transaction_value_after_default_prefix
     assert any("enterprise value" in span.text.lower() or "transaction value" in span.text.lower() for span in spans)
 
 
+def test_sec_complete_submission_expands_exhibit_child_documents_for_transaction_value():
+    complete = SearchSource(
+        source_id="pfe-complete-submission",
+        uri="https://www.sec.gov/Archives/edgar/data/78003/000119312523068538/0001193125-23-068538.txt",
+        title="SEC complete submission text for Pfizer Seagen acquisition 8-K",
+        snippet="Official SEC complete submission text with exhibit documents.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "regulatory_filing",
+            "authority_level": "primary",
+            "source_kind": "sec_complete_submission_text",
+            "sec_accession_number": "0001193125-23-068538",
+            "sec_accession_compact": "000119312523068538",
+            "sec_form": "8-K",
+        },
+    )
+    exhibit_url = "https://www.sec.gov/Archives/edgar/data/78003/000119312523068538/d408093dex991.htm"
+    complete_body = """
+<SEC-DOCUMENT>0001193125-23-068538.txt : 20230313
+<DOCUMENT>
+<TYPE>8-K
+<FILENAME>d408093d8k.htm
+<DESCRIPTION>FORM 8-K
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>EX-2.1
+<FILENAME>d408093dex21.htm
+<DESCRIPTION>Agreement and Plan of Merger
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>EX-99.1
+<FILENAME>d408093dex991.htm
+<DESCRIPTION>Press Release dated March 13, 2023
+</DOCUMENT>
+</SEC-DOCUMENT>
+"""
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {"Pfizer Seagen acquisition transaction EV revenue multiple public deal disclosures": [complete]}
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                complete.uri: complete_body,
+                exhibit_url: (
+                    "Pfizer to acquire Seagen for $229 per Seagen share in cash, "
+                    "for a total enterprise value of approximately $43 billion. "
+                    "Transaction value of approximately $43 billion, inclusive of net debt."
+                ),
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-transaction-complete-submission-exhibit",
+            query="Pfizer Seagen acquisition transaction EV revenue multiple public deal disclosures",
+            max_sources=5,
+            max_fetches=3,
+            max_spans_per_document=4,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_depth": "light",
+                "source_authority_requirement": "primary",
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-transaction-complete-submission-exhibit",
+        run_id="run-1",
+    )
+
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-transaction-complete-submission-exhibit", kind="retrieval_fetch_attempt")
+    ]
+    assert exhibit_url in fetch_uris
+    evidence_text = " ".join(
+        record.data["text"]
+        for record in journal.records(task_id="task-transaction-complete-submission-exhibit", kind="retrieval_evidence")
+    )
+    assert "$43 billion" in evidence_text
+
+
+def test_sec_submission_expands_complete_submission_then_exhibit_child_document():
+    submissions = SearchSource(
+        source_id="pfe-submissions",
+        uri="https://data.sec.gov/submissions/CIK0000078003.json",
+        title="SEC submissions JSON for CIK 0000078003",
+        snippet="Official SEC submissions metadata and primary document chronology.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "structured_regulatory_data",
+            "authority_level": "primary",
+            "source_kind": "sec_submissions_json",
+            "sec_cik": "0000078003",
+        },
+    )
+    accession = "0001193125-23-068538"
+    compact = "000119312523068538"
+    primary_url = f"https://www.sec.gov/Archives/edgar/data/78003/{compact}/d408093d8k.htm"
+    complete_url = f"https://www.sec.gov/Archives/edgar/data/78003/{compact}/{accession}.txt"
+    exhibit_url = f"https://www.sec.gov/Archives/edgar/data/78003/{compact}/d408093dex991.htm"
+    submissions_body = json.dumps(
+        {
+            "cik": "0000078003",
+            "filings": {
+                "recent": {
+                    "accessionNumber": [accession, "0000078003-23-000019"],
+                    "form": ["8-K", "8-K"],
+                    "primaryDocument": ["d408093d8k.htm", "pfe-20230221.htm"],
+                    "primaryDocDescription": ["PFIZER SEAGEN MERGER 8-K", "PFIZER 8-K FEB 21 2023"],
+                    "items": ["1.01,7.01,8.01,9.01", "8.01"],
+                    "reportDate": ["2023-03-12", "2023-02-21"],
+                    "filingDate": ["2023-03-13", "2023-02-21"],
+                }
+            },
+        }
+    )
+    complete_body = """
+<SEC-DOCUMENT>0001193125-23-068538.txt : 20230313
+<DOCUMENT>
+<TYPE>8-K
+<FILENAME>d408093d8k.htm
+<DESCRIPTION>FORM 8-K
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>EX-99.1
+<FILENAME>d408093dex991.htm
+<DESCRIPTION>Press Release dated March 13, 2023
+</DOCUMENT>
+</SEC-DOCUMENT>
+"""
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider(
+            {"Pfizer Seagen acquisition transaction EV revenue multiple public deal disclosures": [submissions]}
+        ),
+        fetch_provider=FakeFetchProvider(
+            {
+                submissions.uri: submissions_body,
+                primary_url: "Pfizer and Seagen entered into a merger agreement for $229 per share.",
+                complete_url: complete_body,
+                "https://www.sec.gov/Archives/edgar/data/78003/000007800323000019/pfe-20230221.htm": (
+                    "Pfizer relocated its corporate headquarters."
+                ),
+                "https://www.sec.gov/Archives/edgar/data/78003/000007800323000019/0000078003-23-000019.txt": (
+                    "<SEC-DOCUMENT><DOCUMENT><TYPE>8-K<FILENAME>pfe-20230221.htm</DOCUMENT></SEC-DOCUMENT>"
+                ),
+                exhibit_url: (
+                    "Pfizer to acquire Seagen for $229 per Seagen share in cash, "
+                    "for a total enterprise value of approximately $43 billion. "
+                    "Seagen full year revenue was $2.0 billion."
+                ),
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-transaction-submission-exhibit-second-hop",
+            query="Pfizer Seagen acquisition transaction EV revenue multiple public deal disclosures",
+            max_sources=8,
+            max_fetches=5,
+            max_spans_per_document=4,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_depth": "light",
+                "source_authority_requirement": "primary",
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-transaction-submission-exhibit-second-hop",
+        run_id="run-1",
+    )
+
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-transaction-submission-exhibit-second-hop", kind="retrieval_fetch_attempt")
+    ]
+    assert complete_url in fetch_uris
+    assert exhibit_url in fetch_uris
+    assert f"https://www.sec.gov/Archives/edgar/data/78003/{compact}/d408093dex21.htm" not in fetch_uris
+    assert journal.records(task_id="task-transaction-submission-exhibit-second-hop", kind="retrieval_document_expansion")
+    evidence_text = " ".join(
+        record.data["text"]
+        for record in journal.records(task_id="task-transaction-submission-exhibit-second-hop", kind="retrieval_evidence")
+    )
+    assert "$43 billion" in evidence_text
+
+
 def test_transaction_retrieval_fetches_sec_submissions_before_generic_pages():
     submissions = SearchSource(
         source_id="sgen-submissions",

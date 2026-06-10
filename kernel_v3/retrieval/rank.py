@@ -154,6 +154,8 @@ def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "
         return 0.78 if filing_text_intent else 0.55
     if source_kind == "sec_complete_submission_text":
         return 0.82 if filing_text_intent else 0.52
+    if source_kind == "sec_exhibit_document":
+        return 0.9 if filing_text_intent else 0.62
     if source_kind == "sec_companyfacts_json":
         if submissions_intent:
             return 0.38
@@ -314,13 +316,18 @@ def _source_family_preference_adjustment(goal_metadata: dict[str, object], sourc
 
 
 def _source_rank_preference_adjustment(metadata: dict[str, object]) -> float:
+    relevance_adjustment = 0.0
+    try:
+        relevance_adjustment = min(max(float(metadata.get("link_relevance_score") or 0.0), 0.0), 5.0) * 0.08
+    except (TypeError, ValueError):
+        relevance_adjustment = 0.0
     try:
         rank = int(str(metadata.get("rank") or "").strip())
     except ValueError:
-        return 0.0
+        return relevance_adjustment
     if rank <= 0:
-        return 0.0
-    return -min(rank, 500) * 0.0001
+        return relevance_adjustment
+    return relevance_adjustment - (min(rank, 500) * 0.0001)
 
 
 def _preferred_source_families(metadata: dict[str, object]) -> set[str]:

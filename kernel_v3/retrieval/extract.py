@@ -322,7 +322,7 @@ def readable_document_text(body: str, *, document: FetchedDocument) -> tuple[str
 
 def _readable_text_limit_for_document(document: FetchedDocument) -> int:
     source_kind = _document_source_kind(document)
-    if source_kind in {"sec_complete_submission_text", "sec_primary_filing_document"}:
+    if source_kind in {"sec_complete_submission_text", "sec_primary_filing_document", "sec_exhibit_document"}:
         return SEC_FILING_TEXT_LIMIT
     return READABLE_TEXT_LIMIT
 

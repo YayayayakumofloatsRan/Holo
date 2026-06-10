@@ -581,6 +581,52 @@ Post-dev10 EV/EBITDA iteration:
   Pfizer 8-K and produced `facts=10`, `claims=10`, but still lacked the total
   EV and revenue slots together. This is now classified as an event-source /
   exhibit acquisition gap, not a formula, verifier, or prompt-format issue.
+- 2026-06-10 SEC exhibit acquisition pass:
+  `retrieval.run` now expands SEC complete-submission text into child exhibit
+  documents, treats `sec_exhibit_document` as a filing-text source kind, gives
+  EX-99 / press-release children higher transaction relevance than EX-2 merger
+  agreements, reserves one second-hop fetch slot for transaction filing
+  expansion, and lets evidence evaluation match transaction synonyms such as
+  `EV` / `enterprise value`, `acquisition`, `acquire`, `acquired`, and
+  `merger`. Local regressions for document expansion, retrieval campaigns, deep
+  retrieval, finance engine, and finance benchmark passed with `134 passed`.
+  The PFE-only live reruns after this change improved source acquisition but
+  still did not close repeatably. The best post-change PFE reruns reached SEC
+  transaction filing sources and produced `facts=16`, `claims=16`,
+  `slot_frame_present=1`, and `transform_plan_present=1`, but still had
+  `calculator_call_count=0`, `formula_trace_count=0`, and four missing slots
+  (`equity_value_or_market_cap`, `debt`, `cash`, `revenue`). One rerun fetched
+  and accepted the merger agreement exhibit (`d408093dex21.htm`) plus the
+  primary 8-K (`d408093d8k.htm`), but did not yet acquire/bind the press-release
+  enterprise-value disclosure as a usable finance fact. This keeps PFE/SGEN in
+  the source-acquisition / fact-ledger binding bucket rather than the formula or
+  verifier bucket.
+- 2026-06-10 stable4 delivery rerun after the SEC exhibit acquisition pass:
+  `run_stable4_latest_after_pfe_acquisition_fixes` used `finance-fact-fast`,
+  mission off, live retrieval, model planner, fake evaluator, model synthesizer,
+  compact context, and `parallel=1` on HD/LOW DIO, KHC adjusted EBITDA bridge,
+  PFE/SGEN transaction multiple, and WSC adjusted EBITDA add-back trend. The
+  batch produced `overall_score=0.9603`, behavior score `0.9643`, substrate
+  score `0.9167`, numeric score `1.0`, calculator-used rate `0.75`,
+  formula-trace-present rate `0.75`, numeric-verifier pass rate `1.0`,
+  claim-ledger present rate `1.0`, slot-frame present rate `1.0`,
+  transform-plan present rate `1.0`, verifier-gate pass rate `1.0`,
+  citation-present rate `1.0`, average answer numeric support `1.0`, average
+  retrieval runs `1.5`, average total tokens `78,233.25`, average duration
+  `57,108.25 ms`, average finance facts `86.5`, average claims `86.5`, average
+  calculator calls `1.5`, average formula traces `1.5`, and average missing
+  slots `1.25`. HD/LOW DIO closed with `facts=40`, `claims=40`,
+  `calculator_call_count=4`, `formula_trace_count=4`, verifier passed, and
+  post-run behavior/numeric/substrate scores all `1.0`. KHC closed with
+  `facts=147`, `claims=147`, one calculator trace, no missing slots, verifier
+  passed, and substrate score `1.0`. WSC closed with `facts=143`,
+  `claims=143`, one calculator trace, no missing slots, verifier passed, and
+  substrate score `1.0`. PFE/SGEN remained the only non-closed representative:
+  `retrieval_runs=3`, `fetches=32`, `facts=16`, `claims=16`,
+  `calculator_call_count=0`, `formula_trace_count=0`, four missing slots, and
+  post-run substrate score `0.6667`. This stable4 result is the current
+  delivery-grade checkpoint; it should be reported as a strong auditable
+  substrate demonstration, not as a solved official FAB v2 benchmark.
 - The next concrete live validation should implement a stronger event resolver
   for transaction questions, then rerun PFE/SGEN and finally rerun
   KHC/WSC/PFE-SGEN together. If a case fails, classify the failure as source
@@ -595,29 +641,34 @@ Post-dev10 EV/EBITDA iteration:
 
 ## Next Steps
 
-1. Rerun KHC/WSC/PFE-SGEN as a small live batch and confirm that each item
-   records evidence, facts, formula traces, citations, and numeric verification
-   after the KHC scale repair. Keep the gold/dev annotations out of prompts.
-2. Map reconciliation `period_series` / `source_table` gaps into more explicit
+1. Keep HD/LOW DIO, KHC adjusted EBITDA bridge, and WSC adjusted EBITDA add-back
+   trend as the stable delivery showcase. Do not claim PFE/SGEN is solved until
+   it repeatably acquires/binds the transaction enterprise-value and revenue
+   slots and triggers `calculator.compute`.
+2. Implement the next PFE/SGEN fix as an event-source resolver and fact-ledger
+   binding pass: identify issuer/target, likely announcement/closing periods,
+   SEC accession candidates, and whether the task needs 8-K, merger agreement,
+   10-K note, or investor/press-release evidence. Keep it generic for
+   transaction questions; do not hardcode answer values.
+3. After PFE/SGEN repeatability improves, rerun the full curated dev10 and
+   report the latest post-run annotation scores instead of the older `0.8111`
+   dev10 baseline.
+4. Map reconciliation `period_series` / `source_table` gaps into more explicit
    ledger extraction diagnostics and missing-slot replan hints, especially when
    the source contains a table but the fact ledger extracts no add-back rows.
-3. Run the curated dev10 in small batches and classify verifier failures into
+5. Run the curated dev10 in small batches and classify verifier failures into
    unsupported answer number, ledger extraction gap, missing formula trace, unit
    mismatch, period mismatch, and assumption-label issues.
-4. Expand the finance fact ledger and formula planner for bridge, transaction
+6. Expand the finance fact ledger and formula planner for bridge, transaction
    multiple, fixed-charge coverage, DCF/LBO, MLR, and purchase price allocation
    cases. EV/EBITDA now has formula intent and missing-fact fallback; it still
    needs stronger acquisition for market cap, total debt, cash, and EBITDA
    components.
-5. Add an event-aware finance filing resolver for transaction questions:
-   identify issuer/target, likely announcement/closing periods, SEC accession
-   candidates, and whether the task needs 8-K, merger agreement, 10-K note, or
-   investor/press-release evidence.
-6. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
+7. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
    structured retrieval results more directly, and avoiding synthesis context
    duplication.
-7. Add claim-level citation judging for non-numeric assertions.
-8. Add source-support scoring against benchmark evidence excerpts.
-9. Add PPT-ready rendering presets for task and benchmark graphs.
-10. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
+8. Add claim-level citation judging for non-numeric assertions.
+9. Add source-support scoring against benchmark evidence excerpts.
+10. Add PPT-ready rendering presets for task and benchmark graphs.
+11. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
    retrieval plus memory.

@@ -205,7 +205,7 @@ def expand_document_links(
 
 def _is_expandable_source(*, source: SearchSource, document: FetchedDocument, body: str) -> bool:
     kind = _source_kind(source) or _document_source_kind(document)
-    if kind == "sec_submissions_json":
+    if kind in {"sec_submissions_json", "sec_complete_submission_text"}:
         return bool(body)
     if not body or ("href" not in body.lower() and ".pdf" not in body.lower() and "http" not in body.lower()):
         return False
@@ -340,7 +340,125 @@ def _structured_candidate_links(
     kind = _source_kind(source) or _document_source_kind(document)
     if kind == "sec_submissions_json":
         return _sec_submission_document_links(goal=goal, document=document, source=source, body=body, query_terms=query_terms)
+    if kind == "sec_complete_submission_text":
+        return _sec_complete_submission_child_document_links(
+            goal=goal,
+            document=document,
+            source=source,
+            body=body,
+            query_terms=query_terms,
+        )
     return []
+
+
+def _sec_complete_submission_child_document_links(
+    *,
+    goal: SearchGoal,
+    document: FetchedDocument,
+    source: SearchSource,
+    body: str,
+    query_terms: list[str],
+) -> list[JsonObject]:
+    base_uri = _sec_archive_base_uri(document.uri)
+    if not base_uri:
+        return []
+    intent_terms = [*query_terms, *_metadata_goal_terms(goal.metadata)]
+    wants_transaction_event = _query_wants_transaction_event(intent_terms)
+    links: list[JsonObject] = []
+    for index, block in enumerate(re.findall(r"<DOCUMENT>(.*?)(?=<DOCUMENT>|</SEC-DOCUMENT>|$)", body, re.IGNORECASE | re.DOTALL)):
+        filename = _sec_document_block_value(block, "FILENAME")
+        if not filename:
+            continue
+        safe_name = _safe_sec_document_name(filename)
+        if not safe_name:
+            continue
+        doc_type = _sec_document_block_value(block, "TYPE")
+        description = _sec_document_block_value(block, "DESCRIPTION")
+        text = _bounded(" ".join(part for part in (doc_type, description, safe_name) if part), 240)
+        score = _sec_child_document_score(
+            filename=safe_name,
+            doc_type=doc_type,
+            description=description,
+            query_terms=query_terms,
+            wants_transaction_event=wants_transaction_event,
+        )
+        if score <= 0:
+            continue
+        links.append(
+            {
+                "url": urllib.parse.urljoin(base_uri + "/", safe_name),
+                "text": text,
+                "score": score,
+                "matched_terms": _ordered_unique(
+                    [
+                        str(doc_type or "").lower(),
+                        *[
+                            term
+                            for term in query_terms
+                            if term and term in f"{safe_name} {description} {doc_type}".lower()
+                        ],
+                        "sec",
+                        "exhibit",
+                    ]
+                )[:16],
+                "source_family": "regulatory_filing",
+                "source_kind": "sec_exhibit_document",
+                "filing_index": index,
+                "sec_accession_number": source.metadata.get("sec_accession_number")
+                or document.metadata.get("sec_accession_number"),
+                "sec_accession_compact": source.metadata.get("sec_accession_compact")
+                or document.metadata.get("sec_accession_compact"),
+                "sec_form": source.metadata.get("sec_form") or document.metadata.get("sec_form"),
+                "sec_primary_doc_description": description,
+            }
+        )
+    links.sort(key=lambda item: (-float(item.get("score") or 0.0), str(item.get("url") or "")))
+    return links[:16]
+
+
+def _sec_document_block_value(block: str, key: str) -> str:
+    match = re.search(rf"<{re.escape(key)}>\s*([^\r\n<]+)", block, re.IGNORECASE)
+    return " ".join(match.group(1).split()) if match else ""
+
+
+def _sec_archive_base_uri(uri: str) -> str:
+    parsed = urllib.parse.urlparse(str(uri or ""))
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return ""
+    path = parsed.path
+    if "/Archives/edgar/data/" not in path:
+        return ""
+    directory = path.rsplit("/", 1)[0]
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, directory, "", "", ""))
+
+
+def _sec_child_document_score(
+    *,
+    filename: str,
+    doc_type: str,
+    description: str,
+    query_terms: list[str],
+    wants_transaction_event: bool,
+) -> float:
+    haystack = f"{filename} {doc_type} {description}".lower()
+    score = 0.15
+    matched = [term for term in query_terms if len(term) >= 3 and term in haystack]
+    score += min(1.0, 0.2 * len(matched))
+    if str(doc_type or "").upper().startswith("EX-99"):
+        score += 1.9
+    if str(doc_type or "").upper().startswith("EX-2"):
+        score += 0.95
+    if any(marker in haystack for marker in ("press", "release", "presentation", "investor")):
+        score += 0.65
+    if any(marker in haystack for marker in ("merger", "agreement", "acquisition", "transaction")):
+        score += 0.65
+    if wants_transaction_event and any(marker in haystack for marker in ("ex-99", "ex99", "press", "release")):
+        score += 1.8
+    elif wants_transaction_event and any(marker in haystack for marker in ("merger", "agreement")):
+        score += 1.0
+    if _extension(filename) not in {".htm", ".html", ".txt"}:
+        score -= 0.35
+    return score
 
 
 def _sec_submission_document_links(

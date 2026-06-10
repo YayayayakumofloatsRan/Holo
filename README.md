@@ -1158,27 +1158,31 @@ verifier status, answer numeric support rate, and finance numeric failure
 taxonomy.
 
 Latest live smoke status: several curated FAB v2-style items now close through
-the finance substrate. `fabv2-hd-low-dio` retrieves SEC companyfacts for HD and
-LOW, projects 36 finance facts, runs 4 calculator traces, passes numeric
-verification, and reaches 100% post-run dev annotation score. `fabv2-pfe-sgen-
-transaction-multiple` remains the main unstable transaction-multiple target.
-Earlier runs could close it, but current repeatability checks show the source
-acquisition path is still incomplete: recent live reruns now reach SEC 8-K
-primary filing and/or Seagen companyfacts, project claim/fact ledgers, slot
-frames, transform plans, and verifier-gate records, but they still fail to
-consistently acquire the total transaction enterprise value needed to trigger
-`calculator.compute`. Treat PFE/SGEN as an event-source resolver gap, not as a
-solved case. The latest reliability pass fixed unbound acquisition-source
-templates such as `{ticker}`, isolated SEC extraction exceptions so one bad
-document no longer aborts `retrieval.run`, accepts primary 8-K transaction
-disclosures and complementary companyfacts facts, expands late SEC exhibit /
-press-release links from long filing HTML, and seeds missing-fact retrieval
-with issuer SEC submissions/companyfacts URLs. The WSC adjusted
-EBITDA add-back trend smoke now retrieves SEC 10-K evidence, extracts 108
-finance facts, runs one bridge-subtotal calculator trace, passes
-`finance.verify_numeric` with 100% answer numeric support, keeps citation
-coverage, and reaches 100% post-run dev annotation score. These are real live
-runs, not fixed-answer tests.
+the finance substrate. The latest stable4 delivery rerun
+(`run_stable4_latest_after_pfe_acquisition_fixes`) used `finance-fact-fast`,
+mission disabled, live retrieval, model planner, fake evaluator, model
+synthesizer, compact context, and serial execution. It produced post-run dev
+annotation `overall_score=0.9603`, behavior `0.9643`, substrate `0.9167`,
+numeric `1.0`, calculator-used rate `0.75`, formula-trace-present rate `0.75`,
+claim-ledger and slot-frame present rates `1.0`, transform-plan present rate
+`1.0`, verifier-gate pass rate `1.0`, citation-present rate `1.0`, and 100%
+average answer numeric support. HD/LOW DIO, KHC adjusted EBITDA bridge, and WSC
+adjusted EBITDA add-back trend each closed with retrieval evidence, structured
+finance facts, calculator/formula traces, citations, and numeric verification.
+`fabv2-pfe-sgen-transaction-multiple` remains the main unstable
+transaction-multiple target. Earlier runs could close it, but current
+repeatability checks show the source acquisition path is still incomplete:
+recent live reruns now reach SEC transaction filings and project claim/fact
+ledgers, slot frames, transform plans, and verifier-gate records, but they
+still fail to consistently acquire and bind the total transaction enterprise
+value / revenue slots needed to trigger `calculator.compute`. Treat PFE/SGEN as
+an event-source resolver and fact-binding gap, not as a solved case. The latest
+reliability pass fixed unbound acquisition-source templates such as `{ticker}`,
+isolated SEC extraction exceptions so one bad document no longer aborts
+`retrieval.run`, accepts primary 8-K transaction disclosures and complementary
+companyfacts facts, expands SEC complete-submission child documents, reserves a
+second-hop fetch slot for transaction exhibits, and prioritizes SEC exhibit /
+press-release documents. These are real live runs, not fixed-answer tests.
 
 The full curated dev10 is still not solved. An earlier live run with
 `finance-fact-fast`, mission disabled, live retrieval, model planner, fake

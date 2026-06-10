@@ -60,6 +60,7 @@ TARGET_ENTITY_EXEMPT_SOURCE_KINDS = {
     "sec_submissions_json",
     "sec_primary_filing_document",
     "sec_complete_submission_text",
+    "sec_exhibit_document",
     "fred_series_page",
     "fred_observations_csv",
     "fiscaldata_api_json",
@@ -555,11 +556,24 @@ class RetrievalOperator:
                                 max_count=remaining_fetch_budget,
                                 groups=[
                                     _priority_sec_filing_discovery_sources(second_ranked_all),
+                                    _priority_sec_filing_document_sources(second_fetchable_ranked),
                                     second_fetchable_ranked,
                                 ],
                             )
                         else:
                             second_fetch_queue = second_fetchable_ranked
+                        if not second_fetch_queue and _should_fetch_rejected_sources(
+                            goal,
+                            research_profile=research_profile,
+                            source_rejections=second_source_rejections,
+                        ):
+                            second_fetch_queue = _merge_ranked_sources(
+                                max_count=remaining_fetch_budget,
+                                groups=[
+                                    _priority_sec_filing_document_sources(second_ranked_all),
+                                    second_ranked_all,
+                                ],
+                            )
                         second_fetch_jobs = [
                             (index, ranked_source, source_by_id[ranked_source.source_id])
                             for index, ranked_source in enumerate(
@@ -1702,17 +1716,28 @@ def _priority_sec_filing_document_sources(sources: list[RankedSource]) -> list[R
     result = [
         source
         for source in sources
-        if _ranked_source_kind(source) in {"sec_primary_filing_document", "sec_complete_submission_text"}
+        if _ranked_source_kind(source) in {"sec_primary_filing_document", "sec_complete_submission_text", "sec_exhibit_document"}
     ]
     result.sort(
         key=lambda source: (
             _sec_filing_document_form_rank(source),
             _safe_rank_int(source.metadata.get("filing_index"), default=10_000),
-            0 if _ranked_source_kind(source) == "sec_complete_submission_text" else 1,
+            _sec_filing_document_kind_rank(source),
             source.rank,
         )
     )
     return result
+
+
+def _sec_filing_document_kind_rank(source: RankedSource) -> int:
+    kind = _ranked_source_kind(source)
+    if kind == "sec_exhibit_document":
+        return 0
+    if kind == "sec_primary_filing_document":
+        return 1
+    if kind == "sec_complete_submission_text":
+        return 2
+    return 3
 
 
 def _sec_filing_document_form_rank(source: RankedSource) -> int:
@@ -1872,11 +1897,16 @@ def _document_expansion_fetch_limit(
         return 0
     if depth != 1 or not _wants_sec_filing_text(goal):
         return budget
-    if not any(_ranked_source_kind(source) == "sec_submissions_json" for source in fetch_queue):
+    if not _wants_transaction_filing_evidence(goal):
+        return budget
+    if not any(
+        _ranked_source_kind(source) in {"sec_submissions_json", "sec_complete_submission_text"}
+        for source in fetch_queue
+    ):
         return budget
     if budget <= 2:
-        return 1
-    return max(1, budget // 2)
+        return budget
+    return max(1, budget - 1)
 
 
 def _supplemental_discovery_ranked_sources(
