@@ -2268,6 +2268,10 @@ def _finance_benchmark_progress_callback(
         calculator_calls = metrics.get("calculator_call_count")
         formula_traces = metrics.get("formula_trace_count")
         finance_facts = metrics.get("finance_fact_count")
+        claim_count = metrics.get("claim_count")
+        missing_slots = metrics.get("missing_slot_count")
+        transform_plans = metrics.get("transform_plan_count")
+        verifier_gate = metrics.get("verifier_gate_status")
         verifier_status = metrics.get("numeric_verifier_status")
         support_rate = metrics.get("answer_numeric_support_rate")
         numeric_failure = metrics.get("finance_numeric_failure_reason")
@@ -2284,7 +2288,11 @@ def _finance_benchmark_progress_callback(
             f"calc={calculator_calls if calculator_calls is not None else '-'} "
             f"formula={formula_traces if formula_traces is not None else '-'} "
             f"facts={finance_facts if finance_facts is not None else '-'} "
+            f"claims={claim_count if claim_count is not None else '-'} "
+            f"slots_missing={missing_slots if missing_slots is not None else '-'} "
+            f"transforms={transform_plans if transform_plans is not None else '-'} "
             f"verifier={verifier_status or '-'} "
+            f"gate={verifier_gate or '-'} "
             f"num_support={_percent_for_progress(support_rate)} "
             f"num_fail={numeric_failure or '-'} "
             f"processor_ms={duration_ms if duration_ms is not None else '-'}",

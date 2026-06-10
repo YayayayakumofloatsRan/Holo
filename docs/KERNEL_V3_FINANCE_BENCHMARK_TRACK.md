@@ -453,9 +453,19 @@ Post-dev10 EV/EBITDA iteration:
   existing finance-specific records.
 - Benchmark metrics and reports now expose the generic substrate as well as
   finance-specific counters: claim count, slot-frame presence, missing slots,
-  transform-plan presence/count, and verifier-gate pass rate. This lets future
-  domain packs reuse the same scoring and visualization spine instead of adding
+  transform-plan presence/count, ready versus missing-slot transform-plan
+  counts, verifier-gate status/pass/fail state, and verifier-gate issue count.
+  `FinanceBenchmarkSummary` also reports claim-ledger present rate,
+  slot-frame present rate, average missing slots, transform-plan present rate,
+  average transform plans, and verifier-gate pass rate. This lets future domain
+  packs reuse the same scoring and visualization spine instead of adding
   isolated benchmark-only metrics.
+- Cost control is not finished. The `finance-fact-fast` lane has hard
+  step/tool caps and provider-call budget enforcement, but its token budget is
+  currently relaxed for reliability while ledger extraction, formula binding,
+  and synthesis repair stabilize. In reports, describe this as a bounded fast
+  execution lane with a temporarily broad token envelope, not as a fully
+  optimized low-token lane.
 - The current real-task capability is measurable but not yet reliable enough to
   claim Finance Agent v2 competence. Representative live successes now include
   `fabv2-hd-low-dio`, `fabv2-khc-adjusted-ebitda-bridge`,
@@ -479,6 +489,24 @@ Post-dev10 EV/EBITDA iteration:
   The final user-visible answer was a host fallback because the model
   synthesizer still inserted unsupported bridge numbers; that is now a
   synthesis/answer-repair quality issue rather than a missing substrate issue.
+- 2026-06-10 stable3 rerun status after adding generic substrate metrics:
+  `fabv2-khc-adjusted-ebitda-bridge` and
+  `fabv2-wsc-adjusted-ebitda-addback-trend` are currently repeatable positive
+  substrate examples. KHC in the stable3 batch produced `retrieval_runs=1`,
+  `calculator_call_count=1`, `formula_trace_count=1`,
+  `finance_fact_count=218`, `claim_count=218`, `slot_frame_present=true`,
+  `transform_plan_count=2`, `numeric_verifier_status=passed`,
+  `verifier_gate_status=passed`, and 100% answer numeric support. WSC in the
+  single-item retry produced `retrieval_runs=1`, `calculator_call_count=1`,
+  `formula_trace_count=1`, `finance_fact_count=186`, `claim_count=186`,
+  `slot_frame_present=true`, `transform_plan_count=1`,
+  `numeric_verifier_status=passed`, `verifier_gate_status=passed`, and 100%
+  post-run dev annotation score. `fabv2-pfe-sgen-transaction-multiple` is not
+  repeatably closed yet: the stable3 batch hit a DeepSeek SSL EOF before tools,
+  and the single-item retry reached `retrieval.run` but the retrieval
+  observation failed, then planner JSON repair failed with `JSONDecodeError`.
+  This should be treated as a retrieval/tool-observation plus planner-repair
+  stability gap, not as a solved transaction-multiple case.
 - The latest WSC add-back trend work deliberately tightened evidence gates so
   market-statistics snippets such as `EBITDA Margin` plus `Dividend Per Share`
   are no longer accepted as add-back/reconciliation evidence, and the natural

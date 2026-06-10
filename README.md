@@ -601,7 +601,13 @@ Kernel v3 currently contains the infrastructure for:
   `transform_plan` records, finance task requirements into `slot_frame` records
   with an `EvidencePolicy`, and numeric verification into
   `verifier_gate_result` records. These records are deliberately domain-neutral:
-  finance is the first adapter, not the kernel's only target domain.
+  finance is the first adapter, not the kernel's only target domain. Benchmark
+  trace metrics now expose generic substrate counters such as
+  `claim_ledger_present`, `claim_count`, `slot_frame_present`,
+  `missing_slot_count`, `transform_plan_count`,
+  `ready_transform_plan_count`, `missing_slot_transform_plan_count`,
+  `verifier_gate_status`, `verifier_gate_passed`, and
+  `verifier_gate_issue_count`.
 - Transaction/acquisition retrieval now treats issuer event pages and SEC 8-K
   event filings as first-class acquisition paths. The source layer can render
   multi-issuer company IR candidates, the operator critic emits
@@ -1107,10 +1113,12 @@ holo-v3 bench finance \
 Live finance benchmark runs use an explicit execution lane. The benchmark
 default is `finance-fact-fast`, which bypasses resident mission supervision and
 workmethod framing so simple public benchmark questions do not pay the full
-long-mission cost. Its loop and processor budgets are hard control-plane limits:
-the host will not silently expand a fast profile into the 2048-step resident
-budget, and `ProcessorFabric` blocks over-budget model calls before sending a
-provider request.
+long-mission cost. Its step and tool budgets are hard control-plane limits: the
+host will not silently expand a fast profile into the 2048-step resident budget,
+and `ProcessorFabric` blocks over-budget model calls before sending a provider
+request. The current `finance-fact-fast` token budget is intentionally relaxed
+for reliability while the finance substrate stabilizes; it is fast by
+mission/workmethod bypass and step/tool caps, not yet by a tight token envelope.
 
 Finance lanes also include a deterministic finance substrate:
 
@@ -1154,7 +1162,12 @@ complete-submission expansion, per-share binding fixes, and SEC identifier
 noise filtering, `fabv2-pfe-sgen-transaction-multiple` retrieves the Pfizer /
 Seagen 8-K and Exhibit 99.1 evidence, projects 17 finance facts, runs one
 EV/Revenue calculator trace, passes numeric verification with 100% numeric
-support, and reaches 100% post-run dev annotation score. The WSC adjusted
+support, and reaches 100% post-run dev annotation score. A later stable3 rerun
+showed this PFE/SGEN case is not repeatably closed yet: one batch hit a
+DeepSeek SSL EOF before tools, and one single-item retry reached
+`retrieval.run` but failed the retrieval observation and subsequent planner JSON
+repair. Treat it as an important unstable transaction-multiple target, not as a
+solved case. The WSC adjusted
 EBITDA add-back trend smoke now retrieves SEC 10-K evidence, extracts 108
 finance facts, runs one bridge-subtotal calculator trace, passes
 `finance.verify_numeric` with 100% answer numeric support, keeps citation

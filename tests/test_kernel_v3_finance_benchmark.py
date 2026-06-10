@@ -12,7 +12,7 @@ from kernel_v3.bench import (
     score_finance_dev_annotations,
     score_finance_answer,
 )
-from kernel_v3.bench.finance import trace_metrics
+from kernel_v3.bench.finance import summarize_finance_benchmark, trace_metrics
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.journal import JournalStore
 
@@ -469,6 +469,41 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
         kind="retrieval_citation",
         data={"uri": "https://www.sec.gov/Archives/example", "citation_id": "cite-1"},
     )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="claim_ledger",
+        data={"claim_count": 4, "claims": [{"claim_id": "claim-1"}]},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="slot_frame",
+        data={"task_type": "compute", "missing_slots": ["cogs"]},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="transform_plan",
+        data={"status": "ready", "method": "dio"},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="transform_plan",
+        data={"status": "missing_slots", "method": "ev_revenue", "missing_slots": ["debt"]},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="verifier_gate_result",
+        data={"status": "failed", "issues": [{"code": "missing_formula_trace"}, {"code": "period_mismatch"}]},
+    )
 
     metrics = trace_metrics(journal, task_id="task-fin")
 
@@ -479,6 +514,74 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
     assert metrics["answer_numeric_support_rate"] == 1.0
     assert metrics["source_hosts"] == ["www.sec.gov"]
     assert metrics["finance_source_forms"] == ["10-K"]
+    assert metrics["claim_ledger_present"] is True
+    assert metrics["claim_count"] == 4
+    assert metrics["slot_frame_present"] is True
+    assert metrics["missing_slot_count"] == 1
+    assert metrics["missing_slots"] == ["cogs"]
+    assert metrics["transform_plan_present"] is True
+    assert metrics["transform_plan_count"] == 2
+    assert metrics["ready_transform_plan_count"] == 1
+    assert metrics["missing_slot_transform_plan_count"] == 1
+    assert metrics["verifier_gate_status"] == "failed"
+    assert metrics["verifier_gate_passed"] is False
+    assert metrics["verifier_gate_issue_count"] == 2
+
+
+def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
+    results = [
+        FinanceBenchmarkResult(
+            item_id="Q1",
+            status="ungraded",
+            question="Q1?",
+            answer="answer",
+            task_id="task-1",
+            run_id="run-1",
+            thread_id="thread-1",
+            scorecard={"status": "ungraded", "answer_present": True, "citation_present": True},
+            trace_metrics={
+                "claim_ledger_present": True,
+                "claim_count": 4,
+                "slot_frame_present": True,
+                "missing_slot_count": 1,
+                "transform_plan_count": 2,
+                "verifier_gate_status": "passed",
+            },
+            trace_refs=[],
+            final_answer=None,
+            failure_report=None,
+        ),
+        FinanceBenchmarkResult(
+            item_id="Q2",
+            status="ungraded",
+            question="Q2?",
+            answer="answer",
+            task_id="task-2",
+            run_id="run-2",
+            thread_id="thread-2",
+            scorecard={"status": "ungraded", "answer_present": True, "citation_present": False},
+            trace_metrics={
+                "claim_ledger_present": False,
+                "claim_count": 0,
+                "slot_frame_present": False,
+                "missing_slot_count": 0,
+                "transform_plan_count": 0,
+                "verifier_gate_status": "failed",
+            },
+            trace_refs=[],
+            final_answer=None,
+            failure_report=None,
+        ),
+    ]
+
+    summary = summarize_finance_benchmark(results)
+
+    assert summary.claim_ledger_present_rate == 0.5
+    assert summary.slot_frame_present_rate == 0.5
+    assert summary.average_missing_slots == 0.5
+    assert summary.transform_plan_present_rate == 0.5
+    assert summary.average_transform_plans == 1.0
+    assert summary.verifier_gate_pass_rate == 0.5
 
 
 def test_finance_benchmark_cli_imports_public_dataset(tmp_path: Path) -> None:

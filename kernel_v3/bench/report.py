@@ -91,6 +91,7 @@ def _render_markdown(report: FinanceBenchmarkReport) -> str:
         f"| Numeric verifier pass rate | {_percent(summary.get('numeric_verifier_pass_rate'))} |",
         f"| Verifier gate pass rate | {_percent(summary.get('verifier_gate_pass_rate'))} |",
         f"| Avg formula traces | {_number(summary.get('average_formula_traces'))} |",
+        f"| Claim-ledger present rate | {_percent(summary.get('claim_ledger_present_rate'))} |",
         f"| Transform-plan present rate | {_percent(summary.get('transform_plan_present_rate'))} |",
         f"| Slot-frame present rate | {_percent(summary.get('slot_frame_present_rate'))} |",
         f"| Avg missing slots | {_number(summary.get('average_missing_slots'))} |",
