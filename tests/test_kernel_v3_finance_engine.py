@@ -22,6 +22,10 @@ from kernel_v3.finance import (
     FormulaTrace,
     build_finance_fact_ledger,
     compute_formula,
+    finance_facts_to_claims,
+    finance_formula_plan_to_transform_plan,
+    finance_slot_frame,
+    finance_verification_to_gate_result,
     plan_finance_formula,
     verify_finance_answer,
 )
@@ -195,6 +199,46 @@ def test_finance_fact_ledger_extracts_adjusted_ebitda_bridge_components() -> Non
     assert plan.status == "ready"
     assert plan.payload is not None
     assert plan.payload["formula_name"] == "bridge_subtotal"
+
+
+def test_finance_substrate_adapter_projects_slots_claims_transforms_and_verifier_gate() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="khc-substrate-bridge",
+            title="Kraft Heinz 2024 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/1637459/example/khc-20241228.htm",
+            text=(
+                "Kraft Heinz 2024 Form 10-K non-GAAP reconciliation. "
+                "Net income was $1.0 billion. Restructuring add-backs were $0.2 billion. "
+                "Less license income was $0.1 billion. Adjusted EBITDA was $1.1 billion."
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-khc-substrate")]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    plan = plan_finance_formula(question="Explain the adjusted EBITDA add-back bridge.", facts=facts)
+    claims = finance_facts_to_claims(facts)
+    frame = finance_slot_frame(question="Explain the adjusted EBITDA add-back bridge.", facts=facts, plan=plan)
+    transform = finance_formula_plan_to_transform_plan(plan, question="Explain the adjusted EBITDA add-back bridge.")
+    verification = verify_finance_answer(
+        answer="The bridge is $1.0B + $0.2B - $0.1B = $1.1B.",
+        facts=facts,
+        formula_traces=[],
+        question="Explain the adjusted EBITDA add-back bridge.",
+    )
+    gate = finance_verification_to_gate_result(verification, policy=frame.evidence_policy)
+
+    assert claims
+    assert all(claim.domain == "finance" for claim in claims)
+    assert frame.task_type == "reconcile"
+    assert frame.evidence_policy is not None
+    assert "market_data_provider" in frame.evidence_policy.forbidden_source_families
+    assert transform.domain == "finance"
+    assert transform.operation == "calculate"
+    assert transform.status == "ready"
+    assert gate.domain == "finance"
+    assert gate.policy_id == frame.evidence_policy.policy_id
 
 
 def test_finance_fact_ledger_does_not_extract_dividend_per_share_as_ebitda() -> None:
@@ -1117,7 +1161,13 @@ def test_retrieval_finalization_journals_numeric_verification_and_final_answer()
     assert final is not None
     verification = journal.records(task_id="task-finance", kind="finance_numeric_verification")[-1]
     assert verification.data["status"] == "passed"
+    gate_records = journal.records(task_id="task-finance", kind="verifier_gate_result")
+    assert gate_records
+    assert gate_records[-1].data["domain"] == "finance"
+    assert gate_records[-1].data["status"] == "passed"
     assert journal.records(task_id="task-finance", kind="finance_fact_ledger")
+    assert journal.records(task_id="task-finance", kind="claim_ledger")
+    assert journal.records(task_id="task-finance", kind="slot_frame")
     assert journal.records(task_id="task-finance", kind="agent_final_answer")
 
 
@@ -1163,8 +1213,15 @@ def test_retrieval_finalization_runs_finance_formula_preflight_before_synthesis(
     assert failure is None
     assert final is not None
     plans = journal.records(task_id="task-finance-dio", kind="finance_formula_plan")
+    transform_plans = journal.records(task_id="task-finance-dio", kind="transform_plan")
     observations = journal.records(task_id="task-finance-dio", kind="observation")
     assert plans
+    assert transform_plans
+    assert any(record.data["method"] == "dio" for record in transform_plans)
+    assert journal.records(task_id="task-finance-dio", kind="claim_ledger")
+    slot_frames = journal.records(task_id="task-finance-dio", kind="slot_frame")
+    assert slot_frames
+    assert slot_frames[-1].data["task_type"] == "compute"
     assert any(record.data.get("source") == f"tool:{CALCULATOR_TOOL_NAME}" for record in observations)
     trace = observations[-1].data["content"]["formula_trace"]
     assert trace["formula_name"] == "dio"

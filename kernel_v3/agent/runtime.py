@@ -38,6 +38,10 @@ from kernel_v3.finance import (
     FormulaTrace,
     build_finance_fact_ledger,
     compute_formula,
+    finance_facts_to_claims,
+    finance_formula_plan_to_transform_plan,
+    finance_slot_frame,
+    finance_verification_to_gate_result,
     plan_finance_formula,
     register_finance_tools,
     verify_finance_answer,
@@ -1342,6 +1346,7 @@ class AgentRuntime:
             evidence=evidence,
             citations=citations,
             purpose="verification",
+            question=_root_goal_from_recipe(recipe),
         )
         trace_refs = _trace_refs(self.journal, answer.task_id)
         formula_traces = _calculator_formula_traces(self.journal, task_id=answer.task_id, run_id=answer.run_id)
@@ -1353,6 +1358,14 @@ class AgentRuntime:
             evidence=evidence,
             question=_root_goal_from_recipe(recipe),
         )
+        gate = finance_verification_to_gate_result(
+            verification,
+            policy=finance_slot_frame(
+                question=_root_goal_from_recipe(recipe),
+                facts=facts,
+            ).evidence_policy,
+            formula_traces=formula_traces,
+        )
         self.journal.append(
             task_id=answer.task_id,
             run_id=answer.run_id,
@@ -1362,11 +1375,27 @@ class AgentRuntime:
                 {
                     **verification.to_dict(),
                     "schema": "holo.kernel_v3.finance_numeric_verification.v1",
+                    "verifier_gate_result": gate.to_dict(),
                     "ledger_ref": ledger_record.record_id,
                     "trace_refs": [*trace_refs, ledger_record.record_id],
                 }
             ),
             state_delta={"finance_numeric_verification": verification.status},
+        )
+        self.journal.append(
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            step_id=None,
+            kind="verifier_gate_result",
+            data=redact_journal_data(
+                {
+                    **gate.to_dict(),
+                    "schema": "holo.kernel_v3.verifier_gate_result.v1",
+                    "source": "finance_numeric_verification",
+                    "ledger_ref": ledger_record.record_id,
+                }
+            ),
+            state_delta={"verifier_gate_status": gate.status},
         )
         return verification
 
@@ -1385,6 +1414,7 @@ class AgentRuntime:
             evidence=evidence,
             citations=citations,
             purpose="preflight",
+            question=_root_goal_from_recipe(recipe),
         )
         existing = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
         plans = _finance_formula_preflight_plans(
@@ -1410,6 +1440,27 @@ class AgentRuntime:
                     }
                 ),
                 state_delta={"finance_formula_plan": plan.status},
+            )
+            transform_plan = finance_formula_plan_to_transform_plan(
+                plan,
+                question=_root_goal_from_recipe(recipe),
+            )
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="transform_plan",
+                data=redact_journal_data(
+                    {
+                        **transform_plan.to_dict(),
+                        "schema": "holo.kernel_v3.transform_plan.v1",
+                        "source": "finance_formula_plan",
+                        "finance_formula_plan_ref": plan_record.record_id,
+                        "ledger_ref": ledger_record.record_id,
+                    }
+                ),
+                feedback_ref=plan_record.record_id,
+                state_delta={"transform_plan": transform_plan.status},
             )
             if plan.status != "ready" or not isinstance(plan.payload, dict):
                 continue
@@ -1588,6 +1639,7 @@ class AgentRuntime:
         evidence: list[EvidenceItem],
         citations: list[CitationItem],
         purpose: str,
+        question: str = "",
     ):
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
         ledger_record = self.journal.append(
@@ -1607,6 +1659,45 @@ class AgentRuntime:
             ),
             state_delta={"finance_fact_count": len(facts)},
         )
+        claims = finance_facts_to_claims(facts)
+        claim_record = self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="claim_ledger",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.claim_ledger.v1",
+                    "domain": "finance",
+                    "purpose": purpose,
+                    "claim_count": len(claims),
+                    "claims": [claim.to_dict() for claim in claims[:512]],
+                    "source_ledger_ref": ledger_record.record_id,
+                }
+            ),
+            state_delta={"claim_count": len(claims)},
+        )
+        if question:
+            frame = finance_slot_frame(question=question, facts=facts)
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="slot_frame",
+                data=redact_journal_data(
+                    {
+                        **frame.to_dict(),
+                        "schema": "holo.kernel_v3.slot_frame.v1",
+                        "source": "finance_fact_ledger",
+                        "claim_ledger_ref": claim_record.record_id,
+                        "finance_fact_ledger_ref": ledger_record.record_id,
+                    }
+                ),
+                state_delta={
+                    "slot_frame_task_type": frame.task_type,
+                    "missing_slot_count": len(frame.missing_slots),
+                },
+            )
         return facts, ledger_record
 
     def _append_final_quality_check(
@@ -2180,7 +2271,7 @@ class _RecipeBoundPlanner:
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
         existing_traces = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
         plan = plan_finance_formula(question=self.goal, facts=facts, existing_traces=existing_traces)
-        self.journal.append(
+        plan_record = self.journal.append(
             task_id=task_id,
             run_id=run_id,
             step_id=str(context.state.get("step_id") or ""),
@@ -2194,6 +2285,23 @@ class _RecipeBoundPlanner:
                 }
             ),
             state_delta={"finance_formula_plan": plan.status},
+        )
+        transform_plan = finance_formula_plan_to_transform_plan(plan, question=self.goal)
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=str(context.state.get("step_id") or ""),
+            kind="transform_plan",
+            data=redact_journal_data(
+                {
+                    **transform_plan.to_dict(),
+                    "schema": "holo.kernel_v3.transform_plan.v1",
+                    "source": "finance_formula_planner",
+                    "finance_formula_plan_ref": plan_record.record_id,
+                }
+            ),
+            feedback_ref=plan_record.record_id,
+            state_delta={"transform_plan": transform_plan.status},
         )
         if plan.status != "ready" or not isinstance(plan.payload, dict):
             return _finance_missing_fact_retrieval_action(

@@ -96,8 +96,14 @@ class FinanceBenchmarkSummary(Contract):
     average_calculator_calls: float
     formula_trace_present_rate: float
     average_formula_traces: float
+    transform_plan_present_rate: float
+    average_transform_plans: float
+    slot_frame_present_rate: float
+    average_missing_slots: float
+    average_claims: float
     average_finance_facts: float
     numeric_verifier_pass_rate: float | None
+    verifier_gate_pass_rate: float | None
     average_answer_numeric_support_rate: float | None
     finance_numeric_failure_reason_counts: JsonObject
     status_counts: JsonObject
@@ -365,6 +371,7 @@ def summarize_finance_benchmark(
     ]
     adversarial_scored = [result for result in results if bool(result.scorecard.get("gold_sentinel"))]
     verifier_scored = [result for result in results if result.trace_metrics.get("numeric_verifier_status") in {"passed", "failed"}]
+    gate_scored = [result for result in results if result.trace_metrics.get("verifier_gate_status") in {"passed", "failed"}]
     support_rates = [
         float(result.trace_metrics["answer_numeric_support_rate"])
         for result in results
@@ -406,12 +413,23 @@ def summarize_finance_benchmark(
         average_calculator_calls=_average_metric(results, "calculator_call_count"),
         formula_trace_present_rate=_rate(sum(1 for result in results if int(result.trace_metrics.get("formula_trace_count") or 0) > 0), len(results)),
         average_formula_traces=_average_metric(results, "formula_trace_count"),
+        transform_plan_present_rate=_rate(sum(1 for result in results if int(result.trace_metrics.get("transform_plan_count") or 0) > 0), len(results)),
+        average_transform_plans=_average_metric(results, "transform_plan_count"),
+        slot_frame_present_rate=_rate(sum(1 for result in results if bool(result.trace_metrics.get("slot_frame_present"))), len(results)),
+        average_missing_slots=_average_metric(results, "missing_slot_count"),
+        average_claims=_average_metric(results, "claim_count"),
         average_finance_facts=_average_metric(results, "finance_fact_count"),
         numeric_verifier_pass_rate=_rate(
             sum(1 for result in verifier_scored if result.trace_metrics.get("numeric_verifier_status") == "passed"),
             len(verifier_scored),
         )
         if verifier_scored
+        else None,
+        verifier_gate_pass_rate=_rate(
+            sum(1 for result in gate_scored if result.trace_metrics.get("verifier_gate_status") == "passed"),
+            len(gate_scored),
+        )
+        if gate_scored
         else None,
         average_answer_numeric_support_rate=_average(support_rates) if support_rates else None,
         finance_numeric_failure_reason_counts=dict(numeric_failure_reasons),
@@ -507,6 +525,10 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     observations = [record.data for record in records if record.kind == "observation"]
     finance_ledgers = [record.data for record in records if record.kind == "finance_fact_ledger"]
     numeric_verifications = [record.data for record in records if record.kind == "finance_numeric_verification"]
+    claim_ledgers = [record.data for record in records if record.kind == "claim_ledger"]
+    slot_frames = [record.data for record in records if record.kind == "slot_frame"]
+    transform_plans = [record.data for record in records if record.kind == "transform_plan"]
+    verifier_gates = [record.data for record in records if record.kind == "verifier_gate_result"]
     retrieval_evidence_records = [record.data for record in records if record.kind == "retrieval_evidence"]
     retrieval_citation_records = [record.data for record in records if record.kind == "retrieval_citation"]
     retrieval = retrieval_behavior_benchmark(journal, task_id)
@@ -531,6 +553,9 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         if isinstance(formula_id, str) and formula_id:
             formula_trace_ids.add(formula_id)
     latest_ledger = finance_ledgers[-1] if finance_ledgers else {}
+    latest_claim_ledger = claim_ledgers[-1] if claim_ledgers else {}
+    latest_slot_frame = slot_frames[-1] if slot_frames else {}
+    latest_verifier_gate = verifier_gates[-1] if verifier_gates else {}
     latest_verification = numeric_verifications[-1] if numeric_verifications else {}
     latest_verification = latest_verification if isinstance(latest_verification, dict) else {}
     verification_diagnostics = latest_verification.get("diagnostics") if isinstance(latest_verification.get("diagnostics"), dict) else {}
@@ -538,6 +563,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     matched_values = latest_verification.get("matched_values") if isinstance(latest_verification.get("matched_values"), list) else []
     issue_codes = _finance_numeric_issue_codes(latest_verification)
     numeric_verifier_status = latest_verification.get("status") if isinstance(latest_verification.get("status"), str) else None
+    verifier_gate_status = latest_verifier_gate.get("status") if isinstance(latest_verifier_gate.get("status"), str) else None
     answer_numeric_support_rate = _rate(len(matched_values), answer_numeric_count) if answer_numeric_count else None
     source_uris = _source_uris([*retrieval_evidence_records, *retrieval_citation_records])
     source_hosts = _source_hosts(source_uris)
@@ -567,10 +593,19 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "calculator_call_count": len(calculator_observations),
         "formula_trace_present": bool(formula_trace_ids),
         "formula_trace_count": len(formula_trace_ids),
+        "transform_plan_present": bool(transform_plans),
+        "transform_plan_count": len(transform_plans),
+        "claim_count": _int_value(latest_claim_ledger.get("claim_count")) if isinstance(latest_claim_ledger, dict) else 0,
+        "slot_frame_present": bool(slot_frames),
+        "slot_frame_task_type": latest_slot_frame.get("task_type") if isinstance(latest_slot_frame, dict) else None,
+        "missing_slot_count": len(latest_slot_frame.get("missing_slots") or []) if isinstance(latest_slot_frame, dict) else 0,
+        "missing_slots": latest_slot_frame.get("missing_slots") if isinstance(latest_slot_frame, dict) else [],
         "finance_fact_count": _int_value(latest_ledger.get("fact_count")) if isinstance(latest_ledger, dict) else 0,
         "numeric_verifier_status": numeric_verifier_status,
         "numeric_verifier_passed": numeric_verifier_status == "passed" if numeric_verifier_status else None,
         "numeric_verifier_pass_rate": 1.0 if numeric_verifier_status == "passed" else 0.0 if numeric_verifier_status == "failed" else None,
+        "verifier_gate_status": verifier_gate_status,
+        "verifier_gate_passed": verifier_gate_status == "passed" if verifier_gate_status else None,
         "answer_numeric_support_rate": answer_numeric_support_rate,
         "finance_numeric_failure_reason": issue_codes[0] if issue_codes else None,
         "finance_numeric_failure_reasons": issue_codes,

@@ -116,6 +116,14 @@ but it should not yet be described as a stable Finance Agent v2 solver. The
 main open gap is robust acquisition and extraction for harder filing tasks such
 as add-back/non-GAAP reconciliation trends, DCF/LBO, fixed-charge coverage, and
 purchase-price-allocation analysis.
+The newest substrate work starts lifting finance lessons into domain-general
+kernel primitives: `ClaimLedger`, `SlotFrame`, `EvidencePolicy`,
+`TransformPlan`, and `VerifierGateResult`. Finance now projects its fact ledger,
+formula plans, and numeric verification into those generic records while still
+keeping the deterministic finance domain pack intact. This is intended to keep
+Holo from becoming a finance-only benchmark script collection; future
+mathematics, code, legal, policy, and research domain packs should reuse the
+same slot/evidence/claim/transform/verification spine.
 The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
@@ -580,6 +588,12 @@ Kernel v3 currently contains the infrastructure for:
   through `finance.verify_numeric` before delivery. FAB v2 curated dev10 support
   and post-run annotation scoring are documented in
   `docs/KERNEL_V3_FINANCE_BENCHMARK_TRACK.md`.
+- Domain-general substrate records for future packs: finance facts are also
+  projected into `claim_ledger` records, finance formula plans into generic
+  `transform_plan` records, finance task requirements into `slot_frame` records
+  with an `EvidencePolicy`, and numeric verification into
+  `verifier_gate_result` records. These records are deliberately domain-neutral:
+  finance is the first adapter, not the kernel's only target domain.
 - Transaction/acquisition retrieval now treats issuer event pages and SEC 8-K
   event filings as first-class acquisition paths. The source layer can render
   multi-issuer company IR candidates, the operator critic emits

@@ -382,6 +382,20 @@ Post-dev10 EV/EBITDA iteration:
   deterministic `finance.verify_numeric`, FAB v2 public/dev10 import and
   annotation scoring, substrate trace metrics, verifier failure taxonomy, and
   fast-lane hard budgets are all present in the code path.
+- The substrate is now partially generalized out of the finance domain pack.
+  Kernel v3 has domain-neutral contracts for `Claim`, `SlotFrame`,
+  `EvidencePolicy`, `TransformPlan`, and `VerificationGateResult`. Finance
+  currently acts as the first adapter: `FinanceFact` projects into `Claim`,
+  finance formula plans project into generic `TransformPlan`, finance task
+  requirements project into `SlotFrame`, and `finance.verify_numeric` projects
+  into `VerificationGateResult`. Runtime traces now journal `claim_ledger`,
+  `slot_frame`, `transform_plan`, and `verifier_gate_result` alongside the
+  existing finance-specific records.
+- Benchmark metrics and reports now expose the generic substrate as well as
+  finance-specific counters: claim count, slot-frame presence, missing slots,
+  transform-plan presence/count, and verifier-gate pass rate. This lets future
+  domain packs reuse the same scoring and visualization spine instead of adding
+  isolated benchmark-only metrics.
 - The current real-task capability is measurable but not yet reliable enough to
   claim Finance Agent v2 competence. Representative live successes now include
   `fabv2-hd-low-dio`, `fabv2-khc-adjusted-ebitda-bridge`, and
@@ -419,23 +433,27 @@ Post-dev10 EV/EBITDA iteration:
    20-F/40-F, complete submission text, and issuer annual-report pages before
    event 8-Ks or market-stat pages; require actual add-back/reconciliation terms
    in accepted evidence.
-2. Run the curated dev10 in small batches and classify verifier failures into
+2. Use the new `SlotFrame` / `EvidencePolicy` layer to express add-back trend
+   requirements as slots (`base_metric`, `adjustment_items`, `adjusted_metric`,
+   `period_series`, `source_table`) and policy constraints, then make retrieval
+   acquisition target missing slots rather than repeating broad queries.
+3. Run the curated dev10 in small batches and classify verifier failures into
    unsupported answer number, ledger extraction gap, missing formula trace, unit
    mismatch, period mismatch, and assumption-label issues.
-3. Expand the finance fact ledger and formula planner for bridge, transaction
+4. Expand the finance fact ledger and formula planner for bridge, transaction
    multiple, fixed-charge coverage, DCF/LBO, MLR, and purchase price allocation
    cases. EV/EBITDA now has formula intent and missing-fact fallback; it still
    needs stronger acquisition for market cap, total debt, cash, and EBITDA
    components.
-4. Add an event-aware finance filing resolver for transaction questions:
+5. Add an event-aware finance filing resolver for transaction questions:
    identify issuer/target, likely announcement/closing periods, SEC accession
    candidates, and whether the task needs 8-K, merger agreement, 10-K note, or
    investor/press-release evidence.
-5. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
+6. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
    structured retrieval results more directly, and avoiding synthesis context
    duplication.
-6. Add claim-level citation judging for non-numeric assertions.
-7. Add source-support scoring against benchmark evidence excerpts.
-8. Add PPT-ready rendering presets for task and benchmark graphs.
-9. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
+7. Add claim-level citation judging for non-numeric assertions.
+8. Add source-support scoring against benchmark evidence excerpts.
+9. Add PPT-ready rendering presets for task and benchmark graphs.
+10. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
    retrieval plus memory.
