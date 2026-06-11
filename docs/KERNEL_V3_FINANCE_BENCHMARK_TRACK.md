@@ -241,8 +241,11 @@ not repeatedly download these sources during benchmark iteration.
   `investors.3m.com` source miss and reaches behavior/workflow/substrate score
   `1.0`, but still fails answer scoring because qualitative MD&A driver
   synthesis is not yet reliable. `run_financebench_doc_item4_model_net_v7`
-  is a benchmark-scorer pass but fails Holo's citation/verifier/synthesis gates;
-  treat it as a diagnostic, not as a quality pass.
+  exposed a benchmark-scorer false positive: bare `3M` was interpreted as
+  `3,000,000` and a failure report could pass despite failed
+  citation/verifier/synthesis gates. The scorer and FinanceBench annotation
+  export now reject that pattern, and v7 re-scores as failed; treat it as a
+  diagnostic, not as a quality pass.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,

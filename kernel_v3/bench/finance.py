@@ -206,6 +206,9 @@ def score_finance_answer(
     if not answer_present:
         status = "failed" if scored else "ungraded"
         reason = "empty_answer"
+    if failure_report is not None and final_answer is None and not gold_sentinel:
+        status = "failed" if scored else "ungraded"
+        reason = "failure_report_not_final_answer"
 
     return {
         "schema": "holo.kernel_v3.finance_benchmark_score.v1",
@@ -1901,6 +1904,9 @@ def _extract_numeric_candidates(text: str) -> list[JsonObject]:
         except ValueError:
             continue
         unit = (match.group("unit") or "").lower()
+        prefix = match.group("prefix") or ""
+        if _ambiguous_compact_scale_unit(text, match, raw=raw, prefix=prefix, unit=unit):
+            continue
         if unit in {"million", "mn", "m"}:
             value *= 1_000_000
         elif unit in {"billion", "bn", "b"}:
@@ -1918,11 +1924,29 @@ def _extract_numeric_candidates(text: str) -> list[JsonObject]:
                 {
                     "value": value,
                     "raw_number": raw,
-                    "prefix": match.group("prefix") or "",
+                    "raw_token": match.group(0).strip(),
+                    "prefix": prefix,
                     "unit": unit,
                 }
             )
     return candidates
+
+
+def _ambiguous_compact_scale_unit(text: str, match: re.Match[str], *, raw: str, prefix: str, unit: str) -> bool:
+    if unit not in {"m", "b"} or prefix:
+        return False
+    unit_start = match.start("unit")
+    if unit_start < 0:
+        return False
+    separator = text[match.end("number") : unit_start]
+    if separator:
+        return False
+    if "." in raw:
+        return False
+    # Bare compact tokens such as "3M" are frequently company names, tickers,
+    # product labels, or identifiers. Keep explicit currency or word-scale
+    # forms ("$3M", "3 million") but avoid turning names into gold numerics.
+    return True
 
 
 def _looks_like_year(value: float) -> bool:

@@ -178,6 +178,51 @@ def test_finance_benchmark_gold_numeric_scoring_handles_approximate_text() -> No
     assert score["numeric"]["expected"] == 34_800_000_000
 
 
+def test_finance_benchmark_numeric_scoring_does_not_treat_company_3m_as_millions() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="fb-3m-margin",
+        question="What drove operating margin change for 3M?",
+        gold_answer="Operating margin for 3M in FY2022 decreased by 1.7% due to lower gross margin.",
+    )
+
+    score = score_finance_answer(item, answer="I could not support an answer for 3M.")
+
+    assert score["status"] == "failed"
+    assert score["numeric"]["expected"] == 1.7
+    assert score["numeric"]["values"] == []
+
+
+def test_finance_benchmark_numeric_scoring_keeps_explicit_compact_currency_units() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="fb-currency-compact",
+        question="What was the charge?",
+        gold_answer="The charge was $3M.",
+    )
+
+    score = score_finance_answer(item, answer="The charge was $3.0 million.")
+
+    assert score["status"] == "passed"
+    assert score["numeric"]["expected"] == 3_000_000
+
+
+def test_finance_benchmark_failure_report_cannot_pass_gold_backed_numeric_question() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="fb-failure-report",
+        question="What drove operating margin change for 3M?",
+        gold_answer="Operating margin for 3M in FY2022 decreased by 1.7%.",
+    )
+
+    score = score_finance_answer(
+        item,
+        answer="I could not support an answer for 3M.",
+        final_answer=None,
+        failure_report={"reason": "finance_numeric_verification_failed"},
+    )
+
+    assert score["status"] == "failed"
+    assert score["reason"] == "failure_report_not_final_answer"
+
+
 def test_finance_benchmark_sentinel_actual_value_does_not_score_year_as_target() -> None:
     item = FinanceBenchmarkItem(
         item_id="adv-year",
@@ -540,6 +585,29 @@ def test_financebench_import_can_emit_scoring_annotation_sidecar(tmp_path: Path)
     score = score_finance_dev_annotations(results, annotation_path=annotation)
     assert score["numeric_score"] == 1.0
     assert "The reference answer" not in runtime.seen_prompts[0]
+
+
+def test_financebench_annotation_export_ignores_company_name_numeric_token(tmp_path: Path) -> None:
+    dataset = tmp_path / "financebench-3m.normalized.jsonl"
+    annotation = tmp_path / "financebench-3m.gold.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "id": "financebench_id_01226",
+                "question": "What drove operating margin change for 3M?",
+                "gold_answer": "Operating margin for 3M in FY2022 decreased by 1.7%.",
+                "source": "financebench",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    write_finance_dev_annotations_from_dataset(dataset_path=dataset, annotation_path=annotation)
+    annotations = [json.loads(line) for line in annotation.read_text(encoding="utf-8").splitlines()]
+
+    assert [item["value"] for item in annotations[0]["expected_numeric"]] == [1.7]
 
 
 def test_benchmark_provided_context_creates_source_grounded_trace(tmp_path: Path) -> None:

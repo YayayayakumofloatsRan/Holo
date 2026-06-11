@@ -239,8 +239,9 @@ FinanceBench rows, not the first-slice target binding bug.
   required-source miss is cleared. The row still fails answer scoring because
   the qualitative operating-margin driver explanation is not synthesized from
   the target MD&A evidence.
-- `run_financebench_doc_item4_model_net_v7` is intentionally not counted as a
-  quality pass even though the benchmark scorer marks it passed: Holo's own
-  verifier gate and synthesis gate fail, citation preservation is `0`, and the
-  output is a failure report. It is useful as evidence that benchmark scoring
-  alone is weaker than the host-owned gate stack.
+- `run_financebench_doc_item4_model_net_v7` exposed a benchmark scorer false
+  positive: the old numeric extractor treated the company token `3M` as
+  `3,000,000` and a failure report had no final-answer citation while Holo's
+  verifier and synthesis gates failed. The scorer now rejects bare compact
+  company/name tokens as gold numerics and non-sentinel gold-backed rows cannot
+  pass with only a `failure_report`; v7 re-scores as failed.

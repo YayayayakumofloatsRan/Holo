@@ -1281,9 +1281,12 @@ disclosure answers. `run_financebench_doc_item4_model_net_v6` reaches
 retrieval runs `2`, source hosts including `investors.3m.com`, behavior score
 `1.0`, workflow/substrate score `1.0`, citation preservation `1.0`, and
 unsupported numeric claim rate `0`; it still fails the numeric answer score.
-`run_financebench_doc_item4_model_net_v7` happens to pass the benchmark scorer,
-but fails Holo's own citation/verifier/synthesis gates and must be treated as a
-diagnostic, not a quality win.
+`run_financebench_doc_item4_model_net_v7` exposed a benchmark-scoring false
+positive: the old scorer treated the company token `3M` as `3,000,000` and
+marked a failure report as passed. The scorer and FinanceBench annotation export
+now reject bare compact company/name tokens as gold numerics and do not allow a
+non-sentinel `failure_report` with no `final_answer` to pass; the same v7 row
+re-scores as failed with expected numeric `1.7`.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
