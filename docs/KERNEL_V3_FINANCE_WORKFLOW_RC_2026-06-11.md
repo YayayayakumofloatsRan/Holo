@@ -90,6 +90,18 @@ synthesis-gate pass, citation preservation `1.0`, and annotation overall /
 workflow / substrate / numeric scores of `1.0`. This is a single-item
 oracle-context smoke, not a broad FinQA subset score.
 
+A follow-up FinQA oracle-context subset diagnostic ran `20` local `dev` rows
+without network access and without exposing gold/reference programs to prompts
+(`run_finqa_oracle20_confirm_formula_patterns_v1`). Generic table/text
+arithmetic preflight now binds several recurring numeric-reasoning operations:
+table averages, indexed cumulative return, percentage-of-total, period change,
+simple projection, and pretax/after-tax difference. The subset result is pass
+rate / numeric accuracy `0.30`, calculator-used / formula-trace rates `0.60`,
+substrate score `0.925`, workflow score `0.96`, citation preservation `0.95`,
+synthesis-gate pass `1.0`, and unsupported numeric claim rate `0.0`. Treat this
+as an oracle-context engineering diagnostic; the remaining failures are still
+formula-binding and target-cell-selection gaps.
+
 DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional
 per-share output, and LBO debt-paydown / exit-equity / MOIC / IRR schedules.

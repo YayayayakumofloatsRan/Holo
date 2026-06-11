@@ -1469,6 +1469,77 @@ def test_finance_formula_preflight_binds_average_per_question_from_provided_tabl
     assert Decimal(trace.result_value) == Decimal("30")
 
 
+def test_finance_formula_preflight_binds_common_finqa_table_formula_patterns() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="finqa-return",
+            text=(
+                'table: [["date", "citi", "s&p 500"], ["31-dec-2012", "100.0", "100.0"], '
+                '["31-dec-2017", "193.5", "208.1"]]'
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="finqa-share",
+            text=(
+                'table: [["", "oil ( mmbbls )", "total ( mmboe )"], '
+                '["canada", "23", "60"], ["total", "66", "243"]]'
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="finqa-change",
+            text=(
+                'table: [["( in millions )", "2017", "2016"], '
+                '["operating income", "11503", "10815"]]'
+            ),
+        ),
+    ]
+
+    return_plan = _finance_formula_preflight_plans(
+        question="what was the percentage cumulative total return for the five year period ended 31-dec-2017 of citi common stock?",
+        facts=[],
+        existing_traces=[],
+        evidence=[evidence[0]],
+    )[0]
+    share_plan = _finance_formula_preflight_plans(
+        question="what percentage of the total oil and gas mmboe comes from canada?",
+        facts=[],
+        existing_traces=[],
+        evidence=[evidence[1]],
+    )[0]
+    change_plan = _finance_formula_preflight_plans(
+        question="what was the change in millions of operating income from 2016 to 2017?",
+        facts=[],
+        existing_traces=[],
+        evidence=[evidence[2]],
+    )[0]
+
+    assert return_plan.formula_name == "cumulative_return_percent"
+    assert compute_formula(**return_plan.payload).diagnostics["formatted_value"] == "93.5%"
+    assert share_plan.formula_name == "percentage_of_total_source"
+    assert compute_formula(**share_plan.payload).diagnostics["formatted_value"] == "24.69135802469135802469135802%"
+    assert change_plan.formula_name == "period_change"
+    assert Decimal(compute_formula(**change_plan.payload).result_value) == Decimal("688")
+
+
+def test_finance_formula_preflight_binds_text_tax_difference() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="finqa-aftertax",
+            text="These unrealized losses totaled $303 million, or $189 million after-tax.",
+        )
+    ]
+
+    plan = _finance_formula_preflight_plans(
+        question="in 2011 what was the amount of tax related to the unrealized losses reclassifications totaled $303 million, or $189 million after-tax?",
+        facts=[],
+        existing_traces=[],
+        evidence=evidence,
+    )[0]
+
+    assert plan.formula_name == "pretax_aftertax_difference"
+    assert Decimal(compute_formula(**plan.payload).result_value) == Decimal("114")
+
+
 def test_finance_formula_planner_derives_ebitda_from_components() -> None:
     evidence = [
         _finance_evidence(

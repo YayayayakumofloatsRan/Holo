@@ -157,6 +157,17 @@ not repeatedly download these sources during benchmark iteration.
   synthesis-gate pass, citation preservation `1.0`, and annotation overall /
   workflow / substrate / numeric scores of `1.0`. This is a single-item
   no-network smoke for the oracle-context path, not a broad FinQA subset score.
+- A first FinQA oracle-context subset diagnostic then ran `20` local `dev` rows
+  without network access or benchmark gold in prompts
+  (`run_finqa_oracle20_confirm_formula_patterns_v1`). Generic table/text
+  arithmetic preflight now covers table averages, indexed cumulative return,
+  percentage-of-total, period change, simple projection, and pretax/after-tax
+  difference patterns. On this subset, pass rate and numeric accuracy are
+  `0.30`, calculator-used and formula-trace rates are `0.60`, substrate score is
+  `0.925`, workflow score is `0.96`, citation preservation is `0.95`,
+  synthesis-gate pass is `1.0`, and unsupported numeric claim rate is `0.0`.
+  The remaining misses are formula-binding / target-cell-selection gaps; do not
+  report this as an official FinQA score.
 
 Finance Agent v2 public import:
 

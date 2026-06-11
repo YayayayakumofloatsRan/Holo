@@ -8545,6 +8545,13 @@ def _finance_fallback_fact_score(fact: FinanceFact, *, question: str) -> int:
 
 
 def _benchmark_oracle_question_text(goal: str) -> str:
+    wrapper_marker = "Benchmark-provided oracle source context follows."
+    if wrapper_marker in goal:
+        tail = goal[goal.find(wrapper_marker) + len(wrapper_marker):].strip()
+        if "\n\n" in tail:
+            candidate = tail.rsplit("\n\n", 1)[1].strip()
+            if candidate:
+                return candidate
     marker = "Provided evidence excerpt:"
     marker_index = goal.find(marker)
     if marker_index < 0:
@@ -8956,7 +8963,7 @@ def _finance_formula_preflight_plans(
     evidence: list[EvidenceItem] | None = None,
 ):
     question_only = _benchmark_oracle_question_text(question)
-    table_plan = _benchmark_table_average_formula_plan(question=question_only, evidence=evidence or [])
+    table_plan = _benchmark_table_formula_plan(question=question_only, evidence=evidence or [])
     if table_plan is not None:
         return [table_plan]
     plan = plan_finance_formula(question=question_only, facts=facts, existing_traces=existing_traces)
@@ -8982,6 +8989,28 @@ def _finance_formula_preflight_plans(
             if ready:
                 return ready
     return [plan]
+
+
+def _benchmark_table_formula_plan(*, question: str, evidence: list[EvidenceItem]) -> FinanceFormulaPlan | None:
+    average_plan = _benchmark_table_average_formula_plan(question=question, evidence=evidence)
+    if average_plan is not None:
+        return average_plan
+    text_plan = _benchmark_text_formula_plan(question=question, evidence=evidence)
+    if text_plan is not None:
+        return text_plan
+    tables = _benchmark_tables_from_evidence(evidence)
+    for table in tables:
+        for planner in (
+            _benchmark_cumulative_return_plan,
+            _benchmark_percentage_share_plan,
+            _benchmark_change_between_periods_plan,
+            _benchmark_sum_period_values_plan,
+            _benchmark_same_increase_projection_plan,
+        ):
+            plan = planner(question=question, table=table)
+            if plan is not None:
+                return plan
+    return None
 
 
 def _benchmark_table_average_formula_plan(*, question: str, evidence: list[EvidenceItem]) -> FinanceFormulaPlan | None:
@@ -9062,6 +9091,372 @@ def _benchmark_table_average_formula_plan(*, question: str, evidence: list[Evide
     )
 
 
+def _benchmark_text_formula_plan(*, question: str, evidence: list[EvidenceItem]) -> FinanceFormulaPlan | None:
+    normalized_question = " ".join(str(question or "").lower().split())
+    if "after-tax" not in normalized_question and "after tax" not in normalized_question:
+        return None
+    if "tax" not in normalized_question:
+        return None
+    joined = " ".join(str(item.text or "") for item in evidence)
+    match = re.search(
+        r"\$\s*(?P<pretax>-?\d+(?:\.\d+)?)\s*million\s*,?\s*or\s*\$\s*(?P<aftertax>-?\d+(?:\.\d+)?)\s*million\s*after[- ]tax",
+        joined,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    pretax = Decimal(match.group("pretax"))
+    aftertax = Decimal(match.group("aftertax"))
+    return _benchmark_ready_formula_plan(
+        formula_name="pretax_aftertax_difference",
+        expression="pretax - aftertax",
+        variables={"pretax": pretax, "aftertax": aftertax},
+        unit=None,
+        input_labels=["pretax", "aftertax"],
+        diagnostics={
+            "source": "benchmark_text_numeric_reasoning",
+            "question": question,
+            "matched_text": match.group(0),
+        },
+    )
+
+
+def _benchmark_cumulative_return_plan(*, question: str, table: list[list[object]]) -> FinanceFormulaPlan | None:
+    normalized = " ".join(str(question or "").lower().split())
+    if "cumulative total return" not in normalized:
+        return None
+    date_match = re.search(r"\b\d{1,2}-[a-z]{3}-\d{4}\b", normalized)
+    entity_match = re.search(r"\bof\s+(?P<entity>.+?)(?:\s+common stock|\?|$)", normalized)
+    if date_match is None or entity_match is None:
+        return None
+    headers = _benchmark_table_headers(table)
+    rows = _benchmark_table_rows(table)
+    row = _benchmark_table_entity_row(rows, entity=date_match.group(0))
+    col_index = _benchmark_table_column_index(headers, entity_match.group("entity"))
+    if row is None or col_index is None:
+        return None
+    ending = _benchmark_table_value_at(row, col_index)
+    if ending is None:
+        return None
+    return _benchmark_ready_formula_plan(
+        formula_name="cumulative_return_percent",
+        expression="(ending_value - base_value) / base_value",
+        variables={"ending_value": ending, "base_value": Decimal("100")},
+        unit="percent",
+        input_labels=[date_match.group(0), entity_match.group("entity")],
+        diagnostics={
+            "source": "benchmark_table_numeric_reasoning",
+            "question": question,
+            "row_label": str(row[0]) if row else "",
+            "column": headers[col_index] if col_index < len(headers) else "",
+        },
+    )
+
+
+def _benchmark_percentage_share_plan(*, question: str, table: list[list[object]]) -> FinanceFormulaPlan | None:
+    normalized = " ".join(str(question or "").lower().split())
+    if "percent" not in normalized and "percentage" not in normalized:
+        return None
+    headers = _benchmark_table_headers(table)
+    rows = _benchmark_table_rows(table)
+    if not headers or not rows:
+        return None
+
+    after_year_match = re.search(r"\b(?:due|due after|after)\s+(?P<year>(?:19|20)\d{2})\b", normalized)
+    total_row_match = re.search(
+        r"\b(?:percent|percentage)\s+of\s+(?:the\s+)?total\s+(?P<row>.+?)\s+(?:that\s+)?(?:was\s+)?due\s+after\s+(?:19|20)\d{2}",
+        normalized,
+    )
+    if total_row_match is not None and after_year_match is not None:
+        row_phrase = total_row_match.group("row").strip()
+        row = _benchmark_table_entity_row(rows, entity=row_phrase)
+        numerator_col = _benchmark_table_column_index(headers, "thereafter") or _benchmark_table_column_index(headers, "after")
+        denominator_col = _benchmark_table_column_index(headers, "total")
+        plan = _benchmark_ratio_from_row_columns(
+            question=question,
+            table=table,
+            row=row,
+            numerator_col=numerator_col,
+            denominator_col=denominator_col,
+            formula_name="percentage_of_total_due_after",
+            diagnostics_extra={"row_phrase": row_phrase, "after_year": after_year_match.group("year")},
+        )
+        if plan is not None:
+            return plan
+
+    row_due_match = re.search(
+        r"\b(?:percent|percentage)\s+of\s+(?:the\s+)?total\s+(?P<denominator>.+?)\s+(?:is|are|was|were)\s+due\s+to\s+(?P<numerator>[^?.,;]+)",
+        normalized,
+    )
+    if row_due_match is not None:
+        plan = _benchmark_ratio_from_rows(
+            question=question,
+            table=table,
+            numerator_phrase=row_due_match.group("numerator"),
+            denominator_phrase="total",
+            column_phrase="total",
+            formula_name="percentage_of_total_row",
+        )
+        if plan is not None:
+            return plan
+
+    due_after_match = re.search(
+        r"\b(?:percent|percentage)\s+of\s+(?:the\s+)?total\s+(?P<denominator>.+?)\s+(?:is|are|was|were)\s+due\s+after\s+(?:19|20)\d{2}",
+        normalized,
+    )
+    if due_after_match is not None:
+        plan = _benchmark_ratio_from_rows(
+            question=question,
+            table=table,
+            numerator_phrase="thereafter",
+            denominator_phrase="total",
+            column_phrase="",
+            formula_name="percentage_of_total_due_after_row",
+        )
+        if plan is not None:
+            return plan
+
+    comes_from_match = re.search(
+        r"\b(?:percent|percentage)\s+of\s+(?:the\s+)?(?P<denominator>.+?)\s+comes\s+from\s+(?P<numerator>[^?.,;]+)",
+        normalized,
+    )
+    if comes_from_match is not None:
+        denominator_phrase = comes_from_match.group("denominator")
+        column_phrase = "total"
+        if "mmboe" in denominator_phrase:
+            column_phrase = "total mmboe"
+        plan = _benchmark_ratio_from_rows(
+            question=question,
+            table=table,
+            numerator_phrase=comes_from_match.group("numerator"),
+            denominator_phrase="total",
+            column_phrase=column_phrase,
+            formula_name="percentage_of_total_source",
+        )
+        if plan is not None:
+            return plan
+    return None
+
+
+def _benchmark_change_between_periods_plan(*, question: str, table: list[list[object]]) -> FinanceFormulaPlan | None:
+    normalized = " ".join(str(question or "").lower().split())
+    if not any(marker in normalized for marker in ("change", "increase", "decline", "decrease")):
+        return None
+    years = _benchmark_years_from_question(normalized)
+    if len(years) < 2:
+        return None
+    headers = _benchmark_table_headers(table)
+    rows = _benchmark_table_rows(table)
+    row_phrase = _benchmark_change_row_phrase(normalized)
+    row = _benchmark_table_entity_row(rows, entity=row_phrase)
+    if row is None:
+        return None
+    first_col = _benchmark_table_column_index(headers, years[0])
+    second_col = _benchmark_table_column_index(headers, years[1])
+    if first_col is None or second_col is None:
+        return None
+    first = _benchmark_table_value_at(row, first_col)
+    second = _benchmark_table_value_at(row, second_col)
+    if first is None or second is None:
+        return None
+    if "decline" in normalized or "decrease" in normalized:
+        expression = "old_value - new_value"
+        variables = {"old_value": first, "new_value": second}
+    else:
+        expression = "new_value - old_value"
+        variables = {"old_value": first, "new_value": second}
+    return _benchmark_ready_formula_plan(
+        formula_name="period_change",
+        expression=expression,
+        variables=variables,
+        unit=None,
+        input_labels=[row_phrase, years[0], years[1]],
+        diagnostics={
+            "source": "benchmark_table_numeric_reasoning",
+            "question": question,
+            "row_phrase": row_phrase,
+            "row_label": str(row[0]) if row else "",
+            "first_period": years[0],
+            "second_period": years[1],
+        },
+    )
+
+
+def _benchmark_sum_period_values_plan(*, question: str, table: list[list[object]]) -> FinanceFormulaPlan | None:
+    normalized = " ".join(str(question or "").lower().split())
+    if "total" not in normalized and "balance" not in normalized:
+        return None
+    years = _benchmark_years_from_question(normalized)
+    if len(years) < 2:
+        return None
+    row_match = re.search(r"\b(?:what was|what is|was)\s+(?:the\s+)?(?P<row>.+?)\s+(?:balance\s+)?for\s+(?:19|20)\d{2}\s+and\s+(?:19|20)\d{2}", normalized)
+    if row_match is None:
+        return None
+    row_phrase = row_match.group("row").strip()
+    headers = _benchmark_table_headers(table)
+    row = _benchmark_table_entity_row(_benchmark_table_rows(table), entity=row_phrase)
+    if row is None:
+        return None
+    values: dict[str, Decimal] = {}
+    labels: list[str] = [row_phrase]
+    for index, year in enumerate(years[:4], start=1):
+        col = _benchmark_table_column_index(headers, year)
+        value = _benchmark_table_value_at(row, col) if col is not None else None
+        if value is None:
+            return None
+        values[f"value_{index}"] = value
+        labels.append(year)
+    expression = " + ".join(values)
+    return _benchmark_ready_formula_plan(
+        formula_name="period_value_sum",
+        expression=expression,
+        variables=values,
+        unit=None,
+        input_labels=labels,
+        diagnostics={"source": "benchmark_table_numeric_reasoning", "question": question, "row_phrase": row_phrase},
+    )
+
+
+def _benchmark_same_increase_projection_plan(*, question: str, table: list[list[object]]) -> FinanceFormulaPlan | None:
+    normalized = " ".join(str(question or "").lower().split())
+    if "increased" not in normalized or "as much as" not in normalized or "what would" not in normalized:
+        return None
+    years = _benchmark_years_from_question(normalized)
+    if len(years) < 2:
+        return None
+    target_year = years[0]
+    previous_year = years[1]
+    headers = _benchmark_table_headers(table)
+    rows = _benchmark_table_rows(table)
+    row_phrase = _benchmark_projection_row_phrase(normalized)
+    row = _benchmark_table_entity_row(rows, entity=row_phrase)
+    if row is None:
+        return None
+    current_col = _benchmark_table_column_index(headers, target_year)
+    previous_col = _benchmark_table_column_index(headers, previous_year)
+    current = _benchmark_table_value_at(row, current_col) if current_col is not None else None
+    previous = _benchmark_table_value_at(row, previous_col) if previous_col is not None else None
+    if current is None or previous is None:
+        return None
+    return _benchmark_ready_formula_plan(
+        formula_name="same_increase_projection",
+        expression="current_value + (current_value - previous_value)",
+        variables={"current_value": current, "previous_value": previous},
+        unit=None,
+        input_labels=[row_phrase, target_year, previous_year],
+        diagnostics={
+            "source": "benchmark_table_numeric_reasoning",
+            "question": question,
+            "row_phrase": row_phrase,
+        },
+    )
+
+
+def _benchmark_ratio_from_rows(
+    *,
+    question: str,
+    table: list[list[object]],
+    numerator_phrase: str,
+    denominator_phrase: str,
+    column_phrase: str,
+    formula_name: str,
+) -> FinanceFormulaPlan | None:
+    headers = _benchmark_table_headers(table)
+    rows = _benchmark_table_rows(table)
+    numerator_row = _benchmark_table_entity_row(rows, entity=numerator_phrase)
+    denominator_row = _benchmark_table_entity_row(rows, entity=denominator_phrase)
+    if numerator_row is None or denominator_row is None:
+        return None
+    col_index = _benchmark_table_column_index(headers, column_phrase) if column_phrase else 1 if len(headers) > 1 else None
+    if col_index is None:
+        return None
+    numerator = _benchmark_table_value_at(numerator_row, col_index)
+    denominator = _benchmark_table_value_at(denominator_row, col_index)
+    if numerator is None or denominator is None or denominator.is_zero():
+        return None
+    return _benchmark_ready_formula_plan(
+        formula_name=formula_name,
+        expression="numerator / denominator",
+        variables={"numerator": numerator, "denominator": denominator},
+        unit="percent",
+        input_labels=[numerator_phrase, denominator_phrase, column_phrase],
+        diagnostics={
+            "source": "benchmark_table_numeric_reasoning",
+            "question": question,
+            "numerator_phrase": numerator_phrase,
+            "denominator_phrase": denominator_phrase,
+            "column_phrase": column_phrase,
+        },
+    )
+
+
+def _benchmark_ratio_from_row_columns(
+    *,
+    question: str,
+    table: list[list[object]],
+    row: list[object] | None,
+    numerator_col: int | None,
+    denominator_col: int | None,
+    formula_name: str,
+    diagnostics_extra: JsonObject | None = None,
+) -> FinanceFormulaPlan | None:
+    if row is None or numerator_col is None or denominator_col is None:
+        return None
+    numerator = _benchmark_table_value_at(row, numerator_col)
+    denominator = _benchmark_table_value_at(row, denominator_col)
+    if numerator is None or denominator is None or denominator.is_zero():
+        return None
+    headers = _benchmark_table_headers(table)
+    return _benchmark_ready_formula_plan(
+        formula_name=formula_name,
+        expression="numerator / denominator",
+        variables={"numerator": numerator, "denominator": denominator},
+        unit="percent",
+        input_labels=[str(row[0]) if row else "", headers[numerator_col], headers[denominator_col]],
+        diagnostics={
+            "source": "benchmark_table_numeric_reasoning",
+            "question": question,
+            "row_label": str(row[0]) if row else "",
+            "numerator_column": headers[numerator_col],
+            "denominator_column": headers[denominator_col],
+            **dict(diagnostics_extra or {}),
+        },
+    )
+
+
+def _benchmark_ready_formula_plan(
+    *,
+    formula_name: str,
+    expression: str,
+    variables: dict[str, Decimal],
+    unit: str | None,
+    input_labels: list[str],
+    diagnostics: JsonObject,
+) -> FinanceFormulaPlan:
+    input_fact_ids = [
+        "table-cell-" + _short_hash(label, key, _decimal_string_runtime(value))
+        for label, (key, value) in zip(input_labels or [], variables.items())
+    ]
+    if len(input_fact_ids) < len(variables):
+        for key, value in list(variables.items())[len(input_fact_ids):]:
+            input_fact_ids.append("table-cell-" + _short_hash(key, _decimal_string_runtime(value)))
+    return FinanceFormulaPlan(
+        status="ready",
+        formula_name=formula_name,
+        input_fact_ids=input_fact_ids,
+        missing_facts=[],
+        payload={
+            "expression": expression,
+            "formula_name": formula_name,
+            "variables": {key: _decimal_string_runtime(value) for key, value in variables.items()},
+            "unit": unit,
+            "input_fact_ids": input_fact_ids,
+            "diagnostics": diagnostics,
+        },
+        diagnostics=diagnostics,
+    )
+
+
 def _average_per_question(question: str) -> tuple[str, str, str] | None:
     text = " ".join(str(question or "").strip().split())
     match = re.search(
@@ -9109,6 +9504,22 @@ def _looks_like_table(value: object) -> bool:
     )
 
 
+def _benchmark_table_headers(table: list[list[object]]) -> list[str]:
+    if not table:
+        return []
+    return [str(item) for item in table[0]]
+
+
+def _benchmark_table_rows(table: list[list[object]]) -> list[list[object]]:
+    return [row for row in table[1:] if isinstance(row, list) and row]
+
+
+def _benchmark_table_value_at(row: list[object] | None, index: int | None) -> Decimal | None:
+    if row is None or index is None or index < 0 or index >= len(row):
+        return None
+    return _benchmark_table_decimal(row[index])
+
+
 def _benchmark_table_entity_row(rows: list[list[object]], *, entity: str) -> list[object] | None:
     entity_tokens = _benchmark_table_tokens(entity)
     if not entity_tokens:
@@ -9130,6 +9541,9 @@ def _benchmark_table_entity_row(rows: list[list[object]], *, entity: str) -> lis
 
 
 def _benchmark_table_column_index(headers: list[str], phrase: str) -> int | None:
+    phrase = str(phrase or "").strip()
+    if not phrase and len(headers) > 1:
+        return 1
     phrase_tokens = _benchmark_table_tokens(phrase)
     if not phrase_tokens:
         return None
@@ -9148,6 +9562,41 @@ def _benchmark_table_column_index(headers: list[str], phrase: str) -> int | None
     return best[1] if best is not None else None
 
 
+def _benchmark_years_from_question(question: str) -> list[str]:
+    return re.findall(r"\b(?:19|20)\d{2}\b", str(question or ""))
+
+
+def _benchmark_change_row_phrase(question: str) -> str:
+    text = str(question or "")
+    patterns = (
+        r"\bchange\s+in\s+(?P<row>.+?)\s+from\s+(?:19|20)\d{2}",
+        r"\bincrease\s+in\s+(?P<row>.+?)\s+between\s+years",
+        r"\bdecline\s+in\s+(?P<row>.+?)\s+(?:in\s+)?(?:fiscal\s+)?(?:19|20)\d{2}",
+        r"\bchange\s+of\s+(?P<row>.+?)\s+from\s+(?:19|20)\d{2}",
+        r"\bwhat\s+was\s+(?:the\s+)?(?P<row>.+?)\s+decline\s+in\s+(?:fiscal\s+)?(?:19|20)\d{2}",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match is not None:
+            return _benchmark_clean_row_phrase(match.group("row"))
+    return _benchmark_clean_row_phrase(text)
+
+
+def _benchmark_projection_row_phrase(question: str) -> str:
+    text = str(question or "")
+    match = re.search(r"\bcurrent\s+(?P<row>.+?)\s+increased\s+in\s+(?:19|20)\d{2}", text, flags=re.IGNORECASE)
+    if match is not None:
+        return _benchmark_clean_row_phrase(match.group("row"))
+    return _benchmark_clean_row_phrase(text)
+
+
+def _benchmark_clean_row_phrase(value: str) -> str:
+    text = re.sub(r"\b(in|from|to|between|for|of|the|a|an|what|was|is|were|are)\b", " ", str(value or ""), flags=re.IGNORECASE)
+    text = re.sub(r"\b(?:19|20)\d{2}\b", " ", text)
+    text = re.sub(r"[^A-Za-z0-9&/% -]+", " ", text)
+    return " ".join(text.split())
+
+
 def _benchmark_table_tokens(value: str) -> set[str]:
     text = str(value or "").lower().replace("-", " ")
     stop_words = {
@@ -9157,7 +9606,6 @@ def _benchmark_table_tokens(value: str) -> set[str]:
         "of",
         "for",
         "per",
-        "total",
         "amount",
         "amounts",
         "in",

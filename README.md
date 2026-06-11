@@ -1140,6 +1140,19 @@ workflow, substrate, and numeric scores. This proves the oracle-context path can
 drive a simple FinQA numeric-reasoning item; it is still a single-item smoke,
 not a broad FinQA accuracy claim.
 
+The first FinQA oracle-context subset diagnostic also ran against `20` local
+`dev` rows without network access or benchmark gold in prompts
+(`run_finqa_oracle20_confirm_formula_patterns_v1`). Generic table/text
+arithmetic preflight now handles recurring numeric-reasoning shapes such as
+table averages, cumulative return from indexed values, percentage-of-total,
+period change, simple projection, and pretax/after-tax difference. On that
+subset, pass rate and numeric accuracy are `0.30`, calculator-used and
+formula-trace rates are `0.60`, substrate score is `0.925`, workflow score is
+`0.96`, citation preservation is `0.95`, synthesis-gate pass is `1.0`, and
+unsupported numeric claim rate is `0.0`. The remaining misses expose formula
+binding and target-cell selection gaps, so this is an oracle-context engineering
+diagnostic rather than an official FinQA score.
+
 FinanceBench-150 can be normalized from a local CSV/JSON/JSONL export in three
 explicit modes:
 
