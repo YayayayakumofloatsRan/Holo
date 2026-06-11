@@ -60,6 +60,19 @@ write manifest/annotation sidecars in the same command. Use this to start the
 first FinanceBench oracle-evidence and FinQA oracle-context runs when raw files
 are absent locally.
 
+2026-06-11 smoke verification has exercised that path against real public
+files: FinanceBench merged rows downloaded `958,087` bytes and normalized
+`5/5` oracle-evidence smoke rows with `0` skipped; FinQA `dev` downloaded
+`10,954,658` bytes and normalized `5/5` oracle-context smoke rows with `0`
+skipped. Both wrote `.gold.jsonl` sidecars. This verifies data acquisition and
+normalization only; live model scoring for FinanceBench-150 and FinQA subsets is
+still the next required benchmark step.
+
+FinQA oracle-context rows now carry generic `numeric_reasoning` workflow
+annotations instead of plain QA metadata: context/input/formula/unit slots,
+provided-report-context evidence policy, expected calculator/verifier/synthesis
+traces, and scoring-only reference program policy.
+
 DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional
 per-share output, and LBO debt-paydown / exit-equity / MOIC / IRR schedules.

@@ -413,12 +413,13 @@ def _normalize_finqa(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, in
     if _first_present(record, "program", "derivation") is not None or _first_present(qa, "program") is not None:
         metadata["reference_program_available"] = True
         metadata["reference_program_policy"] = "scoring_only_not_prompted"
+    metadata.update(_finqa_workflow_annotation(question=question, context=context, mode=import_mode))
     return _normalized_item(
         spec,
         item_id=_item_id(record, index=index, prefix="finqa"),
         question=question,
         gold_answer=_text_or_none(_first_present(record, "answer", "Answer", "gold_answer") or _first_present(qa, "answer")),
-        category=_text_or_none(_first_present(record, "question_type", "type", "category")),
+        category=_text_or_none(_first_present(record, "question_type", "type", "category")) or "numeric_reasoning",
         evidence_excerpt=None,
         required_tools=["provided_report_context", "calculator"],
         metadata=metadata,
@@ -752,6 +753,43 @@ def _financebench_workflow_annotation(
         "authority": policy.get("authority") or "benchmark_evidence_or_primary_filing",
     }
     return workflow
+
+
+def _finqa_workflow_annotation(*, question: str, context: str, mode: str) -> JsonObject:
+    trace = [
+        "claim_ledger",
+        "slot_frame",
+        "transform_plan",
+        "calculator.compute",
+        "verifier_gate",
+        "synthesis_gate",
+    ]
+    policy: JsonObject = {
+        "required_source_families": ["provided_report_context"] if mode != "question_only" else [],
+        "forbidden_source_families": ["reference_program", "gold_answer"],
+        "authority": "oracle_context" if mode != "question_only" else "question_only",
+    }
+    if context:
+        policy["required_terms"] = ["context_table_or_text"]
+    return {
+        "workflow_type": "numeric_reasoning",
+        "required_slots": ["question_context", "input_values", "formula_or_operation", "answer_unit"],
+        "evidence_policy": policy,
+        "required_transforms": ["numeric_reasoning"],
+        "dealbreakers": [
+            "calculator_trace_required",
+            "no_unsupported_numeric_claims",
+            "synthesis_gate_pass_required",
+        ],
+        "expected_trace": trace,
+        "failure_taxonomy": [
+            "context_extraction",
+            "formula_binding",
+            "calculator_usage",
+            "unsupported_numeric_claim",
+            "synthesis_gate",
+        ],
+    }
 
 
 def _finance_agent_v2_category(question: str) -> str:

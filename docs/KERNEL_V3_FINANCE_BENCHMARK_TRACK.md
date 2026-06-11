@@ -125,6 +125,22 @@ import happen in one step:
 Keep downloaded raw files under `data/raw` or another explicit cache path. Do
 not repeatedly download these sources during benchmark iteration.
 
+2026-06-11 fetch/import smoke:
+
+- FinanceBench built-in fetch downloaded `958,087` bytes from the PatronusAI
+  merged JSONL export, normalized `5` `oracle_evidence` rows, skipped `0`, and
+  wrote a matching scoring annotation sidecar.
+- FinQA built-in fetch downloaded `10,954,658` bytes from the public `dev` JSON,
+  normalized `5` `oracle_context` rows, skipped `0`, and wrote a matching
+  scoring annotation sidecar.
+- These smoke runs validate the public gold-backed data path only. They are not
+  live agent accuracy scores.
+- FinQA annotations now use the generic `numeric_reasoning` workflow shape:
+  `question_context`, `input_values`, `formula_or_operation`, and `answer_unit`
+  slots; `calculator.compute`, verifier, and synthesis-gate traces; and a
+  provided-report-context evidence policy. The reference program remains
+  scoring-only and is not prompt context.
+
 Finance Agent v2 public import:
 
 ```bash

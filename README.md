@@ -1116,6 +1116,13 @@ holo-v3 bench finance-fetch \
 local mirror or alternate export. Use `--limit`/`--offset` with
 `--normalized-output` for small smoke subsets.
 
+2026-06-11 smoke verification: the built-in fetch lane successfully downloaded
+PatronusAI FinanceBench merged rows (`958,087` bytes) and FinQA `dev`
+(`10,954,658` bytes), then normalized `5` oracle-mode rows from each with
+`0` skipped rows and generated matching `.gold.jsonl` annotation sidecars under
+`.state/kernel_v3/bench/finance/`. This verifies the gold-backed public
+benchmark data path; it is not a live model score.
+
 FinanceBench-150 can be normalized from a local CSV/JSON/JSONL export in three
 explicit modes:
 
@@ -1163,6 +1170,13 @@ holo-v3 bench finance-import \
   --output .state/kernel_v3/bench/finance/finqa_dev_oracle_context.jsonl \
   --annotation-output .state/kernel_v3/bench/finance/finqa_dev_oracle_context.gold.jsonl
 ```
+
+FinQA oracle-context annotations now enter the generic workflow harness as
+`numeric_reasoning` tasks with required slots (`question_context`,
+`input_values`, `formula_or_operation`, `answer_unit`), expected
+`calculator.compute` / verifier / synthesis-gate traces, and a provided-context
+evidence policy. The reference program remains scoring-only and is not prompt
+context.
 
 ```bash
 HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \

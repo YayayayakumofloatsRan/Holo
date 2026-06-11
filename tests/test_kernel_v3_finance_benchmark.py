@@ -477,6 +477,11 @@ def test_finqa_import_supports_oracle_context_and_question_only_modes(tmp_path: 
     assert "subtract(divide" not in oracle_runtime.seen_prompts[0]
     assert "10%" not in oracle_runtime.seen_prompts[0]
     assert oracle_items[0].metadata["reference_program_policy"] == "scoring_only_not_prompted"
+    assert oracle_items[0].workflow_type == "numeric_reasoning"
+    assert oracle_items[0].required_slots == ["question_context", "input_values", "formula_or_operation", "answer_unit"]
+    assert oracle_items[0].required_transforms == ["numeric_reasoning"]
+    assert "calculator.compute" in oracle_items[0].expected_trace
+    assert oracle_items[0].evidence_policy["required_source_families"] == ["provided_report_context"]
 
     question_output = tmp_path / "finqa.question.jsonl"
     convert_public_finance_benchmark(
