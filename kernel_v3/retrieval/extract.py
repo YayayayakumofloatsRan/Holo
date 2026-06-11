@@ -1789,6 +1789,7 @@ def _companyfacts_query_priority_metrics(query: str) -> tuple[str, ...]:
             "ppne",
             "net ppe",
             "net pp&e",
+            "propertyplantandequipmentnet",
             "property, plant and equipment, net",
             "property plant and equipment net",
             "net property plant and equipment",
@@ -1808,6 +1809,8 @@ def _companyfacts_query_priority_metrics(query: str) -> tuple[str, ...]:
         add("capital expenditures")
     if any(alias in normalized for alias in ("operating cash flow", "cash flow from operating", "operating activities")):
         add("operating cash flow")
+    if any(alias in normalized for alias in ("total assets", "assets")):
+        add("assets")
     if any(alias in normalized for alias in ("revenue", "revenues", "sales", "net sales")):
         add("revenue")
         add("net sales")

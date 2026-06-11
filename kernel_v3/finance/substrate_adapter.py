@@ -178,6 +178,13 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
         "yoy_growth": ["prior_period_value", "current_period_value"],
         "dcf": ["entity", "base_cash_flow", "growth_assumptions", "discount_rate", "terminal_value_assumption"],
         "lbo": ["entity", "entry_value", "debt_assumption", "cash_flow_or_ebitda", "exit_assumption"],
+        "capital_intensity": [
+            "capital_expenditures",
+            "revenue",
+            "operating_cash_flow",
+            "property_plant_and_equipment_net",
+            "assets",
+        ],
     }
     names = slots_by_formula.get(str(formula_name or ""), [])
     return [
@@ -341,6 +348,19 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "ebitda",
         ],
         "exit_assumption": ["exit multiple", "terminal multiple", "exit value"],
+        "capital_expenditures": ["capital expenditures", "capex"],
+        "operating_cash_flow": [
+            "operating cash flow",
+            "cash flow from operations",
+            "net cash provided by operating activities",
+        ],
+        "property_plant_and_equipment_net": [
+            "property plant and equipment net",
+            "net property plant and equipment",
+            "net ppne",
+            "ppne",
+        ],
+        "assets": ["assets", "total assets"],
     }
     return mapping.get(name, [name])
 
@@ -350,7 +370,7 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         return "reconcile"
     if formula_name in {"dcf", "lbo"}:
         return "model"
-    if formula_name in {"dio", "ev_revenue", "ev_ebitda", "cagr", "margin", "bps_difference", "yoy_growth"}:
+    if formula_name in {"dio", "ev_revenue", "ev_ebitda", "cagr", "margin", "bps_difference", "yoy_growth", "capital_intensity"}:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
 
@@ -366,6 +386,8 @@ def _infer_formula_name(question: str) -> str:
         return "ev_ebitda"
     if "ev/revenue" in compact or "ev/rev" in compact:
         return "ev_revenue"
+    if "capital-intensive" in text or "capital intensive" in text or "capital intensity" in text:
+        return "capital_intensity"
     if "dio" in text or "days inventory" in text:
         return "dio"
     if "cagr" in text:

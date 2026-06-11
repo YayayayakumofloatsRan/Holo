@@ -24,6 +24,57 @@ class EvidencePolicy(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class TaskSpec(Contract):
+    spec_id: str
+    domain: str
+    task_type: str
+    objective: str
+    target_entities: list[str] = field(default_factory=list)
+    target_periods: list[str] = field(default_factory=list)
+    success_criteria: list[str] = field(default_factory=list)
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class EvidenceSpec(Contract):
+    spec_id: str
+    slot_name: str
+    domain: str
+    accepted_attributes: list[str] = field(default_factory=list)
+    source_role: str | None = None
+    required_source_families: list[str] = field(default_factory=list)
+    target_period: str | None = None
+    statement: str | None = None
+    line_item: str | None = None
+    required: bool = True
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class TransformSpec(Contract):
+    spec_id: str
+    domain: str
+    name: str
+    required_slots: list[str] = field(default_factory=list)
+    expression: str | None = None
+    output_unit: str | None = None
+    output_attribute: str | None = None
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class CompiledTaskProgram(Contract):
+    program_id: str
+    domain: str
+    task_spec: TaskSpec
+    evidence_specs: list[EvidenceSpec] = field(default_factory=list)
+    transform_specs: list[TransformSpec] = field(default_factory=list)
+    slot_frame: "SlotFrame | None" = None
+    transform_plan: "TransformPlan | None" = None
+    diagnostics: JsonObject = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class SlotSpec(Contract):
     name: str
     requirement: SlotRequirement = "required"

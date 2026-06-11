@@ -1233,6 +1233,17 @@ unsupported numeric claim rate `0.3333`. Item 3 remains a real
 capital-intensity workflow gap: the workbench identifies missing PP&E / assets /
 capex / operating-cash-flow slots, but the current run still lacks a supported
 calculator/verifier path for the qualitative judgment.
+Task Compiler v1 now makes that gap explicit instead of leaving it as a raw
+retrieval failure. Finance questions are compiled into generic `TaskSpec`,
+`EvidenceSpec`, and `TransformSpec` records before synthesis, and runtime
+journals a `compiled_task_program` record alongside the claim ledger and slot
+frame. In `run_financebench_doc_live3_task_compiler_v1`, the same live3 slice
+remains `2/3`, but compiled-program coverage is `1.0`; item 3 is now a
+`compute` task with five evidence specs, three capital-intensity transform
+specs, and explicit missing slots for capital expenditures, operating cash
+flow, net PP&E, and assets. The verifier/synthesis gates still reject the final
+unsupported numeric answer, which is the correct host-owned failure mode until
+those slots are filled and calculator traces exist.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

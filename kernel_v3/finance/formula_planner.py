@@ -53,6 +53,8 @@ def plan_finance_formula(
         return _plan_dcf(question=question, facts=usable)
     if formula == "lbo":
         return _plan_lbo(question=question, facts=usable)
+    if formula == "capital_intensity":
+        return _plan_capital_intensity(usable)
     return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "unsupported_formula", "formula": formula})
 
 
@@ -67,6 +69,8 @@ def _detect_formula(question: str) -> str | None:
         return "dcf"
     if re.search(r"\blbo\b", text) or "leveraged buyout" in text:
         return "lbo"
+    if "capital-intensive" in text or "capital intensive" in text or "capital intensity" in text:
+        return "capital_intensity"
     if "ev/revenue" in compact or "ev/rev" in compact or "enterprise value to revenue" in text:
         return "ev_revenue"
     if "ev/ebitda" in compact or "enterprise value to ebitda" in text:
@@ -136,6 +140,69 @@ def _plan_margin(facts: list[FinanceFact]) -> FinanceFormulaPlan:
         unit="percent",
         facts=[numerator, denominator],
     )
+
+
+def _plan_capital_intensity(facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    capex = _latest_fact(facts, ("capital expenditures",))
+    revenue = _latest_fact(facts, ("revenue", "net sales", "net revenues", "total revenues", "sales"))
+    operating_cash_flow = _latest_fact(
+        facts,
+        (
+            "operating cash flow",
+            "cash flow from operations",
+            "net cash provided by operating activities",
+        ),
+    )
+    ppe = _latest_fact(facts, ("property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"))
+    assets = _latest_fact(facts, ("assets", "total assets"))
+    missing = []
+    if capex is None:
+        missing.append("capital_expenditures")
+    if revenue is None:
+        missing.append("revenue")
+    if operating_cash_flow is None:
+        missing.append("operating_cash_flow")
+    if ppe is None:
+        missing.append("property_plant_and_equipment_net")
+    if assets is None:
+        missing.append("assets")
+    if missing:
+        return _missing(
+            "capital_intensity",
+            missing,
+            facts=[item for item in (capex, revenue, operating_cash_flow, ppe, assets) if item is not None],
+            diagnostics={
+                "required_ratios": ["capex_to_revenue", "capex_to_operating_cash_flow", "ppe_to_assets"],
+                "reason": "capital_intensity_requires_multiple_balance_sheet_and_cash_flow_slots",
+            },
+        )
+    return _ready(
+        "capital_intensity",
+        "capital_expenditures / revenue",
+        {
+            "capital_expenditures": _absolute_decimal_string(capex.value),
+            "revenue": revenue.value,
+            "operating_cash_flow": operating_cash_flow.value,
+            "property_plant_and_equipment_net": ppe.value,
+            "assets": assets.value,
+        },
+        unit="percent",
+        facts=[capex, revenue, operating_cash_flow, ppe, assets],
+        diagnostics={
+            "required_ratios": ["capex_to_revenue", "capex_to_operating_cash_flow", "ppe_to_assets"],
+            "secondary_expressions": {
+                "capex_to_operating_cash_flow": "capital_expenditures / operating_cash_flow",
+                "ppe_to_assets": "property_plant_and_equipment_net / assets",
+            },
+        },
+    )
+
+
+def _absolute_decimal_string(value: object) -> str:
+    decimal = _decimal_or_none(value)
+    if decimal is None:
+        return str(value)
+    return str(abs(decimal))
 
 
 def _plan_bps_difference(facts: list[FinanceFact]) -> FinanceFormulaPlan:
@@ -1436,13 +1503,19 @@ def _ready(
     )
 
 
-def _missing(formula_name: str, missing: list[str], *, facts: list[FinanceFact] | None = None) -> FinanceFormulaPlan:
+def _missing(
+    formula_name: str,
+    missing: list[str],
+    *,
+    facts: list[FinanceFact] | None = None,
+    diagnostics: JsonObject | None = None,
+) -> FinanceFormulaPlan:
     return FinanceFormulaPlan(
         status="missing_facts",
         formula_name=formula_name,
         missing_facts=missing,
         input_fact_ids=[fact.fact_id for fact in facts or []],
-        diagnostics={"reason": "insufficient_formula_inputs"},
+        diagnostics={"reason": "insufficient_formula_inputs", **dict(diagnostics or {})},
     )
 
 

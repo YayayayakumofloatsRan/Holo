@@ -68,6 +68,12 @@ same first-three-item slice to `2/3`: item 2 closes after inline
 `Document period` parsing and balance-sheet net PP&E / net PPNE binding to SEC
 `PropertyPlantAndEquipmentNet`. Item 3 remains a capital-intensity workflow gap
 requiring missing slot recovery and a supported transform.
+Task Compiler v1 keeps the same live3 slice at `2/3`, but adds a first-class
+program trace: compiled task program presence is `1.0`, and item 3 is compiled
+as a `compute` task with five evidence specs, three capital-intensity transform
+specs, and explicit missing slots for capex, operating cash flow, net PP&E, and
+assets. This makes the next doc-retrieval work a slot/transform binding problem
+rather than an undefined search-threshold problem.
 
 FinQA dev oracle100 confirms the FinQA oracle-context path scales beyond the
 earlier 20-row diagnostic, but the score drops from the small oracle20 sample:

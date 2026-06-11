@@ -40,6 +40,7 @@ from kernel_v3.finance import (
     FormulaTrace,
     attach_target_binding_to_facts,
     build_finance_fact_ledger,
+    compile_finance_task_program,
     compute_formula,
     finance_facts_to_claims,
     finance_formula_plan_to_transform_plan,
@@ -1870,7 +1871,29 @@ class AgentRuntime:
             state_delta={"claim_count": len(claims)},
         )
         if question:
-            frame = finance_slot_frame(question=question, facts=facts)
+            plan = plan_finance_formula(question=question, facts=facts, existing_traces=[])
+            compiled = compile_finance_task_program(question=question, facts=facts, target_binding=binding, plan=plan)
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="compiled_task_program",
+                data=redact_journal_data(
+                    {
+                        **compiled.to_dict(),
+                        "schema": "holo.kernel_v3.compiled_task_program.v1",
+                        "source": "finance_task_compiler",
+                        "claim_ledger_ref": claim_record.record_id,
+                        "finance_fact_ledger_ref": ledger_record.record_id,
+                    }
+                ),
+                state_delta={
+                    "compiled_task_program": compiled.task_spec.task_type,
+                    "compiled_evidence_spec_count": len(compiled.evidence_specs),
+                    "compiled_transform_spec_count": len(compiled.transform_specs),
+                },
+            )
+            frame = compiled.slot_frame or finance_slot_frame(question=question, facts=facts, plan=plan)
             self.journal.append(
                 task_id=task_id,
                 run_id=run_id,
@@ -3042,6 +3065,8 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
         return any(marker in text for marker in ("dcf", "discounted cash flow", "cash flow", "wacc", "terminal growth"))
     if formula_name == "lbo" and missing:
         return any(marker in text for marker in ("lbo", "leveraged buyout", "ebitda", "exit multiple", "leverage"))
+    if formula_name == "capital_intensity" and missing:
+        return any(marker in text for marker in ("capital-intensive", "capital intensive", "capital intensity", "capex", "property plant", "assets"))
     return False
 
 
@@ -3086,6 +3111,11 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             f"{base_query} 10-K adjusted EBITDA operating cash flow free cash flow enterprise value market cap debt cash "
             "LBO leverage exit multiple assumptions"
         )
+    elif formula_name == "capital_intensity":
+        query = (
+            f"{base_query} SEC companyfacts capital expenditures revenue operating cash flow total assets "
+            "PropertyPlantAndEquipmentNet PP&E net"
+        )
     else:
         query = f"{base_query} SEC filing missing finance facts {' '.join(missing)}"
     queries = _finance_missing_fact_queries(
@@ -3102,6 +3132,9 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
     if formula_name in {"dcf", "lbo"}:
         max_queries = min(6, max(4, len(queries)))
         max_fetches = 18
+    if formula_name == "capital_intensity":
+        max_queries = min(5, max(3, len(queries)))
+        max_fetches = 16
     return {
         "query": query,
         "queries": queries[:max_queries],
@@ -3277,6 +3310,10 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
         for ticker in tickers:
             add(f"{ticker} 10-K EBITDA operating cash flow free cash flow debt cash enterprise value market cap SEC")
             add(f"{ticker} LBO leverage exit multiple assumptions")
+    elif formula_name == "capital_intensity" and tickers:
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts capital expenditures revenue operating cash flow total assets PropertyPlantAndEquipmentNet")
+            add(f"{ticker} 10-K balance sheet PP&E assets cash flow capital expenditures")
     else:
         add(_finance_missing_fact_secondary_query(formula_name=formula_name, goal=goal))
         add(_finance_missing_fact_tertiary_query(formula_name=formula_name, goal=goal))
@@ -3294,6 +3331,8 @@ def _finance_missing_fact_preferred_families(formula_name: str) -> list[str]:
         return ["market_data_provider", "structured_regulatory_data", "regulatory_filing"]
     if formula_name in {"dcf", "lbo"}:
         return ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"]
+    if formula_name == "capital_intensity":
+        return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
     return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
 
 
@@ -3317,6 +3356,8 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} annual report 10-K operating cash flow free cash flow capital expenditures"
     if formula_name == "lbo":
         return f"{goal} annual report 10-K adjusted EBITDA operating cash flow free cash flow debt cash enterprise value"
+    if formula_name == "capital_intensity":
+        return f"{goal} annual report 10-K PP&E total assets capital expenditures operating cash flow revenue"
     return f"{goal} SEC Archives 8-K 10-K consideration revenue"
 
 
@@ -3329,6 +3370,8 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} investor relations DCF assumptions WACC terminal growth cash flow"
     if formula_name == "lbo":
         return f"{goal} investor relations LBO assumptions leverage exit multiple EBITDA cash flow"
+    if formula_name == "capital_intensity":
+        return f"{goal} SEC companyfacts PropertyPlantAndEquipmentNet Assets PaymentsToAcquirePropertyPlantAndEquipment NetCashProvidedByUsedInOperatingActivities Revenues"
     return f"{goal} official filing transaction value revenue"
 
 

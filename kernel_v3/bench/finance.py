@@ -105,6 +105,9 @@ class FinanceBenchmarkSummary(Contract):
     formula_trace_present_rate: float
     average_formula_traces: float
     claim_ledger_present_rate: float
+    compiled_task_program_present_rate: float
+    average_compiled_evidence_specs: float
+    average_compiled_transform_specs: float
     transform_plan_present_rate: float
     average_transform_plans: float
     slot_frame_present_rate: float
@@ -483,6 +486,12 @@ def summarize_finance_benchmark(
         formula_trace_present_rate=_rate(sum(1 for result in results if int(result.trace_metrics.get("formula_trace_count") or 0) > 0), len(results)),
         average_formula_traces=_average_metric(results, "formula_trace_count"),
         claim_ledger_present_rate=_rate(sum(1 for result in results if bool(result.trace_metrics.get("claim_ledger_present"))), len(results)),
+        compiled_task_program_present_rate=_rate(
+            sum(1 for result in results if bool(result.trace_metrics.get("compiled_task_program_present"))),
+            len(results),
+        ),
+        average_compiled_evidence_specs=_average_metric(results, "compiled_evidence_spec_count"),
+        average_compiled_transform_specs=_average_metric(results, "compiled_transform_spec_count"),
         transform_plan_present_rate=_rate(sum(1 for result in results if int(result.trace_metrics.get("transform_plan_count") or 0) > 0), len(results)),
         average_transform_plans=_average_metric(results, "transform_plan_count"),
         slot_frame_present_rate=_rate(sum(1 for result in results if bool(result.trace_metrics.get("slot_frame_present"))), len(results)),
@@ -678,6 +687,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     claim_ledgers = [record.data for record in records if record.kind == "claim_ledger"]
     slot_frames = [record.data for record in records if record.kind == "slot_frame"]
     transform_plans = [record.data for record in records if record.kind == "transform_plan"]
+    compiled_programs = [record.data for record in records if record.kind == "compiled_task_program"]
     verifier_gates = [record.data for record in records if record.kind == "verifier_gate_result"]
     synthesis_gates = [record.data for record in records if record.kind == "synthesis_gate_result"]
     workbench_decisions = [record.data for record in records if record.kind == "retrieval_workbench_decision"]
@@ -708,6 +718,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     latest_ledger = finance_ledgers[-1] if finance_ledgers else {}
     latest_claim_ledger = claim_ledgers[-1] if claim_ledgers else {}
     latest_slot_frame = slot_frames[-1] if slot_frames else {}
+    latest_compiled_program = compiled_programs[-1] if compiled_programs else {}
     latest_verifier_gate = verifier_gates[-1] if verifier_gates else {}
     latest_synthesis_gate = synthesis_gates[-1] if synthesis_gates else {}
     latest_workbench = workbench_decisions[-1] if workbench_decisions else {}
@@ -782,6 +793,12 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "formula_trace_count": len(formula_trace_ids),
         "claim_ledger_present": bool(claim_ledgers),
         "claim_count": _int_value(latest_claim_ledger.get("claim_count")) if isinstance(latest_claim_ledger, dict) else 0,
+        "compiled_task_program_present": bool(compiled_programs),
+        "compiled_task_program_count": len(compiled_programs),
+        "compiled_task_type": _compiled_task_type(latest_compiled_program),
+        "compiled_evidence_spec_count": _compiled_list_count(latest_compiled_program, "evidence_specs"),
+        "compiled_transform_spec_count": _compiled_list_count(latest_compiled_program, "transform_specs"),
+        "compiled_missing_slots": _compiled_missing_slots(latest_compiled_program),
         "transform_plan_present": bool(transform_plans),
         "transform_plan_count": len(transform_plans),
         "transform_methods": transform_methods[:32],
@@ -1366,6 +1383,39 @@ def _transform_methods(transform_plans: list[JsonObject]) -> list[str]:
             if isinstance(value, str) and value:
                 methods.append(value)
     return _ordered_unique(methods)
+
+
+def _compiled_task_type(program: JsonObject) -> str | None:
+    if not isinstance(program, dict):
+        return None
+    task_spec = program.get("task_spec") if isinstance(program.get("task_spec"), dict) else {}
+    value = task_spec.get("task_type")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _compiled_list_count(program: JsonObject, key: str) -> int:
+    if not isinstance(program, dict):
+        return 0
+    value = program.get(key)
+    if isinstance(value, list):
+        return len(value)
+    return 0
+
+
+def _compiled_missing_slots(program: JsonObject) -> list[str]:
+    if not isinstance(program, dict):
+        return []
+    diagnostics = program.get("diagnostics") if isinstance(program.get("diagnostics"), dict) else {}
+    missing = diagnostics.get("missing_slots")
+    if isinstance(missing, list):
+        return [str(item) for item in missing if str(item)]
+    slot_frame = program.get("slot_frame") if isinstance(program.get("slot_frame"), dict) else {}
+    missing = slot_frame.get("missing_slots")
+    if isinstance(missing, list):
+        return [str(item) for item in missing if str(item)]
+    return []
 
 
 def _repeatability_summary(results: list[FinanceBenchmarkResult]) -> tuple[int, float | None]:

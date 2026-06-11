@@ -148,6 +148,14 @@ accuracy `0.6667`, claim-ledger / slot-frame / transform-plan present rate
 `1.0`, citation preservation `0.6667`, synthesis-gate pass rate `0.6667`, and
 unsupported numeric claim rate `0.3333`. Item 3 remains a capital-intensity
 slot/transform gap rather than an empty-retrieval gap.
+Task Compiler v1 now turns that item-3 gap into a first-class program state:
+`run_financebench_doc_live3_task_compiler_v1` keeps the live3 result at `2/3`,
+but every item has a `compiled_task_program`. Item 3 is compiled as a `compute`
+task with five evidence specs, three capital-intensity transform specs, and
+missing slots for capital expenditures, operating cash flow, net PP&E, and
+assets. The verifier and synthesis gates still fail the answer because no
+calculator-backed numeric support exists yet; this is the intended failure
+surface for the next iteration.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy

@@ -204,6 +204,12 @@ Result:
 Issue #3 live1 validation is now closed by
 `run_financebench_doc_live1_binding_v7`, and the focused live3 follow-up
 `run_financebench_doc_live3_binding_v2` improves the small probe to `2/3`.
-The next FinanceBench doc-retrieval work should focus on item 3's
-capital-intensity slot/transform path and source-grounded synthesis repair,
-not on broad threshold expansion or fixed answer tables.
+Task Compiler v1 now adds the missing program boundary for that next step:
+finance runtime journals `compiled_task_program` records with generic
+`TaskSpec`, `EvidenceSpec`, and `TransformSpec` payloads. The live probe
+`run_financebench_doc_live3_task_compiler_v1` still scores `2/3`, but
+compiled-program coverage is `1.0`; item 3 is compiled as a capital-intensity
+`compute` task with explicit missing slots for capital expenditures, operating
+cash flow, net PP&E, and assets. The next FinanceBench doc-retrieval work should
+therefore focus on filling those slots and binding calculator traces, not on
+broad threshold expansion or fixed answer tables.

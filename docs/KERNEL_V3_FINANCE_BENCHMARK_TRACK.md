@@ -212,6 +212,16 @@ not repeatedly download these sources during benchmark iteration.
   and unsupported numeric claim rate `0.3333`. Item 3 remains a capital-
   intensity slot/transform gap, not the original secondary-current `899M`
   failure.
+- Task Compiler v1 adds the missing intermediate program layer for this gap:
+  finance runtime now journals a `compiled_task_program` with generic
+  `TaskSpec`, `EvidenceSpec`, and `TransformSpec` records. The live validation
+  `run_financebench_doc_live3_task_compiler_v1` keeps the slice at `2/3`, but
+  compiled-program presence is `1.0` and item 3 is no longer just a failed
+  retrieval/synthesis item. It is compiled as a `compute` task with five
+  evidence specs, three capital-intensity transform specs, and missing slots
+  for capital expenditures, operating cash flow, net PP&E, and assets. The
+  current final answer still fails numeric support, so the correct next work is
+  slot filling plus calculator binding, not another threshold search patch.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,
