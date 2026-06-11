@@ -222,6 +222,17 @@ not repeatedly download these sources during benchmark iteration.
   for capital expenditures, operating cash flow, net PP&E, and assets. The
   current final answer still fails numeric support, so the correct next work is
   slot filling plus calculator binding, not another threshold search patch.
+- Target-slot binding closes the first FinanceBench doc-retrieval slice.
+  `run_financebench_doc_live3_target_slots_v4` passes `3/3`: pass rate /
+  numeric accuracy `1.0`, workflow / substrate score `1.0`, citation
+  preservation `1.0`, numeric verifier / verifier gate / synthesis gate pass
+  rate `1.0`, unsupported numeric claim rate `0`, and calculator/formula trace
+  rate `0.3333`. The third item now keeps FY2022 SEC companyfacts evidence for
+  revenue, operating cash flow, capex, net PP&E, and assets, then computes
+  capital intensity with a host calculator trace. The first broader
+  `run_financebench_doc_live10_target_slots_v1` baseline is `3/10`: the closed
+  slice holds, while later rows expose target PDF/table extraction,
+  source-resolution, and qualitative disclosure-answer gaps.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,

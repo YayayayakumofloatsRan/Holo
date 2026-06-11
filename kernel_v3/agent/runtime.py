@@ -2759,6 +2759,7 @@ class _RecipeBoundPlanner:
                 plan=plan,
                 goal=self.goal,
                 call_index=self._calls,
+                recipe=self.recipe,
             )
             if retrieval is not None:
                 rescue_payload = _host_rescue_retrieval_payload(
@@ -2846,6 +2847,7 @@ class _RecipeBoundPlanner:
                 plan=plan,
                 goal=self.goal,
                 call_index=self._calls,
+                recipe=self.recipe,
             )
         if _formula_trace_covers_inputs(existing_traces, _string_list(plan.payload.get("input_fact_ids"))):
             return None
@@ -3027,13 +3029,18 @@ def _finance_missing_fact_retrieval_action(
     plan: object,
     goal: str,
     call_index: int,
+    recipe: TaskRecipe | None = None,
 ) -> CandidateAction | None:
     formula_name = str(getattr(plan, "formula_name", "") or "")
     missing = [str(item) for item in getattr(plan, "missing_facts", []) or [] if str(item)]
     if not _finance_missing_fact_retrieval_needed(formula_name=formula_name, missing=missing, goal=goal):
         return None
     payload = dict(source_action.payload) if isinstance(source_action.payload, dict) else {}
-    payload.update(_finance_missing_fact_retrieval_payload(formula_name=formula_name, missing=missing, goal=goal))
+    payload = _merge_retrieval_payload(
+        payload,
+        _finance_missing_fact_retrieval_payload(formula_name=formula_name, missing=missing, goal=goal),
+    )
+    payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=True)
     return CandidateAction(
         action_id=f"act-finance-missing-facts-retrieval-{call_index}",
         kind="tool",
@@ -3172,7 +3179,16 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             continue
         padded = cik.zfill(10)
         urls.append(f"https://data.sec.gov/submissions/CIK{padded}.json")
-        if formula_name in {"ev_revenue", "ev_ebitda", "margin", "cagr", "yoy_growth", "dcf", "lbo"}:
+        if formula_name in {
+            "ev_revenue",
+            "ev_ebitda",
+            "margin",
+            "cagr",
+            "yoy_growth",
+            "dcf",
+            "lbo",
+            "capital_intensity",
+        }:
             urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
     return _ordered_unique(urls)[:12]
 
@@ -7678,7 +7694,7 @@ def _benchmark_doc_retrieval_inline_labels(goal: str) -> JsonObject:
     question_start = _benchmark_doc_retrieval_question_start_pattern()
     result: JsonObject = {}
     for match in re.finditer(
-        rf"(?P<label>{label_pattern})\s*:\s*(?P<value>.*?)(?=\s+(?:{label_pattern})\s*:|\s{{2,}}(?:{question_start})\b|$)",
+        rf"(?P<label>{label_pattern})\s*:\s*(?P<value>.*?)(?=\s+(?:{label_pattern})\s*:|\s+(?:{question_start})\b|$)",
         text,
         flags=re.IGNORECASE,
     ):

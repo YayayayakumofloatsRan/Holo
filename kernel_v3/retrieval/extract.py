@@ -429,6 +429,9 @@ def _target_document_binding_candidates(text: str, *, goal: SearchGoal, terms: l
     binding = _target_document_binding(goal)
     if not binding:
         return []
+    structured_companyfacts = _target_structured_companyfacts_candidates(text, goal=goal, binding=binding, terms=terms)
+    if structured_companyfacts:
+        return structured_companyfacts
     line_item = _string_value(binding.get("required_line_item")).lower()
     period = _string_value(binding.get("doc_period"))
     statement = _string_value(binding.get("required_statement")).lower()
@@ -482,6 +485,136 @@ def _target_document_binding_candidates(text: str, *, goal: SearchGoal, terms: l
             }
         )
     return candidates
+
+
+def _target_structured_companyfacts_candidates(
+    text: str,
+    *,
+    goal: SearchGoal,
+    binding: JsonObject,
+    terms: list[str],
+) -> list[dict]:
+    if "sec companyfacts official" not in text.lower():
+        return []
+    intent_text = " ".join(
+        part
+        for part in (
+            goal.query,
+            _metadata_intent_text(goal.metadata),
+        )
+        if part
+    )
+    target_years = _companyfacts_target_years(intent_text)
+    if not target_years and binding.get("doc_period"):
+        try:
+            target_years = {int(str(binding.get("doc_period")))}
+        except ValueError:
+            target_years = set()
+    target_metrics = _companyfacts_query_priority_metrics(intent_text)
+    if not target_metrics:
+        target_metrics = _companyfacts_target_binding_metrics(binding)
+    if not target_years or not target_metrics:
+        return []
+    target_accession = _target_binding_accession(binding)
+    metric_order = {metric: index for index, metric in enumerate(target_metrics)}
+    candidates: list[tuple[tuple[int, int, int, int, str], dict]] = []
+    offset = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            offset += len(line) + 1
+            continue
+        lower = stripped.lower()
+        if "sec companyfacts official financial statement" not in lower:
+            offset += len(line) + 1
+            continue
+        metric = _structured_line_value(lower, "metric")
+        if metric not in metric_order:
+            offset += len(line) + 1
+            continue
+        year = _structured_line_int_value(lower, "period_fy")
+        if year not in target_years:
+            offset += len(line) + 1
+            continue
+        line_accession = _structured_line_value(lower, "accn").replace("-", "")
+        exact_accession = bool(target_accession and line_accession == target_accession)
+        form = _structured_line_value(lower, "form").replace("-", "")
+        target_form = str(binding.get("doc_type") or "").lower().replace("-", "")
+        exact_form = bool(target_form and form == target_form)
+        matched = [candidate for candidate in terms if candidate in lower]
+        for marker in (metric, str(year), "companyfacts", "sec_xbrl_companyfacts"):
+            if marker and marker not in matched:
+                matched.append(marker)
+        candidate = {
+            "start_offset": offset,
+            "end_offset": offset + len(line),
+            "text": _normalize_span(f"{text.splitlines()[0]} {stripped}"),
+            "matched_terms": matched,
+            "score": 1.0,
+            "target_document_binding": binding,
+            "target_period": str(year),
+            "target_line_item": metric,
+        }
+        priority = (
+            metric_order.get(metric, 999),
+            0 if exact_accession else 1,
+            0 if exact_form else 1,
+            offset,
+            stripped,
+        )
+        candidates.append((priority, candidate))
+        offset += len(line) + 1
+    return [candidate for _priority, candidate in sorted(candidates, key=lambda item: item[0])[:32]]
+
+
+STRUCTURED_LINE_KEYS = (
+    "entityname",
+    "ticker",
+    "cik",
+    "taxonomy",
+    "concept",
+    "metric",
+    "label",
+    "unit",
+    "period_fy",
+    "period",
+    "fy",
+    "fp",
+    "form",
+    "filed",
+    "end",
+    "start",
+    "frame",
+    "accn",
+    "value",
+    "val",
+    "scale",
+)
+
+
+def _structured_line_value(line: str, key: str) -> str:
+    normalized_key = key.lower()
+    match = re.search(rf"(?:^|\s){re.escape(normalized_key)}=", line, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    key_pattern = re.compile(
+        r"(?P<key>" + "|".join(re.escape(item) for item in STRUCTURED_LINE_KEYS) + r")=",
+        flags=re.IGNORECASE,
+    )
+    value_start = match.end()
+    next_match = key_pattern.search(line, value_start)
+    value_end = next_match.start() if next_match else len(line)
+    return line[value_start:value_end].strip().strip(",;")
+
+
+def _structured_line_int_value(line: str, key: str) -> int | None:
+    value = _structured_line_value(line, key)
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _target_should_use_structured_line(text: str, index: int) -> bool:

@@ -1245,6 +1245,28 @@ flow, net PP&E, and assets. The verifier/synthesis gates still reject the final
 unsupported numeric answer, which is the correct host-owned failure mode until
 those slots are filled and calculator traces exist.
 
+The next target-slot iteration closes that first FinanceBench doc-retrieval
+slice. `run_financebench_doc_live3_target_slots_v4` passes `3/3` with live
+retrieval, pass rate / numeric accuracy `1.0`, claim-ledger / slot-frame /
+transform-plan presence `1.0`, citation preservation `1.0`, numeric verifier /
+verifier gate / synthesis gate pass rate `1.0`, unsupported numeric claim rate
+`0`, and calculator/formula trace rate `0.3333`. The previously failing
+capital-intensity item now retrieves FY2022 SEC companyfacts slots for revenue,
+operating cash flow, capex, net PP&E, and assets, runs a host calculator trace
+for `capital_expenditures / revenue`, and answers the benchmark's `5.1%`
+numeric target with citable evidence.
+
+The same changes were expanded to a first FinanceBench doc-retrieval live10
+baseline: `run_financebench_doc_live10_target_slots_v1` scores pass rate
+`0.30`, numeric accuracy `0.30`, workflow score `0.6572`, substrate score
+`0.60`, citation preservation `0.40`, calculator/formula trace rate `0.20`,
+verifier gate pass rate `1.0` where verifier gates run, and unsupported numeric
+claim rate `0`. This is a baseline, not a solved benchmark. The failures are now
+clearer: several later rows produce zero finance facts/claims because target
+PDF/table extraction and source acquisition are not yet robust beyond the
+closed 3M slice, while one disclosure-style row has facts but the answer
+contract does not match the qualitative security-list task.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

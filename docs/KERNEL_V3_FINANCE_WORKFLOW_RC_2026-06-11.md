@@ -157,6 +157,19 @@ assets. The verifier and synthesis gates still fail the answer because no
 calculator-backed numeric support exists yet; this is the intended failure
 surface for the next iteration.
 
+That intended next iteration is now complete for the first live slice.
+`run_financebench_doc_live3_target_slots_v4` passes `3/3` with pass rate /
+numeric accuracy `1.0`, workflow / substrate score `1.0`, citation preservation
+`1.0`, numeric verifier / verifier gate / synthesis gate pass rate `1.0`,
+unsupported numeric claim rate `0`, and calculator/formula trace rate `0.3333`.
+The capital-intensity item now preserves the target FY2022 SEC companyfacts
+facts for revenue, operating cash flow, capex, net PP&E, and assets, then runs a
+host calculator trace for `capital_expenditures / revenue` and matches the
+`5.1%` gold target. The first expanded doc-retrieval baseline,
+`run_financebench_doc_live10_target_slots_v1`, is `3/10`; the failures now
+cluster around target PDF/table extraction and source resolution beyond the
+closed first slice, plus disclosure-style qualitative answer contracts.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
 `0.15`, workflow score `0.925`, substrate score `0.8816`,

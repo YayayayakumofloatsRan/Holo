@@ -39,8 +39,10 @@ from kernel_v3.finance import (
 from kernel_v3.finance.calculator import register_finance_tools
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
-from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, FetchedDocument, RetrievalReport
-from kernel_v3.retrieval.extract import readable_document_text
+from kernel_v3.research.profiles import finance_fundamentals_profile
+from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, FetchedDocument, RetrievalReport, SearchGoal
+from kernel_v3.retrieval.evaluate import qualify_evidence_candidate
+from kernel_v3.retrieval.extract import extract_spans, readable_document_text
 from kernel_v3.retrieval.targeting import target_entity_phrases
 from kernel_v3.tools import ToolRegistry
 
@@ -129,6 +131,377 @@ def test_finance_fact_ledger_parses_period_fy_without_polluting_concept() -> Non
     assert facts[0].value == "1577000000"
     assert facts[0].fiscal_year == 2018
     assert facts[0].metadata["concept"] == "PaymentsToAcquirePropertyPlantAndEquipment"
+
+
+def test_companyfacts_readable_text_prioritizes_target_year_missing_slots() -> None:
+    body = json.dumps(
+        {
+            "entityName": "3M COMPANY",
+            "cik": 66740,
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "label": "Revenues",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 24948000000,
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-02-03",
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "frame": "CY2025",
+                                    "accn": "0000066740-26-000014",
+                                },
+                                {
+                                    "val": 34229000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "start": "2022-01-01",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                },
+                            ]
+                        },
+                    },
+                    "PaymentsToAcquirePropertyPlantAndEquipment": {
+                        "label": "Payments to Acquire Property, Plant, and Equipment",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 910000000,
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-02-03",
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "frame": "CY2025",
+                                    "accn": "0000066740-26-000014",
+                                },
+                                {
+                                    "val": 1749000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "start": "2022-01-01",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                },
+                            ]
+                        },
+                    },
+                    "NetCashProvidedByUsedInOperatingActivities": {
+                        "label": "Net Cash Provided by (Used in) Operating Activities",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 2306000000,
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-02-03",
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "frame": "CY2025",
+                                    "accn": "0000066740-26-000014",
+                                },
+                                {
+                                    "val": 5591000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "start": "2022-01-01",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                },
+                            ]
+                        },
+                    },
+                    "PropertyPlantAndEquipmentNet": {
+                        "label": "Property, Plant and Equipment, Net",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 7101000000,
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-02-03",
+                                    "end": "2025-12-31",
+                                    "accn": "0000066740-26-000014",
+                                },
+                                {
+                                    "val": 9178000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                },
+                            ]
+                        },
+                    },
+                    "Assets": {
+                        "label": "Assets",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 37733000000,
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-02-03",
+                                    "end": "2025-12-31",
+                                    "accn": "0000066740-26-000014",
+                                },
+                                {
+                                    "val": 46455000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                },
+                            ]
+                        },
+                    },
+                }
+            },
+        }
+    )
+    document = FetchedDocument(
+        document_id="doc-3m-companyfacts",
+        goal_id="goal",
+        source_id="source",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+        title="SEC companyfacts JSON for CIK 0000066740",
+        artifact_id="artifact",
+        payload_hash="hash",
+        preview="",
+        size_bytes=len(body),
+        metadata={"mime_type": "application/json"},
+    )
+    goal = SearchGoal(
+        goal_id="goal",
+        query=(
+            "3M FY2022 capital expenditures revenue operating cash flow total assets "
+            "PropertyPlantAndEquipmentNet"
+        ),
+        metadata={
+            "target_document_binding": {
+                "company": "3M",
+                "doc_link": (
+                    "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+                    "0000066740-23-000014.pdf"
+                ),
+                "doc_type": "10k",
+                "doc_period": "2022",
+                "primary_source_required": True,
+            }
+        },
+    )
+
+    text, mode = readable_document_text(body, document=document, goal=goal)
+
+    assert mode == "sec_companyfacts_readable_text"
+    target_index = text.index("value=1749000000")
+    assert target_index < text.index("value=910000000")
+    assert "concept=Revenues metric=revenue" in text
+    assert "value=34229000000" in text
+    assert "concept=NetCashProvidedByUsedInOperatingActivities metric=operating cash flow" in text
+    assert "value=5591000000" in text
+    assert "concept=PropertyPlantAndEquipmentNet metric=property plant and equipment net" in text
+    assert "value=9178000000" in text
+    assert "concept=Assets metric=assets" in text
+    assert "value=46455000000" in text
+
+
+def test_companyfacts_target_bound_slots_are_qualified_finance_evidence() -> None:
+    body = json.dumps(
+        {
+            "entityName": "3M COMPANY",
+            "cik": 66740,
+            "facts": {
+                "us-gaap": {
+                    "Revenues": {
+                        "label": "Revenues",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 34229000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "start": "2022-01-01",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                }
+                            ]
+                        },
+                    },
+                    "PaymentsToAcquirePropertyPlantAndEquipment": {
+                        "label": "Payments to Acquire Property, Plant, and Equipment",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 1749000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "start": "2022-01-01",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                }
+                            ]
+                        },
+                    },
+                    "NetCashProvidedByUsedInOperatingActivities": {
+                        "label": "Net Cash Provided by (Used in) Operating Activities",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 5591000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "start": "2022-01-01",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                }
+                            ]
+                        },
+                    },
+                    "PropertyPlantAndEquipmentNet": {
+                        "label": "Property, Plant and Equipment, Net",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 9178000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                }
+                            ]
+                        },
+                    },
+                    "Assets": {
+                        "label": "Assets",
+                        "units": {
+                            "USD": [
+                                {
+                                    "val": 46455000000,
+                                    "fy": 2022,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2023-02-08",
+                                    "end": "2022-12-31",
+                                    "accn": "0000066740-23-000014",
+                                }
+                            ]
+                        },
+                    },
+                }
+            },
+        }
+    )
+    binding = {
+        "company": "3M",
+        "doc_link": (
+            "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+            "0000066740-23-000014.pdf"
+        ),
+        "doc_type": "10k",
+        "doc_period": "2022",
+        "primary_source_required": True,
+    }
+    document = FetchedDocument(
+        document_id="doc-3m-companyfacts",
+        goal_id="goal",
+        source_id="source",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+        title="SEC companyfacts JSON for CIK 0000066740",
+        artifact_id="artifact",
+        payload_hash="hash",
+        preview="",
+        size_bytes=len(body),
+        metadata={
+            "mime_type": "application/json",
+            "source_metadata": {
+                "source_kind": "sec_companyfacts_json",
+                "source_family": "structured_regulatory_data",
+                "authority_level": "primary",
+            },
+            "target_document_binding": binding,
+        },
+    )
+    goal = SearchGoal(
+        goal_id="goal",
+        query=(
+            "Benchmark target source follows. Source URL: "
+            "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+            "0000066740-23-000014.pdf Company: 3M Document type: 10k Document period: 2022 "
+            "Is 3M a capital-intensive business based on FY2022 data? SEC companyfacts capital expenditures "
+            "revenue operating cash flow total assets PropertyPlantAndEquipmentNet PP&E net"
+        ),
+        metadata={
+            "research_profile": "finance_fundamentals",
+            "benchmark_doc_retrieval": True,
+            "company": "3M",
+            "issuer": "3M",
+            "target_document_binding": binding,
+        },
+        max_spans_per_document=8,
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=body)
+    target_line_items = [str(span.metadata.get("target_line_item") or "") for span in spans]
+
+    assert target_line_items[:5] == [
+        "revenue",
+        "operating cash flow",
+        "capital expenditures",
+        "property plant and equipment net",
+        "assets",
+    ]
+    profile = finance_fundamentals_profile()
+    for span in spans[:5]:
+        evidence = EvidenceItem(
+            evidence_id=f"evidence-{span.span_id}",
+            goal_id=goal.goal_id,
+            span_id=span.span_id,
+            document_id=document.document_id,
+            source_id=document.source_id,
+            artifact_id=document.artifact_id,
+            uri=document.uri,
+            title=document.title,
+            text=span.text,
+            score=span.score,
+            payload_hash=document.payload_hash,
+            diagnostics={
+                "source_kind": "direct_url",
+                "span_metadata": span.metadata,
+                "target_document_binding": binding,
+            },
+        )
+        qualification = qualify_evidence_candidate(goal=goal, evidence=evidence, research_profile=profile)
+        assert qualification["accepted"] is True
+        assert qualification["reason"] == "qualified_finance_evidence"
+        assert qualification["finance_numeric_fact_present"] is True
 
 
 def test_finance_fact_ledger_extracts_transaction_value_from_filing_text() -> None:
@@ -708,6 +1081,73 @@ def test_primary_source_numeric_binding_selects_balance_sheet_net_ppne() -> None
     assert resolution["selected_fact_ids"] == ["target-net-ppne"]
 
 
+def test_primary_source_numeric_binding_accepts_target_period_sec_structured_companion_for_compute_task() -> None:
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_link": "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/0000066740-23-000014.pdf",
+            "doc_type": "10-K",
+            "doc_period": "2022",
+            "primary_source_required": True,
+        },
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+    )
+    facts = [
+        FinanceFact(
+            fact_id="target-revenue-2022",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="revenue",
+            value="34229000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-sec-companyfacts",
+            evidence_ref="ev-sec-companyfacts",
+            citation_ref="cite-sec-companyfacts",
+            metadata={
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+                "source_title": "SEC companyfacts JSON for CIK 0000066740",
+                "concept": "Revenues",
+                "context": "FY2022 target-bound SEC companyfacts",
+            },
+        ),
+        FinanceFact(
+            fact_id="secondary-revenue",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="revenue",
+            value="34229000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-secondary",
+            evidence_ref="ev-secondary",
+            citation_ref="cite-secondary",
+            metadata={
+                "source_uri": "https://stockanalysis.com/stocks/mmm/revenue/",
+                "source_title": "3M Revenue - StockAnalysis",
+                "context": "FY2022 revenue",
+            },
+        ),
+    ]
+
+    resolution = primary_source_numeric_binding_resolution(
+        attach_target_binding_to_facts(facts, binding, question="FY2022 capital intensity"),
+        binding,
+        question="FY2022 capital intensity",
+    )
+
+    assert binding.get("required_line_item") is None
+    assert resolution["status"] == "selected"
+    assert resolution["selected_fact_ids"] == ["target-revenue-2022"]
+    rejected = {item["fact_id"]: item for item in resolution["rejected_candidates"]}
+    assert "secondary-revenue" in rejected
+    assert "secondary_market_source_rejected_for_primary_binding" in rejected["secondary-revenue"]["reasons"]
+
+
 def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -> None:
     program = compile_finance_task_program(
         question="Is 3M a capital-intensive business based on FY2022 data?",
@@ -834,6 +1274,112 @@ def test_finance_formula_planner_generates_capital_intensity_payload() -> None:
     assert plan.payload["expression"] == "capital_expenditures / revenue"
     assert plan.payload["variables"]["capital_expenditures"] == "1334000000"
     assert set(plan.input_fact_ids) == {"capex", "revenue", "ocf", "ppe", "assets"}
+
+
+def test_finance_formula_planner_does_not_fill_capital_intensity_with_wrong_year_or_cost_of_revenue() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="revenue-2022",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="revenue",
+            value="26161000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-revenue",
+            evidence_ref="ev-revenue",
+            citation_ref="cite-revenue",
+            metadata={"concept": "Revenues"},
+        ),
+        FinanceFact(
+            fact_id="cost-2025",
+            entity="3M",
+            ticker="MMM",
+            period="2025",
+            fiscal_year=2025,
+            metric="cost of revenue",
+            value="14991000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-cost",
+            evidence_ref="ev-cost",
+            citation_ref="cite-cost",
+            metadata={"concept": "CostOfRevenue"},
+        ),
+        FinanceFact(
+            fact_id="capex-2025",
+            entity="3M",
+            ticker="MMM",
+            period="2025",
+            fiscal_year=2025,
+            metric="capital expenditures",
+            value="910000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-capex",
+            evidence_ref="ev-capex",
+            citation_ref="cite-capex",
+            metadata={"concept": "PaymentsToAcquirePropertyPlantAndEquipment"},
+        ),
+        FinanceFact(
+            fact_id="ocf-2025",
+            entity="3M",
+            ticker="MMM",
+            period="2025",
+            fiscal_year=2025,
+            metric="operating cash flow",
+            value="2306000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-ocf",
+            evidence_ref="ev-ocf",
+            citation_ref="cite-ocf",
+            metadata={"concept": "NetCashProvidedByUsedInOperatingActivities"},
+        ),
+        FinanceFact(
+            fact_id="ppe-2025",
+            entity="3M",
+            ticker="MMM",
+            period="2025",
+            fiscal_year=2025,
+            metric="property plant and equipment net",
+            value="7101000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-ppe",
+            evidence_ref="ev-ppe",
+            citation_ref="cite-ppe",
+            metadata={"concept": "PropertyPlantAndEquipmentNet"},
+        ),
+        FinanceFact(
+            fact_id="assets-2025",
+            entity="3M",
+            ticker="MMM",
+            period="2025",
+            fiscal_year=2025,
+            metric="assets",
+            value="37733000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-assets",
+            evidence_ref="ev-assets",
+            citation_ref="cite-assets",
+            metadata={"concept": "Assets"},
+        ),
+    ]
+
+    plan = plan_finance_formula(question="Is 3M a capital-intensive business based on FY2022 data?", facts=facts)
+
+    assert plan.status == "missing_facts"
+    assert plan.input_fact_ids == ["revenue-2022"]
+    assert plan.missing_facts == [
+        "capital_expenditures",
+        "operating_cash_flow",
+        "property_plant_and_equipment_net",
+        "assets",
+    ]
 
 
 def test_numeric_verifier_filters_secondary_value_when_target_binding_requires_primary_source() -> None:
@@ -1437,6 +1983,30 @@ def test_finance_missing_fact_payload_for_transaction_ev_revenue_seeds_sec_issue
     assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0001060736.json" in source_urls
     assert payload["source_urls"] == source_urls
     assert payload["metadata"]["preferred_source_families"][0] == "structured_regulatory_data"
+
+
+def test_finance_missing_fact_payload_for_capital_intensity_seeds_companyfacts() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="capital_intensity",
+        missing=["capital_expenditures", "operating_cash_flow", "property_plant_and_equipment_net", "assets"],
+        goal=(
+            "Benchmark target source follows. Source URL: "
+            "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+            "0000066740-23-000014.pdf Company: 3M Document: 3M_2022_10K Document type: 10k "
+            "Document period: 2022 Is 3M a capital-intensive business based on FY2022 data?"
+        ),
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/submissions/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in source_urls
+    assert payload["source_urls"] == source_urls
+    assert payload["metadata"]["missing_slots"] == [
+        "capital_expenditures",
+        "operating_cash_flow",
+        "property_plant_and_equipment_net",
+        "assets",
+    ]
 
 
 def test_finance_valuation_retrieval_defaults_allow_market_data_sources() -> None:
@@ -2515,6 +3085,88 @@ def test_finance_missing_fact_retrieval_action_supports_ev_ebitda() -> None:
     assert action.payload["metadata"]["finance_formula_name"] == "ev_ebitda"
     assert "enterprise value" in action.payload["query"].lower()
     assert "ebitda" in action.payload["query"].lower()
+
+
+def test_finance_missing_fact_retrieval_action_preserves_target_document_binding() -> None:
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search. Source URL: "
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf Company: 3M Document: 3M_2022_10K Document type: 10k "
+        "Document period: 2022 Is 3M a capital-intensive business based on FY2022 data?"
+    )
+    binding = target_document_binding_from_metadata(
+        {
+            "benchmark_doc_retrieval": True,
+            "company": "3M",
+            "doc_name": "3M_2022_10K",
+            "doc_type": "10k",
+            "doc_period": "2022",
+            "source_url": (
+                "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+                "0000066740-23-000014.pdf"
+            ),
+        },
+        question=goal,
+    )
+    source_action = CandidateAction(
+        action_id="act-source",
+        kind="tool",
+        name="retrieval.run",
+        description="initial retrieval",
+        score=0.8,
+        payload={
+            "query": goal,
+            "metadata": {
+                "benchmark_doc_retrieval": True,
+                "target_document_binding": binding,
+                "source_urls": [binding["doc_link"]],
+                "research_profile": "finance_fundamentals",
+            },
+        },
+        reasons=["initial_retrieval"],
+        side_effect_class="network",
+    )
+    plan = plan_finance_formula(
+        question=goal,
+        facts=[
+            FinanceFact(
+                fact_id="revenue-2022",
+                entity="3M",
+                ticker="MMM",
+                period="FY2022",
+                fiscal_year=2022,
+                metric="revenue",
+                value="34229000000",
+                unit="USD",
+                scale="actual",
+                source_ref="source",
+                evidence_ref="evidence",
+                citation_ref="cite",
+                metadata={"concept": "Revenues", "label": "Revenues", "end": "2022-12-31"},
+            )
+        ],
+    )
+    action = _finance_missing_fact_retrieval_action(
+        source_action,
+        plan=plan,
+        goal=goal,
+        call_index=2,
+        recipe=task_recipe("retrieval_answer", metadata={"target_document_binding": binding}),
+    )
+
+    assert action is not None
+    metadata = action.payload["metadata"]
+    assert metadata["target_document_binding"]["doc_period"] == "2022"
+    assert metadata["target_document_binding"]["doc_link"] == binding["doc_link"]
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in metadata["source_urls"]
+    assert binding["doc_link"] in metadata["source_urls"]
+    assert metadata["missing_slots"] == [
+        "capital_expenditures",
+        "operating_cash_flow",
+        "property_plant_and_equipment_net",
+        "assets",
+    ]
 
 
 def test_finance_missing_fact_payload_for_modeling_uses_slot_frame_and_evidence_policy() -> None:

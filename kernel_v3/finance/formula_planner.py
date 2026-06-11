@@ -54,7 +54,7 @@ def plan_finance_formula(
     if formula == "lbo":
         return _plan_lbo(question=question, facts=usable)
     if formula == "capital_intensity":
-        return _plan_capital_intensity(usable)
+        return _plan_capital_intensity(question=question, facts=usable)
     return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "unsupported_formula", "formula": formula})
 
 
@@ -142,19 +142,25 @@ def _plan_margin(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     )
 
 
-def _plan_capital_intensity(facts: list[FinanceFact]) -> FinanceFormulaPlan:
-    capex = _latest_fact(facts, ("capital expenditures",))
-    revenue = _latest_fact(facts, ("revenue", "net sales", "net revenues", "total revenues", "sales"))
-    operating_cash_flow = _latest_fact(
+def _plan_capital_intensity(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    capex = _latest_fact_for_year(facts, ("capital expenditures",), target_year=target_year)
+    revenue = _latest_revenue_fact(facts, target_year=target_year)
+    operating_cash_flow = _latest_fact_for_year(
         facts,
         (
             "operating cash flow",
             "cash flow from operations",
             "net cash provided by operating activities",
         ),
+        target_year=target_year,
     )
-    ppe = _latest_fact(facts, ("property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"))
-    assets = _latest_fact(facts, ("assets", "total assets"))
+    ppe = _latest_fact_for_year(
+        facts,
+        ("property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"),
+        target_year=target_year,
+    )
+    assets = _latest_fact_for_year(facts, ("assets", "total assets"), target_year=target_year)
     missing = []
     if capex is None:
         missing.append("capital_expenditures")
@@ -174,6 +180,7 @@ def _plan_capital_intensity(facts: list[FinanceFact]) -> FinanceFormulaPlan:
             diagnostics={
                 "required_ratios": ["capex_to_revenue", "capex_to_operating_cash_flow", "ppe_to_assets"],
                 "reason": "capital_intensity_requires_multiple_balance_sheet_and_cash_flow_slots",
+                "target_fiscal_year": target_year,
             },
         )
     return _ready(
@@ -194,6 +201,7 @@ def _plan_capital_intensity(facts: list[FinanceFact]) -> FinanceFormulaPlan:
                 "capex_to_operating_cash_flow": "capital_expenditures / operating_cash_flow",
                 "ppe_to_assets": "property_plant_and_equipment_net / assets",
             },
+            "target_fiscal_year": target_year,
         },
     )
 
@@ -1541,6 +1549,121 @@ def _latest_fact(
     if not matches:
         return None
     return _sort_facts(matches)[-1]
+
+
+def _latest_fact_for_year(
+    facts: list[FinanceFact],
+    markers: tuple[str, ...],
+    *,
+    target_year: int | None,
+    exclude_fact_ids: set[str] | None = None,
+    predicate=None,
+) -> FinanceFact | None:
+    excluded = exclude_fact_ids or set()
+    matches = [fact for fact in _facts_for_metric(facts, markers) if fact.fact_id not in excluded]
+    if predicate is not None:
+        matches = [fact for fact in matches if predicate(fact)]
+    if not matches:
+        return None
+    if target_year is not None:
+        target_matches = [
+            fact
+            for fact in matches
+            if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+        ]
+        if not target_matches:
+            return None
+        return _sort_facts(target_matches)[-1]
+    return _sort_facts(matches)[-1]
+
+
+def _latest_revenue_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    matches = [
+        fact
+        for fact in _facts_for_metric(
+            facts,
+            ("revenue", "revenues", "net sales", "net revenues", "total revenues", "sales"),
+        )
+        if _is_revenue_fact(fact)
+    ]
+    if not matches:
+        return None
+    if target_year is not None:
+        matches = [
+            fact
+            for fact in matches
+            if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+        ]
+        if not matches:
+            return None
+    return sorted(matches, key=_revenue_fact_sort_key)[-1]
+
+
+def _is_revenue_fact(fact: FinanceFact) -> bool:
+    texts = [
+        _metric_text(fact.metric),
+        _metric_text(str(fact.metadata.get("label") or "")),
+        _metric_text(str(fact.metadata.get("concept") or "")),
+    ]
+    blocked = ("cost of revenue", "costofrevenue", "expense", "interest income")
+    if any(any(marker in text for marker in blocked) for text in texts):
+        return False
+    exact = {
+        "revenue",
+        "revenues",
+        "net sales",
+        "net revenues",
+        "total revenue",
+        "total revenues",
+        "sales",
+        "sales revenue net",
+        "sales revenue services net",
+    }
+    return any(text in exact for text in texts)
+
+
+def _revenue_fact_sort_key(fact: FinanceFact) -> tuple[int, Decimal, int, str, str, str]:
+    value = _decimal_or_none(fact.value) or Decimal(0)
+    return (
+        _revenue_concept_priority(fact),
+        abs(value),
+        fact.fiscal_year or 0,
+        str(fact.metadata.get("end") or ""),
+        str(fact.metadata.get("filed") or ""),
+        fact.fact_id,
+    )
+
+
+def _revenue_concept_priority(fact: FinanceFact) -> int:
+    concept = _metric_text(str(fact.metadata.get("concept") or ""))
+    label = _metric_text(str(fact.metadata.get("label") or ""))
+    metric = _metric_text(fact.metric)
+    demoted_markers = (
+        "fair value",
+        "liability revenue recognized",
+        "unearned",
+        "deferred",
+        "tax",
+        "segment",
+    )
+    if any(marker in label or marker in concept for marker in demoted_markers):
+        return -10
+    primary_concepts = {
+        "revenues": 100,
+        "revenuefromcontractwithcustomerexcludingassessedtax": 98,
+        "revenuefromcontractwithcustomerincludingassessedtax": 96,
+        "salesrevenuegoodsnet": 94,
+        "salesrevenueservicesnet": 92,
+        "salesrevenuenet": 90,
+        "salesandotheroperatingrevenue": 88,
+        "operatingrevenues": 86,
+    }
+    compact_concept = concept.replace(" ", "")
+    if compact_concept in primary_concepts:
+        return primary_concepts[compact_concept]
+    if metric in {"revenue", "revenues", "total revenue", "total revenues", "net sales", "net revenues", "sales"}:
+        return 10
+    return 0
 
 
 def _latest_cash_fact(facts: list[FinanceFact]) -> FinanceFact | None:

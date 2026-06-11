@@ -1,0 +1,51 @@
+{
+  "benchmark": "financebench",
+  "benchmark_spec": {
+    "benchmark_id": "financebench",
+    "dataset_url": "https://huggingface.co/datasets/PatronusAI/financebench",
+    "default_scoring": "gold_answer_and_evidence",
+    "display_name": "FinanceBench",
+    "homepage_url": "https://github.com/patronus-ai/financebench",
+    "notes": [
+      "Gold-backed 150-question financial filing QA benchmark from PatronusAI.",
+      "Answer and justification fields are scoring-only and must never enter the agent prompt.",
+      "Use oracle_evidence, doc_retrieval, or question_only import modes to separate evidence use from retrieval ability."
+    ]
+  },
+  "input_path": "data/raw/financebench_merged.jsonl",
+  "item_count": 150,
+  "manifest_path": "data/bench/finance/financebench_doc_retrieval.manifest.json",
+  "mode": "doc_retrieval",
+  "normalized_schema": {
+    "evidence_excerpt": "scoring/audit evidence excerpt",
+    "gold_answer": "scoring-only reference answer",
+    "id": "stable benchmark item id",
+    "metadata": "provenance, prompt_context, source_refs, workflow annotation, scoring notes",
+    "question": "user-visible question",
+    "source": "public benchmark id",
+    "type": "question/category type",
+    "workflow_annotation": [
+      "metadata.workflow_type",
+      "metadata.required_slots",
+      "metadata.evidence_policy",
+      "metadata.required_transforms",
+      "metadata.dealbreakers",
+      "metadata.expected_trace",
+      "metadata.failure_taxonomy"
+    ]
+  },
+  "output_path": "data/bench/finance/financebench_doc_retrieval.jsonl",
+  "prompt_policy": {
+    "gold_answer_in_prompt": false,
+    "import_mode": "doc_retrieval",
+    "provided_context_in_prompt": true,
+    "reference_reasoning_in_prompt": false,
+    "rubric_in_prompt": false
+  },
+  "schema": "holo.kernel_v3.public_finance_benchmark_import.v1",
+  "skipped_count": 0,
+  "source_format": "jsonl",
+  "source_url": "https://huggingface.co/datasets/PatronusAI/financebench",
+  "status": "ok",
+  "warnings": []
+}

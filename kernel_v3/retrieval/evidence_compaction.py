@@ -57,6 +57,23 @@ def compact_evidence_candidates(
                 _select_candidate(candidate, selected, selected_ids, source_counts)
             if len(selected) >= effective_limit:
                 break
+    selected_target_line_items: list[str] = []
+    if len(selected) < effective_limit:
+        for line_item in _target_line_item_markers(ordered):
+            if len(selected) >= effective_limit:
+                break
+            candidate = _best_candidate_for_target_line_item(
+                ordered,
+                line_item=line_item,
+                selected_ids=selected_ids,
+                source_counts=source_counts,
+                per_source_limit=per_source_limit,
+            )
+            if candidate is not None:
+                _select_candidate(candidate, selected, selected_ids, source_counts)
+                selected_target_line_items.append(line_item)
+            if len(selected) >= effective_limit:
+                break
     if bool(policy.get("prefer_facet_coverage", True)) and required_facets and len(selected) < effective_limit:
         for facet in required_facets:
             if len(selected) >= effective_limit:
@@ -100,6 +117,7 @@ def compact_evidence_candidates(
         "per_source_limit": per_source_limit,
         "required_facets": required_facets,
         "selected_facets": _selected_facets(selected),
+        "selected_target_line_items": selected_target_line_items,
     }
     return selected, rejected, diagnostics
 
@@ -159,6 +177,27 @@ def _best_candidate_for_target(
     return None
 
 
+def _best_candidate_for_target_line_item(
+    candidates: list[EvidenceCandidate],
+    *,
+    line_item: str,
+    selected_ids: set[str],
+    source_counts: dict[str, int],
+    per_source_limit: int,
+) -> EvidenceCandidate | None:
+    matches: list[EvidenceCandidate] = []
+    for candidate in candidates:
+        if candidate.evidence.evidence_id in selected_ids:
+            continue
+        if source_counts.get(candidate.evidence.source_id, 0) >= per_source_limit:
+            continue
+        if _candidate_target_line_item(candidate) == line_item and _candidate_target_period(candidate):
+            matches.append(candidate)
+    if not matches:
+        return None
+    return min(matches, key=_target_line_item_sort_key)
+
+
 def _select_candidate(
     candidate: EvidenceCandidate,
     selected: list[EvidenceCandidate],
@@ -199,6 +238,16 @@ def _candidate_sort_key(
         len(evidence.text),
         evidence.evidence_id,
     )
+
+
+def _target_line_item_sort_key(candidate: EvidenceCandidate) -> tuple[int, int, float, str]:
+    # Target-bound structured spans are generated in EvidenceSpec priority order.
+    # Preserve that order instead of letting broad finance facet scoring drop a
+    # required slot before formula planning gets a chance to bind it.
+    start_offset = candidate.span.start_offset
+    if start_offset < 0:
+        start_offset = 1_000_000_000
+    return (start_offset, len(candidate.evidence.text), -float(candidate.evidence.score), candidate.evidence.evidence_id)
 
 
 def _market_valuation_bonus(candidate: EvidenceCandidate, *, goal: SearchGoal) -> float:
@@ -288,6 +337,37 @@ def _candidate_matches_target(candidate: EvidenceCandidate, target: str) -> bool
     )
 
 
+def _target_line_item_markers(candidates: list[EvidenceCandidate]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in sorted(candidates, key=_target_line_item_sort_key):
+        line_item = _candidate_target_line_item(candidate)
+        if not line_item or line_item in seen:
+            continue
+        if not _candidate_target_period(candidate):
+            continue
+        seen.add(line_item)
+        result.append(line_item)
+    return result
+
+
+def _candidate_target_line_item(candidate: EvidenceCandidate) -> str:
+    metadata = _candidate_span_metadata(candidate)
+    return str(metadata.get("target_line_item") or "").strip().lower()
+
+
+def _candidate_target_period(candidate: EvidenceCandidate) -> str:
+    metadata = _candidate_span_metadata(candidate)
+    return str(metadata.get("target_period") or "").strip()
+
+
+def _candidate_span_metadata(candidate: EvidenceCandidate) -> JsonObject:
+    if isinstance(candidate.span.metadata, dict) and candidate.span.metadata:
+        return candidate.span.metadata
+    span_metadata = candidate.evidence.diagnostics.get("span_metadata")
+    return span_metadata if isinstance(span_metadata, dict) else {}
+
+
 def _candidate_facets(candidate: EvidenceCandidate) -> list[str]:
     qualification = candidate.evidence.diagnostics.get("qualification")
     if not isinstance(qualification, dict):
@@ -347,6 +427,8 @@ def _compaction_rejection(candidate: EvidenceCandidate, *, reason: str) -> JsonO
         "title": candidate.evidence.title,
         "reason": reason,
         "covered_profile_facets": _candidate_facets(candidate),
+        "target_line_item": _candidate_target_line_item(candidate),
+        "target_period": _candidate_target_period(candidate),
         "preview": candidate.evidence.text[:160],
     }
 

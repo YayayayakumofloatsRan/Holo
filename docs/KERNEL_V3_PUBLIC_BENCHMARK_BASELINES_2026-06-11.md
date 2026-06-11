@@ -38,6 +38,8 @@ model research quality.
 | FinanceBench-150 doc retrieval fake | 150 | pass `0.0067`; numeric accuracy `0.0079` | `0.8059` | `0.7037` | `0.0` / `0.0` | preservation `0.0` | `0.0` |
 | FinanceBench doc retrieval live3 | 3 | pass `0.0`; numeric accuracy `0.0` | `0.8571` | `0.8571` | `0.0` / `0.0` | preservation `0.0` | `0.0` |
 | FinanceBench doc retrieval live3 target-binding v2 | 3 | pass `0.6667`; numeric accuracy `0.6667` | `0.9048` | `1.0` | `0.0` / `0.0` | preservation `0.6667` | `0.3333` |
+| FinanceBench doc retrieval live3 target-slots v4 | 3 | pass `1.0`; numeric accuracy `1.0` | `1.0` | `1.0` | `0.3333` / `0.3333` | preservation `1.0` | `0.0` |
+| FinanceBench doc retrieval live10 target-slots v1 | 10 | pass `0.30`; numeric accuracy `0.30` | `0.6572` | `0.60` | `0.20` / `0.20` | preservation `0.40` | `0.0` |
 | FinQA dev oracle100 fake | 100 | pass `0.15`; numeric accuracy `0.15` | `0.925` | `0.8816` | `0.37` / `0.37` | preservation `0.92` | `0.06` |
 
 ## Interpretation
@@ -75,6 +77,19 @@ specs, and explicit missing slots for capex, operating cash flow, net PP&E, and
 assets. This makes the next doc-retrieval work a slot/transform binding problem
 rather than an undefined search-threshold problem.
 
+The target-slot binding pass closes that small slice:
+`run_financebench_doc_live3_target_slots_v4` reaches `3/3`. The third item now
+preserves target-bound FY2022 SEC companyfacts evidence for revenue, operating
+cash flow, capex, net PP&E, and assets; the host calculator computes
+`capital_expenditures / revenue = 5.1097%`; numeric verifier, verifier gate, and
+synthesis gate all pass; citation preservation is `1.0`. The broader live10
+baseline, `run_financebench_doc_live10_target_slots_v1`, is still only `3/10`.
+That result is useful because failures are no longer hidden behind the first
+three rows: later rows mostly fail before claim ledger creation because the
+document/table reader and source resolver do not yet extract the needed Adobe
+and 3M 10-Q/10-K tables, while a disclosure-style row retrieves facts but needs
+source-grounded qualitative answer handling instead of numeric fallback.
+
 FinQA dev oracle100 confirms the FinQA oracle-context path scales beyond the
 earlier 20-row diagnostic, but the score drops from the small oracle20 sample:
 numeric accuracy is `0.15`, calculator/formula trace rate is `0.37`, and the
@@ -87,9 +102,10 @@ answer grounding path is working; the weakness is formula/target binding.
 1. Run a small live-model FinanceBench oracle subset before attempting live 150:
    `--limit 10`, `finance-fact-fast`, mission off, fake evaluator, model planner
    and synthesizer.
-2. Improve FinanceBench `doc_retrieval` source acquisition before expanding the
-   live subset: the live3 probe already retrieves documents, but does not
-   convert them into citable facts or calculator inputs.
+2. Improve FinanceBench `doc_retrieval` beyond the now-closed first live3 slice:
+   focus on target PDF/table extraction, company filing URL/CIK resolution for
+   non-3M documents, and source-grounded qualitative disclosure tasks. The
+   current live10 baseline is `3/10`.
 3. Run FinQA oracle-context `500` only after formula/target binding improves on
    oracle100. Otherwise it will mainly multiply known failures.
 4. Keep dev10/public27 as workflow regression and generalization checks, but do

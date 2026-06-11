@@ -648,6 +648,9 @@ def decide_termination(
         elif recipe.mode == "workspace_answer" and _feedback_requires_workspace_file_read(feedback):
             decision = "continue"
             reason = "workspace_file_read_requested"
+        elif _feedback_requires_transform_work(feedback):
+            decision = "continue"
+            reason = "transform_work_required"
         elif _evidence_can_finalize(observation=observation, evidence=evidence, recipe=recipe) and recipe.mode in {
             "semantic_answer",
             "retrieval_answer",
@@ -748,7 +751,7 @@ def decide_termination(
 def _allows_repeated_signal_to_continue(*, feedback: Feedback, repetition: RepetitionSignal) -> bool:
     if not str(repetition.repeat_type or "").startswith("same_missing"):
         return False
-    return "remaining_plan_actions" in feedback.missing_evidence
+    return "remaining_plan_actions" in feedback.missing_evidence or _feedback_requires_transform_work(feedback)
 
 
 def _network_budget_guard_with_evidence(*, observation: Observation | None, evidence: EvidenceSufficiency) -> bool:
@@ -763,6 +766,21 @@ def _network_budget_guard_with_evidence(*, observation: Observation | None, evid
 def _feedback_requires_workspace_file_read(feedback: Feedback) -> bool:
     normalized = {str(item).lower().replace("_", " ") for item in feedback.missing_evidence}
     return "file.read observation" in normalized or "file read observation" in normalized
+
+
+def _feedback_requires_transform_work(feedback: Feedback) -> bool:
+    normalized = {str(item).lower().replace("_", " ") for item in feedback.missing_evidence}
+    return any(
+        marker in normalized
+        for marker in (
+            "finance formula trace required",
+            "formula trace required",
+            "calculator trace required",
+            "calculator required before final",
+            "transform trace required",
+            "transform work required",
+        )
+    )
 
 
 def _successful_response_can_finalize(

@@ -64,6 +64,15 @@ FINANCE_FUNDAMENTAL_FACET_ALIASES: dict[str, list[str]] = {
         "free cash flow",
         "cash and cash equivalents",
         "cash equivalents",
+        "capital expenditures",
+        "capital expenditure",
+        "capex",
+        "property plant and equipment",
+        "property, plant and equipment",
+        "property plant and equipment net",
+        "property, plant and equipment, net",
+        "pp&e",
+        "ppne",
         "ebitda",
         "adjusted ebitda",
         "enterprise value",
@@ -130,6 +139,11 @@ FINANCE_FUNDAMENTAL_FACET_ALIASES: dict[str, list[str]] = {
         "cash flow",
         "operating cash flow",
         "cash provided by operating activities",
+        "capital expenditures",
+        "capital expenditure",
+        "capex",
+        "payments to acquire property plant and equipment",
+        "payments to acquire property, plant, and equipment",
         "free cash flow",
         "现金流",
         "经营活动现金流",
@@ -139,6 +153,12 @@ FINANCE_FUNDAMENTAL_FACET_ALIASES: dict[str, list[str]] = {
         "assets",
         "liabilities",
         "equity",
+        "property plant and equipment",
+        "property, plant and equipment",
+        "property plant and equipment net",
+        "property, plant and equipment, net",
+        "pp&e",
+        "ppne",
         "shareholders' equity",
         "资产负债表",
         "资产",
@@ -341,6 +361,7 @@ FINANCE_DISCOVERY_SOURCE_KINDS = [
 FINANCE_VALUE_PATTERN = (
     r"[$€£¥]\s*\d{1,3}(?:,\d{3})*(?:\.\d+)?"
     r"|[$€£¥]\s*\d+(?:\.\d+)?"
+    r"|\b(?:value|val)=-?\d+(?:,\d{3})*(?:\.\d+)?\b"
     r"|\b(?:usd|dollars|shares)\b.{0,24}\b\d{2,}(?:,\d{3})*(?:\.\d+)?\b"
     r"|\b\d{2,}(?:,\d{3})*(?:\.\d+)?\b.{0,24}\b(?:usd|dollars|shares)\b"
     r"|\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\s*(?:million|billion|trillion|mn|bn|usd|dollars|shares)\b"

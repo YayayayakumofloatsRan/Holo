@@ -90,6 +90,7 @@ def qualify_evidence_candidate(
                 qualifier_diagnostics["required"]
                 and not qualifier_diagnostics["satisfied"]
                 and not _finance_complementary_fact_source(goal=goal, evidence=evidence)
+                and not _finance_target_bound_structured_fact_source(goal=goal, evidence=evidence)
             ):
                 result["accepted"] = False
                 result["reason"] = "finance_specialized_query_terms_missing"
@@ -736,6 +737,33 @@ def _finance_complementary_fact_source(*, goal: SearchGoal, evidence: EvidenceIt
             "net sales",
         )
     )
+
+
+def _finance_target_bound_structured_fact_source(*, goal: SearchGoal, evidence: EvidenceItem) -> bool:
+    source_kind = evidence_source_kind(evidence)
+    uri = str(evidence.uri or "").lower()
+    if source_kind != "sec_companyfacts_json" and "data.sec.gov/api/xbrl/companyfacts/" not in uri:
+        return False
+    text = str(evidence.text or "").lower()
+    if "sec companyfacts official financial statement" not in text:
+        return False
+    if not re.search(r"\b(?:value|val)=-?\d+(?:,\d{3})*(?:\.\d+)?\b", text):
+        return False
+    diagnostics = evidence.diagnostics if isinstance(evidence.diagnostics, dict) else {}
+    span_metadata = diagnostics.get("span_metadata")
+    if isinstance(span_metadata, dict):
+        target_period = str(span_metadata.get("target_period") or "").strip()
+        target_line_item = str(span_metadata.get("target_line_item") or "").strip()
+        if target_period and target_line_item:
+            return True
+    target_binding = diagnostics.get("target_document_binding")
+    if not isinstance(target_binding, dict):
+        metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+        target_binding = metadata.get("target_document_binding")
+    if not isinstance(target_binding, dict):
+        return False
+    doc_period = str(target_binding.get("doc_period") or "").strip()
+    return bool(doc_period and _evidence_covers_finance_period(evidence.text, doc_period))
 
 
 def _finance_addback_trend_required_terms(goal: SearchGoal) -> list[str]:

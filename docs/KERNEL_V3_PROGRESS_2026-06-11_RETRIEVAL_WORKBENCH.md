@@ -213,3 +213,15 @@ compiled-program coverage is `1.0`; item 3 is compiled as a capital-intensity
 cash flow, net PP&E, and assets. The next FinanceBench doc-retrieval work should
 therefore focus on filling those slots and binding calculator traces, not on
 broad threshold expansion or fixed answer tables.
+
+The target-slot follow-up closes this first slice. After preserving
+target-bound line-item evidence through compaction and accepting SEC
+companyfacts as the structured companion to the target filing for multi-slot
+compute tasks, `run_financebench_doc_live3_target_slots_v4` passes `3/3`.
+The previously failing capital-intensity item now has five target facts,
+zero missing slots, one calculator/formula trace, numeric verifier passed,
+verifier gate passed, synthesis gate passed, citation preservation `1.0`, and
+unsupported numeric claim rate `0`. A broader live10 probe,
+`run_financebench_doc_live10_target_slots_v1`, is `3/10`; the remaining failures
+are mostly document/table extraction and source-resolution gaps for later
+FinanceBench rows, not the first-slice target binding bug.

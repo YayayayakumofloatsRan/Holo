@@ -164,6 +164,9 @@ def primary_source_numeric_binding_score(
     if _metric_matches(fact, binding=binding, question=question):
         score += 35
         reasons.append("target_line_item_match")
+    elif not _string(binding.get("required_line_item")) and "data.sec.gov/api/xbrl/companyfacts" in source_uri.lower():
+        score += 20
+        reasons.append("target_period_structured_companion")
     if _statement_matches(fact, binding=binding):
         score += 15
         reasons.append("target_statement_match")
