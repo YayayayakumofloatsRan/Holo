@@ -110,6 +110,9 @@ unverified free-form synthesis. The verifier now recognizes model-output
 diagnostics and explicit assumptions as supported calculator values, and the
 host fallback can produce an assumption-labeled DCF/LBO summary when model
 synthesis adds unsupported finance numbers.
+The calculator result now follows the requested modeling output where possible:
+DCF selects enterprise value, equity value, or equity value per share; LBO
+selects sponsor IRR, MOIC, or exit equity value.
 
 ## Workflow 50
 

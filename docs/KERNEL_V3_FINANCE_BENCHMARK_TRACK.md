@@ -1014,6 +1014,10 @@ assumption-ledger display, and citation-preserving limitation answers.
   exit EV, exit debt, exit equity, MOIC, and sponsor IRR. These outputs are
   diagnostics attached to the formula trace; retrieved facts and assumptions
   remain distinguishable.
+- DCF/LBO output selection now matches the question-level target: DCF can report
+  enterprise value, equity value, or equity value per share; LBO can report
+  sponsor IRR, MOIC, or exit equity value. The selected value becomes the actual
+  `calculator.compute` result, not just a secondary diagnostics field.
 - The finance numeric verifier now accepts model-output diagnostics and explicit
   assumptions as calculator-derived support values, including percentage display
   forms such as `9%` for a stored `0.09` assumption. The conservative host

@@ -1665,6 +1665,40 @@ def test_finance_formula_planner_dcf_can_report_equity_value_per_share() -> None
     assert Decimal(trace.result_value) > Decimal("0")
 
 
+def test_finance_formula_planner_dcf_can_report_equity_value() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="dcf-equity-value",
+            text=(
+                "entityName=ExampleCo ticker=EXM facts="
+                "metric=free cash flow unit=USD fy=2024 form=10-K value=1000000000 ; "
+                "metric=debt unit=USD fy=2024 form=10-K value=2000000000 ; "
+                "metric=cash and cash equivalents unit=USD fy=2024 form=10-K value=500000000 ; "
+                "metric=short-term investments unit=USD fy=2024 form=10-K value=250000000"
+            ),
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-dcf-equity-value")],
+    )
+
+    plan = plan_finance_formula(
+        question=(
+            "Using a DCF, calculate equity value with forecast 5 years, "
+            "FCF growth 3%, WACC 9%, terminal growth 2%."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.diagnostics["reported_output"] == "equity_value"
+    trace = compute_formula(**plan.payload)
+    assert trace.diagnostics["model_outputs"]["equity_value"] == trace.result_value
+    assert Decimal(trace.result_value) < Decimal(trace.diagnostics["model_outputs"]["enterprise_value"])
+
+
 def test_finance_formula_planner_generates_lbo_payload_with_assumptions() -> None:
     evidence = [
         _finance_evidence(
@@ -1712,6 +1746,71 @@ def test_finance_formula_planner_generates_lbo_payload_with_assumptions() -> Non
     trace = compute_formula(**plan.payload)
     assert Decimal(trace.result_value) > Decimal("0")
     assert trace.diagnostics["model_outputs"]["sponsor_irr"] == plan.diagnostics["model_outputs"]["sponsor_irr"]
+
+
+def test_finance_formula_planner_lbo_can_report_moic() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="lbo-moic-market",
+            text="entityName=ExampleCo ticker=EXM metric=market cap unit=USD fy=2024 value=12000000000",
+        ),
+        _finance_evidence(
+            evidence_id="lbo-moic-ebitda",
+            text="entityName=ExampleCo ticker=EXM metric=adjusted ebitda unit=USD fy=2024 value=2000000000",
+        ),
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence],
+    )
+
+    plan = plan_finance_formula(
+        question=(
+            "Build an LBO analysis and report MOIC with leverage 4.0x, "
+            "exit multiple 9.0x, EBITDA growth 3%, annual debt paydown 0.5x, hold period 5 years."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.diagnostics["reported_output"] == "moic"
+    assert plan.payload["unit"] == "x"
+    trace = compute_formula(**plan.payload)
+    assert trace.diagnostics["model_outputs"]["moic"] == trace.result_value
+    assert trace.diagnostics["formatted_value"].endswith(" x")
+
+
+def test_finance_formula_planner_lbo_can_report_exit_equity_value() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="lbo-exit-equity-market",
+            text="entityName=ExampleCo ticker=EXM metric=market cap unit=USD fy=2024 value=12000000000",
+        ),
+        _finance_evidence(
+            evidence_id="lbo-exit-equity-ebitda",
+            text="entityName=ExampleCo ticker=EXM metric=adjusted ebitda unit=USD fy=2024 value=2000000000",
+        ),
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence],
+    )
+
+    plan = plan_finance_formula(
+        question=(
+            "Build an LBO analysis and report exit equity value with leverage 4.0x, "
+            "exit multiple 9.0x, EBITDA growth 3%, annual debt paydown 0.5x, hold period 5 years."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.diagnostics["reported_output"] == "exit_equity_value"
+    assert plan.payload["unit"] == "USD"
+    trace = compute_formula(**plan.payload)
+    assert trace.diagnostics["model_outputs"]["exit_equity_value"] == trace.result_value
 
 
 def test_finance_formula_planner_lbo_uses_assumed_entry_multiple_when_market_value_missing() -> None:

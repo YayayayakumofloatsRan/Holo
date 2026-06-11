@@ -1381,6 +1381,12 @@ include entry enterprise value, initial debt, sponsor equity, annual EBITDA and
 debt-paydown schedule, exit enterprise value, exit debt, exit equity value,
 MOIC, and sponsor IRR. The calculator remains deterministic; assumptions are
 explicitly labeled in diagnostics instead of being treated as retrieved facts.
+The model-output selector also aligns the calculator result with the user's
+requested valuation output: DCF can return enterprise value, equity value, or
+equity value per share, while LBO can return sponsor IRR, MOIC, or exit equity
+value. This prevents benchmark/user questions from being scored against the
+wrong default modeling output even when the right value exists elsewhere in the
+trace diagnostics.
 
 The finance numeric verifier now treats `FormulaTrace.diagnostics.model_outputs`
 and explicit `assumptions` as supported calculator-derived values. This lets

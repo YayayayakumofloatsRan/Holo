@@ -573,6 +573,7 @@ def _plan_dcf(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
     investments = _latest_fact(facts, ("short-term investments", "short term investments"))
     shares = _latest_fact(facts, ("shares outstanding",))
     wants_per_share = _wants_per_share_output(question)
+    wants_equity_value = _wants_equity_value_output(question)
     if wants_per_share and shares is None:
         return _missing("dcf", ["shares_outstanding"], facts=[*input_facts, *[item for item in (debt, cash, investments) if item is not None]])
     variables: JsonObject = {
@@ -605,6 +606,9 @@ def _plan_dcf(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
         expression = f"(({enterprise_value_expression}) + cash + investments - debt) / shares"
         unit = "USD/share"
         reported_output = "equity_value_per_share"
+    elif wants_equity_value:
+        expression = f"({enterprise_value_expression}) + cash + investments - debt"
+        reported_output = "equity_value"
     base_decimal = _decimal_or_none(base_cash_flow_value)
     model_outputs = (
         _dcf_model_outputs(
@@ -736,17 +740,27 @@ def _plan_lbo(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
         if entry_enterprise_value is not None and ebitda_value is not None
         else {}
     )
-    expression = (
-        "(((ebitda * ((1 + ebitda_growth_rate) ** hold_years) * exit_multiple) "
-        "- max((ebitda * debt_multiple) - (ebitda * annual_debt_paydown_multiple * hold_years), 0)) "
-        "/ ((equity_value + debt - cash - investments) - (ebitda * debt_multiple))) "
-        "** (1 / hold_years) - 1"
+    sponsor_equity_expression = "((equity_value + debt - cash - investments) - (ebitda * debt_multiple))"
+    exit_debt_expression = "max((ebitda * debt_multiple) - (ebitda * annual_debt_paydown_multiple * hold_years), 0)"
+    exit_equity_expression = (
+        "((ebitda * ((1 + ebitda_growth_rate) ** hold_years) * exit_multiple) "
+        f"- {exit_debt_expression})"
     )
+    moic_expression = f"({exit_equity_expression}) / {sponsor_equity_expression}"
+    reported_output = _lbo_reported_output(question)
+    expression = f"({moic_expression}) ** (1 / hold_years) - 1"
+    unit = "percent"
+    if reported_output == "moic":
+        expression = moic_expression
+        unit = "x"
+    elif reported_output == "exit_equity_value":
+        expression = exit_equity_expression
+        unit = basis_value_fact.unit
     return _ready(
         "lbo",
         expression,
         variables,
-        unit="percent",
+        unit=unit,
         facts=input_facts,
         diagnostics={
             "modeling_workflow": "leveraged_buyout",
@@ -756,7 +770,7 @@ def _plan_lbo(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
             "assumptions": _assumption_diagnostics(assumptions),
             "defaulted_assumptions": assumptions["defaulted"],
             "assumption_source": "question_or_host_modeling_policy",
-            "reported_output": "sponsor_irr",
+            "reported_output": reported_output,
             "model_outputs": model_outputs,
         },
     )
@@ -1240,7 +1254,57 @@ def _lbo_model_outputs(
 
 def _wants_per_share_output(question: str) -> bool:
     text = _metric_text(question)
-    return "per share" in text or "per-share" in text or "share price" in text or "equity value per share" in text
+    return (
+        "per share" in text
+        or "per-share" in text
+        or "share price" in text
+        or "price target" in text
+        or "equity value per share" in text
+    )
+
+
+def _wants_equity_value_output(question: str) -> bool:
+    text = _metric_text(question)
+    if _wants_per_share_output(question):
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "equity value",
+            "market capitalization",
+            "market cap",
+            "shareholder equity value",
+            "value of equity",
+        )
+    )
+
+
+def _lbo_reported_output(question: str) -> str:
+    text = _metric_text(question)
+    if any(
+        marker in text
+        for marker in (
+            "exit equity",
+            "exit equity value",
+            "equity value at exit",
+            "sponsor equity at exit",
+            "exit sponsor equity",
+        )
+    ):
+        return "exit_equity_value"
+    if any(
+        marker in text
+        for marker in (
+            "moic",
+            "money on money",
+            "money-on-money",
+            "multiple of invested capital",
+            "cash on cash multiple",
+            "sponsor multiple",
+        )
+    ):
+        return "moic"
+    return "sponsor_irr"
 
 
 def _decimal_or_zero(value: object) -> Decimal:
