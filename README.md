@@ -1089,6 +1089,33 @@ holo-v3 bench finance-import \
   --manifest-output .state/kernel_v3/bench/finance/fabv2_public_dev.manifest.json
 ```
 
+Known small public benchmark files can also be fetched into `data/raw` and
+immediately normalized. This is the preferred reproducible path when raw files
+are absent locally:
+
+```bash
+holo-v3 bench finance-fetch \
+  --benchmark financebench \
+  --output data/raw/financebench.jsonl \
+  --normalized-output .state/kernel_v3/bench/finance/financebench_oracle.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/financebench_oracle.manifest.json \
+  --annotation-output .state/kernel_v3/bench/finance/financebench_oracle.gold.jsonl \
+  --mode oracle_evidence
+
+holo-v3 bench finance-fetch \
+  --benchmark finqa \
+  --split test \
+  --output data/raw/finqa_test.json \
+  --normalized-output .state/kernel_v3/bench/finance/finqa_test_oracle_context.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/finqa_test_oracle_context.manifest.json \
+  --annotation-output .state/kernel_v3/bench/finance/finqa_test_oracle_context.gold.jsonl \
+  --mode oracle_context
+```
+
+`finance-fetch` has a default `--max-bytes` guard and supports `--url` for a
+local mirror or alternate export. Use `--limit`/`--offset` with
+`--normalized-output` for small smoke subsets.
+
 FinanceBench-150 can be normalized from a local CSV/JSON/JSONL export in three
 explicit modes:
 

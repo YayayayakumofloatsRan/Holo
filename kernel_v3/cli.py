@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import urllib.parse
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -26,6 +27,7 @@ from kernel_v3.bench import (
     FinanceBenchmarkResult,
     build_finance_benchmark_report_from_path,
     convert_public_finance_benchmark,
+    fetch_public_finance_benchmark,
     finance_benchmark_run_id,
     load_finance_benchmark_items,
     render_finance_benchmark_report,
@@ -621,6 +623,28 @@ def main(argv: list[str] | None = None) -> int:
 
     bench_parser = sub.add_parser("bench")
     bench_sub = bench_parser.add_subparsers(dest="bench_command", required=True)
+    finance_fetch = bench_sub.add_parser("finance-fetch")
+    finance_fetch.add_argument(
+        "--benchmark",
+        required=True,
+        choices=sorted(PUBLIC_FINANCE_BENCHMARK_SPECS),
+        help="Public finance benchmark to download from a known direct URL or --url override.",
+    )
+    finance_fetch.add_argument("--output", required=True, help="Raw local output path.")
+    finance_fetch.add_argument("--split", default=None, help="Optional benchmark split, such as finqa dev/test/train.")
+    finance_fetch.add_argument("--url", default=None, help="Optional explicit source URL or file:// mirror.")
+    finance_fetch.add_argument("--timeout", type=float, default=60.0)
+    finance_fetch.add_argument("--max-bytes", type=int, default=32_000_000)
+    finance_fetch.add_argument(
+        "--mode",
+        default=None,
+        help="Optional import mode when --normalized-output is also provided.",
+    )
+    finance_fetch.add_argument("--normalized-output", default=None, help="Optional normalized Kernel v3 benchmark JSONL.")
+    finance_fetch.add_argument("--manifest-output", default=None, help="Optional manifest for normalized import.")
+    finance_fetch.add_argument("--annotation-output", default=None, help="Optional post-run dev annotation sidecar.")
+    finance_fetch.add_argument("--limit", type=int, default=None)
+    finance_fetch.add_argument("--offset", type=int, default=0)
     finance_import = bench_sub.add_parser("finance-import")
     finance_import.add_argument(
         "--benchmark",
@@ -2061,6 +2085,55 @@ def _resident_queue(args) -> ResidentQueue:
 
 def _bench_command(args, journal: JournalStore) -> dict[str, object]:
     command = str(getattr(args, "bench_command", "") or "")
+    if command == "finance-fetch":
+        fetch_summary = fetch_public_finance_benchmark(
+            benchmark=args.benchmark,
+            output_path=args.output,
+            split=args.split,
+            source_url=args.url,
+            timeout=args.timeout,
+            max_bytes=args.max_bytes,
+        )
+        import_summary = None
+        annotation_summary = None
+        if getattr(args, "normalized_output", None):
+            import_summary_obj = convert_public_finance_benchmark(
+                benchmark=args.benchmark,
+                input_path=args.output,
+                output_path=args.normalized_output,
+                manifest_path=args.manifest_output,
+                limit=args.limit,
+                offset=args.offset,
+                mode=args.mode,
+            )
+            import_summary = import_summary_obj.to_dict()
+            if getattr(args, "annotation_output", None):
+                annotation_summary = write_finance_dev_annotations_from_dataset(
+                    dataset_path=args.normalized_output,
+                    annotation_path=args.annotation_output,
+                )
+            fetch_summary = replace(
+                fetch_summary,
+                imported_output_path=args.normalized_output,
+                manifest_path=args.manifest_output,
+                annotation_path=args.annotation_output,
+                import_summary=import_summary,
+            )
+        journal.append(
+            task_id=None,
+            run_id="finance-benchmark-fetch",
+            step_id=None,
+            kind="finance_benchmark_fetch",
+            data={**fetch_summary.to_dict(), "annotation_export": annotation_summary},
+            state_delta={"finance_benchmark_fetch_status": fetch_summary.status, "finance_benchmark": fetch_summary.benchmark},
+        )
+        return {
+            "status": "ok",
+            "mode": "finance_fetch",
+            "summary": fetch_summary.to_dict(),
+            "import_summary": import_summary,
+            "annotation_export": annotation_summary,
+        }
     if command == "finance-import":
         summary = convert_public_finance_benchmark(
             benchmark=args.benchmark,

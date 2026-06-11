@@ -54,6 +54,11 @@ The import path now also supports `--annotation-output`, producing a post-run
 requirements, source requirements, expected traces, dealbreakers, and numeric
 expectations extracted from reference answers. Reference answers and
 justifications remain scoring-only and are not inserted into prompts.
+`bench finance-fetch` can now fetch built-in public files for FinanceBench,
+FinQA, and FAB v2 public into `data/raw` and optionally normalize them plus
+write manifest/annotation sidecars in the same command. Use this to start the
+first FinanceBench oracle-evidence and FinQA oracle-context runs when raw files
+are absent locally.
 
 DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional

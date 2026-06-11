@@ -14,9 +14,11 @@ from kernel_v3.bench.finance import (
 )
 from kernel_v3.bench.public_finance import (
     PUBLIC_FINANCE_BENCHMARK_SPECS,
+    PublicFinanceBenchmarkFetchSummary,
     PublicFinanceBenchmarkImportSummary,
     PublicFinanceBenchmarkSpec,
     convert_public_finance_benchmark,
+    fetch_public_finance_benchmark,
 )
 from kernel_v3.bench.report import (
     FinanceBenchmarkReport,
@@ -31,11 +33,13 @@ __all__ = [
     "FinanceBenchmarkSummary",
     "PUBLIC_FINANCE_BENCHMARK_SPECS",
     "FinanceBenchmarkReport",
+    "PublicFinanceBenchmarkFetchSummary",
     "PublicFinanceBenchmarkImportSummary",
     "PublicFinanceBenchmarkSpec",
     "build_finance_benchmark_report",
     "build_finance_benchmark_report_from_path",
     "convert_public_finance_benchmark",
+    "fetch_public_finance_benchmark",
     "finance_benchmark_run_id",
     "load_finance_benchmark_items",
     "run_finance_benchmark",

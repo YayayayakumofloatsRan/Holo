@@ -6,6 +6,7 @@ from kernel_v3.bench import (
     FinanceBenchmarkItem,
     FinanceBenchmarkResult,
     convert_public_finance_benchmark,
+    fetch_public_finance_benchmark,
     load_finance_benchmark_items,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
@@ -965,6 +966,89 @@ def test_finance_benchmark_cli_imports_financebench_mode(tmp_path: Path) -> None
     annotation_payload = json.loads(annotation.read_text(encoding="utf-8").strip())
     assert annotation_payload["item_id"] == "fb-cli-001"
     assert annotation_payload["expected_numeric"][0]["value"] == 10_000_000
+
+
+def test_finance_benchmark_fetch_downloads_and_imports_with_annotation(tmp_path: Path) -> None:
+    remote = tmp_path / "remote-financebench.jsonl"
+    raw = tmp_path / "downloaded-financebench.jsonl"
+    normalized = tmp_path / "financebench.normalized.jsonl"
+    manifest = tmp_path / "financebench.manifest.json"
+    annotation = tmp_path / "financebench.gold.jsonl"
+    remote.write_text(
+        json.dumps(
+            {
+                "financebench_id": "fb-fetch-001",
+                "company": "ExampleCo",
+                "question": "What was revenue?",
+                "answer": "$10 million",
+                "evidence": "Revenue was $10 million in the filing.",
+                "doc_type": "10-K",
+                "doc_link": "https://www.sec.gov/exampleco-10k.htm",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fetch_summary = fetch_public_finance_benchmark(
+        benchmark="financebench",
+        source_url=remote.as_uri(),
+        output_path=raw,
+    )
+
+    assert fetch_summary.status == "ok"
+    assert raw.read_text(encoding="utf-8") == remote.read_text(encoding="utf-8")
+
+    code = cli.main(
+        [
+            "bench",
+            "finance-fetch",
+            "--benchmark",
+            "financebench",
+            "--url",
+            remote.as_uri(),
+            "--output",
+            str(raw),
+            "--normalized-output",
+            str(normalized),
+            "--manifest-output",
+            str(manifest),
+            "--annotation-output",
+            str(annotation),
+            "--mode",
+            "oracle_evidence",
+        ]
+    )
+
+    assert code == 0
+    items = load_finance_benchmark_items(normalized)
+    assert items[0].item_id == "fb-fetch-001"
+    assert items[0].metadata["import_mode"] == "oracle_evidence"
+    assert json.loads(manifest.read_text(encoding="utf-8"))["prompt_policy"]["import_mode"] == "oracle_evidence"
+    annotation_payload = json.loads(annotation.read_text(encoding="utf-8").strip())
+    assert annotation_payload["item_id"] == "fb-fetch-001"
+    assert annotation_payload["expected_numeric"][0]["value"] == 10_000_000
+
+
+def test_finance_benchmark_fetch_cleans_partial_file_on_budget_block(tmp_path: Path) -> None:
+    remote = tmp_path / "remote-large.jsonl"
+    output = tmp_path / "blocked.jsonl"
+    remote.write_text("x" * 128, encoding="utf-8")
+
+    try:
+        fetch_public_finance_benchmark(
+            benchmark="financebench",
+            source_url=remote.as_uri(),
+            output_path=output,
+            max_bytes=8,
+        )
+    except ValueError as exc:
+        assert "max_bytes" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected max_bytes guard to fail")
+
+    assert not output.exists()
+    assert not output.with_name(output.name + ".part").exists()
 
 
 class _StaticChatRuntime:

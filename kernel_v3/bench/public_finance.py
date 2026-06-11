@@ -4,6 +4,8 @@ import csv
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from kernel_v3.contracts import Contract, JsonObject, JsonValue
 
@@ -31,6 +33,23 @@ class PublicFinanceBenchmarkImportSummary(Contract):
     source_format: str
     source_url: str | None
     mode: str | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, kw_only=True)
+class PublicFinanceBenchmarkFetchSummary(Contract):
+    schema: str
+    status: str
+    benchmark: str
+    split: str | None
+    source_url: str
+    output_path: str
+    bytes_written: int
+    source_format: str
+    imported_output_path: str | None = None
+    manifest_path: str | None = None
+    annotation_path: str | None = None
+    import_summary: JsonObject | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -103,6 +122,55 @@ PUBLIC_FINANCE_BENCHMARK_SPECS: dict[str, PublicFinanceBenchmarkSpec] = {
         ],
     ),
 }
+
+
+PUBLIC_FINANCE_DIRECT_DOWNLOADS: dict[str, dict[str | None, str]] = {
+    "finance_agent_v2_public": {
+        None: "https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt",
+        "public": "https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt",
+    },
+    "financebench": {
+        None: "https://huggingface.co/datasets/PatronusAI/financebench/resolve/main/financebench_merged.jsonl",
+        "merged": "https://huggingface.co/datasets/PatronusAI/financebench/resolve/main/financebench_merged.jsonl",
+        "open_source": "https://huggingface.co/datasets/PatronusAI/financebench/resolve/main/financebench_merged.jsonl",
+    },
+    "finqa": {
+        None: "https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset/test.json",
+        "test": "https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset/test.json",
+        "dev": "https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset/dev.json",
+        "train": "https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset/train.json",
+        "private_test": "https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset/private_test.json",
+    },
+}
+
+
+def fetch_public_finance_benchmark(
+    *,
+    benchmark: str,
+    output_path: Path | str,
+    split: str | None = None,
+    source_url: str | None = None,
+    timeout: float = 60.0,
+    max_bytes: int = 32_000_000,
+) -> PublicFinanceBenchmarkFetchSummary:
+    benchmark_id = _normalize_benchmark_id(benchmark)
+    if benchmark_id not in PUBLIC_FINANCE_BENCHMARK_SPECS:
+        supported = ", ".join(sorted(PUBLIC_FINANCE_BENCHMARK_SPECS))
+        raise ValueError(f"unsupported public finance benchmark: {benchmark}. Supported: {supported}")
+    effective_url = source_url or _public_finance_download_url(benchmark_id, split=split)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    bytes_written = _download_url(effective_url, output, timeout=timeout, max_bytes=max_bytes)
+    return PublicFinanceBenchmarkFetchSummary(
+        schema="holo.kernel_v3.public_finance_benchmark_fetch.v1",
+        status="ok",
+        benchmark=benchmark_id,
+        split=_normalize_split(split),
+        source_url=effective_url,
+        output_path=str(output),
+        bytes_written=bytes_written,
+        source_format=_source_format(output),
+    )
 
 
 def convert_public_finance_benchmark(
@@ -490,6 +558,49 @@ def _load_public_records(path: Path, *, benchmark_id: str | None = None) -> list
         if "question" in payload or "Question" in payload:
             return [payload]
     raise ValueError(f"unsupported public benchmark input format: {path}")
+
+
+def _public_finance_download_url(benchmark_id: str, *, split: str | None) -> str:
+    split_key = _normalize_split(split)
+    by_split = PUBLIC_FINANCE_DIRECT_DOWNLOADS.get(benchmark_id)
+    if not by_split:
+        raise ValueError(
+            f"benchmark {benchmark_id} does not have a built-in direct download URL; pass --url with a local mirror/export"
+        )
+    if split_key in by_split:
+        return by_split[split_key]
+    known = ", ".join(str(key or "default") for key in by_split)
+    raise ValueError(f"unsupported split for {benchmark_id}: {split}. Known: {known}")
+
+
+def _download_url(url: str, output: Path, *, timeout: float, max_bytes: int) -> int:
+    request = Request(url, headers={"User-Agent": "Holo-Kernel-v3-benchmark-fetch/1.0"})
+    bytes_written = 0
+    temp_output = output.with_name(output.name + ".part")
+    try:
+        with urlopen(request, timeout=max(1.0, float(timeout))) as response:  # noqa: S310 - benchmark fetch uses explicit URLs
+            with temp_output.open("wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 256)
+                    if not chunk:
+                        break
+                    bytes_written += len(chunk)
+                    if max_bytes > 0 and bytes_written > int(max_bytes):
+                        raise ValueError(f"download exceeded max_bytes={max_bytes}")
+                    handle.write(chunk)
+        temp_output.replace(output)
+    except (HTTPError, URLError) as exc:
+        temp_output.unlink(missing_ok=True)
+        raise ValueError(f"download failed for {url}: {exc}") from exc
+    except Exception:
+        temp_output.unlink(missing_ok=True)
+        raise
+    return bytes_written
+
+
+def _normalize_split(split: str | None) -> str | None:
+    normalized = str(split or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized or None
 
 
 def _hf_row_payload(item: JsonObject) -> JsonObject:

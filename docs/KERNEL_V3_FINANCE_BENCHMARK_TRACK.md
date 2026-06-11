@@ -97,6 +97,34 @@ Import policy:
 - benchmark-provided filing/report context may be inserted into the prompt as evidence;
 - every import can write a manifest with source URL, prompt policy, item count, and warnings.
 
+If the local raw file is missing, fetch known small public benchmark files first.
+`finance-fetch` supports built-in direct URLs for FAB v2 public, FinanceBench
+merged open-source rows, and FinQA `train`/`dev`/`test`/`private_test` JSON files;
+it also accepts `--url` for a local mirror. With `--normalized-output`, fetch and
+import happen in one step:
+
+```bash
+./holo-v3 bench finance-fetch \
+  --benchmark financebench \
+  --output data/raw/financebench.jsonl \
+  --normalized-output .state/kernel_v3/bench/finance/financebench_oracle.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/financebench_oracle.manifest.json \
+  --annotation-output .state/kernel_v3/bench/finance/financebench_oracle.gold.jsonl \
+  --mode oracle_evidence
+
+./holo-v3 bench finance-fetch \
+  --benchmark finqa \
+  --split test \
+  --output data/raw/finqa_test.json \
+  --normalized-output .state/kernel_v3/bench/finance/finqa_test_oracle_context.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/finqa_test_oracle_context.manifest.json \
+  --annotation-output .state/kernel_v3/bench/finance/finqa_test_oracle_context.gold.jsonl \
+  --mode oracle_context
+```
+
+Keep downloaded raw files under `data/raw` or another explicit cache path. Do
+not repeatedly download these sources during benchmark iteration.
+
 Finance Agent v2 public import:
 
 ```bash
