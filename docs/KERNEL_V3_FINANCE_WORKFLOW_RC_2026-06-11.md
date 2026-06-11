@@ -49,6 +49,12 @@ Gold-backed public benchmark support now starts with FinanceBench and FinQA:
 start with `oracle_evidence`, then compare `doc_retrieval` to measure source
 acquisition instead of only answer synthesis.
 
+The import path now also supports `--annotation-output`, producing a post-run
+`--dev-gold` sidecar from the normalized dataset. The sidecar includes workflow
+requirements, source requirements, expected traces, dealbreakers, and numeric
+expectations extracted from reference answers. Reference answers and
+justifications remain scoring-only and are not inserted into prompts.
+
 DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional
 per-share output, and LBO debt-paydown / exit-equity / MOIC / IRR schedules.

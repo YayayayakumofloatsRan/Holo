@@ -9,6 +9,7 @@ from kernel_v3.bench.finance import (
     score_finance_dev_annotations,
     score_finance_answer,
     score_finance_prediction_file,
+    write_finance_dev_annotations_from_dataset,
     write_finance_benchmark_outputs,
 )
 from kernel_v3.bench.public_finance import (
@@ -43,5 +44,6 @@ __all__ = [
     "score_finance_answer",
     "score_finance_prediction_file",
     "render_finance_benchmark_report",
+    "write_finance_dev_annotations_from_dataset",
     "write_finance_benchmark_outputs",
 ]

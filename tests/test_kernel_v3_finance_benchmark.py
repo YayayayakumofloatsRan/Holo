@@ -11,6 +11,7 @@ from kernel_v3.bench import (
     run_finance_benchmark_parallel,
     score_finance_dev_annotations,
     score_finance_answer,
+    write_finance_dev_annotations_from_dataset,
 )
 from kernel_v3.bench.finance import summarize_finance_benchmark, trace_metrics
 from kernel_v3.chat.contracts import ChatRuntimeResult
@@ -384,6 +385,59 @@ def test_financebench_import_modes_keep_gold_out_of_prompt(tmp_path: Path) -> No
     assert "The filing evidence says revenue" not in question_runtime.seen_prompts[0]
     assert "Reference calculation" not in question_runtime.seen_prompts[0]
     assert question_items[0].metadata["source_refs"][0]["doc_type"] == "10-K"
+
+
+def test_financebench_import_can_emit_scoring_annotation_sidecar(tmp_path: Path) -> None:
+    source = tmp_path / "financebench.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "financebench_id": "fb-annotation-001",
+                "company": "ExampleCo",
+                "doc_name": "ExampleCo FY2024 10-K",
+                "question_type": "quantitative",
+                "question": "What was ExampleCo FY2024 revenue?",
+                "answer": "$10 million",
+                "justification": "The reference answer is derived from the revenue line.",
+                "evidence": "The filing evidence says revenue was $10 million.",
+                "doc_type": "10-K",
+                "doc_period": "FY2024",
+                "doc_link": "https://www.sec.gov/exampleco-10k.htm",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    dataset = tmp_path / "financebench.normalized.jsonl"
+    annotation = tmp_path / "financebench.gold.jsonl"
+    convert_public_finance_benchmark(
+        benchmark="financebench",
+        input_path=source,
+        output_path=dataset,
+        mode="doc_retrieval",
+    )
+
+    export_summary = write_finance_dev_annotations_from_dataset(
+        dataset_path=dataset,
+        annotation_path=annotation,
+    )
+    annotations = [json.loads(line) for line in annotation.read_text(encoding="utf-8").splitlines()]
+
+    assert export_summary["item_count"] == 1
+    assert annotations[0]["item_id"] == "fb-annotation-001"
+    assert annotations[0]["gold_policy"] == "scoring_only_not_prompted"
+    assert annotations[0]["expected_numeric"][0]["value"] == 10_000_000
+    assert "10-k" in annotations[0]["required_sources"]
+    assert "www.sec.gov" in annotations[0]["required_sources"]
+    assert "citation_required" in annotations[0]["dealbreakers"]
+
+    items = load_finance_benchmark_items(dataset)
+    runtime = _StaticChatRuntime(JournalStore.in_memory())
+    results = run_finance_benchmark(items=items, runtime=runtime)
+    score = score_finance_dev_annotations(results, annotation_path=annotation)
+    assert score["numeric_score"] == 1.0
+    assert "The reference answer" not in runtime.seen_prompts[0]
 
 
 def test_finqa_import_supports_oracle_context_and_question_only_modes(tmp_path: Path) -> None:
@@ -865,6 +919,7 @@ def test_finance_benchmark_cli_imports_financebench_mode(tmp_path: Path) -> None
     source = tmp_path / "financebench.jsonl"
     output = tmp_path / "financebench.normalized.jsonl"
     manifest = tmp_path / "financebench.manifest.json"
+    annotation = tmp_path / "financebench.gold.jsonl"
     source.write_text(
         json.dumps(
             {
@@ -895,6 +950,8 @@ def test_finance_benchmark_cli_imports_financebench_mode(tmp_path: Path) -> None
             str(output),
             "--manifest-output",
             str(manifest),
+            "--annotation-output",
+            str(annotation),
         ]
     )
 
@@ -905,6 +962,9 @@ def test_finance_benchmark_cli_imports_financebench_mode(tmp_path: Path) -> None
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["benchmark"] == "financebench"
     assert manifest_payload["prompt_policy"]["import_mode"] == "doc_retrieval"
+    annotation_payload = json.loads(annotation.read_text(encoding="utf-8").strip())
+    assert annotation_payload["item_id"] == "fb-cli-001"
+    assert annotation_payload["expected_numeric"][0]["value"] == 10_000_000
 
 
 class _StaticChatRuntime:

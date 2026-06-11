@@ -1098,19 +1098,22 @@ holo-v3 bench finance-import \
   --mode oracle_evidence \
   --input data/raw/financebench.jsonl \
   --output .state/kernel_v3/bench/finance/financebench_oracle.jsonl \
-  --manifest-output .state/kernel_v3/bench/finance/financebench_oracle.manifest.json
+  --manifest-output .state/kernel_v3/bench/finance/financebench_oracle.manifest.json \
+  --annotation-output .state/kernel_v3/bench/finance/financebench_oracle.gold.jsonl
 
 holo-v3 bench finance-import \
   --benchmark financebench \
   --mode doc_retrieval \
   --input data/raw/financebench.jsonl \
-  --output .state/kernel_v3/bench/finance/financebench_doc_retrieval.jsonl
+  --output .state/kernel_v3/bench/finance/financebench_doc_retrieval.jsonl \
+  --annotation-output .state/kernel_v3/bench/finance/financebench_doc_retrieval.gold.jsonl
 
 holo-v3 bench finance-import \
   --benchmark financebench \
   --mode question_only \
   --input data/raw/financebench.jsonl \
-  --output .state/kernel_v3/bench/finance/financebench_question_only.jsonl
+  --output .state/kernel_v3/bench/finance/financebench_question_only.jsonl \
+  --annotation-output .state/kernel_v3/bench/finance/financebench_question_only.gold.jsonl
 ```
 
 `oracle_evidence` prompts the benchmark evidence excerpt but never the reference
@@ -1118,6 +1121,10 @@ answer or justification. `doc_retrieval` prompts document metadata/link only,
 forcing Holo to acquire support. `question_only` removes both provided evidence
 and document hints from the prompt. This lets reports separate answer quality,
 document acquisition, and bare-question generalization.
+`--annotation-output` writes the post-run scoring sidecar for `--dev-gold`:
+workflow slots, evidence policy, required traces, dealbreakers, source
+requirements, and numeric expectations extracted from the reference answer.
+The sidecar is never prompt context.
 
 FinQA now uses the same import-mode discipline:
 
@@ -1126,7 +1133,8 @@ holo-v3 bench finance-import \
   --benchmark finqa \
   --mode oracle_context \
   --input data/raw/finqa_dev.json \
-  --output .state/kernel_v3/bench/finance/finqa_dev_oracle_context.jsonl
+  --output .state/kernel_v3/bench/finance/finqa_dev_oracle_context.jsonl \
+  --annotation-output .state/kernel_v3/bench/finance/finqa_dev_oracle_context.gold.jsonl
 ```
 
 ```bash

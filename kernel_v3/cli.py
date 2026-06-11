@@ -32,6 +32,7 @@ from kernel_v3.bench import (
     run_finance_benchmark,
     run_finance_benchmark_parallel,
     score_finance_prediction_file,
+    write_finance_dev_annotations_from_dataset,
     write_finance_benchmark_outputs,
 )
 from kernel_v3.capabilities import semantic_capability_catalog
@@ -641,6 +642,11 @@ def main(argv: list[str] | None = None) -> int:
         "--manifest-output",
         default=None,
         help="Optional provenance manifest recording source URL and prompt/gold handling policy.",
+    )
+    finance_import.add_argument(
+        "--annotation-output",
+        default=None,
+        help="Optional post-run dev annotation JSONL for --dev-gold scoring; gold/reference fields stay out of prompts.",
     )
     finance_import.add_argument("--limit", type=int, default=None)
     finance_import.add_argument("--offset", type=int, default=0)
@@ -2065,15 +2071,21 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             offset=args.offset,
             mode=args.mode,
         )
+        annotation_summary = None
+        if getattr(args, "annotation_output", None):
+            annotation_summary = write_finance_dev_annotations_from_dataset(
+                dataset_path=args.output,
+                annotation_path=args.annotation_output,
+            )
         journal.append(
             task_id=None,
             run_id="finance-benchmark-import",
             step_id=None,
             kind="finance_benchmark_import",
-            data=summary.to_dict(),
+            data={**summary.to_dict(), "annotation_export": annotation_summary},
             state_delta={"finance_benchmark_import_status": summary.status, "finance_benchmark_items": summary.item_count},
         )
-        return {"status": "ok", "mode": "finance_import", "summary": summary.to_dict()}
+        return {"status": "ok", "mode": "finance_import", "summary": summary.to_dict(), "annotation_export": annotation_summary}
     if command == "finance-graph":
         graph = build_benchmark_result_graph_from_path(
             args.results,

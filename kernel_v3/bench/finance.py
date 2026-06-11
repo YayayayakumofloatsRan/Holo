@@ -604,6 +604,35 @@ def score_finance_dev_annotations(
     }
 
 
+def write_finance_dev_annotations_from_dataset(
+    *,
+    dataset_path: Path | str,
+    annotation_path: Path | str,
+) -> JsonObject:
+    """Create post-run workflow annotations from a normalized benchmark dataset.
+
+    The generated file is intended for `bench finance --dev-gold`; it preserves
+    reference answers and numeric expectations only in the scoring sidecar, never
+    in benchmark prompts.
+    """
+    items = load_finance_benchmark_items(dataset_path)
+    annotations = [_dev_annotation_from_item(item) for item in items]
+    output = Path(annotation_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        "\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in annotations)
+        + ("\n" if annotations else ""),
+        encoding="utf-8",
+    )
+    return {
+        "schema": "holo.kernel_v3.finance_dev_annotation_export.v1",
+        "status": "ok",
+        "dataset_path": str(dataset_path),
+        "annotation_path": str(output),
+        "item_count": len(annotations),
+    }
+
+
 def finance_benchmark_run_id() -> str:
     return "finbench-" + str(int(time.time() * 1000))
 
@@ -856,6 +885,84 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
     }
 
 
+def _dev_annotation_from_item(item: FinanceBenchmarkItem) -> JsonObject:
+    metadata = dict(item.metadata or {})
+    annotation: JsonObject = {
+        "item_id": item.item_id,
+        "workflow_type": item.workflow_type or metadata.get("workflow_type") or item.category,
+        "required_slots": list(item.required_slots),
+        "evidence_policy": dict(item.evidence_policy),
+        "required_transforms": list(item.required_transforms),
+        "dealbreakers": list(item.dealbreakers),
+        "expected_trace": list(item.expected_trace),
+        "failure_taxonomy": list(item.failure_taxonomy),
+        "source": item.source,
+        "category": item.category,
+        "gold_policy": "scoring_only_not_prompted",
+    }
+    required_sources = _annotation_required_sources(item)
+    if required_sources:
+        annotation["required_sources"] = required_sources
+    expected_numeric = _numeric_expectations_from_gold(item.gold_answer)
+    if expected_numeric:
+        annotation["expected_numeric"] = expected_numeric
+    expected_contains = _annotation_expected_contains(item)
+    if expected_contains:
+        annotation["expected_answer_contains"] = expected_contains
+    return {key: value for key, value in annotation.items() if value not in (None, [], {})}
+
+
+def _annotation_required_sources(item: FinanceBenchmarkItem) -> list[str]:
+    sources: list[str] = []
+    refs = item.metadata.get("source_refs") if isinstance(item.metadata.get("source_refs"), list) else []
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        doc_type = _coerce_text(ref.get("doc_type"))
+        if doc_type:
+            sources.append(doc_type.lower())
+        url = _coerce_text(ref.get("url"))
+        if url:
+            host = urllib.parse.urlparse(url).hostname
+            if host:
+                sources.append(host.lower())
+    policy = item.evidence_policy if isinstance(item.evidence_policy, dict) else {}
+    for family in _string_list(policy.get("required_source_families")):
+        if family:
+            sources.append(family)
+    return _ordered_unique(sources)
+
+
+def _annotation_expected_contains(item: FinanceBenchmarkItem) -> list[str]:
+    if not isinstance(item.metadata, dict):
+        return []
+    return _ordered_unique(_string_list(item.metadata.get("expected_answer_contains")))
+
+
+def _numeric_expectations_from_gold(gold: str | None) -> list[JsonObject]:
+    if not gold:
+        return []
+    expectations: list[JsonObject] = []
+    seen: set[float] = set()
+    for candidate in _extract_numeric_candidates(gold):
+        value = float(candidate["value"])
+        if _looks_like_year(value):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        expectations.append(
+            {
+                "name": f"gold_numeric_{len(expectations) + 1}",
+                "value": value,
+                "tolerance": max(abs(value) * 0.01, 1.0),
+            }
+        )
+        if len(expectations) >= 8:
+            break
+    return expectations
+
+
 def _expected_contains_met(answer: str, expected: str) -> bool:
     normalized_answer = answer.casefold()
     normalized_expected = expected.casefold()
@@ -906,6 +1013,13 @@ def _source_requirement_met(name: str, result: FinanceBenchmarkResult, *, haysta
     if not normalized:
         return False
     metrics = result.trace_metrics
+    if normalized in {"provided_evidence_or_company_filing", "benchmark_evidence_or_primary_filing"}:
+        return (
+            bool(result.scorecard.get("citation_present"))
+            or _int_value(metrics.get("citation_count")) > 0
+            or _int_value(metrics.get("evidence_count")) > 0
+            or "provided evidence" in haystack.casefold()
+        )
     hosts = [str(item).casefold() for item in metrics.get("source_hosts", [])] if isinstance(metrics.get("source_hosts"), list) else []
     forms = [str(item).casefold() for item in metrics.get("finance_source_forms", [])] if isinstance(metrics.get("finance_source_forms"), list) else []
     source_text = " ".join([haystack.casefold(), *hosts, *forms])
@@ -920,6 +1034,9 @@ def _source_requirement_met(name: str, result: FinanceBenchmarkResult, *, haysta
         "ex-99": ("ex-99", "exhibit 99", "99.1"),
         "market_data": ("market", "stock price", "market cap", "enterprise value", "yahoo", "google finance"),
         "regulatory_filing": ("sec.gov", "10-k", "10-q", "8-k", "6-k"),
+        "company_filing": ("sec.gov", "10-k", "10-q", "8-k", "6-k", "annual report", "quarterly report"),
+        "primary_filing": ("sec.gov", "10-k", "10-q", "8-k", "6-k", "annual report", "quarterly report"),
+        "provided_evidence_context": ("provided evidence", "benchmark-provided evidence", "provided_evidence_context"),
     }
     candidates = aliases.get(normalized, (normalized,))
     return any(candidate in source_text for candidate in candidates)

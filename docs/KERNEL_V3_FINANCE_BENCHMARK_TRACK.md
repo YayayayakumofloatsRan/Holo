@@ -115,14 +115,16 @@ FinanceBench import modes:
   --mode oracle_evidence \
   --input data/raw/financebench.jsonl \
   --output .state/kernel_v3/bench/finance/financebench_oracle.jsonl \
-  --manifest-output .state/kernel_v3/bench/finance/financebench_oracle.manifest.json
+  --manifest-output .state/kernel_v3/bench/finance/financebench_oracle.manifest.json \
+  --annotation-output .state/kernel_v3/bench/finance/financebench_oracle.gold.jsonl
 
 ./holo-v3 bench finance-import \
   --benchmark financebench \
   --mode doc_retrieval \
   --input data/raw/financebench.jsonl \
   --output .state/kernel_v3/bench/finance/financebench_doc_retrieval.jsonl \
-  --manifest-output .state/kernel_v3/bench/finance/financebench_doc_retrieval.manifest.json
+  --manifest-output .state/kernel_v3/bench/finance/financebench_doc_retrieval.manifest.json \
+  --annotation-output .state/kernel_v3/bench/finance/financebench_doc_retrieval.gold.jsonl
 ```
 
 In `oracle_evidence`, the provided evidence excerpt is prompt context but the
@@ -130,6 +132,12 @@ reference answer and justification stay scoring-only. In `doc_retrieval`, only
 document metadata/link is prompt context; the evidence excerpt is retained for
 audit/scoring but not prompted. In `question_only`, neither evidence nor document
 hints are prompted.
+
+`--annotation-output` exports the post-run `--dev-gold` sidecar directly from
+the normalized dataset. It carries workflow type, slots, evidence policy,
+required transforms, dealbreakers, expected trace records, failure taxonomy,
+source requirements, and numeric expectations extracted from reference answers.
+This sidecar is scoring material only and must never enter model prompts.
 
 The official public file lives at
 `https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt`.
