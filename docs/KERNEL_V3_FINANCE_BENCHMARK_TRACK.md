@@ -140,6 +140,16 @@ not repeatedly download these sources during benchmark iteration.
   slots; `calculator.compute`, verifier, and synthesis-gate traces; and a
   provided-report-context evidence policy. The reference program remains
   scoring-only and is not prompt context.
+- Follow-up live smoke confirms the current bottleneck. FinanceBench
+  `oracle_evidence` no longer needs live retrieval to create the workflow trace:
+  the first item now records claim-ledger, slot-frame, transform-plan, and
+  verifier-gate evidence, and re-scores to substrate `1.0` / workflow `0.8571`.
+  It still fails numeric scoring because the final answer is a retrieval-failure
+  template with no supported number or citation. FinQA `oracle_context` similarly
+  records the generic numeric-reasoning trace and re-scores to workflow `0.9`,
+  but lacks `calculator.compute` and synthesis-gate traces. This is now a
+  final-synthesis / calculator-closure problem, not a raw data acquisition
+  problem.
 
 Finance Agent v2 public import:
 

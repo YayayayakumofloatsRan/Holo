@@ -471,6 +471,15 @@ def _normalize_financebench(spec: PublicFinanceBenchmarkSpec, record: JsonObject
         question_reasoning=question_reasoning,
         doc_type=doc_type,
     )
+    if import_mode == "oracle_evidence":
+        workflow["expected_trace"] = [
+            "provided_evidence_context",
+            "claim_ledger",
+            "slot_frame",
+            "transform_plan",
+            "verifier_gate",
+            "citation",
+        ]
     metadata.update(workflow)
     source_refs = _financebench_source_refs(
         company=company,

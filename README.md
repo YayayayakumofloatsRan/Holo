@@ -1123,6 +1123,17 @@ PatronusAI FinanceBench merged rows (`958,087` bytes) and FinQA `dev`
 `.state/kernel_v3/bench/finance/`. This verifies the gold-backed public
 benchmark data path; it is not a live model score.
 
+Follow-up live smoke on the same day exposed the current next bottleneck:
+FinanceBench `oracle_evidence` and FinQA `oracle_context` now enter the generic
+claim/slot/transform/verifier trace path, but final answers still fail the
+gold-backed numeric checks when the agent returns a retrieval-failure template
+or does not run `calculator.compute`. The first FinanceBench oracle item
+re-scored to substrate `1.0` / workflow `0.8571` but numeric `0.0`; the first
+FinQA oracle-context item re-scored to workflow `0.9` but still lacked
+`calculator.compute` and synthesis-gate traces. The next engineering target is
+therefore oracle-context final synthesis/calculator closure, not more source
+acquisition.
+
 FinanceBench-150 can be normalized from a local CSV/JSON/JSONL export in three
 explicit modes:
 

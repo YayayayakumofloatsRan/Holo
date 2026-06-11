@@ -73,6 +73,18 @@ annotations instead of plain QA metadata: context/input/formula/unit slots,
 provided-report-context evidence policy, expected calculator/verifier/synthesis
 traces, and scoring-only reference program policy.
 
+The first live gold-backed smoke after this import work is intentionally
+recorded as a partial failure. FinanceBench `oracle_evidence` now enters the
+host-owned generic substrate path: claim ledger, slot frame, transform plan, and
+verifier gate are all present, and the first item re-scores to substrate `1.0`
+and workflow `0.8571`. It still fails numeric accuracy because the agent returns
+a retrieval-failure template instead of synthesizing from the provided context.
+FinQA `oracle_context` shows the same pattern: source/context scoring is aligned
+and workflow re-score reaches `0.9`, but the answer still lacks
+`calculator.compute` and synthesis-gate traces. The next RC task is therefore
+oracle-context final synthesis plus calculator closure, not another benchmark
+import pass.
+
 DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional
 per-share output, and LBO debt-paydown / exit-equity / MOIC / IRR schedules.

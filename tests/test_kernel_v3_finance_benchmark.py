@@ -441,6 +441,49 @@ def test_financebench_import_can_emit_scoring_annotation_sidecar(tmp_path: Path)
     assert "The reference answer" not in runtime.seen_prompts[0]
 
 
+def test_benchmark_provided_context_creates_source_grounded_trace(tmp_path: Path) -> None:
+    source = tmp_path / "financebench.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "financebench_id": "fb-trace-001",
+                "company": "ExampleCo",
+                "doc_name": "ExampleCo FY2024 10-K",
+                "question_type": "metrics-generated",
+                "question": "What was ExampleCo FY2024 revenue?",
+                "answer": "$10 million",
+                "evidence": "The FY2024 filing says revenue was $10 million.",
+                "doc_type": "10-K",
+                "doc_period": "FY2024",
+                "doc_link": "https://example.com/exampleco-10k.pdf",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    dataset = tmp_path / "financebench.normalized.jsonl"
+    convert_public_finance_benchmark(
+        benchmark="financebench",
+        input_path=source,
+        output_path=dataset,
+        mode="oracle_evidence",
+    )
+    items = load_finance_benchmark_items(dataset)
+    runtime = _StaticChatRuntime(JournalStore.in_memory())
+    result = run_finance_benchmark(items=items, runtime=runtime)[0]
+
+    assert "First solve directly from this context" in runtime.seen_prompts[0]
+    assert "do not call live retrieval only to reacquire" in runtime.seen_prompts[0]
+    assert result.trace_metrics["claim_ledger_present"] is True
+    assert result.trace_metrics["claim_count"] == 1
+    assert result.trace_metrics["slot_frame_present"] is True
+    assert result.trace_metrics["missing_slot_count"] == 0
+    assert result.trace_metrics["transform_plan_count"] == 1
+    assert result.trace_metrics["verifier_gate_status"] == "passed"
+    assert "example.com" in result.trace_metrics["source_hosts"]
+
+
 def test_finqa_import_supports_oracle_context_and_question_only_modes(tmp_path: Path) -> None:
     source = tmp_path / "finqa.json"
     source.write_text(
