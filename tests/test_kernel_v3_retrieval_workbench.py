@@ -1,9 +1,11 @@
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
+from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.contracts import FetchedDocument
+from kernel_v3.retrieval.workbench import retrieval_workbench_packet, validate_workbench_output
 
 
 def test_retrieval_operator_journals_model_workbench_decision() -> None:
@@ -307,6 +309,156 @@ def test_retrieval_workbench_next_query_becomes_tool_action_when_evidence_missin
     model_action = next(action for action in actions if action["action"] == "model_guided_query")
     assert model_action["payload_hint"]["query"] == "ExampleCo FY2024 operating income income statement annual report"
     assert model_action["payload_hint"]["missing_slots"] == ["operating_income"]
+
+
+def test_retrieval_workbench_direct_document_target_becomes_tool_action() -> None:
+    journal = JournalStore.in_memory()
+    goal = SearchGoal(
+        goal_id="goal-workbench-target",
+        query="ExampleCo capital expenditure",
+        max_sources=3,
+        max_fetches=1,
+        max_spans_per_document=2,
+    )
+    source = SearchSource(
+        source_id="source-example-target",
+        provider="fake",
+        uri="https://example.com/search",
+        title="ExampleCo Search Page",
+        snippet="No useful evidence.",
+    )
+    fabric = fake_fabric(
+        {
+            "retrieval.workbench": {
+                "decision": "continue",
+                "reason_summary": "Fetch the exact filing document next.",
+                "accepted_evidence_ids": [],
+                "rescued_evidence_ids": [],
+                "rejected_evidence_ids": [],
+                "source_roles": [],
+                "slot_assessments": [],
+                "covered_slots": [],
+                "missing_slots": ["capital_expenditure"],
+                "assumptions_needed": [],
+                "next_queries": [],
+                "next_source_families": ["company_ir"],
+                "next_document_targets": ["https://example.com/exampleco-2024-10k.htm"],
+                "limitations": [],
+            }
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider({goal.query: [source]}),
+        fetch_provider=FakeFetchProvider({source.uri: "This page only says hello."}),
+        processor_fabric=fabric,
+    )
+
+    report = operator.run(
+        goal,
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-workbench-target",
+        run_id="run-workbench-target",
+    )
+
+    action = next(item for item in report.diagnostics["next_tool_actions"] if item["action"] == "model_guided_document_target")
+    assert action["payload_hint"]["query"] == "https://example.com/exampleco-2024-10k.htm"
+    assert action["payload_hint"]["prefer_direct_url"] is True
+    assert action["payload_hint"]["missing_slots"] == ["capital_expenditure"]
+
+
+def test_retrieval_workbench_accepts_live_alias_output_shape() -> None:
+    goal = SearchGoal(
+        goal_id="goal-workbench-alias",
+        query="3M FY2018 capital expenditure",
+        metadata={"required_slots": ["capital_expenditure"]},
+    )
+    source = SearchSource(
+        source_id="direct-url-source",
+        provider="direct_url_search",
+        uri="https://investors.3m.com/report.pdf",
+        title="3M 2018 10-K PDF",
+        snippet="Target filing.",
+    )
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=[source],
+        fetch_summaries=[],
+        documents=[],
+        spans=[],
+        evidence=[],
+        citations=[],
+        rejected_evidence=[],
+    )
+
+    decision = validate_workbench_output(
+        {
+            "evidence_sufficiency": "insufficient",
+            "filled_slots": [],
+            "missing_slots": ["capital_expenditure_fy2018"],
+            "key_source_roles": {"direct-url-source": "primary_target_document"},
+            "next_acquisition_moves": [
+                {
+                    "action": "fetch_direct_url",
+                    "target": "https://investors.3m.com/report.pdf",
+                    "source_family": "company_filing",
+                }
+            ],
+        },
+        packet=packet,
+    )
+
+    assert decision.status == "ok"
+    assert decision.decision == "continue"
+    assert decision.missing_slots == ["capital_expenditure_fy2018"]
+    assert decision.source_roles[0]["role"] == "primary_filing"
+    assert decision.next_queries == ["https://investors.3m.com/report.pdf"]
+    assert decision.next_document_targets == ["https://investors.3m.com/report.pdf"]
+
+
+def test_retrieval_workbench_normalizes_object_query_items() -> None:
+    goal = SearchGoal(goal_id="goal-workbench-object-query", query="3M FY2018 capital expenditure")
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=[],
+        fetch_summaries=[],
+        documents=[],
+        spans=[],
+        evidence=[],
+        citations=[],
+        rejected_evidence=[],
+    )
+
+    decision = validate_workbench_output(
+        {
+            "decision": "continue",
+            "reason_summary": "Need cash flow statement evidence.",
+            "next_queries": [
+                {
+                    "query": "3M 2018 10-K capital expenditures cash flow statement",
+                    "source_family": "company_ir",
+                }
+            ],
+            "next_source_families": [{"source_family": "company_ir"}],
+            "next_document_targets": [{"url": "https://www.sec.gov/Archives/example/mmm-20181231x10k.htm"}],
+        },
+        packet=packet,
+    )
+
+    assert decision.next_queries == ["3M 2018 10-K capital expenditures cash flow statement"]
+    assert decision.next_source_families == ["company_ir"]
+    assert decision.next_document_targets == ["https://www.sec.gov/Archives/example/mmm-20181231x10k.htm"]
+
+
+def test_json_repair_accepts_python_literal_object() -> None:
+    result = parse_json_object(
+        "{'decision': 'continue', 'next_queries': [{'query': '3M capex'}],}",
+        max_repair_attempts=1,
+    )
+
+    assert result.value == {"decision": "continue", "next_queries": [{"query": "3M capex"}]}
+    assert result.repaired is True
 
 
 def test_pdf_document_reader_diagnostics_are_exposed_on_spans() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import dataclass
@@ -36,6 +37,9 @@ def parse_json_object(text: str, *, max_repair_attempts: int = 1) -> JsonParseRe
         if isinstance(value, dict):
             return JsonParseResult(value=value, repaired=True, attempts=attempt)
         last_error = "json_root_not_object"
+    literal = _parse_python_literal_object(candidate)
+    if literal is not None:
+        return JsonParseResult(value=literal, repaired=True, attempts=max(1, max(0, max_repair_attempts)))
     return JsonParseResult(value=None, repaired=False, attempts=max(0, max_repair_attempts), error=last_error)
 
 
@@ -54,3 +58,21 @@ def _repair_once(text: str) -> str:
         stripped = stripped[start : end + 1]
     stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
     return stripped
+
+
+def _parse_python_literal_object(text: str) -> JsonObject | None:
+    stripped = text.strip()
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start >= 0 and end > start:
+        stripped = stripped[start : end + 1]
+    try:
+        value = ast.literal_eval(stripped)
+    except (SyntaxError, ValueError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return None

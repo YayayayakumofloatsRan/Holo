@@ -2415,6 +2415,7 @@ def _workbench_next_tool_actions(goal: SearchGoal, decision: RetrievalWorkbenchR
     if decision.status != "ok":
         return []
     actions: list[RetrievalNextAction] = []
+    query_values = [query for query in decision.next_queries[:8] if query]
     for index, query in enumerate(decision.next_queries[:8], start=1):
         actions.append(
             RetrievalNextAction(
@@ -2429,6 +2430,33 @@ def _workbench_next_tool_actions(goal: SearchGoal, decision: RetrievalWorkbenchR
                     "document_targets": decision.next_document_targets[:8],
                     "missing_slots": decision.missing_slots[:24],
                     "strategy": "model_guided_evidence_workbench",
+                },
+                diagnostics={
+                    "workbench_decision": decision.decision,
+                    "semantic_missing_slots": decision.missing_slots[:24],
+                },
+            )
+        )
+    target_urls = [
+        target
+        for target in decision.next_document_targets[:8]
+        if _is_http_url(target) and target not in query_values
+    ]
+    for index, target in enumerate(target_urls, start=1):
+        actions.append(
+            RetrievalNextAction(
+                action_id=f"next-{goal.goal_id}-workbench-document-target-{index}",
+                action="model_guided_document_target",
+                tool_hint="retrieval.run",
+                reason=decision.reason_summary or "retrieval workbench identified a concrete document target",
+                payload_hint={
+                    "goal_id": goal.goal_id,
+                    "query": target,
+                    "source_families": decision.next_source_families[:12],
+                    "document_targets": [target],
+                    "missing_slots": decision.missing_slots[:24],
+                    "strategy": "model_guided_evidence_workbench",
+                    "prefer_direct_url": True,
                 },
                 diagnostics={
                     "workbench_decision": decision.decision,
@@ -2457,6 +2485,11 @@ def _workbench_next_tool_actions(goal: SearchGoal, decision: RetrievalWorkbenchR
             )
         )
     return actions
+
+
+def _is_http_url(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    return text.startswith(("http://", "https://"))
 
 
 def _dedupe_next_actions(actions: list[RetrievalNextAction]) -> list[RetrievalNextAction]:

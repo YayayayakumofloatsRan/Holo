@@ -2707,6 +2707,16 @@ class _RecipeBoundPlanner:
             return None
         if action.kind != "respond" or "processor_failed" not in set(action.reasons):
             return None
+        workbench_followup = _workbench_followup_retrieval_action(
+            action,
+            context=context,
+            goal=self.goal,
+            recipe=self.recipe,
+            journal=self.journal,
+            call_index=self._calls,
+        )
+        if workbench_followup is not None:
+            return workbench_followup
         plan = plan_finance_formula(question=self.goal, facts=[], existing_traces=[])
         if plan.status == "missing_facts":
             retrieval = _finance_missing_fact_retrieval_action(
@@ -2881,6 +2891,98 @@ class _RecipeBoundPlanner:
             action_ref=action.action_id,
             state_delta={"agent_work_plan_revision": self._calls},
         )
+
+
+def _workbench_followup_retrieval_action(
+    source_action: CandidateAction,
+    *,
+    context: ContextBundle,
+    goal: str,
+    recipe: TaskRecipe,
+    journal: JournalStore | None,
+    call_index: int,
+) -> CandidateAction | None:
+    if journal is None:
+        return None
+    task_id = str(context.state.get("task_id") or "")
+    run_id = str(context.state.get("run_id") or "")
+    if not task_id or not run_id:
+        return None
+    record = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind="retrieval_workbench_decision")
+    if record is None:
+        return None
+    data = record.data if isinstance(record.data, dict) else {}
+    if data.get("status") != "ok" or data.get("decision") == "sufficient":
+        return None
+    attempted = {query.casefold() for query in _action_retrieval_queries(journal, task_id=task_id, run_id=run_id)}
+    next_queries = _ordered_unique(
+        [
+            *_string_list(data.get("next_queries")),
+            *[target for target in _string_list(data.get("next_document_targets")) if _looks_like_url(target)],
+        ]
+    )
+    selected_query = next((query for query in next_queries if query.casefold() not in attempted), None)
+    if not selected_query:
+        return None
+    payload = _retrieval_payload(goal, recipe)
+    payload = _host_rescue_retrieval_payload(payload, context=context, goal=goal, call_index=call_index)
+    metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+    source_urls = _ordered_unique(
+        [
+            *_string_list(metadata.get("source_urls")),
+            *[target for target in _string_list(data.get("next_document_targets")) if _looks_like_url(target)],
+            *([selected_query] if _looks_like_url(selected_query) else []),
+        ]
+    )
+    metadata.update(
+        {
+            "host_rescue": True,
+            "host_rescue_reason": "planner_processor_failed_after_retrieval_workbench",
+            "workbench_followup": True,
+            "workbench_decision_ref": record.record_id,
+            "workbench_reason_summary": _string_value(data.get("reason_summary")),
+            "semantic_missing_slots": _string_list(data.get("missing_slots")),
+            "preferred_source_families": _ordered_unique(
+                [
+                    *_string_list(metadata.get("preferred_source_families")),
+                    *_string_list(data.get("next_source_families")),
+                ]
+            ),
+            "next_document_targets": _string_list(data.get("next_document_targets")),
+            "research_profile": metadata.get("research_profile") or "finance_fundamentals",
+            "source_authority_requirement": metadata.get("source_authority_requirement") or "primary",
+        }
+    )
+    if source_urls:
+        metadata["source_urls"] = source_urls[:24]
+    queries = _ordered_unique([selected_query, *next_queries, *_string_list(payload.get("queries"))])[:8]
+    payload.update(
+        {
+            "query": selected_query,
+            "queries": queries,
+            "search_strategy": "structured",
+            "max_queries": max(int(payload.get("max_queries") or 0), min(8, max(3, len(queries)))),
+            "max_sources": max(int(payload.get("max_sources") or 0), 24),
+            "max_fetches": max(int(payload.get("max_fetches") or 0), 12),
+            "max_spans_per_document": max(int(payload.get("max_spans_per_document") or 0), 8),
+            "metadata": metadata,
+        }
+    )
+    return CandidateAction(
+        action_id=f"act-workbench-followup-retrieval-{call_index}",
+        kind="tool",
+        name="retrieval.run",
+        description="Execute retrieval workbench semantic next move after planner processor failure",
+        score=max(float(source_action.score or 0.0), 0.91),
+        payload=payload,
+        reasons=[
+            "retrieval_workbench_followup",
+            "host_planner_failure_rescue",
+            "planner_processor_failed",
+            *[f"missing:{item}" for item in _string_list(data.get("missing_slots"))[:6]],
+        ],
+        side_effect_class="network",
+    )
 
 
 def _finance_missing_fact_retrieval_action(
@@ -3426,8 +3528,17 @@ def _bind_model_action_to_recipe(
         return action
     if action.name == "retrieval.run":
         payload = dict(action.payload)
+        metadata_before = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+        protect_workbench_followup = bool(metadata_before.get("workbench_followup"))
+        protected_query = payload.get("query") if protect_workbench_followup else None
+        protected_queries = payload.get("queries") if protect_workbench_followup else None
         payload = _preserve_retrieval_capability_context(payload, recipe=recipe)
         payload = _merge_retrieval_payload(payload, _benchmark_doc_retrieval_payload(goal))
+        if protect_workbench_followup:
+            if isinstance(protected_query, str) and protected_query:
+                payload["query"] = protected_query
+            if isinstance(protected_queries, list) and protected_queries:
+                payload["queries"] = protected_queries
         payload.setdefault("goal_id", _next_required_retrieval_goal_id(context, recipe) or "goal-agent-retrieval")
         payload.setdefault("query", goal)
         payload.setdefault("max_spans_per_document", 2)
@@ -3435,6 +3546,8 @@ def _bind_model_action_to_recipe(
         payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
         payload = _apply_research_depth_defaults(payload)
         payload = _augment_finance_modeling_retrieval_payload(payload, root_goal=goal, recipe=recipe)
+        if protect_workbench_followup:
+            return replace(action, payload=payload)
         decision = supervise_retrieval_payload(
             payload,
             replan_hints=_retrieval_hints_from_context(context),
@@ -7198,6 +7311,16 @@ def _benchmark_doc_retrieval_payload(goal: str) -> JsonObject:
         metadata["source_url"] = source_url
         metadata["source_urls"] = [source_url]
         metadata["preferred_source_urls"] = [source_url]
+        metadata["queries"] = [source_url, " ".join(part for part in (company, doc_period, doc_type, question) if part)]
+        metadata["suggested_source_targets"] = [
+            {
+                "title": doc_name or source_url,
+                "uri": source_url,
+                "query_hints": [source_url],
+                "source_family": "company_filing",
+                "reason": "FinanceBench doc_retrieval target source URL",
+            }
+        ]
     if question:
         metadata["root_goal"] = question
     return {

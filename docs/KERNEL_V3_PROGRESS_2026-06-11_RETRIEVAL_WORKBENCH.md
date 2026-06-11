@@ -55,6 +55,21 @@ semantic judgment lives.
   - unit tests do not require optional PDF dependencies;
   - extraction diagnostics expose parser used, chars extracted, table-like
     block count, pages, and fallback failure reason where available.
+- Loosened `retrieval.workbench` processor schema and moved shape handling into
+  host validation:
+  - live model aliases such as `evidence_sufficiency`, `filled_slots`,
+    `key_source_roles`, and `next_acquisition_moves` are normalized;
+  - object-style `next_queries` / `next_document_targets` are normalized instead
+    of being stringified into bad search queries;
+  - Python-literal-style object output can be repaired into JSON-compatible
+    dicts before host validation.
+- Coupled workbench decisions back into the agent loop:
+  - URL document targets become `model_guided_document_target` next actions;
+  - if the model planner fails after an insufficient retrieval report, the host
+    can execute the latest workbench semantic next move as a bounded
+    `retrieval.run` fallback;
+  - workbench follow-up payloads preserve their model-selected query and are not
+    rewritten by generic query-diversification supervision.
 
 ## Host Boundary
 
@@ -67,8 +82,12 @@ gates.
 ## Validation
 
 ```bash
+.venv/bin/python -m compileall -q kernel_v3
 .venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_engine.py \
   tests/test_kernel_v3_retrieval_workbench.py \
+  tests/test_kernel_v3_phase5_semantic_processors.py -q
+.venv/bin/python -m pytest \
   tests/test_kernel_v3_finance_benchmark.py \
   tests/test_kernel_v3_phase6_agent_runtime.py -q
 ```
@@ -76,7 +95,9 @@ gates.
 Result:
 
 ```text
-49 passed in 106.93s
+compileall passed
+135 passed in 1.87s
+46 passed in 93.77s
 ```
 
 Additional focused checks:
@@ -97,8 +118,28 @@ Result:
 
 ## Next
 
-- Run FinanceBench doc-retrieval live3 with workbench enabled.
-- Check whether workbench decisions produce useful semantic missing slots and
-  next source-family/document-target moves.
-- Check whether model-guided rescues increase citable finance facts without
-  violating host authority/provenance gates.
+Live FinanceBench doc-retrieval probes with real model/retrieval calls show the
+pivot is partially working but not solved:
+
+- `run_financebench_doc_live1_workbench_v4`: workbench decisions reached
+  benchmark metrics, but evidence remained `0`; failure localized to target PDF
+  extraction and workbench next moves not being executed by the loop.
+- `run_financebench_doc_live1_workbench_v6`: after workbench follow-up coupling,
+  the same item produced `77` finance facts, `77` claims, citations present,
+  slot frame present, transform plans present, verifier gate passed, synthesis
+  gate passed, and workflow/substrate score `1.0`; it still failed numeric
+  scoring because the selected supported figure came from secondary current
+  StockAnalysis cash-flow data (`899M`) instead of the FY2018 10-K cash-flow
+  statement gold value (`1577M`).
+- `run_financebench_doc_live1_workbench_v7`: confirmed more facts can be
+  acquired, but extra loop budget increased cost and did not improve numeric
+  correctness.
+
+Remaining gap:
+
+- Workbench semantic judgment is now visible and can drive follow-up retrieval,
+  but document acquisition still needs a stronger SEC filing/HTML/XBRL reader so
+  the model-guided missing slot can bind to the target 10-K cash-flow statement
+  instead of drifting to secondary market pages.
+- Cost is still high for live doc-retrieval; context compression and fewer
+  planner retries are required after the evidence path is stable.

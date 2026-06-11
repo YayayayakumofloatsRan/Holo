@@ -263,6 +263,71 @@ def test_planner_processor_failure_preserves_benchmark_doc_target() -> None:
     ]
     assert "3M 2018 10k" in action.payload["query"]
     assert "TARGET CORPORATION" not in action.payload["query"]
+
+
+def test_planner_processor_failure_prefers_retrieval_workbench_followup() -> None:
+    class FailedPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-processor-failed",
+                kind="respond",
+                name="respond",
+                description="processor failed",
+                score=0.0,
+                payload={"error": "processor_failed"},
+                reasons=["processor_failed"],
+                side_effect_class="none",
+            )
+
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Source URL: https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf "
+        "Company: 3M Document period: 2018 What is the FY2018 capital expenditure amount for 3M?"
+    )
+    profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
+    recipe = task_recipe("retrieval_answer", metadata=profile_metadata)
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-workbench-followup",
+        run_id="run-workbench-followup",
+        step_id="step-workbench",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "reason_summary": "Need a targeted companyfacts concept query.",
+            "missing_slots": ["capital_expenditure_fy2018"],
+            "next_queries": ["PaymentsToAcquirePropertyPlantAndEquipment 3M 2018"],
+            "next_source_families": ["sec_edgar"],
+            "next_document_targets": ["https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000066740&type=10-K&dateb=20181231"],
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=FailedPlanner(),
+        goal=goal,
+        recipe=recipe,
+        journal=journal,
+    )
+    context = ContextBundle(
+        context_id="ctx-workbench-followup",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-workbench-followup",
+            "run_id": "run-workbench-followup",
+        },
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "retrieval.run"
+    assert "retrieval_workbench_followup" in action.reasons
+    assert action.payload["query"] == "PaymentsToAcquirePropertyPlantAndEquipment 3M 2018"
+    assert action.payload["metadata"]["workbench_followup"] is True
+    assert action.payload["metadata"]["semantic_missing_slots"] == ["capital_expenditure_fy2018"]
+    assert "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000066740&type=10-K&dateb=20181231" in action.payload["metadata"]["source_urls"]
     assert all("TARGET CORPORATION" not in query for query in action.payload["queries"])
 
 

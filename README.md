@@ -157,10 +157,14 @@ valid rejected/compacted evidence into real evidence and citation records, while
 hard rejections such as weak authority, target mismatch, wrong SEC entity, and
 template placeholders remain blocked. Workbench next queries/source families are
 also converted into retrieval next-tool actions when evidence is still
-insufficient. Retrieval reports and finance benchmark metrics expose workbench
-decisions, semantic missing slots, requested rescues, actual rescues, blocked
-rescues, and next moves so live runs can distinguish "search failed" from
-"document/evidence judgment found a semantic gap."
+insufficient. If a model planner call fails after an insufficient retrieval
+report, the host can now execute the latest workbench semantic next move as a
+bounded `retrieval.run` fallback; workbench follow-up payloads preserve their
+model-selected query instead of being rewritten by generic query
+diversification. Retrieval reports and finance benchmark metrics expose
+workbench decisions, semantic missing slots, requested rescues, actual rescues,
+blocked rescues, and next moves so live runs can distinguish "search failed"
+from "document/evidence judgment found a semantic gap."
 The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
@@ -1195,6 +1199,18 @@ retrieval work (`1.3333` average retrieval runs, `8` to `16` fetches per item)
 but still scored `0/3` because it did not convert retrieved sources into citable
 finance facts or formula inputs. This is now the concrete FinanceBench
 doc-retrieval gap.
+After the retrieval workbench pivot, focused live1 probes show partial closure
+of that gap rather than a solved benchmark: `run_financebench_doc_live1_workbench_v6`
+produced `77` finance facts, `77` claims, citation preservation `1.0`, slot
+frame `1.0`, transform plan `1.0`, verifier gate `1.0`, synthesis gate `1.0`,
+and workflow/substrate score `1.0` on the first FinanceBench doc-retrieval item.
+It still failed numeric scoring because the supported number came from secondary
+current StockAnalysis cash-flow data (`899M`) rather than the FY2018 10-K
+cash-flow statement value (`1577M`). The current gap is therefore narrower:
+model-guided workbench decisions can drive follow-up retrieval and produce
+auditable substrate records, but SEC filing/PDF/HTML/XBRL document acquisition
+and source binding must still improve before FinanceBench `doc_retrieval` can be
+claimed as solved.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

@@ -160,6 +160,7 @@ def retrieval_workbench_packet(
 
 
 def validate_workbench_output(parsed: JsonObject, *, packet: JsonObject) -> RetrievalWorkbenchResult:
+    parsed = _normalize_workbench_aliases(parsed)
     evidence_ids = {
         str(item.get("evidence_id"))
         for item in [*packet.get("accepted_evidence", []), *packet.get("rejected_evidence", [])]
@@ -215,6 +216,200 @@ def validate_workbench_output(parsed: JsonObject, *, packet: JsonObject) -> Retr
             },
         },
     )
+
+
+def _normalize_workbench_aliases(parsed: JsonObject) -> JsonObject:
+    normalized = dict(parsed)
+    if not normalized.get("decision"):
+        sufficiency = _string_value(
+            normalized.get("evidence_sufficiency")
+            or normalized.get("sufficiency")
+            or normalized.get("status")
+        ).lower()
+        if sufficiency in {"sufficient", "complete", "enough", "ready"}:
+            normalized["decision"] = "sufficient"
+        elif sufficiency in {"fail", "failed", "fail_with_limitations", "impossible"}:
+            normalized["decision"] = "fail_with_limitations"
+        else:
+            normalized["decision"] = "continue"
+    if not normalized.get("reason_summary"):
+        normalized["reason_summary"] = _string_value(
+            normalized.get("reason")
+            or normalized.get("summary")
+            or normalized.get("rationale")
+            or normalized.get("diagnosis")
+            or normalized.get("evidence_sufficiency")
+        )
+    if "covered_slots" not in normalized and isinstance(normalized.get("filled_slots"), list):
+        normalized["covered_slots"] = normalized.get("filled_slots")
+    if "missing_slots" not in normalized and isinstance(normalized.get("unfilled_slots"), list):
+        normalized["missing_slots"] = normalized.get("unfilled_slots")
+    if "assumptions_needed" not in normalized and isinstance(normalized.get("assumptions"), list):
+        normalized["assumptions_needed"] = normalized.get("assumptions")
+    if "limitations" not in normalized and isinstance(normalized.get("known_limitations"), list):
+        normalized["limitations"] = normalized.get("known_limitations")
+    normalized["next_queries"] = _normalize_query_items(normalized.get("next_queries"))
+    normalized["next_document_targets"] = _normalize_target_items(normalized.get("next_document_targets"))
+    normalized["next_source_families"] = _normalize_family_items(normalized.get("next_source_families"))
+    for key in (
+        "accepted_evidence_ids",
+        "rescued_evidence_ids",
+        "rejected_evidence_ids",
+        "source_roles",
+        "slot_assessments",
+        "covered_slots",
+        "missing_slots",
+        "assumptions_needed",
+        "next_queries",
+        "next_source_families",
+        "next_document_targets",
+        "limitations",
+    ):
+        normalized.setdefault(key, [])
+    normalized["source_roles"] = _normalize_source_role_aliases(normalized.get("source_roles"), parsed)
+    normalized["slot_assessments"] = _normalize_slot_assessment_aliases(normalized.get("slot_assessments"), parsed)
+    moves = _normalize_next_move_aliases(parsed)
+    if moves["next_queries"]:
+        normalized["next_queries"] = [*list(normalized.get("next_queries") or []), *moves["next_queries"]]
+    if moves["next_source_families"]:
+        normalized["next_source_families"] = [
+            *list(normalized.get("next_source_families") or []),
+            *moves["next_source_families"],
+        ]
+    if moves["next_document_targets"]:
+        normalized["next_document_targets"] = [
+            *list(normalized.get("next_document_targets") or []),
+            *moves["next_document_targets"],
+        ]
+    return normalized
+
+
+def _normalize_source_role_aliases(value: object, parsed: JsonObject) -> list[JsonObject]:
+    if isinstance(value, list) and value:
+        return [item for item in value if isinstance(item, dict)]
+    aliases = parsed.get("key_source_roles") or parsed.get("source_role_map") or parsed.get("source_roles_by_id")
+    result: list[JsonObject] = []
+    if isinstance(aliases, dict):
+        for source_id, role in aliases.items():
+            result.append(
+                {
+                    "source_id": str(source_id),
+                    "role": _source_role_alias(str(role)),
+                    "confidence": 0.5,
+                    "reason": f"model alias role: {role}",
+                }
+            )
+    return result
+
+
+def _normalize_slot_assessment_aliases(value: object, parsed: JsonObject) -> list[JsonObject]:
+    result = [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+    existing = {str(item.get("slot") or "") for item in result}
+    for slot in _string_list(parsed.get("filled_slots")):
+        if slot not in existing:
+            result.append({"slot": slot, "status": "filled", "supporting_evidence_ids": [], "reason": "model filled_slots alias"})
+            existing.add(slot)
+    for slot in _string_list(parsed.get("missing_slots")) + _string_list(parsed.get("unfilled_slots")):
+        if slot not in existing:
+            result.append({"slot": slot, "status": "missing", "supporting_evidence_ids": [], "reason": "model missing_slots alias"})
+            existing.add(slot)
+    return result
+
+
+def _normalize_query_items(value: object) -> list[str]:
+    result: list[str] = []
+    if not isinstance(value, list):
+        return result
+    for item in value[:16]:
+        if isinstance(item, dict):
+            for key in ("query", "search_query", "search", "q", "url", "uri", "document_url", "direct_url", "target"):
+                text = _string_value(item.get(key))
+                if text:
+                    result.append(text)
+                    break
+            continue
+        text = _string_value(item)
+        if text:
+            result.append(text)
+    return result
+
+
+def _normalize_target_items(value: object) -> list[str]:
+    result: list[str] = []
+    if not isinstance(value, list):
+        return result
+    for item in value[:16]:
+        if isinstance(item, dict):
+            for key in ("target", "url", "uri", "document_url", "direct_url", "document_target", "section"):
+                text = _string_value(item.get(key))
+                if text:
+                    result.append(text)
+                    break
+            continue
+        text = _string_value(item)
+        if text:
+            result.append(text)
+    return result
+
+
+def _normalize_family_items(value: object) -> list[str]:
+    result: list[str] = []
+    if not isinstance(value, list):
+        return result
+    for item in value[:16]:
+        if isinstance(item, dict):
+            text = _string_value(item.get("source_family") or item.get("source_type") or item.get("family") or item.get("tool"))
+        else:
+            text = _string_value(item)
+        if text:
+            result.append(text)
+    return result
+
+
+def _normalize_next_move_aliases(parsed: JsonObject) -> JsonObject:
+    result: JsonObject = {"next_queries": [], "next_source_families": [], "next_document_targets": []}
+    raw_moves = parsed.get("next_acquisition_moves") or parsed.get("next_moves") or parsed.get("recommended_next_actions")
+    if not isinstance(raw_moves, list):
+        return result
+    for move in raw_moves[:16]:
+        if isinstance(move, str):
+            text = move.strip()
+            if text:
+                result["next_queries"].append(text)
+            continue
+        if not isinstance(move, dict):
+            continue
+        for key in ("query", "search_query", "search", "q"):
+            text = _string_value(move.get(key))
+            if text:
+                result["next_queries"].append(text)
+        for key in ("target", "url", "uri", "document_url", "direct_url"):
+            text = _string_value(move.get(key))
+            if text:
+                result["next_document_targets"].append(text)
+                if text.startswith(("http://", "https://")):
+                    result["next_queries"].append(text)
+        family = _string_value(move.get("source_family") or move.get("source_type") or move.get("tool"))
+        if family:
+            result["next_source_families"].append(family)
+    return result
+
+
+def _source_role_alias(value: str) -> str:
+    normalized = " ".join(value.lower().replace("-", "_").split())
+    if normalized in SOURCE_ROLES:
+        return normalized
+    if "annual" in normalized or "10_k" in normalized or "10-k" in normalized:
+        return "annual_report"
+    if "filing" in normalized or "sec" in normalized or "primary" in normalized:
+        return "primary_filing"
+    if "transaction" in normalized or "8_k" in normalized or "8-k" in normalized:
+        return "transaction_disclosure"
+    if "market" in normalized:
+        return "market_data"
+    if "irrelevant" in normalized or "unrelated" in normalized:
+        return "irrelevant"
+    return "other"
 
 
 def _workbench_prompt(packet: JsonObject) -> str:

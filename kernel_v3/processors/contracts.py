@@ -86,22 +86,8 @@ EVALUATOR_SCHEMA = JsonSchema(
 
 RETRIEVAL_WORKBENCH_SCHEMA = JsonSchema(
     name="retrieval.workbench",
-    required={
-        "decision": "str",
-        "reason_summary": "str",
-        "accepted_evidence_ids": "list",
-        "rescued_evidence_ids": "list",
-        "rejected_evidence_ids": "list",
-        "source_roles": "list",
-        "slot_assessments": "list",
-        "covered_slots": "list",
-        "missing_slots": "list",
-        "assumptions_needed": "list",
-        "next_queries": "list",
-        "next_source_families": "list",
-        "next_document_targets": "list",
-        "limitations": "list",
-    },
+    required={},
+    optional={},
 )
 
 SYNTHESIZER_SCHEMA = JsonSchema(
