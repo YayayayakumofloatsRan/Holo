@@ -10,6 +10,12 @@ from kernel_v3.finance.substrate_adapter import (
     finance_slot_frame,
     finance_verification_to_gate_result,
 )
+from kernel_v3.finance.target_binding import (
+    attach_target_binding_to_facts,
+    filter_facts_for_target_binding,
+    primary_source_numeric_binding_resolution,
+    target_document_binding_from_metadata,
+)
 
 __all__ = [
     "FinanceFact",
@@ -24,7 +30,11 @@ __all__ = [
     "finance_formula_plan_to_transform_plan",
     "finance_slot_frame",
     "finance_verification_to_gate_result",
+    "attach_target_binding_to_facts",
+    "filter_facts_for_target_binding",
+    "primary_source_numeric_binding_resolution",
     "plan_finance_formula",
     "register_finance_tools",
+    "target_document_binding_from_metadata",
     "verify_finance_answer",
 ]

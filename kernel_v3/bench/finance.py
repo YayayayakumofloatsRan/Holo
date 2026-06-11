@@ -720,6 +720,13 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     latest_verification = numeric_verifications[-1] if numeric_verifications else {}
     latest_verification = latest_verification if isinstance(latest_verification, dict) else {}
     verification_diagnostics = latest_verification.get("diagnostics") if isinstance(latest_verification.get("diagnostics"), dict) else {}
+    ledger_binding = latest_ledger.get("primary_source_numeric_binding") if isinstance(latest_ledger.get("primary_source_numeric_binding"), dict) else {}
+    verifier_binding = (
+        verification_diagnostics.get("primary_source_numeric_binding")
+        if isinstance(verification_diagnostics.get("primary_source_numeric_binding"), dict)
+        else {}
+    )
+    primary_binding = verifier_binding or ledger_binding
     answer_numeric_count = _int_value(verification_diagnostics.get("answer_numeric_count"))
     matched_values = latest_verification.get("matched_values") if isinstance(latest_verification.get("matched_values"), list) else []
     issue_codes = _finance_numeric_issue_codes(latest_verification)
@@ -785,6 +792,15 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "missing_slot_count": len(latest_slot_frame.get("missing_slots") or []) if isinstance(latest_slot_frame, dict) else 0,
         "missing_slots": latest_slot_frame.get("missing_slots") if isinstance(latest_slot_frame, dict) else [],
         "finance_fact_count": _int_value(latest_ledger.get("fact_count")) if isinstance(latest_ledger, dict) else 0,
+        "target_document_binding_present": bool(
+            isinstance(latest_ledger, dict) and isinstance(latest_ledger.get("target_document_binding"), dict) and latest_ledger.get("target_document_binding")
+        ),
+        "primary_source_numeric_binding_status": primary_binding.get("status") if isinstance(primary_binding.get("status"), str) else None,
+        "primary_source_numeric_binding_selected_count": _int_value(primary_binding.get("selected_count")) if isinstance(primary_binding, dict) else 0,
+        "primary_source_numeric_binding_rejected_count": _int_value(primary_binding.get("rejected_count")) if isinstance(primary_binding, dict) else 0,
+        "primary_source_numeric_binding_selected_fact_ids": primary_binding.get("selected_fact_ids")[:16]
+        if isinstance(primary_binding.get("selected_fact_ids"), list)
+        else [],
         "workbench_decision_present": bool(workbench_decisions),
         "workbench_status": workbench_status,
         "workbench_decision": workbench_decision,

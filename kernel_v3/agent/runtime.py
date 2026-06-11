@@ -38,6 +38,7 @@ from kernel_v3.finance import (
     FinanceFact,
     FinanceFormulaPlan,
     FormulaTrace,
+    attach_target_binding_to_facts,
     build_finance_fact_ledger,
     compute_formula,
     finance_facts_to_claims,
@@ -45,7 +46,9 @@ from kernel_v3.finance import (
     finance_slot_frame,
     finance_verification_to_gate_result,
     plan_finance_formula,
+    primary_source_numeric_binding_resolution,
     register_finance_tools,
+    target_document_binding_from_metadata,
     verify_finance_answer,
 )
 from kernel_v3.interaction import guard_user_visible_text, interaction_preferences, normalize_response_language
@@ -1525,6 +1528,7 @@ class AgentRuntime:
             citations=citations,
             purpose="verification",
             question=_root_goal_from_recipe(recipe),
+            target_binding=_target_document_binding_from_recipe(recipe),
         )
         trace_refs = _trace_refs(self.journal, answer.task_id)
         formula_traces = _calculator_formula_traces(self.journal, task_id=answer.task_id, run_id=answer.run_id)
@@ -1535,6 +1539,7 @@ class AgentRuntime:
             citations=citations,
             evidence=evidence,
             question=_root_goal_from_recipe(recipe),
+            target_binding=_target_document_binding_from_recipe(recipe),
         )
         gate = finance_verification_to_gate_result(
             verification,
@@ -1593,6 +1598,7 @@ class AgentRuntime:
             citations=citations,
             purpose="preflight",
             question=_root_goal_from_recipe(recipe),
+            target_binding=_target_document_binding_from_recipe(recipe),
         )
         existing = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
         plans = _finance_formula_preflight_plans(
@@ -1820,8 +1826,12 @@ class AgentRuntime:
         citations: list[CitationItem],
         purpose: str,
         question: str = "",
+        target_binding: JsonObject | None = None,
     ):
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+        binding = target_document_binding_from_metadata(target_binding, question=question)
+        facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+        binding_resolution = primary_source_numeric_binding_resolution(facts, binding, question=question) if binding else {}
         ledger_record = self.journal.append(
             task_id=task_id,
             run_id=run_id,
@@ -1835,6 +1845,8 @@ class AgentRuntime:
                     "facts": [fact.to_dict() for fact in facts[:512]],
                     "evidence_count": len(evidence),
                     "citation_count": len(citations),
+                    **({"target_document_binding": binding} if binding else {}),
+                    **({"primary_source_numeric_binding": binding_resolution} if binding_resolution else {}),
                 }
             ),
             state_delta={"finance_fact_count": len(facts)},
@@ -2730,6 +2742,7 @@ class _RecipeBoundPlanner:
                     retrieval.payload,
                     context=context,
                     goal=self.goal,
+                    recipe=self.recipe,
                     call_index=self._calls,
                 )
                 return replace(
@@ -2744,7 +2757,7 @@ class _RecipeBoundPlanner:
                     ),
                 )
         payload = _retrieval_payload(self.goal, self.recipe)
-        payload = _host_rescue_retrieval_payload(payload, context=context, goal=self.goal, call_index=self._calls)
+        payload = _host_rescue_retrieval_payload(payload, context=context, goal=self.goal, recipe=self.recipe, call_index=self._calls)
         return CandidateAction(
             action_id=f"act-host-planner-failure-retrieval-{self._calls}",
             kind="tool",
@@ -2925,7 +2938,7 @@ def _workbench_followup_retrieval_action(
     if not selected_query:
         return None
     payload = _retrieval_payload(goal, recipe)
-    payload = _host_rescue_retrieval_payload(payload, context=context, goal=goal, call_index=call_index)
+    payload = _host_rescue_retrieval_payload(payload, context=context, goal=goal, recipe=recipe, call_index=call_index)
     metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
     source_urls = _ordered_unique(
         [
@@ -3136,10 +3149,13 @@ def _host_rescue_retrieval_payload(
     *,
     context: ContextBundle,
     goal: str,
+    recipe: TaskRecipe | None = None,
     call_index: int,
 ) -> JsonObject:
     updated = dict(payload)
     benchmark_payload = _benchmark_doc_retrieval_payload(goal)
+    if not benchmark_payload and recipe is not None:
+        benchmark_payload = _benchmark_doc_retrieval_payload_from_recipe(recipe)
     if benchmark_payload:
         updated = _merge_retrieval_payload(updated, benchmark_payload)
     metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
@@ -3183,7 +3199,7 @@ def _host_rescue_retrieval_payload(
         }
     )
     updated["metadata"] = metadata
-    return updated
+    return _enforce_benchmark_doc_retrieval_binding(updated, goal=goal, recipe=recipe)
 
 
 def _failed_retrieval_observation_hints(context: ContextBundle) -> JsonObject:
@@ -3533,12 +3549,13 @@ def _bind_model_action_to_recipe(
         protected_query = payload.get("query") if protect_workbench_followup else None
         protected_queries = payload.get("queries") if protect_workbench_followup else None
         payload = _preserve_retrieval_capability_context(payload, recipe=recipe)
-        payload = _merge_retrieval_payload(payload, _benchmark_doc_retrieval_payload(goal))
+        payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=protect_workbench_followup)
         if protect_workbench_followup:
             if isinstance(protected_query, str) and protected_query:
                 payload["query"] = protected_query
             if isinstance(protected_queries, list) and protected_queries:
                 payload["queries"] = protected_queries
+            payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=True)
         payload.setdefault("goal_id", _next_required_retrieval_goal_id(context, recipe) or "goal-agent-retrieval")
         payload.setdefault("query", goal)
         payload.setdefault("max_spans_per_document", 2)
@@ -3546,6 +3563,7 @@ def _bind_model_action_to_recipe(
         payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
         payload = _apply_research_depth_defaults(payload)
         payload = _augment_finance_modeling_retrieval_payload(payload, root_goal=goal, recipe=recipe)
+        payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=protect_workbench_followup)
         if protect_workbench_followup:
             return replace(action, payload=payload)
         decision = supervise_retrieval_payload(
@@ -3553,7 +3571,7 @@ def _bind_model_action_to_recipe(
             replan_hints=_retrieval_hints_from_context(context),
             root_goal=goal,
         )
-        payload = decision.payload
+        payload = _enforce_benchmark_doc_retrieval_binding(decision.payload, goal=goal, recipe=recipe)
         reasons = list(action.reasons)
         if decision.diagnostics.get("rewritten") is True:
             reasons = _ordered_unique([*reasons, "host_strategy_supervision_rewrote_retrieval_payload"])
@@ -7259,7 +7277,7 @@ def _retrieval_payload(goal: str, recipe: TaskRecipe) -> JsonObject:
         "query": goal,
         "max_spans_per_document": 2,
     }
-    payload = _merge_retrieval_payload(payload, _benchmark_doc_retrieval_payload(goal))
+    payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe)
     payload = _merge_retrieval_payload(payload, _retrieval_capability_args(recipe))
     payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
     preferences = _interaction_preferences_metadata(recipe)
@@ -7274,7 +7292,7 @@ def _retrieval_payload(goal: str, recipe: TaskRecipe) -> JsonObject:
     payload.setdefault("max_spans_per_document", 2)
     payload = _apply_recipe_profile_defaults(payload, recipe)
     payload = _apply_research_depth_defaults(payload)
-    return payload
+    return _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe)
 
 
 def _benchmark_doc_retrieval_payload(goal: str) -> JsonObject:
@@ -7323,6 +7341,13 @@ def _benchmark_doc_retrieval_payload(goal: str) -> JsonObject:
         ]
     if question:
         metadata["root_goal"] = question
+    binding = target_document_binding_from_metadata(metadata, question=question or goal)
+    if binding:
+        metadata["target_document_binding"] = binding
+        if binding.get("required_statement"):
+            metadata["required_statement"] = binding["required_statement"]
+        if binding.get("required_line_item"):
+            metadata["required_line_item"] = binding["required_line_item"]
     return {
         "query": " ".join(query_parts) or goal,
         "metadata": metadata,
@@ -7332,6 +7357,218 @@ def _benchmark_doc_retrieval_payload(goal: str) -> JsonObject:
         "max_fetches": 12,
         "max_spans_per_document": 8,
     }
+
+
+def _enforce_benchmark_doc_retrieval_binding(
+    payload: JsonObject,
+    *,
+    goal: str,
+    recipe: TaskRecipe | None = None,
+    preserve_query: bool = False,
+) -> JsonObject:
+    """Keep FinanceBench doc targets attached to every retrieval action.
+
+    The model can still choose the semantic next move. The host only preserves
+    the benchmark's target document/period/line-item contract so a later loop
+    cannot silently drift into secondary/current market pages.
+    """
+
+    benchmark_payload = _benchmark_doc_retrieval_payload(goal)
+    if not benchmark_payload and recipe is not None:
+        benchmark_payload = _benchmark_doc_retrieval_payload_from_recipe(recipe)
+    if not benchmark_payload and recipe is not None:
+        binding = _target_document_binding_from_recipe(recipe)
+        if binding:
+            benchmark_payload = _benchmark_doc_retrieval_payload_from_binding(binding, goal=goal, recipe=recipe)
+    if not benchmark_payload:
+        return dict(payload)
+
+    current = dict(payload)
+    current_metadata = dict(current.get("metadata")) if isinstance(current.get("metadata"), dict) else {}
+    current_query = current.get("query") if isinstance(current.get("query"), str) else ""
+    current_queries = _string_list(current.get("queries"))
+
+    updated = _merge_retrieval_payload(current, benchmark_payload)
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    benchmark_metadata = dict(benchmark_payload.get("metadata")) if isinstance(benchmark_payload.get("metadata"), dict) else {}
+
+    source_urls = _ordered_unique(
+        [
+            *_string_list(benchmark_metadata.get("source_urls")),
+            *_string_list(current_metadata.get("source_urls")),
+            *_string_list(current.get("source_urls")),
+            *_string_list(metadata.get("source_urls")),
+        ]
+    )
+    if source_urls:
+        metadata["source_urls"] = source_urls[:24]
+        metadata.setdefault("preferred_source_urls", source_urls[:8])
+
+    binding = metadata.get("target_document_binding")
+    if isinstance(binding, dict) and binding:
+        metadata["target_document_binding"] = binding
+        if binding.get("required_statement"):
+            metadata["required_statement"] = binding["required_statement"]
+        if binding.get("required_line_item"):
+            metadata["required_line_item"] = binding["required_line_item"]
+    metadata["benchmark_binding_enforced"] = True
+    metadata.setdefault("source_authority_requirement", "primary")
+    metadata.setdefault("research_task_kind", "filing_document_qa")
+
+    benchmark_query = _string_value(benchmark_payload.get("query")) or ""
+    benchmark_queries = _ordered_unique(
+        [
+            *_string_list(benchmark_payload.get("queries")),
+            *_string_list(benchmark_metadata.get("queries")),
+            *_string_list(benchmark_metadata.get("source_urls")),
+        ]
+    )
+
+    keep_current_query = bool(
+        current_query
+        and (
+            preserve_query
+            or _looks_like_url(current_query)
+            or _benchmark_doc_query_is_targeted(current_query, metadata)
+        )
+    )
+    selected_query = current_query if keep_current_query else benchmark_query or (benchmark_queries[0] if benchmark_queries else current_query)
+
+    allowed_current_queries = [
+        query
+        for query in current_queries
+        if preserve_query or _looks_like_url(query) or _benchmark_doc_query_is_targeted(query, metadata)
+    ]
+    queries = _ordered_unique(
+        [
+            *([selected_query] if selected_query else []),
+            *allowed_current_queries,
+            *benchmark_queries,
+            *([benchmark_query] if benchmark_query else []),
+        ]
+    )
+    if queries:
+        updated["query"] = queries[0]
+        updated["queries"] = queries[:8]
+        updated["max_queries"] = max(int(updated.get("max_queries") or 0), min(8, max(2, len(queries[:8]))))
+
+    updated["metadata"] = metadata
+    updated["respect_explicit_budget"] = True
+    updated["search_strategy"] = updated.get("search_strategy") or metadata.get("search_strategy") or "structured"
+    updated["max_sources"] = max(int(updated.get("max_sources") or 0), int(benchmark_payload.get("max_sources") or 0), 24)
+    updated["max_fetches"] = max(int(updated.get("max_fetches") or 0), int(benchmark_payload.get("max_fetches") or 0), 12)
+    updated["max_spans_per_document"] = max(
+        int(updated.get("max_spans_per_document") or 0),
+        int(benchmark_payload.get("max_spans_per_document") or 0),
+        8,
+    )
+    return updated
+
+
+def _benchmark_doc_retrieval_payload_from_binding(
+    binding: JsonObject,
+    *,
+    goal: str,
+    recipe: TaskRecipe | None,
+) -> JsonObject:
+    metadata = dict(binding)
+    if recipe is not None and isinstance(recipe.metadata, dict):
+        metadata = {**recipe.metadata, **metadata}
+    question = _root_goal_from_recipe(recipe) if recipe is not None else goal
+    binding = target_document_binding_from_metadata(metadata, question=question or goal)
+    if not binding:
+        return {}
+    company = _string_value(binding.get("company")) or ""
+    period = _string_value(binding.get("doc_period")) or ""
+    doc_type = _string_value(binding.get("doc_type")) or ""
+    line_item = _string_value(binding.get("required_line_item")) or ""
+    statement = _string_value(binding.get("required_statement")) or ""
+    doc_link = _string_value(binding.get("doc_link")) or ""
+    query = " ".join(part for part in (company, period, doc_type, line_item, statement) if part) or goal
+    payload_metadata: JsonObject = {
+        "benchmark_doc_retrieval": True,
+        "respect_explicit_budget": True,
+        "retrieval_context_frozen": True,
+        "source_authority_requirement": "primary",
+        "search_strategy": "structured",
+        "research_task_kind": "filing_document_qa",
+        "target_document_binding": binding,
+    }
+    for key in ("company", "doc_name", "doc_type", "doc_period", "required_statement", "required_line_item"):
+        if binding.get(key):
+            payload_metadata[key] = binding[key]
+    if doc_link:
+        payload_metadata["source_url"] = doc_link
+        payload_metadata["source_urls"] = [doc_link]
+        payload_metadata["preferred_source_urls"] = [doc_link]
+        payload_metadata["queries"] = [doc_link, query]
+    return {
+        "query": query,
+        "metadata": payload_metadata,
+        "respect_explicit_budget": True,
+        "max_queries": 2,
+        "max_sources": 24,
+        "max_fetches": 12,
+        "max_spans_per_document": 8,
+    }
+
+
+def _benchmark_doc_query_is_targeted(query: str, metadata: JsonObject) -> bool:
+    if _looks_like_url(query):
+        return True
+    binding = metadata.get("target_document_binding")
+    binding = binding if isinstance(binding, dict) else {}
+    normalized = _normalize_for_benchmark_doc_query(query)
+    company = _string_value(binding.get("company") or metadata.get("company")) or ""
+    period = _string_value(binding.get("doc_period") or metadata.get("doc_period")) or ""
+    doc_type = _string_value(binding.get("doc_type") or metadata.get("doc_type") or metadata.get("sec_form")) or ""
+    line_item = _string_value(binding.get("required_line_item") or metadata.get("required_line_item")) or ""
+    statement = _string_value(binding.get("required_statement") or metadata.get("required_statement")) or ""
+    company_hit = not company or _normalize_for_benchmark_doc_query(company) in normalized
+    period_hit = not period or _normalize_for_benchmark_doc_query(period) in normalized
+    doc_type_hit = bool(doc_type and _normalize_for_benchmark_doc_query(doc_type).replace("10 k", "10k") in normalized.replace("10 k", "10k"))
+    line_hit = any(alias in normalized for alias in _benchmark_line_item_aliases(line_item))
+    statement_hit = any(alias in normalized for alias in _benchmark_statement_aliases(statement))
+    return bool(company_hit and period_hit and (doc_type_hit or line_hit or statement_hit))
+
+
+def _benchmark_line_item_aliases(line_item: str) -> list[str]:
+    normalized = _normalize_for_benchmark_doc_query(line_item)
+    aliases = [normalized] if normalized else []
+    if normalized == "capital expenditures":
+        aliases.extend(
+            [
+                "capital expenditure",
+                "capital expenditures",
+                "capex",
+                "property plant and equipment",
+                "property and equipment",
+                "ppe",
+                "payments to acquire property plant and equipment",
+                "paymentstoacquirepropertyplantandequipment",
+            ]
+        )
+    elif normalized == "net income":
+        aliases.extend(["net income", "net earnings"])
+    elif normalized == "revenue":
+        aliases.extend(["revenue", "revenues", "net sales"])
+    return _ordered_unique([item for item in aliases if item])
+
+
+def _benchmark_statement_aliases(statement: str) -> list[str]:
+    if statement == "cash_flow_statement":
+        return ["cash flow", "cash flows", "cashflow", "statement of cash flows"]
+    if statement == "income_statement":
+        return ["income statement", "statement of operations"]
+    if statement == "balance_sheet":
+        return ["balance sheet", "assets", "liabilities"]
+    if statement == "non_gaap_reconciliation":
+        return ["reconciliation", "non gaap", "non-gaap"]
+    return []
+
+
+def _normalize_for_benchmark_doc_query(value: object) -> str:
+    return " ".join(str(value or "").lower().replace("&", " and ").replace("/", " ").replace("-", " ").split())
 
 
 def _benchmark_doc_retrieval_target(goal: str) -> JsonObject:
@@ -7356,6 +7593,8 @@ def _benchmark_doc_retrieval_target(goal: str) -> JsonObject:
         text = value.strip()
         if text:
             result[key] = text
+    inline = _benchmark_doc_retrieval_inline_labels(goal)
+    result.update({key: value for key, value in inline.items() if value})
     return result
 
 
@@ -7363,12 +7602,57 @@ def _benchmark_doc_retrieval_question(goal: str) -> str | None:
     if "Benchmark target source follows." not in goal:
         return None
     paragraphs = [part.strip() for part in str(goal or "").split("\n\n") if part.strip()]
-    if not paragraphs:
-        return None
-    question = paragraphs[-1]
-    if question.startswith("Benchmark target source follows."):
-        return None
-    return question
+    if paragraphs:
+        question = paragraphs[-1]
+        if not question.startswith("Benchmark target source follows."):
+            return question
+    inline = _benchmark_doc_retrieval_inline_question(goal)
+    return inline or None
+
+
+def _benchmark_doc_retrieval_inline_labels(goal: str) -> JsonObject:
+    text = str(goal or "").replace("\n", " ")
+    labels = {
+        "Source URL": "source_url",
+        "Company": "company",
+        "Document type": "doc_type",
+        "Document period": "doc_period",
+        "Document": "doc_name",
+    }
+    label_pattern = "Source URL|Document type|Document period|Company|Document"
+    result: JsonObject = {}
+    for match in re.finditer(
+        rf"(?P<label>{label_pattern})\s*:\s*(?P<value>.*?)(?=\s+(?:{label_pattern})\s*:|\s{{2,}}(?:What|How|Which|Give|Calculate|Using|For)\b|$)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        raw_label = " ".join(match.group("label").split())
+        key = labels.get(raw_label) or labels.get(raw_label.title())
+        if key is None:
+            continue
+        value = " ".join(match.group("value").split())
+        if value:
+            result[key] = value
+    return result
+
+
+def _benchmark_doc_retrieval_inline_question(goal: str) -> str:
+    text = " ".join(str(goal or "").replace("\n", " ").split())
+    match = re.search(r"\s{2,}((?:What|How|Which|Give|Calculate|Using|For)\b.+)$", str(goal or ""), flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return " ".join(match.group(1).split())
+    match = re.search(r"(?:Document period\s*:\s*\S+)\s+((?:What|How|Which|Give|Calculate|Using|For)\b.+)$", text, flags=re.IGNORECASE)
+    if match:
+        return " ".join(match.group(1).split())
+    return ""
+
+
+def _target_document_binding_from_recipe(recipe: TaskRecipe) -> JsonObject:
+    payload = _benchmark_doc_retrieval_payload_from_recipe(recipe)
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    if not metadata and isinstance(recipe.metadata, dict):
+        metadata = recipe.metadata.get("target_document_binding") if isinstance(recipe.metadata.get("target_document_binding"), dict) else recipe.metadata
+    return target_document_binding_from_metadata(metadata, question=_root_goal_from_recipe(recipe))
 
 
 def _apply_research_depth_defaults(payload: JsonObject) -> JsonObject:
@@ -8788,9 +9072,12 @@ def _finance_retrieval_fallback_final(
     else:
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
         question = _benchmark_oracle_question_text(_root_goal_from_recipe(recipe))
+        binding = _target_document_binding_from_recipe(recipe)
+        facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
         fact_lines = _finance_fallback_fact_lines(
             facts,
             question=question,
+            target_binding=binding,
             limit=4,
         )
         if fact_lines:
@@ -8814,9 +9101,18 @@ def _finance_retrieval_fallback_final(
     )
 
 
-def _finance_fallback_fact_lines(facts: list[FinanceFact], *, question: str, limit: int) -> list[str]:
+def _finance_fallback_fact_lines(
+    facts: list[FinanceFact],
+    *,
+    question: str,
+    limit: int,
+    target_binding: JsonObject | None = None,
+) -> list[str]:
+    binding_resolution = primary_source_numeric_binding_resolution(facts, target_binding, question=question) if target_binding else {}
+    selected_fact_ids = set(_string_list(binding_resolution.get("selected_fact_ids"))) if isinstance(binding_resolution, dict) else set()
+    ranked_source = [fact for fact in facts if not selected_fact_ids or fact.fact_id in selected_fact_ids]
     ranked = sorted(
-        (fact for fact in facts if _decimal_or_none_runtime(fact.value) is not None),
+        (fact for fact in ranked_source if _decimal_or_none_runtime(fact.value) is not None),
         key=lambda fact: _finance_fallback_fact_score(fact, question=question),
         reverse=True,
     )

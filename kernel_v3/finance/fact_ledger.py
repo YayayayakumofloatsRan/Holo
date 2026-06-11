@@ -86,7 +86,7 @@ SUPPORTED_FINANCE_METRICS = {
 }
 
 KEY_PATTERN = re.compile(
-    r"(?P<key>entityName|ticker|cik|taxonomy|concept|metric|label|unit|period|fy|fp|form|filed|end|start|frame|accn|value|val|scale)=",
+    r"(?P<key>entityName|ticker|cik|taxonomy|concept|metric|label|unit|period_fy|period|fy|fp|form|filed|end|start|frame|accn|value|val|scale)=",
     re.IGNORECASE,
 )
 AMOUNT_PATTERN = re.compile(

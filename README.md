@@ -1199,18 +1199,33 @@ retrieval work (`1.3333` average retrieval runs, `8` to `16` fetches per item)
 but still scored `0/3` because it did not convert retrieved sources into citable
 finance facts or formula inputs. This is now the concrete FinanceBench
 doc-retrieval gap.
-After the retrieval workbench pivot, focused live1 probes show partial closure
-of that gap rather than a solved benchmark: `run_financebench_doc_live1_workbench_v6`
-produced `77` finance facts, `77` claims, citation preservation `1.0`, slot
-frame `1.0`, transform plan `1.0`, verifier gate `1.0`, synthesis gate `1.0`,
-and workflow/substrate score `1.0` on the first FinanceBench doc-retrieval item.
-It still failed numeric scoring because the supported number came from secondary
-current StockAnalysis cash-flow data (`899M`) rather than the FY2018 10-K
-cash-flow statement value (`1577M`). The current gap is therefore narrower:
-model-guided workbench decisions can drive follow-up retrieval and produce
-auditable substrate records, but SEC filing/PDF/HTML/XBRL document acquisition
-and source binding must still improve before FinanceBench `doc_retrieval` can be
-claimed as solved.
+After the retrieval workbench pivot, focused live1 probes first exposed a
+narrower target-binding failure: `run_financebench_doc_live1_workbench_v6`
+produced citable facts and full workflow substrate, but supported the answer
+with secondary/current StockAnalysis cash-flow data (`899M`) rather than the
+FY2018 10-K cash-flow statement value (`1577M`). Issue #3 then closed the
+first FinanceBench doc-retrieval item with host-owned target-document binding:
+`run_financebench_doc_live1_binding_v7` passed with `numeric_within_tolerance`,
+`retrieval_runs=1`, `facts=114`, `claims=114`, citation preservation `1.0`,
+numeric verifier / verifier gate / synthesis gate all `passed`, unsupported
+numeric claim rate `0`, and answer numeric support `100%`.
+
+Issue #3 P0 narrows this failure with no answer table. FinanceBench doc-retrieval items
+can carry a `target_document_binding` with company, document name/link/type,
+target period, required statement/table, and required line item. Retrieval
+Workbench packets expose that binding to the model, document extraction can
+surface target table windows such as the cash-flow statement PP&E purchase row,
+and the finance ledger/verifier run a host-owned
+`primary_source_numeric_binding` resolver before final answer support. The host
+therefore rejects secondary/current market values such as StockAnalysis `899M`
+when the task requires the FY2018 primary filing cash-flow capex row. This is a
+provenance and period-binding gate, not a hardcoded answer table. The follow-up
+`run_financebench_doc_live3_binding_v1` small probe is now `1/3`: all three
+items reached claim ledger, slot frame, and transform plan (`1.0` present
+rates; average `retrieval_runs=1`), while the second and third items are blocked
+by unsupported numeric synthesis rather than empty retrieval. That makes the
+next gap source-grounded synthesis repair and broader line-item/qualitative
+binding, not the original `899M` secondary-source failure.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

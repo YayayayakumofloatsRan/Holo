@@ -134,6 +134,18 @@ pivot is partially working but not solved:
 - `run_financebench_doc_live1_workbench_v7`: confirmed more facts can be
   acquired, but extra loop budget increased cost and did not improve numeric
   correctness.
+- `run_financebench_doc_live1_binding_v7`: after target-document binding,
+  SEC companyfacts full-body fetch for structured JSON, `period_fy` parsing, and
+  target fact ranking, the first FinanceBench doc-retrieval item passed:
+  `numeric_within_tolerance`, `retrieval_runs=1`, `facts=114`, `claims=114`,
+  citation preservation `1.0`, numeric verifier / verifier gate / synthesis
+  gate `passed`, unsupported numeric claim rate `0`, and answer numeric support
+  `100%`.
+- `run_financebench_doc_live3_binding_v1`: the small follow-up probe is `1/3`.
+  All three items reached claim ledger, slot frame, and transform plan (`1.0`
+  present rates, average `retrieval_runs=1`), but items 2-3 are blocked by
+  unsupported numeric synthesis. That is a new synthesis/line-item binding
+  gap, not the original empty retrieval or secondary `899M` support failure.
 
 Remaining gap:
 
@@ -143,3 +155,44 @@ Remaining gap:
   instead of drifting to secondary market pages.
 - Cost is still high for live doc-retrieval; context compression and fewer
   planner retries are required after the evidence path is stable.
+
+Issue #3 P0 implementation adds the missing target-binding boundary without
+turning the benchmark into a fixed answer table:
+
+- FinanceBench doc-retrieval payloads now derive `target_document_binding`
+  fields for the company, target document link/name/type, document period,
+  required statement/table, required line item, and primary-source requirement.
+- Retrieval Workbench packets expose the binding, required statement, and
+  required line item, so the model judges evidence with the same target document
+  contract the host will later verify.
+- Document extraction now adds target-window candidates when a binding is
+  present. The first required case is cash-flow statement capex/PP&E purchase
+  rows with the target year in the surrounding table window.
+- Finance facts are annotated with target-binding scores and reasons.
+  `primary_source_numeric_binding` selects facts satisfying target document /
+  primary source / period / line-item / statement constraints and journals
+  rejected alternatives, including secondary market pages.
+- `verify_finance_answer` filters material numeric support through that resolver
+  when a primary source is required, so a secondary/current `899M` value cannot
+  support an answer for the FY2018 target filing row.
+
+Current local validation:
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py \
+  tests/test_kernel_v3_finance_benchmark.py tests/test_kernel_v3_retrieval_workbench.py \
+  tests/test_kernel_v3_retrieval_document_expansion.py \
+  tests/test_kernel_v3_phase98_sec_edgar_provider.py \
+  tests/test_kernel_v3_phase99_source_query_provider.py -q
+```
+
+Result:
+
+```text
+207 passed
+```
+
+Issue #3 live1 validation is now closed by
+`run_financebench_doc_live1_binding_v7`. The next FinanceBench doc-retrieval
+work should focus on source-grounded synthesis repair and broader
+line-item/qualitative binding observed in the live3 follow-up.

@@ -695,6 +695,12 @@ class RetrievalOperator:
                     diagnostics={
                         "start_offset": span.start_offset,
                         "end_offset": span.end_offset,
+                        "span_metadata": _safe_json(span.metadata),
+                        **(
+                            {"target_document_binding": _safe_json(goal.metadata.get("target_document_binding"))}
+                            if isinstance(goal.metadata.get("target_document_binding"), dict)
+                            else {}
+                        ),
                         **(
                             {"source_assessment": source_assessments[document.source_id].to_dict()}
                             if document.source_id in source_assessments
@@ -734,6 +740,12 @@ class RetrievalOperator:
                             "required_target_phrases": qualification.get("required_target_phrases", []),
                             "matched_target_phrases": qualification.get("matched_target_phrases", []),
                             "missing_target_phrases": qualification.get("missing_target_phrases", []),
+                            "span_metadata": _safe_json(span.metadata),
+                            **(
+                                {"target_document_binding": _safe_json(goal.metadata.get("target_document_binding"))}
+                                if isinstance(goal.metadata.get("target_document_binding"), dict)
+                                else {}
+                            ),
                             "preview": _preview(item.text, self.preview_chars),
                         }
                     )
@@ -1002,6 +1014,11 @@ class RetrievalOperator:
                 "goal_query": goal.query,
                 "interaction_preferences": goal.metadata.get("interaction_preferences", {}),
                 "response_language": goal.metadata.get("response_language"),
+                **(
+                    {"target_document_binding": _safe_json(goal.metadata.get("target_document_binding"))}
+                    if isinstance(goal.metadata.get("target_document_binding"), dict)
+                    else {}
+                ),
                 "network_access": self.network_access,
                 "budget": _goal_budget(goal),
                 **_budget_clamp_diagnostics(requested_goal, goal),
@@ -1095,7 +1112,15 @@ class RetrievalOperator:
                     payload_hash=artifact.payload_hash,
                     preview=preview,
                     size_bytes=int(artifact.metadata.get("size_bytes", 0)),
-                    metadata={"mime_type": response.mime_type, "source_metadata": _safe_json(source.metadata)},
+                    metadata={
+                        "mime_type": response.mime_type,
+                        "source_metadata": _safe_json(source.metadata),
+                        **(
+                            {"target_document_binding": _safe_json(goal.metadata.get("target_document_binding"))}
+                            if isinstance(goal.metadata.get("target_document_binding"), dict)
+                            else {}
+                        ),
+                    },
                 )
                 documents.append((document, response.body))
                 artifact_refs.append(artifact.artifact_id)

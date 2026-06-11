@@ -146,6 +146,9 @@ def retrieval_workbench_packet(
         "required_slots": _string_list(metadata.get("required_slots")),
         "evidence_policy": _json_object(metadata.get("evidence_policy")),
         "required_transforms": _string_list(metadata.get("required_transforms")),
+        "target_document_binding": _json_object(metadata.get("target_document_binding")),
+        "required_statement": _string_value(metadata.get("required_statement")),
+        "required_line_item": _string_value(metadata.get("required_line_item")),
         "source_summaries": [_source_summary(item) for item in sources[:48]],
         "fetch_summaries": [_bounded_dict(item, text_limit=280) for item in fetch_summaries[-48:]],
         "document_summaries": [_document_summary(document, body) for document, body in documents[-32:]],
@@ -445,10 +448,12 @@ def _source_summary(source: SearchSource) -> JsonObject:
         "source_kind": metadata.get("source_kind"),
         "source_family": metadata.get("source_family"),
         "authority_level": metadata.get("authority_level"),
+        "target_document_binding": _json_object(metadata.get("target_document_binding")),
     }
 
 
 def _document_summary(document: FetchedDocument, body: str) -> JsonObject:
+    metadata = document.metadata if isinstance(document.metadata, dict) else {}
     return {
         "document_id": document.document_id,
         "source_id": document.source_id,
@@ -457,6 +462,7 @@ def _document_summary(document: FetchedDocument, body: str) -> JsonObject:
         "artifact_id": document.artifact_id,
         "chars": len(body or ""),
         "preview": _truncate(" ".join(str(body or "").split()), 360),
+        "target_document_binding": _json_object(metadata.get("target_document_binding")),
     }
 
 
@@ -469,6 +475,9 @@ def _span_summary(span: ExtractedSpan) -> JsonObject:
         "text": _truncate(span.text, 700),
         "matched_terms": _string_list(span.metadata.get("matched_terms")),
         "text_mode": span.metadata.get("text_mode"),
+        "target_document_binding": _json_object(span.metadata.get("target_document_binding")),
+        "target_statement": span.metadata.get("target_statement"),
+        "target_line_item": span.metadata.get("target_line_item"),
     }
 
 
@@ -483,6 +492,7 @@ def _evidence_summary(evidence: EvidenceItem) -> JsonObject:
         "title": _truncate(evidence.title, 180),
         "text": _truncate(evidence.text, 800),
         "qualification": _bounded_dict(qualification if isinstance(qualification, dict) else {}, text_limit=180),
+        "span_metadata": _bounded_dict(evidence.diagnostics.get("span_metadata"), text_limit=180),
     }
 
 

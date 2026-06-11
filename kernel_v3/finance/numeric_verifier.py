@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.finance.contracts import FinanceFact, FormulaTrace, NumericVerification
+from kernel_v3.finance.target_binding import filter_facts_for_target_binding, primary_source_numeric_binding_resolution
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem
 
 
@@ -76,6 +77,7 @@ def verify_finance_answer(
     citations: list[CitationItem] | None = None,
     evidence: list[EvidenceItem] | None = None,
     question: str = "",
+    target_binding: JsonObject | None = None,
 ) -> NumericVerification:
     traces = list(formula_traces or [])
     candidates = _answer_numeric_candidates(answer)
@@ -87,7 +89,9 @@ def verify_finance_answer(
             formula_traces=[item.to_dict() for item in traces],
             diagnostics={"reason": "answer_contains_no_material_numeric_values"},
         )
-    support_values = _support_values(facts, traces)
+    binding_resolution = primary_source_numeric_binding_resolution(facts, target_binding, question=question) if target_binding else {}
+    supported_facts = filter_facts_for_target_binding(facts, target_binding, question=question) if target_binding else facts
+    support_values = _support_values(supported_facts, traces)
     matched: list[JsonObject] = []
     missing: list[JsonObject] = []
     for candidate in candidates:
@@ -134,6 +138,16 @@ def verify_finance_answer(
     if not support_values:
         status = "failed"
         issues.append({"code": "missing_fact_ledger", "message": "no finance facts or formula traces available"})
+    if target_binding and facts and not supported_facts:
+        status = "failed"
+        issues.append(
+            {
+                "code": "primary_source_numeric_binding_failed",
+                "message": "finance facts exist, but none satisfy target document/period/source binding",
+                "binding": target_binding,
+                "binding_resolution": binding_resolution,
+            }
+        )
     return NumericVerification(
         status=status,
         issues=issues,
@@ -145,9 +159,12 @@ def verify_finance_answer(
         diagnostics={
             "answer_numeric_count": len(candidates),
             "fact_count": len(facts),
+            "target_bound_fact_count": len(supported_facts),
             "formula_trace_count": len(traces),
             "citation_count": len(citations or []),
             "evidence_count": len(evidence or []),
+            "target_document_binding": target_binding or {},
+            "primary_source_numeric_binding": binding_resolution,
         },
     )
 

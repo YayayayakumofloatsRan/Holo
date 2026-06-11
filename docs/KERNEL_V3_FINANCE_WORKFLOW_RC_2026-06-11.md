@@ -122,6 +122,26 @@ is `0.0067`. A small true live probe
 calculator inputs. This is the current FinanceBench source-acquisition /
 document-extraction gap.
 
+The subsequent Retrieval Workbench probe proved that the first doc-retrieval
+item can now produce citable facts and claims, but it exposed a narrower
+primary-source numeric binding failure: the answer path accepted secondary
+StockAnalysis current cash-flow data (`899M`) instead of the target FY2018
+10-K cash-flow statement capex row (`1577M`). Issue #3 P0 addresses that
+specific class of error by adding `target_document_binding` to workbench
+packets, target-table extraction windows, and a host-owned
+`primary_source_numeric_binding` resolver that rejects secondary/current facts
+when the benchmark requires the target primary filing/period/statement/line
+item. The narrow live1 validation is now closed:
+`run_financebench_doc_live1_binding_v7` passed the first FinanceBench
+doc-retrieval item with `numeric_within_tolerance`, `retrieval_runs=1`,
+`facts=114`, `claims=114`, citation preservation `1.0`, numeric verifier /
+verifier gate / synthesis gate all `passed`, unsupported numeric claim rate `0`,
+and answer numeric support `100%`. The follow-up
+`run_financebench_doc_live3_binding_v1` is `1/3`; all three items reached the
+generic substrate, while items 2-3 now fail at unsupported numeric synthesis.
+This is not yet a solved FinanceBench claim, but the original secondary-current
+`899M` support failure is closed for the target live1 item.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
 `0.15`, workflow score `0.925`, substrate score `0.8816`,

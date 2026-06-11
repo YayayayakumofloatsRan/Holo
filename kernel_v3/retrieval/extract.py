@@ -267,7 +267,8 @@ def extract_spans(
     if not text:
         return []
     spans: list[ExtractedSpan] = []
-    candidates = (
+    target_candidates = _target_document_binding_candidates(text, goal=goal, terms=terms)
+    ranked_candidates = (
         _ranked_structured_line_candidates(
             text,
             terms,
@@ -277,6 +278,7 @@ def extract_spans(
         if text_mode in STRUCTURED_TEXT_MODES
         else _ranked_span_candidates(text, terms)
     )
+    candidates = _dedupe_candidate_windows([*target_candidates, *ranked_candidates])
     for candidate in candidates:
         spans.append(
             ExtractedSpan(
@@ -298,12 +300,37 @@ def extract_spans(
                     ),
                     **({"document_reader": document_reader} if document_reader else {}),
                     **({"anchor_terms": candidate["anchor_terms"]} if candidate.get("anchor_terms") else {}),
+                    **({"target_document_binding": candidate["target_document_binding"]} if candidate.get("target_document_binding") else {}),
+                    **({"target_statement": candidate["target_statement"]} if candidate.get("target_statement") else {}),
+                    **({"target_line_item": candidate["target_line_item"]} if candidate.get("target_line_item") else {}),
+                    **({"target_period": candidate["target_period"]} if candidate.get("target_period") else {}),
                 },
             )
         )
         if len(spans) >= goal.max_spans_per_document:
             break
     return spans
+
+
+def _dedupe_candidate_windows(candidates: list[dict]) -> list[dict]:
+    seen: set[tuple[int, int]] = set()
+    result: list[dict] = []
+    for candidate in sorted(
+        candidates,
+        key=lambda item: (
+            -float(item.get("score") or 0.0),
+            int(item.get("start_offset") or 0),
+            int(item.get("end_offset") or 0),
+        ),
+    ):
+        start = int(candidate.get("start_offset") or 0)
+        end = int(candidate.get("end_offset") or start)
+        key = _coarse_window_key(start, end)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return result
 
 
 def readable_document_text(
@@ -391,6 +418,154 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
             int(item["start_offset"]),
         ),
     )
+
+
+def _target_document_binding_candidates(text: str, *, goal: SearchGoal, terms: list[str]) -> list[dict]:
+    binding = _target_document_binding(goal)
+    if not binding:
+        return []
+    line_item = _string_value(binding.get("required_line_item")).lower()
+    period = _string_value(binding.get("doc_period"))
+    statement = _string_value(binding.get("required_statement")).lower()
+    line_aliases = _target_line_item_aliases(line_item)
+    statement_aliases = _target_statement_aliases(statement)
+    if not line_aliases and not statement_aliases:
+        return []
+    lower = text.lower()
+    candidates: list[dict] = []
+    marker_positions = _target_marker_positions(lower, line_aliases)
+    if not marker_positions and line_item:
+        marker_positions = _target_marker_positions(lower, [line_item])
+    for marker, index in marker_positions[:40]:
+        statement_index = _nearest_preceding_marker(lower, statement_aliases, index)
+        if _target_should_use_structured_line(text, index):
+            window_start, window_end = _line_bounds(text, index)
+        else:
+            window_start = max(0, (statement_index if statement_index >= 0 else index) - 900)
+            window_end = min(len(text), index + max(900, len(marker) + 700))
+        snippet = _normalize_span(text[window_start:window_end])
+        if not snippet:
+            continue
+        snippet_lower = snippet.lower()
+        period_match = bool(period and period in snippet_lower)
+        statement_match = not statement_aliases or any(alias in snippet_lower for alias in statement_aliases)
+        line_match = any(alias in snippet_lower for alias in line_aliases) or bool(line_item and line_item in snippet_lower)
+        if not line_match:
+            continue
+        matched = [candidate for candidate in terms if candidate in snippet_lower]
+        for alias in [*line_aliases, *statement_aliases, period]:
+            if alias and alias in snippet_lower and alias not in matched:
+                matched.append(alias)
+        score = 0.72
+        if period_match:
+            score += 0.12
+        if statement_match:
+            score += 0.10
+        if line_match:
+            score += 0.08
+        candidates.append(
+            {
+                "start_offset": window_start,
+                "end_offset": window_end,
+                "text": snippet,
+                "matched_terms": matched,
+                "score": min(1.0, score),
+                "target_document_binding": binding,
+                "target_statement": statement,
+                "target_line_item": line_item,
+                "target_period": period,
+            }
+        )
+    return candidates
+
+
+def _target_should_use_structured_line(text: str, index: int) -> bool:
+    prefix = text[max(0, index - 240): index + 240].lower()
+    return "sec companyfacts" in prefix or "source=sec_xbrl_companyfacts" in prefix
+
+
+def _line_bounds(text: str, index: int) -> tuple[int, int]:
+    start = text.rfind("\n", 0, index)
+    end = text.find("\n", index)
+    return (0 if start < 0 else start + 1, len(text) if end < 0 else end)
+
+
+def _target_document_binding(goal: SearchGoal) -> JsonObject:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    binding = metadata.get("target_document_binding")
+    if isinstance(binding, dict):
+        return dict(binding)
+    return {}
+
+
+def _target_line_item_aliases(line_item: str) -> list[str]:
+    normalized = line_item.lower().strip()
+    if normalized == "capital expenditures":
+        return [
+            "purchases of property, plant and equipment",
+            "purchases of property plant and equipment",
+            "payments to acquire property, plant and equipment",
+            "payments to acquire property plant and equipment",
+            "property, plant and equipment",
+            "property plant and equipment",
+            "property and equipment",
+            "capital expenditures",
+            "capital expenditure",
+            "capex",
+            "pp&e",
+        ]
+    if normalized == "net income":
+        return ["net income", "net earnings", "net income attributable", "net loss"]
+    if normalized == "revenue":
+        return ["revenue", "revenues", "net sales", "net revenues", "sales"]
+    return [normalized] if normalized else []
+
+
+def _target_statement_aliases(statement: str) -> list[str]:
+    normalized = statement.lower().strip()
+    if normalized == "cash_flow_statement":
+        return [
+            "consolidated statement of cash flows",
+            "statement of cash flows",
+            "statements of cash flows",
+            "cash flows from investing activities",
+            "cash flows",
+        ]
+    if normalized == "income_statement":
+        return ["consolidated statement of income", "statement of income", "statement of operations", "income statement"]
+    if normalized == "balance_sheet":
+        return ["consolidated balance sheet", "balance sheet", "assets", "liabilities"]
+    if normalized == "non_gaap_reconciliation":
+        return ["reconciliation", "non-gaap", "non gaap"]
+    return [normalized] if normalized else []
+
+
+def _target_marker_positions(lower: str, markers: list[str]) -> list[tuple[str, int]]:
+    result: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for marker in markers:
+        if not marker:
+            continue
+        start = 0
+        while True:
+            index = lower.find(marker, start)
+            if index < 0:
+                break
+            key = (marker, index)
+            if key not in seen:
+                seen.add(key)
+                result.append((marker, index))
+            start = index + max(1, len(marker))
+    return sorted(result, key=lambda item: item[1])
+
+
+def _nearest_preceding_marker(lower: str, markers: list[str], index: int) -> int:
+    best = -1
+    for marker in markers:
+        pos = lower.rfind(marker, 0, index)
+        if pos > best:
+            best = pos
+    return best
 
 
 def _transaction_amount_span_bonus(snippet: str, terms: list[str]) -> float:
@@ -553,7 +728,7 @@ def _extract_json_readable_text(body: str) -> str:
         payload = json.loads(body[:READABLE_TEXT_LIMIT])
     except json.JSONDecodeError:
         return ""
-    lines: list[str] = []
+    lines = []
     lines.extend(_extract_market_json_fact_lines(payload))
     _flatten_json(payload, path="", lines=lines, depth=0)
     return _normalize_span(" ".join(lines)[:READABLE_TEXT_LIMIT])
@@ -1120,6 +1295,7 @@ def _extract_sec_companyfacts_readable_text(body: str, *, goal: SearchGoal | Non
             f"SEC companyfacts official financial statements entityName={entity_name} cik={cik} source=SEC_XBRL_companyfacts"
         )
     ]
+    lines.extend(_companyfacts_target_binding_lines(facts, entity_name=entity_name, cik=cik, goal=goal))
     lines.extend(_companyfacts_annual_summary_lines(facts, entity_name=entity_name, cik=cik, goal=goal))
     for taxonomy_name in ("us-gaap", "ifrs-full", "dei"):
         taxonomy = facts.get(taxonomy_name)
@@ -1154,6 +1330,140 @@ def _extract_sec_companyfacts_readable_text(body: str, *, goal: SearchGoal | Non
                     if len(lines) >= STRUCTURED_LINE_LIMIT:
                         return "\n".join(lines)[:READABLE_TEXT_LIMIT]
     return "\n".join(lines)[:READABLE_TEXT_LIMIT]
+
+
+def _companyfacts_target_binding_lines(
+    facts: dict,
+    *,
+    entity_name: str,
+    cik: str,
+    goal: SearchGoal | None = None,
+) -> list[str]:
+    binding = _target_document_binding(goal) if goal is not None else {}
+    if not binding:
+        return []
+    intent_text = " ".join(
+        part
+        for part in (
+            goal.query if goal is not None else "",
+            _metadata_intent_text(goal.metadata) if goal is not None else "",
+        )
+        if part
+    )
+    target_years = _companyfacts_target_years(intent_text)
+    target_metrics = _companyfacts_query_priority_metrics(intent_text)
+    if not target_metrics:
+        target_metrics = _companyfacts_target_binding_metrics(binding)
+    if not target_years and binding.get("doc_period"):
+        try:
+            target_years = {int(str(binding.get("doc_period")))}
+        except ValueError:
+            target_years = set()
+    if not target_metrics or not target_years:
+        return []
+    target_doc_period = None
+    try:
+        target_doc_period = int(str(binding.get("doc_period") or ""))
+    except ValueError:
+        target_doc_period = None
+    target_accession = _target_binding_accession(binding)
+    candidates: list[tuple[tuple[int, int, int, str], str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for taxonomy_name in ("us-gaap", "ifrs-full"):
+        taxonomy = facts.get(taxonomy_name)
+        if not isinstance(taxonomy, dict):
+            continue
+        for concept, metric in _companyfacts_concept_specs(taxonomy):
+            if metric not in target_metrics:
+                continue
+            item = taxonomy.get(concept)
+            if not isinstance(item, dict):
+                continue
+            label = _structured_value(item.get("label") or concept)
+            units = item.get("units")
+            if not isinstance(units, dict):
+                continue
+            for unit, records in units.items():
+                if not isinstance(records, list):
+                    continue
+                for record in _recent_companyfacts_records(records):
+                    if not isinstance(record, dict) or _companyfacts_period_rank(record) < 3:
+                        continue
+                    year = _companyfacts_year(record)
+                    if year not in target_years:
+                        continue
+                    key = (
+                        concept,
+                        str(record.get("start") or ""),
+                        str(record.get("end") or ""),
+                        str(record.get("accn") or ""),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    record_accession = str(record.get("accn") or "").replace("-", "")
+                    record_fy = record.get("fy")
+                    exact_target_fy = (
+                        isinstance(record_fy, int)
+                        and target_doc_period is not None
+                        and int(record_fy) == target_doc_period
+                    )
+                    exact_accession = bool(target_accession and record_accession == target_accession)
+                    target_form = str(binding.get("doc_type") or "").upper().replace(" ", "").replace("-", "")
+                    record_form = str(record.get("form") or "").upper().replace(" ", "").replace("-", "")
+                    priority = (
+                        0 if exact_accession else 1,
+                        0 if exact_target_fy else 1,
+                        0 if target_form and target_form == record_form else 1,
+                        str(record.get("filed") or ""),
+                    )
+                    line = _companyfacts_record_line(
+                        entity_name=entity_name,
+                        cik=cik,
+                        taxonomy=taxonomy_name,
+                        concept=concept,
+                        metric=metric,
+                        label=label,
+                        unit=_structured_value(unit),
+                        record=record,
+                    )
+                    candidates.append((priority, line))
+    return [line for _priority, line in sorted(candidates, key=lambda item: item[0])[:24]]
+
+
+def _target_binding_accession(binding: JsonObject) -> str:
+    doc_link = str(binding.get("doc_link") or "")
+    match = re.search(r"/Archives/edgar/data/\d+/(\d{18})/", doc_link, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    match = re.search(r"\b(\d{10})-?(\d{2})-?(\d{6})\b", doc_link)
+    if match:
+        return "".join(match.groups())
+    return ""
+
+
+def _companyfacts_target_binding_metrics(binding: JsonObject) -> tuple[str, ...]:
+    line_item = str(binding.get("required_line_item") or "").strip().lower()
+    statement = str(binding.get("required_statement") or "").strip().lower()
+    metrics: list[str] = []
+
+    def add(metric: str) -> None:
+        if metric not in metrics:
+            metrics.append(metric)
+
+    if line_item == "capital expenditures" or any(
+        marker in line_item for marker in ("capital expenditure", "capex", "property plant", "property, plant")
+    ):
+        add("capital expenditures")
+    if line_item in {"revenue", "revenues"} or "revenue" in line_item or "sales" in line_item:
+        add("revenue")
+        add("net sales")
+    if line_item == "net income" or "net income" in line_item:
+        add("net income")
+    if "cash flow" in statement and not metrics:
+        add("operating cash flow")
+        add("capital expenditures")
+    return tuple(metrics)
 
 
 def _companyfacts_concept_specs(taxonomy: dict) -> list[tuple[str, str]]:
@@ -1392,8 +1702,16 @@ def _companyfacts_annual_summary_lines(
         key=lambda group: (int(group.get("year") or 0), str(group.get("filed") or ""), str(group.get("end") or "")),
         reverse=True,
     )
-    target_years = _companyfacts_target_years(goal.query if goal is not None else "")
-    query_priority_metrics = _companyfacts_query_priority_metrics(goal.query if goal is not None else "")
+    intent_text = " ".join(
+        part
+        for part in (
+            goal.query if goal is not None else "",
+            _metadata_intent_text(goal.metadata) if goal is not None else "",
+        )
+        if part
+    )
+    target_years = _companyfacts_target_years(intent_text)
+    query_priority_metrics = _companyfacts_query_priority_metrics(intent_text)
     selected_groups = _companyfacts_selected_summary_groups(ordered, target_years=target_years)
     lines = []
     for group in selected_groups:
@@ -1642,10 +1960,15 @@ def _companyfacts_record_line(
         f"unit={unit}",
         f"period={_companyfacts_period_label(record)}",
     ]
+    period_year = _companyfacts_year(record)
+    if period_year is not None:
+        parts.append(f"period_fy={_structured_value(period_year)}")
     for key in ("val", "fy", "fp", "form", "filed", "end", "start", "frame", "accn"):
         value = record.get(key)
         if value is None or value == "":
             continue
+        if key == "val":
+            parts.append(f"value={_structured_value(value)}")
         parts.append(f"{key}={_structured_value(value)}")
     return _truncate_structured_line(" ".join(parts))
 
@@ -2183,6 +2506,21 @@ def _metadata_intent_text(metadata: object) -> str:
         for item in policy.get("required_terms") or []:
             if isinstance(item, str):
                 parts.append(item)
+    binding = metadata.get("target_document_binding")
+    if isinstance(binding, dict):
+        for key in (
+            "company",
+            "doc_name",
+            "doc_type",
+            "doc_period",
+            "required_statement",
+            "required_line_item",
+            "doc_host",
+            "doc_path_tail",
+        ):
+            value = binding.get(key)
+            if isinstance(value, str):
+                parts.append(value)
     slot_frame = metadata.get("slot_frame")
     if isinstance(slot_frame, dict):
         for item in slot_frame.get("missing_slots") or []:

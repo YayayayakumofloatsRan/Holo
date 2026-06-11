@@ -124,8 +124,9 @@ class HttpFetchProvider:
         if validation.get("status") != "ok":
             return FetchResponse(status="failed", body="", diagnostics=validation)
         headers = self._headers_for_source(source)
+        effective_max_bytes = self._max_bytes_for_source(source)
         try:
-            response = self.transport(source.uri, headers, self.timeout_seconds, self.max_bytes)
+            response = self.transport(source.uri, headers, self.timeout_seconds, effective_max_bytes)
         except Exception as exc:  # pragma: no cover - urllib transport has concrete containment below.
             return FetchResponse(
                 status="failed",
@@ -150,8 +151,8 @@ class HttpFetchProvider:
                     **self._source_discovery_diagnostics(source),
                 },
             )
-        truncated = len(response.body) > self.max_bytes
-        body = response.body[: self.max_bytes] if truncated else response.body
+        truncated = len(response.body) > effective_max_bytes
+        body = response.body[:effective_max_bytes] if truncated else response.body
         budget_diagnostics = _budget_diagnostics_from_headers(response.headers)
         return FetchResponse(
             status="ok",
@@ -166,15 +167,23 @@ class HttpFetchProvider:
                 **(
                     {
                         "truncation_reason": "http_body_too_large",
-                        "max_bytes": self.max_bytes,
+                        "max_bytes": effective_max_bytes,
                     }
                     if truncated
                     else {}
                 ),
+                **({"effective_max_bytes": effective_max_bytes} if effective_max_bytes != self.max_bytes else {}),
                 **_safe_url_diagnostics(source.uri),
                 **self._source_discovery_diagnostics(source),
             },
         )
+
+    def _max_bytes_for_source(self, source: SearchSource) -> int:
+        source_kind = str(source.metadata.get("source_kind") or "").lower()
+        uri = str(source.uri or "").lower()
+        if source_kind == "sec_companyfacts_json" or "data.sec.gov/api/xbrl/companyfacts/" in uri:
+            return max(self.max_bytes, 12_000_000)
+        return self.max_bytes
 
     def _allows_discovered_search_host(self, source: SearchSource) -> bool:
         if not self.allow_discovered_search_hosts:

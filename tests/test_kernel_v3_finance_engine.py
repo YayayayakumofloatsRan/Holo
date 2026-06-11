@@ -23,12 +23,15 @@ from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
     FinanceFact,
     FormulaTrace,
+    attach_target_binding_to_facts,
     build_finance_fact_ledger,
     compute_formula,
     finance_facts_to_claims,
     finance_formula_plan_to_transform_plan,
     finance_slot_frame,
     finance_verification_to_gate_result,
+    primary_source_numeric_binding_resolution,
+    target_document_binding_from_metadata,
     plan_finance_formula,
     verify_finance_answer,
 )
@@ -100,6 +103,31 @@ def test_finance_fact_ledger_extracts_sec_companyfacts_spans() -> None:
     assert facts[0].value == "391035000000"
     assert facts[0].fiscal_year == 2024
     assert facts[0].citation_ref == "cite-1"
+
+
+def test_finance_fact_ledger_parses_period_fy_without_polluting_concept() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="mmm-capex-period-fy",
+            title="SEC companyfacts JSON for CIK 0000066740",
+            uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+            text=(
+                "SEC companyfacts official financial statement entityName=3M COMPANY cik=66740 "
+                "taxonomy=us-gaap concept=PaymentsToAcquirePropertyPlantAndEquipment "
+                "metric=capital expenditures label=Payments to Acquire Property, Plant, and Equipment "
+                "unit=USD period=annual period_fy=2018 value=1577000000 val=1577000000 "
+                "fy=2018 fp=FY form=10-K filed=2019-02-07 end=2018-12-31 "
+                "start=2018-01-01 accn=0001558370-19-000470"
+            ),
+        )
+    ]
+    facts = build_finance_fact_ledger(evidence=evidence, citations=[_finance_citation(evidence[0], citation_id="cite-mmm")])
+
+    assert len(facts) == 1
+    assert facts[0].metric == "capital expenditures"
+    assert facts[0].value == "1577000000"
+    assert facts[0].fiscal_year == 2018
+    assert facts[0].metadata["concept"] == "PaymentsToAcquirePropertyPlantAndEquipment"
 
 
 def test_finance_fact_ledger_extracts_transaction_value_from_filing_text() -> None:
@@ -281,8 +309,13 @@ def test_planner_processor_failure_prefers_retrieval_workbench_followup() -> Non
 
     goal = (
         "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
-        "Source URL: https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf "
-        "Company: 3M Document period: 2018 What is the FY2018 capital expenditure amount for 3M?"
+        "Prefer direct URL fetch before broad search.\n\n"
+        "Source URL: https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf\n"
+        "Company: 3M\n"
+        "Document: 3M_2018_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2018\n\n"
+        "What is the FY2018 capital expenditure amount for 3M?"
     )
     profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
     recipe = task_recipe("retrieval_answer", metadata=profile_metadata)
@@ -326,9 +359,70 @@ def test_planner_processor_failure_prefers_retrieval_workbench_followup() -> Non
     assert "retrieval_workbench_followup" in action.reasons
     assert action.payload["query"] == "PaymentsToAcquirePropertyPlantAndEquipment 3M 2018"
     assert action.payload["metadata"]["workbench_followup"] is True
+    assert action.payload["metadata"]["benchmark_doc_retrieval"] is True
+    assert action.payload["metadata"]["target_document_binding"]["doc_period"] == "2018"
+    assert action.payload["metadata"]["target_document_binding"]["required_line_item"] == "capital expenditures"
     assert action.payload["metadata"]["semantic_missing_slots"] == ["capital_expenditure_fy2018"]
     assert "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000066740&type=10-K&dateb=20181231" in action.payload["metadata"]["source_urls"]
     assert all("TARGET CORPORATION" not in query for query in action.payload["queries"])
+
+
+def test_model_retrieval_action_enforces_benchmark_doc_binding_when_query_drifts() -> None:
+    class DriftedPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-drifted-retrieval",
+                kind="tool",
+                name="retrieval.run",
+                description="Drifted secondary-source retrieval",
+                score=0.8,
+                payload={
+                    "query": "in profits. Earnings per share was 899M current market statistics StockAnalysis",
+                    "queries": ["in profits. Earnings per share was 899M current market statistics StockAnalysis"],
+                    "metadata": {"research_profile": "finance_fundamentals"},
+                },
+                reasons=["model_retrieval_strategy"],
+                side_effect_class="network",
+            )
+
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.\n\n"
+        "Source URL: https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf\n"
+        "Company: 3M\n"
+        "Document: 3M_2018_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2018\n\n"
+        "What is the FY2018 capital expenditure amount for 3M?"
+    )
+    recipe = task_recipe("retrieval_answer", metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")))
+    planner = _RecipeBoundPlanner(
+        inner=DriftedPlanner(),
+        goal=goal,
+        recipe=recipe,
+        journal=JournalStore.in_memory(),
+    )
+    context = ContextBundle(
+        context_id="ctx-drifted-query",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-drifted", "run_id": "run-drifted"},
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "retrieval.run"
+    assert action.payload["query"] == "3M 2018 10k What is the FY2018 capital expenditure amount for 3M?"
+    assert all("899M" not in query and "StockAnalysis" not in query for query in action.payload["queries"])
+    assert action.payload["metadata"]["benchmark_doc_retrieval"] is True
+    assert action.payload["metadata"]["benchmark_binding_enforced"] is True
+    assert action.payload["metadata"]["target_document_binding"]["required_statement"] == "cash_flow_statement"
+    assert action.payload["metadata"]["target_document_binding"]["required_line_item"] == "capital expenditures"
+    assert action.payload["metadata"]["source_urls"] == [
+        "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
+    ]
 
 
 def test_target_entity_extraction_does_not_bind_leading_for_as_entity() -> None:
@@ -483,6 +577,162 @@ def test_finance_fallback_prefers_sec_companyfacts_over_secondary_market_sources
     )
 
     assert lines == ["- FY2018 capital expenditures: 1577（USD millions 口径） [cite-sec-companyfacts]"]
+
+
+def test_target_document_binding_preserves_required_line_item_when_reused() -> None:
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_link": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+            "doc_type": "10-K",
+            "doc_period": "2018",
+            "required_statement": "cash_flow_statement",
+            "required_line_item": "capital expenditures",
+            "primary_source_required": True,
+        }
+    )
+
+    reused = target_document_binding_from_metadata(binding, question="What is the FY2018 capex amount?")
+
+    assert reused["required_statement"] == "cash_flow_statement"
+    assert reused["required_line_item"] == "capital expenditures"
+    assert reused["doc_period"] == "2018"
+    assert reused["primary_source_required"] is True
+
+
+def test_primary_source_numeric_binding_selects_target_capex_and_rejects_secondary_value() -> None:
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_link": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+            "doc_type": "10-K",
+            "doc_period": "2018",
+            "required_statement": "cash_flow_statement",
+            "required_line_item": "capital expenditures",
+            "primary_source_required": True,
+        },
+        question="What is 3M FY2018 capital expenditures from the cash flow statement?",
+    )
+    facts = [
+        FinanceFact(
+            fact_id="secondary-899m",
+            entity="3M",
+            ticker="MMM",
+            period="2018",
+            fiscal_year=2018,
+            metric="capital expenditures",
+            value="899000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-secondary",
+            evidence_ref="ev-secondary",
+            citation_ref="cite-secondary",
+            metadata={
+                "source_uri": "https://stockanalysis.com/stocks/mmm/financials/cash-flow-statement/",
+                "source_title": "3M Cash Flow Statement - StockAnalysis",
+                "context": "Capital expenditures 899",
+            },
+        ),
+        FinanceFact(
+            fact_id="target-1577m",
+            entity="3M",
+            ticker="MMM",
+            period="2018",
+            fiscal_year=2018,
+            metric="capital expenditures",
+            value="-1577000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-target",
+            evidence_ref="ev-target",
+            citation_ref="cite-target",
+            metadata={
+                "source_uri": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+                "source_title": "3M 2018 10-K",
+                "context": "Consolidated Statement of Cash Flows Purchases of property, plant and equipment 2018 (1,577)",
+            },
+        ),
+    ]
+
+    bound = attach_target_binding_to_facts(facts, binding, question="FY2018 capital expenditures")
+    resolution = primary_source_numeric_binding_resolution(bound, binding, question="FY2018 capital expenditures")
+
+    assert resolution["status"] == "selected"
+    assert resolution["selected_fact_ids"] == ["target-1577m"]
+    rejected = {item["fact_id"]: item for item in resolution["rejected_candidates"]}
+    assert "secondary-899m" in rejected
+    assert "secondary_market_source_rejected_for_primary_binding" in rejected["secondary-899m"]["reasons"]
+
+
+def test_numeric_verifier_filters_secondary_value_when_target_binding_requires_primary_source() -> None:
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_link": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+            "doc_period": "2018",
+            "required_statement": "cash_flow_statement",
+            "required_line_item": "capital expenditures",
+            "primary_source_required": True,
+        }
+    )
+    facts = [
+        FinanceFact(
+            fact_id="secondary-899m",
+            entity="3M",
+            ticker="MMM",
+            period="2018",
+            fiscal_year=2018,
+            metric="capital expenditures",
+            value="899000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-secondary",
+            evidence_ref="ev-secondary",
+            citation_ref="cite-secondary",
+            metadata={
+                "source_uri": "https://stockanalysis.com/stocks/mmm/financials/cash-flow-statement/",
+                "source_title": "3M Cash Flow Statement - StockAnalysis",
+                "context": "Capital expenditures 899",
+            },
+        ),
+        FinanceFact(
+            fact_id="target-1577m",
+            entity="3M",
+            ticker="MMM",
+            period="2018",
+            fiscal_year=2018,
+            metric="capital expenditures",
+            value="-1577000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-target",
+            evidence_ref="ev-target",
+            citation_ref="cite-target",
+            metadata={
+                "source_uri": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+                "source_title": "3M 2018 10-K",
+                "context": "Consolidated Statement of Cash Flows Purchases of property, plant and equipment 2018 (1,577)",
+            },
+        ),
+    ]
+
+    bad = verify_finance_answer(
+        answer="The FY2018 capital expenditure amount was $899 million.",
+        facts=facts,
+        question="What is 3M FY2018 capital expenditures?",
+        target_binding=binding,
+    )
+    good = verify_finance_answer(
+        answer="The FY2018 capital expenditure amount was $1,577 million.",
+        facts=facts,
+        question="What is 3M FY2018 capital expenditures?",
+        target_binding=binding,
+    )
+
+    assert bad.status == "failed"
+    assert any(issue["code"] == "unsupported_answer_number" for issue in bad.issues)
+    assert good.status == "passed"
+    assert good.diagnostics["primary_source_numeric_binding"]["selected_fact_ids"] == ["target-1577m"]
 
 
 def test_finance_fact_ledger_extracts_adjusted_ebitda_bridge_components() -> None:

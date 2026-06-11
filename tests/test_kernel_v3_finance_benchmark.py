@@ -441,6 +441,34 @@ def test_financebench_doc_retrieval_prompt_compiles_to_structured_payload(tmp_pa
     assert "scoring-only evidence" not in runtime.seen_prompts[0]
 
 
+def test_financebench_doc_retrieval_payload_parses_inline_prompt_labels() -> None:
+    prompt = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.  "
+        "Source URL: https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf "
+        "Company: 3M Document: 3M_2018_10K Document type: 10k Document period: 2018  "
+        "What is the FY2018 capital expenditure amount (in USD millions) for 3M? "
+        "Give a response to the question by relying on the details shown in the cash flow statement."
+    )
+
+    payload = _benchmark_doc_retrieval_payload(prompt)
+
+    assert payload["query"].startswith("3M 2018 10k What is the FY2018 capital expenditure amount")
+    assert payload["metadata"]["company"] == "3M"
+    assert payload["metadata"]["doc_name"] == "3M_2018_10K"
+    assert payload["metadata"]["doc_type"] == "10k"
+    assert payload["metadata"]["doc_period"] == "2018"
+    assert payload["metadata"]["source_url"] == (
+        "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
+    )
+    binding = payload["metadata"]["target_document_binding"]
+    assert binding["company"] == "3M"
+    assert binding["doc_period"] == "2018"
+    assert binding["primary_source_required"] is True
+    assert binding["required_statement"] == "cash_flow_statement"
+    assert binding["required_line_item"] == "capital expenditures"
+
+
 def test_financebench_import_can_emit_scoring_annotation_sidecar(tmp_path: Path) -> None:
     source = tmp_path / "financebench.jsonl"
     source.write_text(
@@ -849,7 +877,16 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
         run_id="run-1",
         step_id=None,
         kind="finance_fact_ledger",
-        data={"fact_count": 4, "facts": [{"metadata": {"form": "10-K"}}]},
+        data={
+            "fact_count": 4,
+            "facts": [{"metadata": {"form": "10-K"}}],
+            "primary_source_numeric_binding": {
+                "status": "selected",
+                "selected_fact_ids": ["target-1577m"],
+                "selected_count": 1,
+                "rejected_count": 1,
+            },
+        },
     )
     journal.append(
         task_id="task-fin",
@@ -924,6 +961,10 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
     assert metrics["answer_numeric_support_rate"] == 1.0
     assert metrics["source_hosts"] == ["www.sec.gov"]
     assert metrics["finance_source_forms"] == ["10-K"]
+    assert metrics["primary_source_numeric_binding_status"] == "selected"
+    assert metrics["primary_source_numeric_binding_selected_count"] == 1
+    assert metrics["primary_source_numeric_binding_rejected_count"] == 1
+    assert metrics["primary_source_numeric_binding_selected_fact_ids"] == ["target-1577m"]
     assert metrics["claim_ledger_present"] is True
     assert metrics["claim_count"] == 4
     assert metrics["slot_frame_present"] is True

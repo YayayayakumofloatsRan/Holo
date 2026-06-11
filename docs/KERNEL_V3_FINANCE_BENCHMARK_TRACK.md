@@ -187,6 +187,24 @@ not repeatedly download these sources during benchmark iteration.
   scored `0/3` because no citable finance facts, citations, or calculator inputs
   were extracted. The next doc-retrieval work should therefore target source
   acquisition and document-to-fact extraction, not more fixed answer heuristics.
+- Follow-up Retrieval Workbench live1 probes then produced citable facts/claims
+  for the first FinanceBench doc-retrieval item, but selected the wrong numeric
+  support: secondary/current StockAnalysis capex (`899M`) rather than the target
+  FY2018 10-K cash-flow statement capex row (`1577M`). Issue #3 P0 adds
+  target-document binding and primary-source numeric binding so model-guided
+  evidence workbench decisions can be checked against the target document,
+  period, statement/table, and line item before final numeric support is
+  accepted.
+- Issue #3 live1 is now closed by `run_financebench_doc_live1_binding_v7`:
+  pass rate / numeric accuracy `1.0` on the first doc-retrieval item,
+  `retrieval_runs=1`, `facts=114`, `claims=114`, claim ledger / slot frame /
+  transform plan / verifier gate / synthesis gate present and passed, citation
+  preservation `1.0`, unsupported numeric claim rate `0`, and answer numeric
+  support `100%`. The small follow-up
+  `run_financebench_doc_live3_binding_v1` is `1/3`; all three items reached the
+  generic workflow substrate, but items 2-3 failed at unsupported numeric
+  synthesis. The next doc-retrieval work is therefore synthesis repair plus
+  broader line-item binding, not the original secondary-current `899M` failure.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,
