@@ -1983,6 +1983,78 @@ def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calcula
     assert synthesis_gates[-1].data["diagnostics"]["attempt"] == "fallback"
 
 
+def test_retrieval_finalization_fallback_preserves_dcf_model_outputs_and_assumptions() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(
+        journal,
+        answer="CRM DCF enterprise value is $999 billion, supported by cite-1.",
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-1",
+            title="Salesforce FY2024 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/1108524/example/crm-20240131.htm",
+            text=(
+                "entityName=Salesforce ticker=CRM facts="
+                "metric=operating cash flow unit=USD fy=2024 form=10-K value=10234000000 ; "
+                "metric=capital expenditures unit=USD fy=2024 form=10-K value=710000000 ; "
+                "metric=debt unit=USD fy=2024 form=10-K value=8200000000 ; "
+                "metric=cash and cash equivalents unit=USD fy=2024 form=10-K value=14000000000 ; "
+                "metric=short-term investments unit=USD fy=2024 form=10-K value=3000000000"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-1")]
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    plan = plan_finance_formula(
+        question=(
+            "Using a discounted cash flow analysis for CRM, forecast 5 years, "
+            "cash flow growth 4%, discount rate 9%, terminal growth 2%."
+        ),
+        facts=facts,
+    )
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    trace = compute_formula(**plan.payload)
+    journal.append(
+        task_id="task-dcf-repair",
+        run_id="run-1",
+        step_id=None,
+        kind="observation",
+        data={
+            "source": f"tool:{CALCULATOR_TOOL_NAME}",
+            "status": "ok",
+            "content": {"formula_trace": trace.to_dict()},
+        },
+    )
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))},
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-dcf-repair",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    assert "$999 billion" not in final.answer
+    assert "建模假设" in final.answer
+    assert "DCF 核心模型输出" in final.answer
+    assert "enterprise_value" in final.answer
+    assert "FormulaTrace" in final.answer
+    verifications = journal.records(task_id="task-dcf-repair", kind="finance_numeric_verification")
+    assert verifications[-1].data["status"] == "passed"
+    synthesis_gates = journal.records(task_id="task-dcf-repair", kind="synthesis_gate_result")
+    assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
+
+
 def test_finance_formula_planner_generates_dio_payload_from_ledger() -> None:
     evidence = [
         EvidenceItem(

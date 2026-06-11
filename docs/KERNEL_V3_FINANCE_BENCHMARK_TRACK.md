@@ -942,9 +942,14 @@ assumption-ledger display, and citation-preserving limitation answers.
   exit EV, exit debt, exit equity, MOIC, and sponsor IRR. These outputs are
   diagnostics attached to the formula trace; retrieved facts and assumptions
   remain distinguishable.
-- This improves model auditability and answer repair potential, but it does not
-  by itself upgrade CRM DCF / EPAM LBO benchmark status. A new live run is still
-  required after SynthesisGate and assumption-label answer repair are tightened.
+- The finance numeric verifier now accepts model-output diagnostics and explicit
+  assumptions as calculator-derived support values, including percentage display
+  forms such as `9%` for a stored `0.09` assumption. The conservative host
+  fallback summarizes DCF/LBO core outputs and labels modeling assumptions when
+  the model synthesizer inserts unsupported numbers.
+- This improves model auditability and answer repair, but it does not by itself
+  upgrade CRM DCF / EPAM LBO benchmark status. A new live run is still required
+  to measure the end-to-end score impact.
 
 Additional follow-ups:
 

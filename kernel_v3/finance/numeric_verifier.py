@@ -216,7 +216,7 @@ def _support_values(facts: list[FinanceFact], traces: list[FormulaTrace]) -> lis
             "fiscal_year": fact.fiscal_year,
             "citation_ref": fact.citation_ref,
         }
-        values.extend(_display_support_values(value, base))
+        _extend_support_values(values, value, base)
     for trace in traces:
         value = _decimal_or_none(trace.result_value)
         if value is None:
@@ -227,18 +227,7 @@ def _support_values(facts: list[FinanceFact], traces: list[FormulaTrace]) -> lis
             "formula_name": trace.formula_name,
             "unit": _normalize_unit(trace.unit or ""),
         }
-        values.extend(_display_support_values(value, base))
-        if _normalize_unit(trace.unit or "") == "percent":
-            values.append(
-                {
-                    "kind": "formula_trace",
-                    "ref": trace.formula_id,
-                    "formula_name": trace.formula_name,
-                    "value": _decimal_string(value * Decimal(100)),
-                    "unit": "percent",
-                    "derived_display_value": True,
-                }
-            )
+        _extend_support_values(values, value, base)
         diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
         variables = diagnostics.get("variables")
         if isinstance(variables, dict):
@@ -246,31 +235,29 @@ def _support_values(facts: list[FinanceFact], traces: list[FormulaTrace]) -> lis
                 variable_value = _decimal_or_none(raw_value)
                 if variable_value is None:
                     continue
-                values.extend(
-                    _display_support_values(
-                        variable_value,
-                        {
-                            "kind": "formula_variable",
-                            "ref": trace.formula_id,
-                            "formula_name": trace.formula_name,
-                            "variable": str(name),
-                            "unit": _formula_variable_unit(str(name), trace),
-                        },
-                    )
+                _extend_support_values(
+                    values,
+                    variable_value,
+                    {
+                        "kind": "formula_variable",
+                        "ref": trace.formula_id,
+                        "formula_name": trace.formula_name,
+                        "variable": str(name),
+                        "unit": _formula_variable_unit(str(name), trace),
+                    },
                 )
             average_inventory = _average_variable(variables, "inventory_begin", "inventory_end")
             if average_inventory is not None:
-                values.extend(
-                    _display_support_values(
-                        average_inventory,
-                        {
-                            "kind": "formula_intermediate",
-                            "ref": trace.formula_id,
-                            "formula_name": trace.formula_name,
-                            "variable": "average_inventory",
-                            "unit": "",
-                        },
-                    )
+                _extend_support_values(
+                    values,
+                    average_inventory,
+                    {
+                        "kind": "formula_intermediate",
+                        "ref": trace.formula_id,
+                        "formula_name": trace.formula_name,
+                        "variable": "average_inventory",
+                        "unit": "",
+                    },
                 )
         if "/" in str(trace.expression or ""):
             values.append(
@@ -282,8 +269,102 @@ def _support_values(facts: list[FinanceFact], traces: list[FormulaTrace]) -> lis
                     "unit": "",
                 }
             )
+        model_outputs = diagnostics.get("model_outputs")
+        if isinstance(model_outputs, dict):
+            for item in _model_output_support_values(model_outputs, trace=trace):
+                _extend_support_values(values, item["value"], item["base"])
+        assumptions = diagnostics.get("assumptions")
+        if isinstance(assumptions, dict):
+            for item in _formula_assumption_support_values(assumptions, trace=trace):
+                _extend_support_values(values, item["value"], item["base"])
     values.extend(_formula_comparison_support_values(traces))
     return values
+
+
+def _formula_assumption_support_values(assumptions: JsonObject, *, trace: FormulaTrace) -> list[JsonObject]:
+    values: list[JsonObject] = []
+    for path, raw_value in _iter_model_output_numbers(assumptions):
+        value = _decimal_or_none(raw_value)
+        if value is None:
+            continue
+        values.append(
+            {
+                "value": value,
+                "base": {
+                    "kind": "formula_assumption",
+                    "ref": trace.formula_id,
+                    "formula_name": trace.formula_name,
+                    "assumption": path,
+                    "unit": _model_output_unit(path, trace),
+                },
+            }
+        )
+    return values
+
+
+def _model_output_support_values(model_outputs: JsonObject, *, trace: FormulaTrace) -> list[JsonObject]:
+    values: list[JsonObject] = []
+    for path, raw_value in _iter_model_output_numbers(model_outputs):
+        value = _decimal_or_none(raw_value)
+        if value is None:
+            continue
+        values.append(
+            {
+                "value": value,
+                "base": {
+                    "kind": "formula_model_output",
+                    "ref": trace.formula_id,
+                    "formula_name": trace.formula_name,
+                    "model_output": path,
+                    "unit": _model_output_unit(path, trace),
+                },
+            }
+        )
+    return values
+
+
+def _iter_model_output_numbers(value: object, *, prefix: str = "") -> list[tuple[str, object]]:
+    if isinstance(value, dict):
+        result: list[tuple[str, object]] = []
+        for key, item in value.items():
+            name = str(key)
+            path = f"{prefix}.{name}" if prefix else name
+            if name.lower() in {"year"}:
+                continue
+            result.extend(_iter_model_output_numbers(item, prefix=path))
+        return result
+    if isinstance(value, list):
+        result: list[tuple[str, object]] = []
+        for index, item in enumerate(value, start=1):
+            result.extend(_iter_model_output_numbers(item, prefix=f"{prefix}[{index}]"))
+        return result
+    return [(prefix, value)] if _decimal_or_none(value) is not None else []
+
+
+def _model_output_unit(path: str, trace: FormulaTrace) -> str:
+    normalized = str(path or "").lower()
+    if any(marker in normalized for marker in ("irr", "growth", "rate", "margin")):
+        return "percent"
+    if any(marker in normalized for marker in ("multiple", "moic", "discount_factor")):
+        return "x"
+    if any(
+        marker in normalized
+        for marker in (
+            "cash_flow",
+            "free_cash_flow",
+            "present_value",
+            "terminal_value",
+            "enterprise_value",
+            "equity_value",
+            "debt",
+            "cash",
+            "investments",
+            "ebitda",
+            "sponsor_equity",
+        )
+    ):
+        return "usd/share" if "per_share" in normalized else "usd"
+    return _normalize_unit(trace.unit or "")
 
 
 def _suppress_duplicate_display_missing(missing: list[JsonObject], matched: list[JsonObject]) -> list[JsonObject]:
@@ -415,6 +496,19 @@ def _display_support_values(value: Decimal, base: JsonObject) -> list[JsonObject
                 }
             )
     return values
+
+
+def _extend_support_values(values: list[JsonObject], value: Decimal, base: JsonObject) -> None:
+    values.extend(_display_support_values(value, base))
+    if _normalize_unit(str(base.get("unit") or "")) == "percent":
+        values.append(
+            {
+                **base,
+                "value": _decimal_string(value * Decimal(100)),
+                "unit": "percent",
+                "derived_display_value": True,
+            }
+        )
 
 
 def _match_candidate(candidate: JsonObject, support_values: list[JsonObject]) -> JsonObject | None:

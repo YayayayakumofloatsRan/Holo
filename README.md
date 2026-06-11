@@ -1311,6 +1311,16 @@ debt-paydown schedule, exit enterprise value, exit debt, exit equity value,
 MOIC, and sponsor IRR. The calculator remains deterministic; assumptions are
 explicitly labeled in diagnostics instead of being treated as retrieved facts.
 
+The finance numeric verifier now treats `FormulaTrace.diagnostics.model_outputs`
+and explicit `assumptions` as supported calculator-derived values. This lets
+DCF/LBO answers cite enterprise value, equity value, MOIC, IRR, discount/growth
+assumptions, and related bridge outputs without being incorrectly blocked as
+unsupported numbers. The host conservative fallback also summarizes key
+DCF/LBO model outputs and labels modeling assumptions when the model synthesizer
+adds unsupported figures. This improves answer-gate robustness, but CRM DCF /
+EPAM LBO still need fresh live reruns before their benchmark statuses are
+upgraded.
+
 After adding workflow annotations, replay-scoring the same live dev10 results
 with `run_dev10_event_resolver_v1.workflow_scored` yields
 `overall_score=0.9114`, behavior `0.9167`, substrate `0.8889`,

@@ -59,7 +59,10 @@ DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional
 per-share output, and LBO debt-paydown / exit-equity / MOIC / IRR schedules.
 These are deterministic calculator traces with explicit assumptions, not
-unverified free-form synthesis.
+unverified free-form synthesis. The verifier now recognizes model-output
+diagnostics and explicit assumptions as supported calculator values, and the
+host fallback can produce an assumption-labeled DCF/LBO summary when model
+synthesis adds unsupported finance numbers.
 
 ## Workflow 50
 

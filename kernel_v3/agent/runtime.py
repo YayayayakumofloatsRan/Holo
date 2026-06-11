@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import replace
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from kernel_v3.capabilities import capability_catalog, semantic_state_space_catalog
@@ -8195,7 +8196,12 @@ def _finance_retrieval_fallback_final(
         for trace in traces[:3]:
             formatted = str(trace.diagnostics.get("formatted_value") or "").strip()
             value = formatted or f"{trace.result_value} {trace.unit or ''}".strip()
-            lines.append(f"- {trace.formula_name}: {value}，公式 `{trace.expression}`。")
+            if _finance_trace_has_model_outputs(trace):
+                lines.append(f"- {trace.formula_name}: {value}，公式和模型明细已记录在 FormulaTrace。")
+            else:
+                lines.append(f"- {trace.formula_name}: {value}，公式 `{trace.expression}`。")
+            for detail in _finance_model_trace_summary_lines(trace):
+                lines.append(f"  - {detail}")
     if evidence:
         lines.append("可审计证据摘要：")
         for item, citation in zip(evidence[:4], citations[:4]):
@@ -8219,6 +8225,122 @@ def _shorten_for_fallback_answer(text: str, *, limit: int) -> str:
     if len(normalized) <= limit:
         return normalized
     return f"{normalized[: max(0, limit - 3)].rstrip()}..."
+
+
+def _finance_model_trace_summary_lines(trace: FormulaTrace) -> list[str]:
+    diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+    model_outputs = diagnostics.get("model_outputs") if isinstance(diagnostics.get("model_outputs"), dict) else {}
+    assumptions = diagnostics.get("assumptions") if isinstance(diagnostics.get("assumptions"), dict) else {}
+    defaulted = diagnostics.get("defaulted_assumptions") if isinstance(diagnostics.get("defaulted_assumptions"), list) else []
+    lines: list[str] = []
+    if assumptions:
+        assumption_parts = [
+            f"{key}={_finance_model_value_display(value, key=str(key))}"
+            for key, value in sorted(assumptions.items())
+            if key != "defaulted"
+        ]
+        if assumption_parts:
+            label = "建模假设"
+            if defaulted:
+                label += f"（其中默认/缺失填充：{', '.join(str(item) for item in defaulted[:8])}）"
+            lines.append(f"{label}: {', '.join(assumption_parts[:8])}。")
+    workflow = str(diagnostics.get("modeling_workflow") or trace.formula_name or "").lower()
+    if workflow == "discounted_cash_flow" or str(trace.formula_name).lower() == "dcf":
+        dcf_keys = (
+            "enterprise_value",
+            "net_debt",
+            "equity_value",
+            "equity_value_per_share",
+            "terminal_value",
+            "pv_terminal_value",
+        )
+        summary = _finance_model_output_summary(model_outputs, dcf_keys)
+        if summary:
+            lines.append("DCF 核心模型输出: " + ", ".join(summary) + "。")
+    elif workflow == "leveraged_buyout" or str(trace.formula_name).lower() == "lbo":
+        lbo_keys = (
+            "entry_enterprise_value",
+            "initial_debt",
+            "initial_sponsor_equity",
+            "exit_enterprise_value",
+            "exit_debt",
+            "exit_equity_value",
+            "moic",
+            "sponsor_irr",
+        )
+        summary = _finance_model_output_summary(model_outputs, lbo_keys)
+        if summary:
+            lines.append("LBO 核心模型输出: " + ", ".join(summary) + "。")
+    return lines[:3]
+
+
+def _finance_trace_has_model_outputs(trace: FormulaTrace) -> bool:
+    diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+    return isinstance(diagnostics.get("model_outputs"), dict) and bool(diagnostics.get("model_outputs"))
+
+
+def _finance_model_output_summary(model_outputs: JsonObject, keys: tuple[str, ...]) -> list[str]:
+    result: list[str] = []
+    for key in keys:
+        if key not in model_outputs:
+            continue
+        value = model_outputs.get(key)
+        result.append(f"{key}={_finance_model_value_display(value, key=key)}")
+    return result
+
+
+def _finance_model_value_display(value: object, *, key: str) -> str:
+    numeric = _decimal_or_none_runtime(value)
+    normalized_key = str(key or "").lower()
+    if numeric is None:
+        return _shorten_for_fallback_answer(str(value), limit=80)
+    if any(marker in normalized_key for marker in ("irr", "growth", "rate", "margin")):
+        return f"{_decimal_string_runtime(numeric * Decimal(100))}%"
+    if any(marker in normalized_key for marker in ("moic", "multiple", "discount_factor")):
+        return f"{_decimal_string_runtime(numeric)}x"
+    if "per_share" in normalized_key:
+        return f"${_decimal_string_runtime(numeric)}/share"
+    if any(
+        marker in normalized_key
+        for marker in (
+            "cash_flow",
+            "terminal_value",
+            "enterprise_value",
+            "equity_value",
+            "debt",
+            "cash",
+            "investments",
+            "ebitda",
+            "sponsor_equity",
+        )
+    ):
+        return _finance_usd_display(numeric)
+    return _decimal_string_runtime(numeric)
+
+
+def _finance_usd_display(value: Decimal) -> str:
+    abs_value = abs(value)
+    if abs_value >= Decimal(1_000_000_000):
+        return f"${_decimal_string_runtime(value / Decimal(1_000_000_000))} billion"
+    if abs_value >= Decimal(1_000_000):
+        return f"${_decimal_string_runtime(value / Decimal(1_000_000))} million"
+    return f"${_decimal_string_runtime(value)}"
+
+
+def _decimal_or_none_runtime(value: object) -> Decimal | None:
+    try:
+        return Decimal(str(value).replace(",", "").strip())
+    except (InvalidOperation, AttributeError):
+        return None
+
+
+def _decimal_string_runtime(value: Decimal) -> str:
+    if value.is_zero():
+        return "0"
+    text = format(value.normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _safe_fallback_source_label(text: str, *, limit: int) -> str:
