@@ -141,11 +141,20 @@ pivot is partially working but not solved:
   citation preservation `1.0`, numeric verifier / verifier gate / synthesis
   gate `passed`, unsupported numeric claim rate `0`, and answer numeric support
   `100%`.
-- `run_financebench_doc_live3_binding_v1`: the small follow-up probe is `1/3`.
-  All three items reached claim ledger, slot frame, and transform plan (`1.0`
-  present rates, average `retrieval_runs=1`), but items 2-3 are blocked by
-  unsupported numeric synthesis. That is a new synthesis/line-item binding
-  gap, not the original empty retrieval or secondary `899M` support failure.
+- `run_financebench_doc_live3_binding_v1`: the first small follow-up probe was
+  `1/3`. All three items reached claim ledger, slot frame, and transform plan,
+  but items 2-3 were blocked by unsupported numeric synthesis / missing
+  line-item support.
+- `run_financebench_doc_live3_binding_v2`: the focused follow-up is now `2/3`.
+  Item 2 closes after two narrow fixes: inline benchmark prompts that start the
+  question with `Assume ...` no longer pollute `doc_period`, and balance-sheet
+  net PP&E / net PPNE binds to SEC `PropertyPlantAndEquipmentNet`. Summary:
+  pass rate / numeric accuracy `0.6667`, claim-ledger / slot-frame /
+  transform-plan present rate `1.0`, citation preservation `0.6667`,
+  synthesis-gate pass rate `0.6667`, and unsupported numeric claim rate
+  `0.3333`. Item 3 remains the next true workflow gap: a capital-intensity
+  judgment requiring PP&E / assets / capex / operating-cash-flow slots and a
+  supported transform, not another fixed answer heuristic.
 
 Remaining gap:
 
@@ -193,6 +202,8 @@ Result:
 ```
 
 Issue #3 live1 validation is now closed by
-`run_financebench_doc_live1_binding_v7`. The next FinanceBench doc-retrieval
-work should focus on source-grounded synthesis repair and broader
-line-item/qualitative binding observed in the live3 follow-up.
+`run_financebench_doc_live1_binding_v7`, and the focused live3 follow-up
+`run_financebench_doc_live3_binding_v2` improves the small probe to `2/3`.
+The next FinanceBench doc-retrieval work should focus on item 3's
+capital-intensity slot/transform path and source-grounded synthesis repair,
+not on broad threshold expansion or fixed answer tables.

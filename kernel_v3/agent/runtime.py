@@ -7535,7 +7535,19 @@ def _benchmark_doc_query_is_targeted(query: str, metadata: JsonObject) -> bool:
 def _benchmark_line_item_aliases(line_item: str) -> list[str]:
     normalized = _normalize_for_benchmark_doc_query(line_item)
     aliases = [normalized] if normalized else []
-    if normalized == "capital expenditures":
+    if normalized in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}:
+        aliases.extend(
+            [
+                "property plant and equipment net",
+                "property plant and equipment",
+                "net property plant and equipment",
+                "net ppe",
+                "net pp and e",
+                "net ppne",
+                "ppne",
+            ]
+        )
+    elif normalized == "capital expenditures":
         aliases.extend(
             [
                 "capital expenditure",
@@ -7620,9 +7632,10 @@ def _benchmark_doc_retrieval_inline_labels(goal: str) -> JsonObject:
         "Document": "doc_name",
     }
     label_pattern = "Source URL|Document type|Document period|Company|Document"
+    question_start = _benchmark_doc_retrieval_question_start_pattern()
     result: JsonObject = {}
     for match in re.finditer(
-        rf"(?P<label>{label_pattern})\s*:\s*(?P<value>.*?)(?=\s+(?:{label_pattern})\s*:|\s{{2,}}(?:What|How|Which|Give|Calculate|Using|For)\b|$)",
+        rf"(?P<label>{label_pattern})\s*:\s*(?P<value>.*?)(?=\s+(?:{label_pattern})\s*:|\s{{2,}}(?:{question_start})\b|$)",
         text,
         flags=re.IGNORECASE,
     ):
@@ -7638,13 +7651,21 @@ def _benchmark_doc_retrieval_inline_labels(goal: str) -> JsonObject:
 
 def _benchmark_doc_retrieval_inline_question(goal: str) -> str:
     text = " ".join(str(goal or "").replace("\n", " ").split())
-    match = re.search(r"\s{2,}((?:What|How|Which|Give|Calculate|Using|For)\b.+)$", str(goal or ""), flags=re.IGNORECASE | re.DOTALL)
+    question_start = _benchmark_doc_retrieval_question_start_pattern()
+    match = re.search(rf"\s{{2,}}((?:{question_start})\b.+)$", str(goal or ""), flags=re.IGNORECASE | re.DOTALL)
     if match:
         return " ".join(match.group(1).split())
-    match = re.search(r"(?:Document period\s*:\s*\S+)\s+((?:What|How|Which|Give|Calculate|Using|For)\b.+)$", text, flags=re.IGNORECASE)
+    match = re.search(rf"(?:Document period\s*:\s*\S+)\s+((?:{question_start})\b.+)$", text, flags=re.IGNORECASE)
     if match:
         return " ".join(match.group(1).split())
     return ""
+
+
+def _benchmark_doc_retrieval_question_start_pattern() -> str:
+    return (
+        "What|How|Which|Give|Calculate|Using|For|Assume|Is|Are|Does|Do|Did|Was|Were|"
+        "Can|Should|Would|Could|If|Based"
+    )
 
 
 def _target_document_binding_from_recipe(recipe: TaskRecipe) -> JsonObject:

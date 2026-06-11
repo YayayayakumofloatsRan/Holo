@@ -37,6 +37,7 @@ model research quality.
 | FinanceBench-150 oracle evidence fake | 150 | pass `0.2`; numeric accuracy `0.2381` | `0.9132` | `1.0` | `0.14` / `0.14` | preservation `0.8733` | `0.1067` |
 | FinanceBench-150 doc retrieval fake | 150 | pass `0.0067`; numeric accuracy `0.0079` | `0.8059` | `0.7037` | `0.0` / `0.0` | preservation `0.0` | `0.0` |
 | FinanceBench doc retrieval live3 | 3 | pass `0.0`; numeric accuracy `0.0` | `0.8571` | `0.8571` | `0.0` / `0.0` | preservation `0.0` | `0.0` |
+| FinanceBench doc retrieval live3 target-binding v2 | 3 | pass `0.6667`; numeric accuracy `0.6667` | `0.9048` | `1.0` | `0.0` / `0.0` | preservation `0.6667` | `0.3333` |
 | FinQA dev oracle100 fake | 100 | pass `0.15`; numeric accuracy `0.15` | `0.925` | `0.8816` | `0.37` / `0.37` | preservation `0.92` | `0.06` |
 
 ## Interpretation
@@ -56,12 +57,17 @@ required document evidence is absent. True `doc_retrieval` must be rerun with
 live retrieval/document fetching before it represents Holo's source-acquisition
 ability.
 
-That true path has now been probed on a small live 3-item subset
+That true path was first probed on a small live 3-item subset
 (`run_financebench_doc_retrieval_live_limit3_v1`). It performed real retrieval
 work (`1.3333` average retrieval runs; each item fetched `8` to `16` sources)
 but still scored `0/3`: no finance facts, citations, calculator traces, or
 formula traces were produced. This is the current source-acquisition /
-document-extraction gap for FinanceBench doc retrieval.
+document-extraction baseline for FinanceBench doc retrieval. A later focused
+target-binding probe, `run_financebench_doc_live3_binding_v2`, improves the
+same first-three-item slice to `2/3`: item 2 closes after inline
+`Document period` parsing and balance-sheet net PP&E / net PPNE binding to SEC
+`PropertyPlantAndEquipmentNet`. Item 3 remains a capital-intensity workflow gap
+requiring missing slot recovery and a supported transform.
 
 FinQA dev oracle100 confirms the FinQA oracle-context path scales beyond the
 earlier 20-row diagnostic, but the score drops from the small oracle20 sample:

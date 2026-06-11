@@ -133,6 +133,8 @@ SEC_COMPANYFACTS_CONCEPTS = (
     ("PaymentsToAcquireProductiveAssets", "capital expenditures"),
     ("PropertyPlantAndEquipmentAdditions", "capital expenditures"),
     ("CapitalExpendituresIncurredButNotYetPaid", "capital expenditures"),
+    ("PropertyPlantAndEquipmentNet", "property plant and equipment net"),
+    ("PropertyPlantAndEquipmentGross", "property plant and equipment gross"),
     ("CashAndCashEquivalentsAtCarryingValue", "cash and cash equivalents"),
     ("Assets", "assets"),
     ("Liabilities", "liabilities"),
@@ -179,6 +181,9 @@ SEC_COMPANYFACTS_DYNAMIC_KEYWORDS = (
     "capital expenditures",
     "capex",
     "property plant",
+    "property, plant",
+    "ppne",
+    "pp&e",
     "payments to acquire",
     "cash",
     "assets",
@@ -500,6 +505,18 @@ def _target_document_binding(goal: SearchGoal) -> JsonObject:
 
 def _target_line_item_aliases(line_item: str) -> list[str]:
     normalized = line_item.lower().strip()
+    if normalized in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}:
+        return [
+            "property, plant and equipment, net",
+            "property plant and equipment net",
+            "property, plant and equipment net",
+            "net property, plant and equipment",
+            "net property plant and equipment",
+            "net pp&e",
+            "net ppe",
+            "net ppne",
+            "ppne",
+        ]
     if normalized == "capital expenditures":
         return [
             "purchases of property, plant and equipment",
@@ -1451,8 +1468,10 @@ def _companyfacts_target_binding_metrics(binding: JsonObject) -> tuple[str, ...]
         if metric not in metrics:
             metrics.append(metric)
 
+    if line_item in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}:
+        add("property plant and equipment net")
     if line_item == "capital expenditures" or any(
-        marker in line_item for marker in ("capital expenditure", "capex", "property plant", "property, plant")
+        marker in line_item for marker in ("capital expenditure", "capex", "payments to acquire", "purchases of property")
     ):
         add("capital expenditures")
     if line_item in {"revenue", "revenues"} or "revenue" in line_item or "sales" in line_item:
@@ -1552,6 +1571,13 @@ def _companyfacts_dynamic_metric(*, concept: str, label: str) -> str | None:
         return "cloud and AI infrastructure investment"
     if "capitalexpenditure" in compact or ("capital" in lower and "expenditure" in lower):
         return "capital expenditures"
+    if (
+        "propertyplantandequipmentnet" in compact
+        or "property plant and equipment, net" in lower
+        or "property plant and equipment net" in lower
+        or "net property plant and equipment" in lower
+    ):
+        return "property plant and equipment net"
     if "capitalized" in lower and ("software" in lower or "cloud" in lower):
         return "capitalized software or cloud infrastructure"
     if (
@@ -1620,6 +1646,7 @@ def _companyfacts_dynamic_priority(*, concept: str, label: str, metric: str) -> 
         "cost of revenue",
         "cost of goods sold",
         "capital expenditures",
+        "property plant and equipment net",
     }:
         priority += 40
     if "abstract" in text or "policy" in text or "schedule" in text:
@@ -1758,12 +1785,22 @@ def _companyfacts_query_priority_metrics(query: str) -> tuple[str, ...]:
     if any(
         alias in normalized
         for alias in (
+            "net ppne",
+            "ppne",
+            "net ppe",
+            "net pp&e",
+            "property, plant and equipment, net",
+            "property plant and equipment net",
+            "net property plant and equipment",
+        )
+    ) or ("property plant and equipment" in normalized and "balance sheet" in normalized):
+        add("property plant and equipment net")
+    if any(
+        alias in normalized
+        for alias in (
             "capital expenditure",
             "capital expenditures",
             "capex",
-            "property, plant and equipment",
-            "property plant and equipment",
-            "pp&e",
             "purchases of property",
             "payments to acquire property",
         )

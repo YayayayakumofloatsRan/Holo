@@ -137,10 +137,17 @@ doc-retrieval item with `numeric_within_tolerance`, `retrieval_runs=1`,
 `facts=114`, `claims=114`, citation preservation `1.0`, numeric verifier /
 verifier gate / synthesis gate all `passed`, unsupported numeric claim rate `0`,
 and answer numeric support `100%`. The follow-up
-`run_financebench_doc_live3_binding_v1` is `1/3`; all three items reached the
-generic substrate, while items 2-3 now fail at unsupported numeric synthesis.
-This is not yet a solved FinanceBench claim, but the original secondary-current
-`899M` support failure is closed for the target live1 item.
+`run_financebench_doc_live3_binding_v1` first showed `1/3`; all three items
+reached the generic substrate, while items 2-3 failed at unsupported numeric
+synthesis / missing line-item support. A focused follow-up,
+`run_financebench_doc_live3_binding_v2`, is now `2/3`: item 2 closes after
+inline document-period parsing was fixed for `Assume ...` prompts and
+balance-sheet net PP&E / net PPNE was bound to SEC
+`PropertyPlantAndEquipmentNet`. The v2 summary reports pass rate / numeric
+accuracy `0.6667`, claim-ledger / slot-frame / transform-plan present rate
+`1.0`, citation preservation `0.6667`, synthesis-gate pass rate `0.6667`, and
+unsupported numeric claim rate `0.3333`. Item 3 remains a capital-intensity
+slot/transform gap rather than an empty-retrieval gap.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy

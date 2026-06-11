@@ -1220,12 +1220,19 @@ and the finance ledger/verifier run a host-owned
 therefore rejects secondary/current market values such as StockAnalysis `899M`
 when the task requires the FY2018 primary filing cash-flow capex row. This is a
 provenance and period-binding gate, not a hardcoded answer table. The follow-up
-`run_financebench_doc_live3_binding_v1` small probe is now `1/3`: all three
-items reached claim ledger, slot frame, and transform plan (`1.0` present
-rates; average `retrieval_runs=1`), while the second and third items are blocked
-by unsupported numeric synthesis rather than empty retrieval. That makes the
-next gap source-grounded synthesis repair and broader line-item/qualitative
-binding, not the original `899M` secondary-source failure.
+`run_financebench_doc_live3_binding_v1` small probe first showed `1/3`: all
+three items reached claim ledger, slot frame, and transform plan, while items 2
+and 3 were blocked by unsupported numeric synthesis / missing line-item
+support. A targeted follow-up, `run_financebench_doc_live3_binding_v2`, is now
+`2/3`: item 2 passes after fixing inline document-period parsing for
+`Assume ...` prompts and binding balance-sheet net PP&E / net PPNE to SEC
+`PropertyPlantAndEquipmentNet`. The run reports pass rate / numeric accuracy
+`0.6667`, claim-ledger / slot-frame / transform-plan present rate `1.0`,
+citation preservation `0.6667`, synthesis-gate pass rate `0.6667`, and
+unsupported numeric claim rate `0.3333`. Item 3 remains a real
+capital-intensity workflow gap: the workbench identifies missing PP&E / assets /
+capex / operating-cash-flow slots, but the current run still lacks a supported
+calculator/verifier path for the qualitative judgment.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

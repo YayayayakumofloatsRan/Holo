@@ -667,6 +667,81 @@ def test_sec_companyfacts_reader_uses_target_binding_when_query_is_source_url() 
     assert "value=899000000" not in spans[0].text
 
 
+def test_sec_companyfacts_reader_uses_target_binding_for_net_ppne() -> None:
+    binding = {
+        "company": "3M",
+        "doc_link": "https://www.sec.gov/Archives/edgar/data/66740/000155837019000470/mmm-20181231x10k.htm",
+        "doc_period": "2018",
+        "doc_type": "10k",
+        "required_statement": "balance_sheet",
+        "required_line_item": "property plant and equipment net",
+        "primary_source_required": True,
+    }
+    goal = SearchGoal(
+        goal_id="goal-companyfacts-net-ppne",
+        query=binding["doc_link"],
+        max_spans_per_document=3,
+        metadata={"target_document_binding": binding},
+    )
+    document = FetchedDocument(
+        document_id="doc-companyfacts-net-ppne",
+        goal_id=goal.goal_id,
+        source_id="source-companyfacts-net-ppne",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+        title="SEC companyfacts JSON for CIK 0000066740",
+        artifact_id="artifact-companyfacts-net-ppne",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"mime_type": "application/json"},
+    )
+    body = json.dumps(
+        {
+            "entityName": "3M CO",
+            "cik": "66740",
+            "facts": {
+                "us-gaap": {
+                    "PropertyPlantAndEquipmentNet": {
+                        "label": "Property, Plant and Equipment, Net",
+                        "units": {
+                            "USD": [
+                                {
+                                    "fy": 2024,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2025-02-01",
+                                    "end": "2024-12-31",
+                                    "val": 7100000000,
+                                    "accn": "0000066740-25-000001",
+                                },
+                                {
+                                    "fy": 2018,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2019-02-08",
+                                    "end": "2018-12-31",
+                                    "val": 4366000000,
+                                    "accn": "0001558370-19-000470",
+                                },
+                            ]
+                        },
+                    }
+                }
+            },
+        }
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=body)
+
+    assert spans
+    assert spans[0].metadata["target_document_binding"]["doc_period"] == "2018"
+    assert spans[0].metadata["target_line_item"] == "property plant and equipment net"
+    assert "metric=property plant and equipment net" in spans[0].text
+    assert "period_fy=2018" in spans[0].text
+    assert "value=4366000000" in spans[0].text
+    assert "value=7100000000" not in spans[0].text
+
+
 def test_http_fetch_provider_raises_companyfacts_byte_cap_without_expanding_generic_fetches() -> None:
     observed: list[tuple[str, int]] = []
 

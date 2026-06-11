@@ -469,6 +469,26 @@ def test_financebench_doc_retrieval_payload_parses_inline_prompt_labels() -> Non
     assert binding["required_line_item"] == "capital expenditures"
 
 
+def test_financebench_doc_retrieval_payload_stops_inline_period_before_assume_question() -> None:
+    prompt = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.  "
+        "Source URL: https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf "
+        "Company: 3M Document: 3M_2018_10K Document type: 10k Document period: 2018  "
+        "Assume that you are a public equities analyst. Answer the following question by primarily using information "
+        "that is shown in the balance sheet: what is the year end FY2018 net PPNE for 3M? Answer in USD billions."
+    )
+
+    payload = _benchmark_doc_retrieval_payload(prompt)
+
+    assert payload["metadata"]["doc_period"] == "2018"
+    assert payload["query"].startswith("3M 2018 10k Assume that you are a public equities analyst")
+    binding = payload["metadata"]["target_document_binding"]
+    assert binding["doc_period"] == "2018"
+    assert binding["required_statement"] == "balance_sheet"
+    assert binding["required_line_item"] == "property plant and equipment net"
+
+
 def test_financebench_import_can_emit_scoring_annotation_sidecar(tmp_path: Path) -> None:
     source = tmp_path / "financebench.jsonl"
     source.write_text(

@@ -664,6 +664,49 @@ def test_primary_source_numeric_binding_selects_target_capex_and_rejects_seconda
     assert "secondary_market_source_rejected_for_primary_binding" in rejected["secondary-899m"]["reasons"]
 
 
+def test_primary_source_numeric_binding_selects_balance_sheet_net_ppne() -> None:
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_link": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+            "doc_type": "10-K",
+            "doc_period": "2018",
+            "root_goal": "Assume that you are a public equities analyst. What is the year end FY2018 net PPNE shown in the balance sheet?",
+            "primary_source_required": True,
+        }
+    )
+    facts = [
+        FinanceFact(
+            fact_id="target-net-ppne",
+            entity="3M",
+            ticker="MMM",
+            period="2018",
+            fiscal_year=2018,
+            metric="property plant and equipment net",
+            value="4366000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-target",
+            evidence_ref="ev-target",
+            citation_ref="cite-target",
+            metadata={
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+                "source_title": "SEC companyfacts JSON for CIK 0000066740",
+                "concept": "PropertyPlantAndEquipmentNet",
+                "context": "Property, plant and equipment, net 2018",
+            },
+        )
+    ]
+
+    bound = attach_target_binding_to_facts(facts, binding, question="FY2018 net PPNE from balance sheet")
+    resolution = primary_source_numeric_binding_resolution(bound, binding, question="FY2018 net PPNE from balance sheet")
+
+    assert binding["required_line_item"] == "property plant and equipment net"
+    assert binding["required_statement"] == "balance_sheet"
+    assert resolution["status"] == "selected"
+    assert resolution["selected_fact_ids"] == ["target-net-ppne"]
+
+
 def test_numeric_verifier_filters_secondary_value_when_target_binding_requires_primary_source() -> None:
     binding = target_document_binding_from_metadata(
         {

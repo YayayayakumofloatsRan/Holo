@@ -201,10 +201,17 @@ not repeatedly download these sources during benchmark iteration.
   transform plan / verifier gate / synthesis gate present and passed, citation
   preservation `1.0`, unsupported numeric claim rate `0`, and answer numeric
   support `100%`. The small follow-up
-  `run_financebench_doc_live3_binding_v1` is `1/3`; all three items reached the
-  generic workflow substrate, but items 2-3 failed at unsupported numeric
-  synthesis. The next doc-retrieval work is therefore synthesis repair plus
-  broader line-item binding, not the original secondary-current `899M` failure.
+  `run_financebench_doc_live3_binding_v1` was `1/3`; all three items reached
+  the generic workflow substrate, but items 2-3 failed at unsupported numeric
+  synthesis / missing line-item support. `run_financebench_doc_live3_binding_v2`
+  is now `2/3`: item 2 passes after fixing inline `Document period` parsing for
+  `Assume ...` prompts and binding balance-sheet net PP&E / net PPNE to SEC
+  `PropertyPlantAndEquipmentNet`. The v2 summary reports pass rate / numeric
+  accuracy `0.6667`, claim-ledger / slot-frame / transform-plan present rate
+  `1.0`, citation preservation `0.6667`, synthesis-gate pass rate `0.6667`,
+  and unsupported numeric claim rate `0.3333`. Item 3 remains a capital-
+  intensity slot/transform gap, not the original secondary-current `899M`
+  failure.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,

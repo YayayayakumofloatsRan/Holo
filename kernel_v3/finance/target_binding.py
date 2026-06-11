@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from urllib.parse import urlparse
 
@@ -203,6 +204,9 @@ def _period_matches(fact: FinanceFact, binding: JsonObject) -> bool:
     period = _string(binding.get("doc_period"))
     if not period:
         return False
+    period_year = _period_year(period)
+    if period_year is not None and fact.fiscal_year == period_year:
+        return True
     return str(fact.fiscal_year or "") == period or _string(fact.period) == period
 
 
@@ -210,6 +214,8 @@ def _metric_matches(fact: FinanceFact, *, binding: JsonObject, question: str) ->
     metric = _string(fact.metric).lower()
     line_item = _string(binding.get("required_line_item")).lower()
     text = f"{question} {line_item}"
+    if line_item in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}:
+        return metric in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}
     if line_item == "capital expenditures":
         return metric == "capital expenditures"
     if line_item == "revenue":
@@ -231,7 +237,10 @@ def _statement_matches(fact: FinanceFact, *, binding: JsonObject) -> bool:
     if statement == "income_statement":
         return "income" in f"{context} {source_title} {concept}"
     if statement == "balance_sheet":
-        return any(marker in f"{context} {source_title} {concept}" for marker in ("balance sheet", "assets", "liabilities"))
+        return any(
+            marker in f"{context} {source_title} {concept}"
+            for marker in ("balance sheet", "assets", "liabilities", "propertyplantandequipment", "property plant and equipment")
+        )
     return False
 
 
@@ -241,6 +250,8 @@ def _required_statement(text: str, *, required_line_item: str | None = None) -> 
         return "cash_flow_statement"
     if required_line_item == "capital expenditures":
         return "cash_flow_statement"
+    if required_line_item == "property plant and equipment net":
+        return "balance_sheet"
     if "balance sheet" in normalized:
         return "balance_sheet"
     if "income statement" in normalized or "statement of operations" in normalized:
@@ -252,8 +263,23 @@ def _required_statement(text: str, *, required_line_item: str | None = None) -> 
 
 def _required_line_item(text: str) -> str | None:
     normalized = _normalize(text)
-    if any(marker in normalized for marker in ("capital expenditure", "capital expenditures", "capex", "property plant and equipment", "pp e")):
+    if any(
+        marker in normalized
+        for marker in ("capital expenditure", "capital expenditures", "capex", "payments to acquire", "purchases of property")
+    ):
         return "capital expenditures"
+    if any(
+        marker in normalized
+        for marker in (
+            "net ppne",
+            "ppne",
+            "net ppe",
+            "net pp and e",
+            "property plant and equipment net",
+            "property plant and equipment  net",
+        )
+    ) or ("property plant and equipment" in normalized and "balance sheet" in normalized):
+        return "property plant and equipment net"
     if any(marker in normalized for marker in ("net income", "net earnings")):
         return "net income"
     if any(marker in normalized for marker in ("revenue", "revenues", "net sales")):
@@ -267,3 +293,13 @@ def _normalize(value: object) -> str:
 
 def _string(value: object) -> str:
     return str(value or "").strip()
+
+
+def _period_year(value: object) -> int | None:
+    match = re.search(r"\b(?:FY|fiscal\s+year\s*)?((?:19|20)\d{2})\b", _string(value), flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
