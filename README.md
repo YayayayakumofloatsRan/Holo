@@ -122,6 +122,8 @@ cash flow / capex fact extraction, transparent assumption diagnostics, and
 missing-slot acquisition hints. This is a deterministic substrate v1 for
 auditable modeling traces, not a claim that Holo already solves full DCF/LBO
 benchmark tasks end to end.
+The 2026-06-11 retrieval workbench pivot is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-11_RETRIEVAL_WORKBENCH.md`.
 The newest substrate work starts lifting finance lessons into domain-general
 kernel primitives: `ClaimLedger`, `SlotFrame`, `EvidencePolicy`,
 `TransformPlan`, and `VerifierGateResult`. Finance now projects its fact ledger,
@@ -138,6 +140,21 @@ instead of drifting into market-stat pages or unrelated event filings.
 Reconciliation slot frames now also expose `period_series` and `source_table`,
 so bridge/add-back work can distinguish "found a number" from "found the
 multi-period reconciliation table needed for analyst-grade review."
+The current retrieval architecture is pivoting away from threshold-centered
+search decisions toward a model-guided evidence workbench. `retrieval.workbench`
+is now a schema-first processor packet inside `RetrievalOperator`: after source
+acquisition, fetch, extraction, deterministic qualification, and evidence
+compaction, the model receives a bounded workbench packet with the task goal,
+workflow type, source/fetch summaries, extracted spans, accepted evidence,
+rejected evidence previews and reasons, citation state, and known slot/claim
+state. The model judges source roles, accepted/rescued/rejected evidence IDs,
+slot coverage, semantic missing slots, next queries, next source families, next
+document targets, assumptions, and limitations. The host still owns hard
+validation: the model may only reference existing IDs, cannot invent evidence or
+citations, and cannot bypass authority, policy, budget, provenance, numeric
+verification, or synthesis gates. Retrieval reports and finance benchmark
+metrics now expose workbench decisions so live runs can distinguish "search
+failed" from "document/evidence judgment found a semantic gap."
 The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime

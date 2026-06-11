@@ -198,6 +198,8 @@ class AgentRuntime:
         self.artifact_store = artifact_store or ArtifactStore.in_memory()
         self.processor_fabric = processor_fabric
         self.retrieval_operator = retrieval_operator
+        if self.retrieval_operator is not None and self.processor_fabric is not None:
+            setattr(self.retrieval_operator, "processor_fabric", self.processor_fabric)
         self.workspace_root = Path(workspace_root) if workspace_root is not None else None
         self.workspace_files = dict(workspace_files or {})
         self.workloop_config = workloop_config or WorkloopConfig()
@@ -591,6 +593,7 @@ class AgentRuntime:
                     recipe=recipe,
                     artifact_store=self.artifact_store,
                     corpus_store=self.research_corpus_store,
+                    processor_fabric=self.processor_fabric,
                 ),
                 journal=self.journal,
                 artifact_store=self.artifact_store,
@@ -7083,12 +7086,14 @@ def _default_retrieval_operator(
     recipe: TaskRecipe,
     artifact_store: ArtifactStore,
     corpus_store: ResearchCorpusStore | None,
+    processor_fabric: ProcessorFabric | None = None,
 ) -> RetrievalOperator:
     if corpus_store is not None:
         return RetrievalOperator(
             search_provider=CorpusSearchProvider(corpus_store),
             fetch_provider=CorpusFetchProvider(artifact_store),
             corpus_store=corpus_store,
+            processor_fabric=processor_fabric,
         )
     profile_id = _research_profile_id(recipe)
     if profile_id == FINANCE_FUNDAMENTALS_PROFILE_ID:
@@ -7102,6 +7107,7 @@ def _default_retrieval_operator(
                 ]
             ),
             fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
+            processor_fabric=processor_fabric,
         )
     if profile_id == TECHNICAL_DOCUMENTATION_PROFILE_ID:
         return RetrievalOperator(
@@ -7113,6 +7119,7 @@ def _default_retrieval_operator(
                 ]
             ),
             fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
+            processor_fabric=processor_fabric,
         )
     if profile_id == ACADEMIC_RESEARCH_PROFILE_ID:
         return RetrievalOperator(
@@ -7124,10 +7131,12 @@ def _default_retrieval_operator(
                 ]
             ),
             fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
+            processor_fabric=processor_fabric,
         )
     return RetrievalOperator(
         search_provider=UnconfiguredSearchProvider(reason="retrieval_source_not_configured"),
         fetch_provider=UnconfiguredFetchProvider(reason="retrieval_fetch_not_configured"),
+        processor_fabric=processor_fabric,
     )
 
 

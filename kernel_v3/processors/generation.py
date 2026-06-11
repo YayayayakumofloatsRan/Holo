@@ -11,6 +11,7 @@ STRUCTURED_TASK_TYPES = {
     "chat.route",
     "semantic.intake",
     "planner.propose",
+    "retrieval.workbench",
     "evaluator.assess",
     "mission.assess",
     "workmethod.frame",
@@ -131,6 +132,7 @@ def _thinking_for(*, task_type: str, assessment: GenerationAssessment) -> str:
             return "disabled"
         if assessment.task_difficulty in {"replan", "deep_research"} and task_type in {
             "planner.propose",
+            "retrieval.workbench",
             "evaluator.assess",
             "mission.assess",
             "workmethod.frame",
@@ -149,7 +151,14 @@ def _model_for(*, task_type: str, assessment: GenerationAssessment, provider: st
     if assessment.latency_target in {"quality", "thorough"}:
         return DEEPSEEK_PRO_MODEL
     if assessment.latency_target == "balanced" and assessment.task_difficulty in {"replan", "deep_research"}:
-        if task_type in {"planner.propose", "mission.assess", "workmethod.frame", "workmethod.gap", "synthesizer.answer"}:
+        if task_type in {
+            "planner.propose",
+            "retrieval.workbench",
+            "mission.assess",
+            "workmethod.frame",
+            "workmethod.gap",
+            "synthesizer.answer",
+        }:
             return DEEPSEEK_PRO_MODEL
     return DEEPSEEK_FLASH_MODEL
 

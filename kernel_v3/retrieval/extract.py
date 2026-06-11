@@ -8,6 +8,7 @@ import re
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
+from kernel_v3.contracts import JsonObject
 from kernel_v3.research.profile_policy import (
     QUERY_FACET_ALIASES,
     profile_extraction_aliases,
@@ -262,7 +263,7 @@ def extract_spans(
     terms = _terms(goal.query, goal=goal)
     if not terms:
         return []
-    text, text_mode = readable_document_text(body, document=document, goal=goal)
+    text, text_mode, document_reader = readable_document_text_with_diagnostics(body, document=document, goal=goal)
     if not text:
         return []
     spans: list[ExtractedSpan] = []
@@ -295,6 +296,7 @@ def extract_spans(
                         if candidate.get("finance_metric_intent")
                         else {}
                     ),
+                    **({"document_reader": document_reader} if document_reader else {}),
                     **({"anchor_terms": candidate["anchor_terms"]} if candidate.get("anchor_terms") else {}),
                 },
             )
@@ -310,28 +312,39 @@ def readable_document_text(
     document: FetchedDocument,
     goal: SearchGoal | None = None,
 ) -> tuple[str, str]:
+    text, mode, _diagnostics = readable_document_text_with_diagnostics(body, document=document, goal=goal)
+    return text, mode
+
+
+def readable_document_text_with_diagnostics(
+    body: str,
+    *,
+    document: FetchedDocument,
+    goal: SearchGoal | None = None,
+) -> tuple[str, str, JsonObject]:
     mime_type = str(document.metadata.get("mime_type") or "").lower()
     if _looks_like_pdf(body, mime_type=mime_type):
-        return _extract_pdf_text(body), "pdf_text_literals"
+        text, diagnostics = _extract_pdf_text_with_diagnostics(body)
+        return text, str(diagnostics.get("parser_used") or "pdf_text_literals"), diagnostics
     if _looks_like_sec_companyfacts(body, document=document):
         text = _extract_sec_companyfacts_readable_text(body, goal=goal)
         if text:
-            return text, "sec_companyfacts_readable_text"
+            return text, "sec_companyfacts_readable_text", {}
     if _looks_like_scholarly_metadata(body, document=document, mime_type=mime_type):
         text, mode = _extract_scholarly_metadata_readable_text(body, document=document)
         if text:
-            return text, mode
+            return text, mode, {}
     if _looks_like_json(body, mime_type=mime_type):
         text = _extract_json_readable_text(body)
         if text:
-            return text, "json_readable_text"
+            return text, "json_readable_text", {}
     if _looks_like_csv(body, document=document, mime_type=mime_type):
         text = _extract_csv_readable_text(body)
         if text:
-            return text, "csv_readable_text"
+            return text, "csv_readable_text", {}
     if _looks_like_html(body, mime_type=mime_type):
-        return _extract_html_readable_text(body, limit=_readable_text_limit_for_document(document)), "html_readable_text"
-    return _normalize_span(body[: _readable_text_limit_for_document(document)]), "plain_text"
+        return _extract_html_readable_text(body, limit=_readable_text_limit_for_document(document)), "html_readable_text", {}
+    return _normalize_span(body[: _readable_text_limit_for_document(document)]), "plain_text", {}
 
 
 def _readable_text_limit_for_document(document: FetchedDocument) -> int:
@@ -1738,11 +1751,88 @@ def _looks_numeric(value: object) -> bool:
 
 
 def _extract_pdf_text(body: str) -> str:
+    text, _diagnostics = _extract_pdf_text_with_diagnostics(body)
+    return text
+
+
+def _extract_pdf_text_with_diagnostics(body: str) -> tuple[str, JsonObject]:
+    failures: list[str] = []
+    for parser_name, parser in (("pdf_text_pypdf", _extract_pdf_text_pypdf), ("pdf_text_pdfminer", _extract_pdf_text_pdfminer)):
+        try:
+            text, diagnostics = parser(body)
+        except Exception as exc:  # pragma: no cover - optional parser failures vary by dependency/version.
+            failures.append(f"{parser_name}:{type(exc).__name__}")
+            continue
+        if text:
+            return text[:READABLE_TEXT_LIMIT], {
+                **diagnostics,
+                "parser_used": parser_name,
+                "chars_extracted": len(text),
+                "table_like_blocks": _table_like_block_count(text),
+                **({"fallback_failures": failures} if failures else {}),
+            }
+        failures.append(f"{parser_name}:empty")
+    fallback = _extract_pdf_text_literals(body)
+    return fallback, {
+        "parser_used": "pdf_text_literals",
+        "pages_extracted": 0,
+        "chars_extracted": len(fallback),
+        "table_like_blocks": _table_like_block_count(fallback),
+        "extraction_failure_reason": ";".join(failures) if failures else "optional_pdf_parser_unavailable",
+    }
+
+
+def _extract_pdf_text_pypdf(body: str) -> tuple[str, JsonObject]:
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except Exception as exc:  # pragma: no cover - dependency is optional.
+        raise RuntimeError("pypdf_unavailable") from exc
+    data = _pdf_body_bytes(body)
+    reader = PdfReader(io.BytesIO(data))
+    pieces: list[str] = []
+    for page in reader.pages:
+        try:
+            pieces.append(page.extract_text() or "")
+        except Exception:
+            continue
+    text = _normalize_span("\n".join(piece for piece in pieces if piece.strip()))
+    return text, {"pages_extracted": len(pieces)}
+
+
+def _extract_pdf_text_pdfminer(body: str) -> tuple[str, JsonObject]:
+    try:
+        from pdfminer.high_level import extract_text_to_fp  # type: ignore
+    except Exception as exc:  # pragma: no cover - dependency is optional.
+        raise RuntimeError("pdfminer_unavailable") from exc
+    data = _pdf_body_bytes(body)
+    output = io.StringIO()
+    extract_text_to_fp(io.BytesIO(data), output)
+    text = _normalize_span(output.getvalue())
+    return text, {"pages_extracted": _pdf_page_marker_count(body)}
+
+
+def _pdf_body_bytes(body: str) -> bytes:
+    return str(body or "").encode("latin-1", errors="ignore")
+
+
+def _extract_pdf_text_literals(body: str) -> str:
     sample = body[:READABLE_TEXT_LIMIT]
     pieces = []
     pieces.extend(_pdf_literal_strings(sample))
     pieces.extend(_pdf_hex_strings(sample))
     return _normalize_span(" ".join(pieces)[:READABLE_TEXT_LIMIT])
+
+
+def _pdf_page_marker_count(body: str) -> int:
+    return len(re.findall(r"/Type\s*/Page\b", body[:READABLE_TEXT_LIMIT]))
+
+
+def _table_like_block_count(text: str) -> int:
+    count = 0
+    for line in str(text or "").splitlines():
+        if len(re.findall(r"\b-?\d[\d,]*(?:\.\d+)?\b", line)) >= 3:
+            count += 1
+    return count
 
 
 def _pdf_literal_strings(text: str) -> list[str]:

@@ -43,6 +43,7 @@ from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
 from kernel_v3.retrieval.query_campaign import build_query_campaign
 from kernel_v3.retrieval.rank import rank_sources
+from kernel_v3.retrieval.workbench import RetrievalWorkbenchResult, run_retrieval_workbench
 from kernel_v3.tools import ToolRegistry, ToolResult
 
 
@@ -88,6 +89,7 @@ class RetrievalOperator:
         search_provider: SearchProvider,
         fetch_provider: FetchProvider,
         evaluator: EvidenceEvaluator | None = None,
+        processor_fabric: object | None = None,
         preview_chars: int = 160,
         corpus_store: CorpusStore | None = None,
         fetch_concurrency: int = 8,
@@ -95,6 +97,7 @@ class RetrievalOperator:
         self.search_provider = search_provider
         self.fetch_provider = fetch_provider
         self.evaluator = evaluator or EvidenceEvaluator()
+        self.processor_fabric = processor_fabric
         self.preview_chars = preview_chars
         self.corpus_store = corpus_store
         self.fetch_concurrency = max(1, int(fetch_concurrency))
@@ -668,6 +671,7 @@ class RetrievalOperator:
                                 if isinstance(span.metadata.get("text_mode"), str)
                             ]
                         ),
+                        "document_reader": _document_reader_diagnostics(document_spans),
                     },
                 },
                 action_ref=action_ref,
@@ -783,6 +787,31 @@ class RetrievalOperator:
                 },
                 action_ref=action_ref,
             )
+
+        workbench_decision = run_retrieval_workbench(
+            fabric=self.processor_fabric if self.processor_fabric is not None else None,
+            goal=goal,
+            sources=_dedupe_sources(sources),
+            fetch_summaries=fetch_summaries,
+            documents=documents,
+            spans=spans,
+            evidence=evidence,
+            citations=citations,
+            rejected_evidence=rejected_evidence,
+            task_id=task_id,
+            run_id=run_id,
+            step_id=f"{step_id_prefix}-workbench",
+        )
+        _append(
+            journal,
+            task_id,
+            run_id,
+            f"{step_id_prefix}-workbench",
+            "retrieval_workbench_decision",
+            workbench_decision.to_dict(),
+            action_ref=action_ref,
+            artifact_refs=_ordered_unique([item.artifact_id for item in evidence if item.artifact_id]),
+        )
 
         decision = self.evaluator.evaluate(
             goal=goal,
@@ -944,6 +973,7 @@ class RetrievalOperator:
                 "next_tool_actions": [action.to_dict() for action in next_tool_actions],
                 "research_graph": research_graph.to_dict(),
                 "operator_critic": operator_critic,
+                "retrieval_workbench": _workbench_diagnostics(workbench_decision),
                 "discovery_expansion_count": len(discovery_expansions),
                 "discovery_expanded_source_count": len(expanded_sources),
                 "document_expanded_source_count": len(document_expanded_sources),
@@ -2148,6 +2178,44 @@ def _failure_attribution(
             "rejection_reasons": _count_by_key(rejected_evidence, "reason"),
         },
         "next_strategy_hint": _next_strategy_hint(mode),
+    }
+
+
+def _workbench_diagnostics(decision: RetrievalWorkbenchResult) -> JsonObject:
+    return {
+        "status": decision.status,
+        "decision": decision.decision,
+        "reason_summary": decision.reason_summary,
+        "accepted_count": len(decision.accepted_evidence_ids),
+        "rescued_count": len(decision.rescued_evidence_ids),
+        "rejected_count": len(decision.rejected_evidence_ids),
+        "source_roles": decision.source_roles[:24],
+        "semantic_missing_slots": decision.missing_slots[:24],
+        "covered_slots": decision.covered_slots[:24],
+        "assumptions_needed": decision.assumptions_needed[:12],
+        "next_queries": decision.next_queries[:8],
+        "next_source_families": decision.next_source_families[:12],
+        "next_document_targets": decision.next_document_targets[:8],
+        "limitations": decision.limitations[:12],
+        "host_validation": decision.diagnostics.get("host_validation") if isinstance(decision.diagnostics, dict) else {},
+    }
+
+
+def _document_reader_diagnostics(spans: list[object]) -> JsonObject:
+    readers = [
+        span.metadata.get("document_reader")
+        for span in spans
+        if hasattr(span, "metadata") and isinstance(getattr(span, "metadata", None), dict) and isinstance(span.metadata.get("document_reader"), dict)
+    ]
+    if not readers:
+        return {}
+    latest = readers[0]
+    return {
+        "parser_used": latest.get("parser_used"),
+        "pages_extracted": latest.get("pages_extracted"),
+        "chars_extracted": latest.get("chars_extracted"),
+        "table_like_blocks": latest.get("table_like_blocks"),
+        "extraction_failure_reason": latest.get("extraction_failure_reason"),
     }
 
 

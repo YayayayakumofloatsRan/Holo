@@ -111,6 +111,11 @@ class FinanceBenchmarkSummary(Contract):
     average_missing_slots: float
     average_claims: float
     average_finance_facts: float
+    workbench_decision_present_rate: float
+    workbench_continue_rate: float | None
+    workbench_sufficient_rate: float | None
+    average_workbench_rescued_count: float
+    average_workbench_semantic_missing_slots: float
     numeric_verifier_pass_rate: float | None
     verifier_gate_pass_rate: float | None
     synthesis_gate_pass_rate: float | None
@@ -482,6 +487,24 @@ def summarize_finance_benchmark(
         average_missing_slots=_average_metric(results, "missing_slot_count"),
         average_claims=_average_metric(results, "claim_count"),
         average_finance_facts=_average_metric(results, "finance_fact_count"),
+        workbench_decision_present_rate=_rate(
+            sum(1 for result in results if bool(result.trace_metrics.get("workbench_decision_present"))),
+            len(results),
+        ),
+        workbench_continue_rate=_rate(
+            sum(1 for result in results if result.trace_metrics.get("workbench_decision") == "continue"),
+            sum(1 for result in results if result.trace_metrics.get("workbench_decision")),
+        )
+        if any(result.trace_metrics.get("workbench_decision") for result in results)
+        else None,
+        workbench_sufficient_rate=_rate(
+            sum(1 for result in results if result.trace_metrics.get("workbench_decision") == "sufficient"),
+            sum(1 for result in results if result.trace_metrics.get("workbench_decision")),
+        )
+        if any(result.trace_metrics.get("workbench_decision") for result in results)
+        else None,
+        average_workbench_rescued_count=_average_metric(results, "workbench_rescued_count"),
+        average_workbench_semantic_missing_slots=_average_metric(results, "workbench_semantic_missing_slot_count"),
         numeric_verifier_pass_rate=_rate(
             sum(1 for result in verifier_scored if result.trace_metrics.get("numeric_verifier_status") == "passed"),
             len(verifier_scored),
@@ -653,6 +676,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     transform_plans = [record.data for record in records if record.kind == "transform_plan"]
     verifier_gates = [record.data for record in records if record.kind == "verifier_gate_result"]
     synthesis_gates = [record.data for record in records if record.kind == "synthesis_gate_result"]
+    workbench_decisions = [record.data for record in records if record.kind == "retrieval_workbench_decision"]
     retrieval_evidence_records = [record.data for record in records if record.kind == "retrieval_evidence"]
     retrieval_citation_records = [record.data for record in records if record.kind == "retrieval_citation"]
     retrieval = retrieval_behavior_benchmark(journal, task_id)
@@ -681,6 +705,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     latest_slot_frame = slot_frames[-1] if slot_frames else {}
     latest_verifier_gate = verifier_gates[-1] if verifier_gates else {}
     latest_synthesis_gate = synthesis_gates[-1] if synthesis_gates else {}
+    latest_workbench = workbench_decisions[-1] if workbench_decisions else {}
     synthesis_gate_statuses = [
         str(item.get("status"))
         for item in synthesis_gates
@@ -698,6 +723,15 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     synthesis_gate_status = latest_synthesis_gate.get("status") if isinstance(latest_synthesis_gate.get("status"), str) else None
     synthesis_gate_issues = latest_synthesis_gate.get("issues") if isinstance(latest_synthesis_gate.get("issues"), list) else []
     answer_numeric_support_rate = _rate(len(matched_values), answer_numeric_count) if answer_numeric_count else None
+    workbench_decision = latest_workbench.get("decision") if isinstance(latest_workbench.get("decision"), str) else None
+    workbench_status = latest_workbench.get("status") if isinstance(latest_workbench.get("status"), str) else None
+    workbench_missing_slots = latest_workbench.get("missing_slots") if isinstance(latest_workbench.get("missing_slots"), list) else []
+    workbench_next_queries = latest_workbench.get("next_queries") if isinstance(latest_workbench.get("next_queries"), list) else []
+    workbench_next_source_families = (
+        latest_workbench.get("next_source_families")
+        if isinstance(latest_workbench.get("next_source_families"), list)
+        else []
+    )
     source_uris = _ordered_unique([
         *_source_uris([*retrieval_evidence_records, *retrieval_citation_records]),
         *_claim_source_uris(claim_ledgers),
@@ -745,6 +779,14 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "missing_slot_count": len(latest_slot_frame.get("missing_slots") or []) if isinstance(latest_slot_frame, dict) else 0,
         "missing_slots": latest_slot_frame.get("missing_slots") if isinstance(latest_slot_frame, dict) else [],
         "finance_fact_count": _int_value(latest_ledger.get("fact_count")) if isinstance(latest_ledger, dict) else 0,
+        "workbench_decision_present": bool(workbench_decisions),
+        "workbench_status": workbench_status,
+        "workbench_decision": workbench_decision,
+        "workbench_rescued_count": len(latest_workbench.get("rescued_evidence_ids") or []) if isinstance(latest_workbench, dict) else 0,
+        "workbench_semantic_missing_slot_count": len(workbench_missing_slots),
+        "workbench_semantic_missing_slots": workbench_missing_slots[:32],
+        "workbench_next_queries": workbench_next_queries[:8],
+        "workbench_next_source_families": workbench_next_source_families[:12],
         "numeric_verifier_status": numeric_verifier_status,
         "numeric_verifier_passed": numeric_verifier_status == "passed" if numeric_verifier_status else None,
         "numeric_verifier_pass_rate": 1.0 if numeric_verifier_status == "passed" else 0.0 if numeric_verifier_status == "failed" else None,
