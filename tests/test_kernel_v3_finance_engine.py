@@ -1440,6 +1440,35 @@ def test_finance_formula_preflight_returns_missing_plan_when_no_entity_is_ready(
     assert plans[0].formula_name == "ev_ebitda"
 
 
+def test_finance_formula_preflight_binds_average_per_question_from_provided_table() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="finqa-context",
+            text=(
+                "Provided report context. table: "
+                '[["Company", "Revenue", "Employees"], ["ExampleCo", "$300", "10"]]'
+            ),
+        )
+    ]
+
+    plans = _finance_formula_preflight_plans(
+        question="What is the average revenue per employee for ExampleCo?",
+        facts=[],
+        existing_traces=[],
+        evidence=evidence,
+    )
+
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan.status == "ready"
+    assert plan.formula_name == "table_average_per"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "numerator / denominator"
+    assert plan.payload["variables"] == {"numerator": "300", "denominator": "10"}
+    trace = compute_formula(**plan.payload)
+    assert Decimal(trace.result_value) == Decimal("30")
+
+
 def test_finance_formula_planner_derives_ebitda_from_components() -> None:
     evidence = [
         _finance_evidence(

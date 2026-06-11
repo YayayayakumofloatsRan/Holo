@@ -145,14 +145,18 @@ not repeatedly download these sources during benchmark iteration.
   before finalization, so it no longer dies as a `max_network_fetches` or
   retrieval-template failure when the benchmark has already supplied the source
   excerpt. The first FinanceBench oracle item
-  (`run_financebench_oracle_smoke1_after_scale_fallback`) passes in a no-network
-  fake-processor smoke with numeric accuracy `1.0`, citation preservation `1.0`,
-  answer numeric support `1.0`, and claim/slot/transform/verifier presence
-  `1.0`; the gold answer is still scoring-only and is not prompt context.
-  FinQA `oracle_context` uses the same provided-context evidence path and
-  reaches workflow re-score `0.9`, but still lacks `calculator.compute` and
-  formula traces, so FinQA remains a calculator/formula-binding problem rather
-  than a raw data acquisition problem.
+  (`run_financebench_oracle_smoke1_after_fallback_synthesis_gate`) passes in a
+  no-network fake-processor smoke with numeric accuracy `1.0`, citation
+  preservation `1.0`, answer numeric support `1.0`, and
+  claim/slot/transform/verifier/synthesis-gate presence `1.0`; the gold answer
+  is still scoring-only and is not prompt context.
+  FinQA `oracle_context` now uses the same provided-context evidence path plus a
+  table-average calculator preflight. The first smoke item
+  (`run_finqa_oracle_smoke1_after_table_average_synthesis_gate`) passes with
+  one `calculator.compute` trace, one formula trace, verifier-gate pass,
+  synthesis-gate pass, citation preservation `1.0`, and annotation overall /
+  workflow / substrate / numeric scores of `1.0`. This is a single-item
+  no-network smoke for the oracle-context path, not a broad FinQA subset score.
 
 Finance Agent v2 public import:
 

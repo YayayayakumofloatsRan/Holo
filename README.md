@@ -1127,14 +1127,18 @@ Follow-up runtime smoke on the same day tightened the oracle-context path. The
 runtime now turns benchmark-provided oracle evidence into citable retrieval
 evidence before finalization, even when the live retrieval/network lane is not
 available. The first FinanceBench oracle item
-(`run_financebench_oracle_smoke1_after_scale_fallback`) now passes with
+(`run_financebench_oracle_smoke1_after_fallback_synthesis_gate`) now passes with
 numeric accuracy `1.0`, citation preservation `1.0`, claim/slot/transform
-presence `1.0`, and numeric verifier pass `1.0` in a no-network fake-processor
-smoke. This uses only the provided evidence excerpt, not the reference answer.
-The first FinQA oracle-context item also enters the same context/evidence/
-citation/verifier path, but still fails numeric accuracy because it lacks a
-`calculator.compute` formula trace. The next engineering target is therefore
-FinQA-style calculator/formula binding, not more source acquisition.
+presence `1.0`, answer numeric support `1.0`, and numeric verifier pass `1.0`
+in a no-network fake-processor smoke. This uses only the provided evidence
+excerpt, not the reference answer. The first FinQA oracle-context item
+(`run_finqa_oracle_smoke1_after_table_average_synthesis_gate`) now also closes:
+the provided context is promoted into citable evidence, a table-average
+calculator preflight emits one `calculator.compute` formula trace, verifier and
+synthesis gates pass, and the annotation re-score is `1.0` for overall,
+workflow, substrate, and numeric scores. This proves the oracle-context path can
+drive a simple FinQA numeric-reasoning item; it is still a single-item smoke,
+not a broad FinQA accuracy claim.
 
 FinanceBench-150 can be normalized from a local CSV/JSON/JSONL export in three
 explicit modes:

@@ -78,13 +78,17 @@ FinanceBench source-grounded extraction. `oracle_evidence` is promoted inside
 runtime to citable retrieval evidence before finalization, so the task can
 finish from benchmark-provided source excerpts without live retrieval and
 without seeing the reference answer. The first FinanceBench oracle item
-(`run_financebench_oracle_smoke1_after_scale_fallback`) passes in a no-network
-fake-processor smoke with numeric accuracy `1.0`, citation preservation `1.0`,
-answer numeric support `1.0`, and claim/slot/transform/verifier presence `1.0`.
-FinQA `oracle_context` shows the same source/context path and workflow re-score
-`0.9`, but it still lacks `calculator.compute` / formula traces, so the next RC
-task is FinQA-style calculator/formula binding rather than another benchmark
-import or source-acquisition pass.
+(`run_financebench_oracle_smoke1_after_fallback_synthesis_gate`) passes in a
+no-network fake-processor smoke with numeric accuracy `1.0`, citation
+preservation `1.0`, answer numeric support `1.0`, and
+claim/slot/transform/verifier/synthesis-gate presence `1.0`.
+FinQA `oracle_context` now uses the same source/context path plus a
+table-average calculator preflight. The first FinQA oracle-context item
+(`run_finqa_oracle_smoke1_after_table_average_synthesis_gate`) passes with one
+`calculator.compute` trace, one formula trace, verifier-gate pass,
+synthesis-gate pass, citation preservation `1.0`, and annotation overall /
+workflow / substrate / numeric scores of `1.0`. This is a single-item
+oracle-context smoke, not a broad FinQA subset score.
 
 DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional
