@@ -30,6 +30,7 @@ class PublicFinanceBenchmarkImportSummary(Contract):
     skipped_count: int
     source_format: str
     source_url: str | None
+    mode: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -89,6 +90,18 @@ PUBLIC_FINANCE_BENCHMARK_SPECS: dict[str, PublicFinanceBenchmarkSpec] = {
             "Reasoning/program annotations are scoring-only unless explicitly used by an evaluator outside agent prompts.",
         ],
     ),
+    "financebench": PublicFinanceBenchmarkSpec(
+        benchmark_id="financebench",
+        display_name="FinanceBench",
+        homepage_url="https://github.com/patronus-ai/financebench",
+        dataset_url="https://huggingface.co/datasets/PatronusAI/financebench",
+        default_scoring="gold_answer_and_evidence",
+        notes=[
+            "Gold-backed 150-question financial filing QA benchmark from PatronusAI.",
+            "Answer and justification fields are scoring-only and must never enter the agent prompt.",
+            "Use oracle_evidence, doc_retrieval, or question_only import modes to separate evidence use from retrieval ability.",
+        ],
+    ),
 }
 
 
@@ -100,6 +113,7 @@ def convert_public_finance_benchmark(
     manifest_path: Path | str | None = None,
     limit: int | None = None,
     offset: int = 0,
+    mode: str | None = None,
 ) -> PublicFinanceBenchmarkImportSummary:
     benchmark_id = _normalize_benchmark_id(benchmark)
     spec = PUBLIC_FINANCE_BENCHMARK_SPECS.get(benchmark_id)
@@ -119,7 +133,7 @@ def convert_public_finance_benchmark(
     warnings: list[str] = []
     for index, record in enumerate(selected, start=max(0, int(offset)) + 1):
         try:
-            normalized.append(_normalize_public_finance_record(spec, record, index=index))
+            normalized.append(_normalize_public_finance_record(spec, record, index=index, mode=mode))
         except ValueError as exc:
             skipped += 1
             warnings.append(f"row {index}: {exc}")
@@ -142,6 +156,7 @@ def convert_public_finance_benchmark(
         skipped_count=skipped,
         source_format=_source_format(source),
         source_url=spec.dataset_url,
+        mode=_effective_import_mode(spec.benchmark_id, mode),
         warnings=warnings[:128],
     )
     if manifest_output is not None:
@@ -153,7 +168,8 @@ def convert_public_finance_benchmark(
                 "gold_answer_in_prompt": False,
                 "rubric_in_prompt": False,
                 "reference_reasoning_in_prompt": False,
-                "provided_context_in_prompt": True,
+                "provided_context_in_prompt": _provided_context_in_prompt(spec.benchmark_id, mode),
+                "import_mode": _effective_import_mode(spec.benchmark_id, mode),
             },
             "normalized_schema": {
                 "id": "stable benchmark item id",
@@ -178,17 +194,25 @@ def convert_public_finance_benchmark(
     return summary
 
 
-def _normalize_public_finance_record(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int) -> JsonObject:
+def _normalize_public_finance_record(
+    spec: PublicFinanceBenchmarkSpec,
+    record: JsonObject,
+    *,
+    index: int,
+    mode: str | None,
+) -> JsonObject:
     if spec.benchmark_id == "finance_agent_benchmark":
         return _normalize_finance_agent_benchmark(spec, record, index=index)
     if spec.benchmark_id == "finance_agent_v2_public":
         return _normalize_finance_agent_v2_public(spec, record, index=index)
     if spec.benchmark_id == "secque":
-        return _normalize_secque(spec, record, index=index)
+        return _normalize_secque(spec, record, index=index, mode=mode)
     if spec.benchmark_id == "financeqa":
-        return _normalize_financeqa(spec, record, index=index)
+        return _normalize_financeqa(spec, record, index=index, mode=mode)
     if spec.benchmark_id == "finqa":
-        return _normalize_finqa(spec, record, index=index)
+        return _normalize_finqa(spec, record, index=index, mode=mode)
+    if spec.benchmark_id == "financebench":
+        return _normalize_financebench(spec, record, index=index, mode=mode)
     raise ValueError(f"unsupported benchmark: {spec.benchmark_id}")
 
 
@@ -245,7 +269,7 @@ def _normalize_finance_agent_v2_public(spec: PublicFinanceBenchmarkSpec, record:
     )
 
 
-def _normalize_secque(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int) -> JsonObject:
+def _normalize_secque(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int, mode: str | None) -> JsonObject:
     question = _text(_first_present(record, "question", "Question", "query"))
     if not question:
         raise ValueError("missing question")
@@ -256,7 +280,9 @@ def _normalize_secque(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, i
         extra_keys=("accession", "page", "item", "section", "company", "ticker", "filing_type"),
     )
     metadata = _base_metadata(spec, record)
-    if context:
+    import_mode = _effective_import_mode(spec.benchmark_id, mode)
+    metadata["import_mode"] = import_mode
+    if context and import_mode != "question_only":
         metadata["prompt_context"] = context
     if source_refs:
         metadata["source_refs"] = source_refs
@@ -272,14 +298,16 @@ def _normalize_secque(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, i
     )
 
 
-def _normalize_financeqa(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int) -> JsonObject:
+def _normalize_financeqa(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int, mode: str | None) -> JsonObject:
     question = _text(_first_present(record, "question", "Question", "query"))
     if not question:
         raise ValueError("missing question")
     context = _prompt_context(record, "context", "Context", "filing_context")
     source_refs = _source_refs(record, url_keys=("file_link", "url", "source_url"), extra_keys=("company", "file_name", "question_type"))
     metadata = _base_metadata(spec, record)
-    if context:
+    import_mode = _effective_import_mode(spec.benchmark_id, mode)
+    metadata["import_mode"] = import_mode
+    if context and import_mode != "question_only":
         metadata["prompt_context"] = context
     if source_refs:
         metadata["source_refs"] = source_refs
@@ -298,7 +326,7 @@ def _normalize_financeqa(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *
     )
 
 
-def _normalize_finqa(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int) -> JsonObject:
+def _normalize_finqa(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int, mode: str | None) -> JsonObject:
     qa = record.get("qa") if isinstance(record.get("qa"), dict) else {}
     question = _text(_first_present(record, "question", "Question", "query") or _first_present(qa, "question"))
     if not question:
@@ -310,7 +338,9 @@ def _normalize_finqa(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, in
             context_parts.append(f"{key}: {_text(value)}")
     context = "\n\n".join(context_parts).strip()
     metadata = _base_metadata(spec, record)
-    if context:
+    import_mode = _effective_import_mode(spec.benchmark_id, mode)
+    metadata["import_mode"] = import_mode
+    if context and import_mode != "question_only":
         metadata["prompt_context"] = context
     if _first_present(record, "program", "derivation") is not None or _first_present(qa, "program") is not None:
         metadata["reference_program_available"] = True
@@ -323,6 +353,88 @@ def _normalize_finqa(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, in
         category=_text_or_none(_first_present(record, "question_type", "type", "category")),
         evidence_excerpt=None,
         required_tools=["provided_report_context", "calculator"],
+        metadata=metadata,
+    )
+
+
+def _normalize_financebench(spec: PublicFinanceBenchmarkSpec, record: JsonObject, *, index: int, mode: str | None) -> JsonObject:
+    question = _text(_first_present(record, "question", "Question", "query", "prompt"))
+    if not question:
+        raise ValueError("missing question")
+    import_mode = _effective_import_mode(spec.benchmark_id, mode)
+    financebench_id = _text_or_none(
+        _first_present(record, "financebench_id", "FinanceBench ID", "id", "ID", "question_id", "benchmark_id")
+    )
+    company = _text_or_none(_first_present(record, "company", "Company"))
+    doc_name = _text_or_none(_first_present(record, "doc_name", "document_name", "Document Name", "doc"))
+    question_type = _text_or_none(_first_present(record, "question_type", "Question Type", "type", "category"))
+    question_reasoning = _text_or_none(_first_present(record, "question_reasoning", "Question Reasoning", "reasoning"))
+    answer = _text_or_none(_first_present(record, "answer", "Answer", "gold_answer", "reference_answer"))
+    justification = _text_or_none(_first_present(record, "justification", "Justification", "rationale", "reference_reasoning"))
+    evidence = _text_or_none(_first_present(record, "evidence", "Evidence", "supporting_evidence", "evidence_text"))
+    gics_sector = _text_or_none(_first_present(record, "gics_sector", "GICS Sector", "sector"))
+    doc_type = _text_or_none(_first_present(record, "doc_type", "Document Type", "filing_type"))
+    doc_period = _text_or_none(_first_present(record, "doc_period", "Document Period", "period", "filing_period"))
+    doc_link = _text_or_none(_first_present(record, "doc_link", "Document Link", "url", "source_url", "filing_url"))
+    metadata = _base_metadata(spec, record)
+    metadata.update(
+        {
+            "import_mode": import_mode,
+            "financebench_id": financebench_id,
+            "company": company,
+            "doc_name": doc_name,
+            "question_type": question_type,
+            "question_reasoning": question_reasoning,
+            "gics_sector": gics_sector,
+            "doc_type": doc_type,
+            "doc_period": doc_period,
+            "doc_link": doc_link,
+            "reference_justification_available": justification is not None,
+            "reference_justification_policy": "scoring_only_not_prompted",
+            "reference_evidence_available": evidence is not None,
+            "reference_evidence_policy": "prompted_as_oracle_evidence" if import_mode == "oracle_evidence" else "scoring_only_not_prompted",
+            "gold_policy": "answer_and_justification_scoring_only",
+        }
+    )
+    workflow = _financebench_workflow_annotation(
+        question=question,
+        question_type=question_type,
+        question_reasoning=question_reasoning,
+        doc_type=doc_type,
+    )
+    metadata.update(workflow)
+    source_refs = _financebench_source_refs(
+        company=company,
+        doc_name=doc_name,
+        doc_type=doc_type,
+        doc_period=doc_period,
+        doc_link=doc_link,
+        gics_sector=gics_sector,
+    )
+    if source_refs:
+        metadata["source_refs"] = source_refs
+    prompt_context = _financebench_prompt_context(
+        mode=import_mode,
+        company=company,
+        doc_name=doc_name,
+        doc_type=doc_type,
+        doc_period=doc_period,
+        doc_link=doc_link,
+        evidence=evidence,
+    )
+    if prompt_context:
+        metadata["prompt_context"] = prompt_context
+    required_tools = ["retrieval.run", "calculator.compute", "finance.verify_numeric"]
+    if import_mode == "oracle_evidence":
+        required_tools = ["provided_evidence_context", "calculator.compute", "finance.verify_numeric"]
+    return _normalized_item(
+        spec,
+        item_id=financebench_id or _item_id(record, index=index, prefix="financebench"),
+        question=question,
+        gold_answer=answer,
+        category=question_type or str(workflow.get("workflow_type") or "financebench"),
+        evidence_excerpt=evidence,
+        required_tools=required_tools,
         metadata=metadata,
     )
 
@@ -409,8 +521,126 @@ def _normalize_benchmark_id(value: str) -> str:
         "financeagentv2": "finance_agent_v2_public",
         "secque_benchmark": "secque",
         "finance_qa": "financeqa",
+        "finance_bench": "financebench",
+        "financebench150": "financebench",
+        "financebench_150": "financebench",
+        "patronusai_financebench": "financebench",
+        "patronus_financebench": "financebench",
     }
     return aliases.get(normalized, normalized)
+
+
+def _effective_import_mode(benchmark_id: str, mode: str | None) -> str:
+    requested = str(mode or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if benchmark_id == "financebench":
+        if not requested:
+            return "oracle_evidence"
+        aliases = {"oracle": "oracle_evidence", "evidence": "oracle_evidence", "doc": "doc_retrieval", "document": "doc_retrieval"}
+        normalized = aliases.get(requested, requested)
+        if normalized not in {"oracle_evidence", "doc_retrieval", "question_only"}:
+            raise ValueError("unsupported FinanceBench import mode: " + str(mode))
+        return normalized
+    if benchmark_id in {"secque", "financeqa", "finqa"}:
+        if not requested:
+            return "oracle_context"
+        aliases = {"oracle": "oracle_context", "context": "oracle_context"}
+        normalized = aliases.get(requested, requested)
+        if normalized not in {"oracle_context", "question_only"}:
+            raise ValueError(f"unsupported {benchmark_id} import mode: {mode}")
+        return normalized
+    return requested or "question_only"
+
+
+def _provided_context_in_prompt(benchmark_id: str, mode: str | None) -> bool:
+    effective = _effective_import_mode(benchmark_id, mode)
+    return effective in {"oracle_context", "oracle_evidence", "doc_retrieval"}
+
+
+def _financebench_source_refs(
+    *,
+    company: str | None,
+    doc_name: str | None,
+    doc_type: str | None,
+    doc_period: str | None,
+    doc_link: str | None,
+    gics_sector: str | None,
+) -> list[JsonObject]:
+    ref: JsonObject = {}
+    if doc_link:
+        ref["url"] = doc_link
+    for key, value in (
+        ("company", company),
+        ("doc_name", doc_name),
+        ("doc_type", doc_type),
+        ("doc_period", doc_period),
+        ("gics_sector", gics_sector),
+    ):
+        if value:
+            ref[key] = value
+    return [ref] if ref else []
+
+
+def _financebench_prompt_context(
+    *,
+    mode: str,
+    company: str | None,
+    doc_name: str | None,
+    doc_type: str | None,
+    doc_period: str | None,
+    doc_link: str | None,
+    evidence: str | None,
+) -> str | None:
+    if mode == "question_only":
+        return None
+    lines: list[str] = []
+    if mode == "doc_retrieval":
+        lines.append("FinanceBench target document metadata follows. Use it to acquire evidence; it is not answer evidence by itself.")
+    elif mode == "oracle_evidence":
+        lines.append("FinanceBench provided evidence follows. Use it as source evidence; do not treat the reference answer or justification as prompt context.")
+    for label, value in (
+        ("Company", company),
+        ("Document", doc_name),
+        ("Document type", doc_type),
+        ("Document period", doc_period),
+        ("Document link", doc_link),
+    ):
+        if value:
+            lines.append(f"{label}: {value}")
+    if mode == "oracle_evidence" and evidence:
+        lines.append("")
+        lines.append("Provided evidence excerpt:")
+        lines.append(evidence)
+    return "\n".join(lines).strip() or None
+
+
+def _financebench_workflow_annotation(
+    *,
+    question: str,
+    question_type: str | None,
+    question_reasoning: str | None,
+    doc_type: str | None,
+) -> JsonObject:
+    combined = " ".join(item for item in (question, question_type or "", question_reasoning or "", doc_type or "") if item)
+    workflow = dict(_finance_agent_v2_workflow_annotation(combined))
+    workflow.setdefault("workflow_type", "source_grounded_research")
+    workflow.setdefault("required_slots", ["entity", "period", "source"])
+    workflow.setdefault("required_transforms", [])
+    workflow.setdefault("dealbreakers", ["citation_required", "synthesis_gate_pass_required"])
+    workflow.setdefault(
+        "expected_trace",
+        ["retrieval.run", "claim_ledger", "slot_frame", "transform_plan", "verifier_gate", "synthesis_gate", "citation"],
+    )
+    workflow.setdefault("failure_taxonomy", ["source_acquisition", "claim_extraction", "synthesis_gate"])
+    policy = workflow.get("evidence_policy") if isinstance(workflow.get("evidence_policy"), dict) else {}
+    required_families = list(policy.get("required_source_families") or ["provided_evidence_or_company_filing"])
+    if doc_type and "company_filing" not in required_families:
+        required_families.append("company_filing")
+    workflow["evidence_policy"] = {
+        **policy,
+        "required_source_families": required_families,
+        "authority": policy.get("authority") or "benchmark_evidence_or_primary_filing",
+    }
+    return workflow
 
 
 def _finance_agent_v2_category(question: str) -> str:

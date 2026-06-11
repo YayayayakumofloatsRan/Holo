@@ -304,6 +304,140 @@ def test_financeqa_import_never_prompts_reference_cot(tmp_path: Path) -> None:
     assert items[0].metadata["reference_reasoning_available"] is True
 
 
+def test_financebench_import_modes_keep_gold_out_of_prompt(tmp_path: Path) -> None:
+    source = tmp_path / "financebench.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "financebench_id": "fb-001",
+                "company": "ExampleCo",
+                "doc_name": "ExampleCo FY2024 10-K",
+                "question_type": "numeric",
+                "question_reasoning": "requires revenue lookup",
+                "question": "What was ExampleCo FY2024 revenue?",
+                "answer": "$10 million",
+                "justification": "Reference calculation that must stay scoring-only.",
+                "evidence": "The filing evidence says revenue was $10 million.",
+                "gics_sector": "Industrials",
+                "doc_type": "10-K",
+                "doc_period": "FY2024",
+                "doc_link": "https://example.com/exampleco-10k.pdf",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    oracle_output = tmp_path / "financebench.oracle.jsonl"
+    manifest = tmp_path / "financebench.manifest.json"
+    summary = convert_public_finance_benchmark(
+        benchmark="financebench",
+        input_path=source,
+        output_path=oracle_output,
+        manifest_path=manifest,
+        mode="oracle_evidence",
+    )
+    oracle_items = load_finance_benchmark_items(oracle_output)
+    oracle_runtime = _StaticChatRuntime(JournalStore.in_memory())
+    run_finance_benchmark(items=oracle_items, runtime=oracle_runtime)
+
+    assert summary.benchmark == "financebench"
+    assert summary.mode == "oracle_evidence"
+    assert oracle_items[0].item_id == "fb-001"
+    assert oracle_items[0].gold_answer == "$10 million"
+    assert oracle_items[0].evidence_excerpt == "The filing evidence says revenue was $10 million."
+    assert oracle_items[0].metadata["reference_justification_policy"] == "scoring_only_not_prompted"
+    assert "The filing evidence says revenue was $10 million." in oracle_runtime.seen_prompts[0]
+    assert "Reference calculation" not in oracle_runtime.seen_prompts[0]
+    assert "$10 million" in oracle_runtime.seen_prompts[0]  # evidence is intentionally prompted in oracle mode
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert manifest_payload["prompt_policy"]["gold_answer_in_prompt"] is False
+    assert manifest_payload["prompt_policy"]["import_mode"] == "oracle_evidence"
+
+    doc_output = tmp_path / "financebench.doc.jsonl"
+    convert_public_finance_benchmark(
+        benchmark="financebench",
+        input_path=source,
+        output_path=doc_output,
+        mode="doc_retrieval",
+    )
+    doc_items = load_finance_benchmark_items(doc_output)
+    doc_runtime = _StaticChatRuntime(JournalStore.in_memory())
+    run_finance_benchmark(items=doc_items, runtime=doc_runtime)
+    assert "https://example.com/exampleco-10k.pdf" in doc_runtime.seen_prompts[0]
+    assert "The filing evidence says revenue" not in doc_runtime.seen_prompts[0]
+    assert "Reference calculation" not in doc_runtime.seen_prompts[0]
+    assert doc_items[0].metadata["reference_evidence_policy"] == "scoring_only_not_prompted"
+
+    question_output = tmp_path / "financebench.question.jsonl"
+    convert_public_finance_benchmark(
+        benchmark="financebench",
+        input_path=source,
+        output_path=question_output,
+        mode="question_only",
+    )
+    question_items = load_finance_benchmark_items(question_output)
+    question_runtime = _StaticChatRuntime(JournalStore.in_memory())
+    run_finance_benchmark(items=question_items, runtime=question_runtime)
+    assert "https://example.com/exampleco-10k.pdf" not in question_runtime.seen_prompts[0]
+    assert "The filing evidence says revenue" not in question_runtime.seen_prompts[0]
+    assert "Reference calculation" not in question_runtime.seen_prompts[0]
+    assert question_items[0].metadata["source_refs"][0]["doc_type"] == "10-K"
+
+
+def test_finqa_import_supports_oracle_context_and_question_only_modes(tmp_path: Path) -> None:
+    source = tmp_path / "finqa.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "qa": {
+                        "question": "What is revenue growth?",
+                        "answer": "10%",
+                        "program": "subtract(divide(...))",
+                    },
+                    "pre_text": "Revenue increased from 100 to 110.",
+                    "post_text": "Management attributed the increase to volume.",
+                    "table": [["year", "revenue"], ["2023", "100"], ["2024", "110"]],
+                    "question_type": "numeric",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    oracle_output = tmp_path / "finqa.oracle.jsonl"
+    convert_public_finance_benchmark(
+        benchmark="finqa",
+        input_path=source,
+        output_path=oracle_output,
+        mode="oracle_context",
+    )
+    oracle_items = load_finance_benchmark_items(oracle_output)
+    oracle_runtime = _StaticChatRuntime(JournalStore.in_memory())
+    run_finance_benchmark(items=oracle_items, runtime=oracle_runtime)
+    assert "Revenue increased from 100 to 110." in oracle_runtime.seen_prompts[0]
+    assert "subtract(divide" not in oracle_runtime.seen_prompts[0]
+    assert "10%" not in oracle_runtime.seen_prompts[0]
+    assert oracle_items[0].metadata["reference_program_policy"] == "scoring_only_not_prompted"
+
+    question_output = tmp_path / "finqa.question.jsonl"
+    convert_public_finance_benchmark(
+        benchmark="finqa",
+        input_path=source,
+        output_path=question_output,
+        mode="question_only",
+    )
+    question_items = load_finance_benchmark_items(question_output)
+    question_runtime = _StaticChatRuntime(JournalStore.in_memory())
+    run_finance_benchmark(items=question_items, runtime=question_runtime)
+    assert "Revenue increased from 100 to 110." not in question_runtime.seen_prompts[0]
+    assert "subtract(divide" not in question_runtime.seen_prompts[0]
+    assert "10%" not in question_runtime.seen_prompts[0]
+
+
 def test_finance_benchmark_parallel_runner_isolates_and_orders_workers() -> None:
     seen: list[tuple[int, str, str]] = []
 
@@ -725,6 +859,52 @@ def test_finance_benchmark_cli_imports_public_dataset(tmp_path: Path) -> None:
     assert items[0].question == "What was revenue?"
     assert items[0].gold_answer == "$10 million"
     assert json.loads(manifest.read_text(encoding="utf-8"))["benchmark"] == "finance_agent_benchmark"
+
+
+def test_finance_benchmark_cli_imports_financebench_mode(tmp_path: Path) -> None:
+    source = tmp_path / "financebench.jsonl"
+    output = tmp_path / "financebench.normalized.jsonl"
+    manifest = tmp_path / "financebench.manifest.json"
+    source.write_text(
+        json.dumps(
+            {
+                "financebench_id": "fb-cli-001",
+                "company": "ExampleCo",
+                "question": "What was revenue?",
+                "answer": "$10 million",
+                "evidence": "Evidence text should not be prompted in doc retrieval mode.",
+                "doc_link": "https://example.com/filing.pdf",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    code = cli.main(
+        [
+            "bench",
+            "finance-import",
+            "--benchmark",
+            "financebench",
+            "--mode",
+            "doc_retrieval",
+            "--input",
+            str(source),
+            "--output",
+            str(output),
+            "--manifest-output",
+            str(manifest),
+        ]
+    )
+
+    assert code == 0
+    items = load_finance_benchmark_items(output)
+    assert items[0].item_id == "fb-cli-001"
+    assert items[0].metadata["import_mode"] == "doc_retrieval"
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert manifest_payload["benchmark"] == "financebench"
+    assert manifest_payload["prompt_policy"]["import_mode"] == "doc_retrieval"
 
 
 class _StaticChatRuntime:

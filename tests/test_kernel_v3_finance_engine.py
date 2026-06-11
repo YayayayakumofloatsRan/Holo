@@ -1464,7 +1464,11 @@ def test_finance_formula_planner_generates_dcf_payload_with_assumptions() -> Non
             text=(
                 "entityName=Salesforce ticker=CRM facts="
                 "metric=operating cash flow unit=USD fy=2024 form=10-K value=10234000000 ; "
-                "metric=capital expenditures unit=USD fy=2024 form=10-K value=710000000"
+                "metric=capital expenditures unit=USD fy=2024 form=10-K value=710000000 ; "
+                "metric=debt unit=USD fy=2024 form=10-K value=8200000000 ; "
+                "metric=cash and cash equivalents unit=USD fy=2024 form=10-K value=14000000000 ; "
+                "metric=short-term investments unit=USD fy=2024 form=10-K value=3000000000 ; "
+                "metric=shares outstanding unit=shares fy=2024 form=10-K value=1580000000"
             ),
         )
     ]
@@ -1488,12 +1492,54 @@ def test_finance_formula_planner_generates_dcf_payload_with_assumptions() -> Non
     assert plan.payload["variables"]["growth_rate"] == "0.04"
     assert plan.payload["variables"]["discount_rate"] == "0.09"
     assert plan.payload["variables"]["terminal_growth_rate"] == "0.02"
-    assert set(plan.payload["input_fact_ids"]) == {facts[0].fact_id, facts[1].fact_id}
+    expected_input_fact_ids = {fact.fact_id for fact in facts if fact.metric != "shares outstanding"}
+    assert set(plan.payload["input_fact_ids"]) == expected_input_fact_ids
     assert plan.diagnostics["base_cash_flow_metric"] == "derived free cash flow"
     assert plan.diagnostics["assumptions"]["forecast_years"] == 5
     assert plan.diagnostics["defaulted_assumptions"] == []
+    assert plan.diagnostics["model_outputs"]["enterprise_value"]
+    assert len(plan.diagnostics["model_outputs"]["projection"]) == 5
     trace = compute_formula(**plan.payload)
     assert Decimal(trace.result_value) > Decimal("10234000000")
+    assert trace.diagnostics["model_outputs"]["enterprise_value"] == plan.diagnostics["model_outputs"]["enterprise_value"]
+    assert trace.diagnostics["model_outputs"]["equity_value"]
+
+
+def test_finance_formula_planner_dcf_can_report_equity_value_per_share() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="dcf-per-share",
+            text=(
+                "entityName=ExampleCo ticker=EXM facts="
+                "metric=free cash flow unit=USD fy=2024 form=10-K value=1000000000 ; "
+                "metric=debt unit=USD fy=2024 form=10-K value=2000000000 ; "
+                "metric=cash and cash equivalents unit=USD fy=2024 form=10-K value=500000000 ; "
+                "metric=shares outstanding unit=shares fy=2024 form=10-K value=100000000"
+            ),
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-dcf-per-share")],
+    )
+
+    plan = plan_finance_formula(
+        question=(
+            "Using a DCF, calculate equity value per share with forecast 5 years, "
+            "FCF growth 3%, WACC 9%, terminal growth 2%."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["unit"] == "USD/share"
+    assert plan.payload["variables"]["shares"] == "100000000"
+    assert plan.diagnostics["reported_output"] == "equity_value_per_share"
+    assert plan.diagnostics["model_outputs"]["equity_value_per_share"]
+    trace = compute_formula(**plan.payload)
+    assert trace.unit == "USD/share"
+    assert Decimal(trace.result_value) > Decimal("0")
 
 
 def test_finance_formula_planner_generates_lbo_payload_with_assumptions() -> None:
@@ -1537,8 +1583,12 @@ def test_finance_formula_planner_generates_lbo_payload_with_assumptions() -> Non
     assert plan.payload["variables"]["ebitda_growth_rate"] == "0.03"
     assert plan.payload["variables"]["annual_debt_paydown_multiple"] == "0.5"
     assert plan.diagnostics["reported_output"] == "sponsor_irr"
+    assert plan.diagnostics["model_outputs"]["initial_sponsor_equity"]
+    assert plan.diagnostics["model_outputs"]["moic"]
+    assert len(plan.diagnostics["model_outputs"]["projection"]) == 5
     trace = compute_formula(**plan.payload)
     assert Decimal(trace.result_value) > Decimal("0")
+    assert trace.diagnostics["model_outputs"]["sponsor_irr"] == plan.diagnostics["model_outputs"]["sponsor_irr"]
 
 
 def test_finance_formula_planner_lbo_uses_assumed_entry_multiple_when_market_value_missing() -> None:
@@ -1797,7 +1847,7 @@ def test_retrieval_finalization_runs_finance_formula_preflight_before_synthesis(
     assert Decimal(trace["result_value"]).quantize(Decimal("0.01")) == Decimal("80.30")
 
 
-def test_retrieval_finalization_blocks_unsupported_finance_numbers() -> None:
+def test_retrieval_finalization_repairs_unsupported_finance_numbers_without_calculator_trace() -> None:
     journal = JournalStore.in_memory()
     runtime = _runtime_with_synthesizer(
         journal,
@@ -1819,15 +1869,59 @@ def test_retrieval_finalization_blocks_unsupported_finance_numbers() -> None:
         synthesizer_mode="model",
     )
 
-    assert final is None
-    assert failure is not None
-    assert failure.reason == "finance_numeric_verification_failed"
-    assert "unsupported_answer_number:$999 billion" in failure.missing_evidence
-    assert not journal.records(task_id="task-finance", kind="agent_final_answer")
+    assert failure is None
+    assert final is not None
+    assert "$999 billion" not in final.answer
+    assert final.citation_refs == ["cite-1"]
+    assert "保守可验证回答" in final.answer
+    assert journal.records(task_id="task-finance", kind="agent_final_answer")
     synthesis_gates = journal.records(task_id="task-finance", kind="synthesis_gate_result")
     assert synthesis_gates
-    assert synthesis_gates[-1].data["status"] == "failed"
+    assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
     assert synthesis_gates[-1].data["policy"] == "material_numeric_claims_require_claim_or_transform_support"
+    assert synthesis_gates[-1].data["diagnostics"]["attempt"] == "fallback"
+
+
+def test_source_grounded_retrieval_finalization_journals_generic_workflow_trace() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(
+        journal,
+        answer="Management describes AI as both an opportunity and a risk, supported by cite-ai.",
+        citation_refs=["cite-ai"],
+        used_evidence=["evidence-ai"],
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-ai",
+            title="Company AI risk disclosure",
+            uri="https://www.sec.gov/Archives/edgar/data/0000000000/example/10-k.htm",
+            text="Management says artificial intelligence may improve product capabilities but creates security, privacy, and compliance risks.",
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-ai")]
+    recipe = task_recipe("retrieval_answer", metadata={"goal": "Explain AI tailwinds and risks from disclosures."})
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-source-grounded",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    claim_ledgers = journal.records(task_id="task-source-grounded", kind="claim_ledger")
+    slot_frames = journal.records(task_id="task-source-grounded", kind="slot_frame")
+    transform_plans = journal.records(task_id="task-source-grounded", kind="transform_plan")
+    assert claim_ledgers[-1].data["domain"] == "source_grounded_research"
+    assert claim_ledgers[-1].data["claim_count"] == 1
+    assert slot_frames[-1].data["task_type"] == "source_grounded_research"
+    assert slot_frames[-1].data["missing_slots"] == []
+    assert transform_plans[-1].data["method"] == "source_grounded_synthesis"
+    assert transform_plans[-1].data["status"] == "ready"
 
 
 def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calculator_trace() -> None:
@@ -2090,17 +2184,23 @@ def test_finance_agent_v2_public_imports_plain_text_without_gold(tmp_path: Path)
     assert "workflow_annotation" in manifest_payload["normalized_schema"]
 
 
-def _runtime_with_synthesizer(journal: JournalStore, *, answer: str) -> AgentRuntime:
+def _runtime_with_synthesizer(
+    journal: JournalStore,
+    *,
+    answer: str,
+    citation_refs: list[str] | None = None,
+    used_evidence: list[str] | None = None,
+) -> AgentRuntime:
     fabric = ProcessorFabric(
         providers={
             "fake_json": FakeJsonProvider(
                 {
                     "synthesizer.answer": {
                         "answer": answer,
-                        "citation_refs": ["cite-1"],
+                        "citation_refs": citation_refs or ["cite-1"],
                         "confidence": 0.9,
                         "limitations": [],
-                        "used_evidence": ["evidence-1"],
+                        "used_evidence": used_evidence or ["evidence-1"],
                     }
                 }
             )

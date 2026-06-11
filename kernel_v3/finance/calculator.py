@@ -38,6 +38,7 @@ def register_finance_tools(registry: ToolRegistry) -> ToolRegistry:
                 "unit": {"type": "str", "required": False},
                 "formula_name": {"type": "str", "required": False},
                 "input_fact_ids": {"type": "list[str]", "required": False},
+                "diagnostics": {"type": "object", "required": False},
                 "precision": {"type": "int", "required": False, "min": 8, "max": 80},
             },
         ),
@@ -52,6 +53,7 @@ def compute_formula(
     unit: str | None = None,
     formula_name: str | None = None,
     input_fact_ids: list[str] | None = None,
+    diagnostics: JsonObject | None = None,
     precision: int = DEFAULT_PRECISION,
 ) -> FormulaTrace:
     expression = str(expression or "").strip()
@@ -67,11 +69,13 @@ def compute_formula(
         tree = ast.parse(expression, mode="eval")
         result = _DecimalExpressionEvaluator(parsed_variables).visit(tree)
     formula_id = "formula-" + _short_hash(expression, _canonical_variables(parsed_variables), str(unit or ""))
-    diagnostics = {
+    trace_diagnostics = {
         "variables": {key: _decimal_string(value) for key, value in sorted(parsed_variables.items())},
         "formatted_value": format_formula_value(result, unit=unit),
         "precision": max(8, min(int(precision or DEFAULT_PRECISION), 80)),
     }
+    if isinstance(diagnostics, dict):
+        trace_diagnostics.update(_json_safe_diagnostics(diagnostics))
     return FormulaTrace(
         formula_id=formula_id,
         formula_name=str(formula_name or "calculator.compute"),
@@ -79,7 +83,7 @@ def compute_formula(
         input_fact_ids=list(input_fact_ids or []),
         result_value=_decimal_string(result),
         unit=str(unit).strip() if isinstance(unit, str) and unit.strip() else None,
-        diagnostics=diagnostics,
+        diagnostics=trace_diagnostics,
     )
 
 
@@ -104,6 +108,7 @@ def _execute_calculator(action: CandidateAction) -> Observation:
             input_fact_ids=[str(item) for item in action.payload.get("input_fact_ids", [])]
             if isinstance(action.payload.get("input_fact_ids"), list)
             else [],
+            diagnostics=action.payload.get("diagnostics") if isinstance(action.payload.get("diagnostics"), dict) else None,
             precision=int(action.payload.get("precision") or DEFAULT_PRECISION),
         )
     except Exception as exc:
@@ -224,6 +229,29 @@ def _decimal_power(left: Decimal, right: Decimal) -> Decimal:
         return left.__pow__(right)
     except InvalidOperation:
         return Decimal(str(float(left) ** float(right)))
+
+
+def _json_safe_diagnostics(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        result[key] = _json_safe_value(item)
+    return result
+
+
+def _json_safe_value(value: object):
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, Decimal):
+        return _decimal_string(value)
+    if isinstance(value, list):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    return str(value)
 
 
 def _decimal_string(value: Decimal) -> str:

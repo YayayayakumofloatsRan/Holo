@@ -75,10 +75,20 @@ Supported import formats:
   `Question Type`, `Expert time (mins)`, and `Rubric`.
 - `finance_agent_v2_public`: plain text public development questions, one question
   per line, with no public gold answer in the normalized prompt item.
+- `financebench`: PatronusAI FinanceBench-style rows with `financebench_id`,
+  `company`, `doc_name`, `question_type`, `question_reasoning`, `question`,
+  `answer`, `justification`, `evidence`, `gics_sector`, `doc_type`,
+  `doc_period`, and `doc_link`. It supports `--mode oracle_evidence`,
+  `--mode doc_retrieval`, and `--mode question_only` so reports can separate
+  evidence-conditioned answering, document acquisition, and bare-question
+  generalization.
 - `secque`: question, answer/ground truth, SEC filing context/supporting data, accession,
   page/item/section metadata.
 - `financeqa`: question, answer, filing context, question type, company, file link/name.
 - `finqa`: report text/table context, answer, and numerical-reasoning annotations.
+  It supports `--mode oracle_context` for numerical reasoning with supplied
+  report/table context and `--mode question_only` for acquisition/generalization
+  ablations.
 
 Import policy:
 
@@ -96,6 +106,30 @@ Finance Agent v2 public import:
   --output .state/kernel_v3/bench/finance/fabv2_public_dev.jsonl \
   --manifest-output .state/kernel_v3/bench/finance/fabv2_public_dev.manifest.json
 ```
+
+FinanceBench import modes:
+
+```bash
+./holo-v3 bench finance-import \
+  --benchmark financebench \
+  --mode oracle_evidence \
+  --input data/raw/financebench.jsonl \
+  --output .state/kernel_v3/bench/finance/financebench_oracle.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/financebench_oracle.manifest.json
+
+./holo-v3 bench finance-import \
+  --benchmark financebench \
+  --mode doc_retrieval \
+  --input data/raw/financebench.jsonl \
+  --output .state/kernel_v3/bench/finance/financebench_doc_retrieval.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/financebench_doc_retrieval.manifest.json
+```
+
+In `oracle_evidence`, the provided evidence excerpt is prompt context but the
+reference answer and justification stay scoring-only. In `doc_retrieval`, only
+document metadata/link is prompt context; the evidence excerpt is retained for
+audit/scoring but not prompted. In `question_only`, neither evidence nor document
+hints are prompted.
 
 The official public file lives at
 `https://raw.githubusercontent.com/vals-ai/finance-agent-v2/main/data/public.txt`.
@@ -752,6 +786,26 @@ Post-dev10 EV/EBITDA iteration:
   multi-entity compute/compare `1`, valuation multiple `1`. The main failure modes
   are `all_evidence_rejected`, `coverage_gap`, and
   `finance_numeric:unsupported_answer_number`.
+- Finance Workflow RC report artifacts were regenerated on 2026-06-11 and should
+  be treated as the frozen handoff baseline before further live experimentation:
+  `.state/kernel_v3/bench/finance/run_stable4_event_resolver_v1.report.md`,
+  `.state/kernel_v3/bench/finance/run_dev10_event_resolver_v1.report.md`,
+  `.state/kernel_v3/bench/finance/run_dev10_event_resolver_v1.workflow_report.md`,
+  and `.state/kernel_v3/bench/finance/run_public27_workflow_v1.report.md`.
+  The frozen headline metrics remain stable4 overall `0.9603`, live dev10
+  overall `0.9056`, workflow-rescore overall `0.9114`, and public27 as an
+  ungraded health check.
+- RC hardening has started on the two public27 generalization gaps only. First,
+  generic source-grounded retrieval finalization now journals a domain-neutral
+  `claim_ledger`, `slot_frame`, and `transform_plan` for qualitative/source-
+  grounded tasks whenever retrieval evidence exists, even when no finance
+  formula is applicable. Second, the finance SynthesisGate now has a
+  citation-preserving conservative fallback when model synthesis inserts
+  unsupported material numbers: unsupported numeric claims are stripped or
+  downgraded into limitations, citation refs are preserved, and the fallback is
+  accepted when deterministic verification finds no unsupported material
+  numeric claim. These changes are local-tested; a fresh public27 live rerun is
+  still required before updating the public27 baseline metrics.
 - `data/bench/finance/holo_finance_workflow_challenge.jsonl` now adds a 50-item
   taxonomy challenge set by workflow shape instead of company. It is designed to
   stop the project from overfitting to dev10 while still keeping every task tied
@@ -772,10 +826,14 @@ Post-dev10 EV/EBITDA iteration:
    and WSC adjusted EBITDA add-back trend as the stable delivery showcase. These
    four demonstrate the general slot/evidence/claim/transform/verifier workflow
    in finance form.
-2. Use public27 as the external generalization baseline. The next public27 iteration
-   should target two gaps only: generic source-grounded `ClaimLedger` for qualitative
-   disclosure tasks, and SynthesisGate repair for numeric tasks with partial support.
-   Because public27 has no public gold, do not call it an official accuracy score.
+2. Use public27 as the external generalization baseline. The current code now
+   targets the two intended gaps only: generic source-grounded `ClaimLedger` /
+   `SlotFrame` / `TransformPlan` traces for qualitative disclosure tasks, and
+   SynthesisGate repair for numeric tasks with partial support. The next action is
+   a fresh public27 live rerun to see whether citation preservation moves toward
+   `0.6+`, synthesis-gate pass rate toward `0.4+`, unsupported numeric claim rate
+   below `0.2`, and claim/slot/transform present rate toward `0.75+`. Because
+   public27 has no public gold, do not call it an official accuracy score.
 3. Do not broaden new architecture before addressing the dev10 failure taxonomy.
    The next substrate work should target remaining transform-planning /
    modeling-policy gaps that appear across several tasks: fixed-charge
@@ -859,6 +917,26 @@ Conclusion: DCF/LBO are now real modeling-lite substrate paths with live
 calculator traces, but they are not yet solved benchmark items. The next
 engineering pressure should move from formula coverage to SynthesisGate repair,
 assumption-ledger display, and citation-preserving limitation answers.
+
+2026-06-11 DCF/LBO trace hardening:
+
+- `calculator.compute` now accepts optional planner diagnostics and preserves
+  them inside `FormulaTrace`, so modeling runs can carry schedules and
+  assumption provenance through the same calculator/journal path as simpler
+  ratios.
+- DCF planning now builds an auditable model schedule: projected free cash flow,
+  discount factor, present value by year, terminal free cash flow, terminal
+  value, PV of terminal value, enterprise value, net debt, equity value, and
+  optional equity value per share. It uses a precise cash selector so operating
+  cash flow is not mistaken for cash on hand.
+- LBO planning now emits an auditable debt and exit schedule: entry enterprise
+  value, initial debt, sponsor equity, annual EBITDA, debt paydown, ending debt,
+  exit EV, exit debt, exit equity, MOIC, and sponsor IRR. These outputs are
+  diagnostics attached to the formula trace; retrieved facts and assumptions
+  remain distinguishable.
+- This improves model auditability and answer repair potential, but it does not
+  by itself upgrade CRM DCF / EPAM LBO benchmark status. A new live run is still
+  required after SynthesisGate and assumption-label answer repair are tightened.
 
 Additional follow-ups:
 

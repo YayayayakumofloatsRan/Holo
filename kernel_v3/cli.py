@@ -630,6 +630,14 @@ def main(argv: list[str] | None = None) -> int:
     finance_import.add_argument("--input", required=True, help="Local CSV/JSON/JSONL export from the public benchmark.")
     finance_import.add_argument("--output", required=True, help="Normalized Kernel v3 benchmark JSONL.")
     finance_import.add_argument(
+        "--mode",
+        default=None,
+        help=(
+            "Optional import mode. FinanceBench supports oracle_evidence, doc_retrieval, and question_only; "
+            "FinQA/SECQUE/FinanceQA support oracle_context and question_only."
+        ),
+    )
+    finance_import.add_argument(
         "--manifest-output",
         default=None,
         help="Optional provenance manifest recording source URL and prompt/gold handling policy.",
@@ -2055,6 +2063,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             manifest_path=args.manifest_output,
             limit=args.limit,
             offset=args.offset,
+            mode=args.mode,
         )
         journal.append(
             task_id=None,

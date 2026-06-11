@@ -1089,6 +1089,46 @@ holo-v3 bench finance-import \
   --manifest-output .state/kernel_v3/bench/finance/fabv2_public_dev.manifest.json
 ```
 
+FinanceBench-150 can be normalized from a local CSV/JSON/JSONL export in three
+explicit modes:
+
+```bash
+holo-v3 bench finance-import \
+  --benchmark financebench \
+  --mode oracle_evidence \
+  --input data/raw/financebench.jsonl \
+  --output .state/kernel_v3/bench/finance/financebench_oracle.jsonl \
+  --manifest-output .state/kernel_v3/bench/finance/financebench_oracle.manifest.json
+
+holo-v3 bench finance-import \
+  --benchmark financebench \
+  --mode doc_retrieval \
+  --input data/raw/financebench.jsonl \
+  --output .state/kernel_v3/bench/finance/financebench_doc_retrieval.jsonl
+
+holo-v3 bench finance-import \
+  --benchmark financebench \
+  --mode question_only \
+  --input data/raw/financebench.jsonl \
+  --output .state/kernel_v3/bench/finance/financebench_question_only.jsonl
+```
+
+`oracle_evidence` prompts the benchmark evidence excerpt but never the reference
+answer or justification. `doc_retrieval` prompts document metadata/link only,
+forcing Holo to acquire support. `question_only` removes both provided evidence
+and document hints from the prompt. This lets reports separate answer quality,
+document acquisition, and bare-question generalization.
+
+FinQA now uses the same import-mode discipline:
+
+```bash
+holo-v3 bench finance-import \
+  --benchmark finqa \
+  --mode oracle_context \
+  --input data/raw/finqa_dev.json \
+  --output .state/kernel_v3/bench/finance/finqa_dev_oracle_context.jsonl
+```
+
 ```bash
 HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \
   --dataset .state/kernel_v3/bench/finance/finance_agent_benchmark.normalized.jsonl \
@@ -1103,7 +1143,7 @@ HOLO_V3_LIVE_MODEL=1 holo-v3 bench finance \
 The benchmark runner records one Holo run per question, writes JSONL item
 results plus a summary, and keeps benchmark gold answers out of model/tool
 prompts. `bench finance-import` supports `finance_agent_benchmark`, `secque`,
-`finance_agent_v2_public`, `financeqa`, and `finqa` local CSV/JSON/JSONL/text
+`finance_agent_v2_public`, `financebench`, `financeqa`, and `finqa` local CSV/JSON/JSONL/text
 exports, preserving a provenance manifest while keeping gold answers, rubrics,
 and reference reasoning out of agent prompts. Live benchmark runs are guarded by
 fetch-count, per-response byte, process download-budget, and shared-cache controls; see
@@ -1251,6 +1291,18 @@ because the answer path needs stronger assumption separation and removal of
 unsupported numeric claims. This is progress in the workflow substrate, not a
 full modeling benchmark pass.
 
+DCF/LBO model trace hardening now makes these modeling paths more than a single
+opaque calculator expression. `calculator.compute` accepts planner diagnostics
+and writes them into `FormulaTrace`, so DCF/LBO runs can carry auditable model
+schedules through the journal. DCF traces include annual projected free cash
+flow, discount factors, present values, terminal free cash flow, terminal value,
+PV of terminal value, enterprise value, net debt, equity value, and optional
+equity value per share when share count is available and requested. LBO traces
+include entry enterprise value, initial debt, sponsor equity, annual EBITDA and
+debt-paydown schedule, exit enterprise value, exit debt, exit equity value,
+MOIC, and sponsor IRR. The calculator remains deterministic; assumptions are
+explicitly labeled in diagnostics instead of being treated as retrieved facts.
+
 After adding workflow annotations, replay-scoring the same live dev10 results
 with `run_dev10_event_resolver_v1.workflow_scored` yields
 `overall_score=0.9114`, behavior `0.9167`, substrate `0.8889`,
@@ -1259,6 +1311,31 @@ citation preservation `0.6`, and the same core transform/modeling gaps. This is
 the more honest project metric because it checks whether the agent walked the
 expected slot/evidence/claim/transform/verifier/synthesis path, not only whether
 the final answer looked plausible.
+
+2026-06-11 Finance Workflow RC hardening:
+the current release-candidate artifacts have been regenerated and frozen under
+`.state/kernel_v3/bench/finance/` as markdown reports:
+`run_stable4_event_resolver_v1.report.md`,
+`run_dev10_event_resolver_v1.report.md`,
+`run_dev10_event_resolver_v1.workflow_report.md`, and
+`run_public27_workflow_v1.report.md`. These reports preserve the current RC
+story: stable4 is the closed workflow showcase, dev10 is the curated scored
+regression set, workflow-rescore is the stricter trace-oriented score, and
+public27 is an ungraded external generalization health check. The tracked
+GitHub-facing summary is
+[`docs/KERNEL_V3_FINANCE_WORKFLOW_RC_2026-06-11.md`](docs/KERNEL_V3_FINANCE_WORKFLOW_RC_2026-06-11.md).
+
+The next public27 work is now deliberately narrow. Generic source-grounded
+retrieval finalization writes a domain-neutral `ClaimLedger`, `SlotFrame`, and
+`TransformPlan` even when a qualitative disclosure task has no formula to run,
+so non-numeric research tasks can still be measured by the workflow spine.
+The finance SynthesisGate also has a conservative repair path: when a model
+answer contains unsupported material finance numbers, host fallback strips the
+unsupported numeric claim, preserves available citation refs, and returns a
+limitation answer instead of failing only because no calculator trace exists.
+This is intended to improve public27 citation preservation and synthesis-gate
+pass rates, but the public27 metrics above remain the baseline until a fresh
+live rerun is completed.
 The latest KHC adjusted-EBITDA bridge pass improves the deterministic substrate:
 the fact ledger now keeps an `Adjusted EBITDA` amount even when the next table
 title is an EPS reconciliation, and bridge planning groups facts by
