@@ -1123,16 +1123,18 @@ PatronusAI FinanceBench merged rows (`958,087` bytes) and FinQA `dev`
 `.state/kernel_v3/bench/finance/`. This verifies the gold-backed public
 benchmark data path; it is not a live model score.
 
-Follow-up live smoke on the same day exposed the current next bottleneck:
-FinanceBench `oracle_evidence` and FinQA `oracle_context` now enter the generic
-claim/slot/transform/verifier trace path, but final answers still fail the
-gold-backed numeric checks when the agent returns a retrieval-failure template
-or does not run `calculator.compute`. The first FinanceBench oracle item
-re-scored to substrate `1.0` / workflow `0.8571` but numeric `0.0`; the first
-FinQA oracle-context item re-scored to workflow `0.9` but still lacked
-`calculator.compute` and synthesis-gate traces. The next engineering target is
-therefore oracle-context final synthesis/calculator closure, not more source
-acquisition.
+Follow-up runtime smoke on the same day tightened the oracle-context path. The
+runtime now turns benchmark-provided oracle evidence into citable retrieval
+evidence before finalization, even when the live retrieval/network lane is not
+available. The first FinanceBench oracle item
+(`run_financebench_oracle_smoke1_after_scale_fallback`) now passes with
+numeric accuracy `1.0`, citation preservation `1.0`, claim/slot/transform
+presence `1.0`, and numeric verifier pass `1.0` in a no-network fake-processor
+smoke. This uses only the provided evidence excerpt, not the reference answer.
+The first FinQA oracle-context item also enters the same context/evidence/
+citation/verifier path, but still fails numeric accuracy because it lacks a
+`calculator.compute` formula trace. The next engineering target is therefore
+FinQA-style calculator/formula binding, not more source acquisition.
 
 FinanceBench-150 can be normalized from a local CSV/JSON/JSONL export in three
 explicit modes:

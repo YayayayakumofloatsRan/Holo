@@ -140,16 +140,19 @@ not repeatedly download these sources during benchmark iteration.
   slots; `calculator.compute`, verifier, and synthesis-gate traces; and a
   provided-report-context evidence policy. The reference program remains
   scoring-only and is not prompt context.
-- Follow-up live smoke confirms the current bottleneck. FinanceBench
-  `oracle_evidence` no longer needs live retrieval to create the workflow trace:
-  the first item now records claim-ledger, slot-frame, transform-plan, and
-  verifier-gate evidence, and re-scores to substrate `1.0` / workflow `0.8571`.
-  It still fails numeric scoring because the final answer is a retrieval-failure
-  template with no supported number or citation. FinQA `oracle_context` similarly
-  records the generic numeric-reasoning trace and re-scores to workflow `0.9`,
-  but lacks `calculator.compute` and synthesis-gate traces. This is now a
-  final-synthesis / calculator-closure problem, not a raw data acquisition
-  problem.
+- Follow-up runtime smoke confirms the oracle-context finalization path.
+  FinanceBench `oracle_evidence` is now promoted to citable retrieval evidence
+  before finalization, so it no longer dies as a `max_network_fetches` or
+  retrieval-template failure when the benchmark has already supplied the source
+  excerpt. The first FinanceBench oracle item
+  (`run_financebench_oracle_smoke1_after_scale_fallback`) passes in a no-network
+  fake-processor smoke with numeric accuracy `1.0`, citation preservation `1.0`,
+  answer numeric support `1.0`, and claim/slot/transform/verifier presence
+  `1.0`; the gold answer is still scoring-only and is not prompt context.
+  FinQA `oracle_context` uses the same provided-context evidence path and
+  reaches workflow re-score `0.9`, but still lacks `calculator.compute` and
+  formula traces, so FinQA remains a calculator/formula-binding problem rather
+  than a raw data acquisition problem.
 
 Finance Agent v2 public import:
 

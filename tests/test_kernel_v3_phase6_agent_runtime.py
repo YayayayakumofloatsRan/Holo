@@ -61,6 +61,36 @@ def test_phase6_default_retrieval_without_source_returns_failure_report_not_fake
     assert not journal.records(task_id=result.task_id, kind="retrieval_citation")
 
 
+def test_phase6_retrieval_uses_benchmark_oracle_context_as_citable_evidence():
+    journal = JournalStore.in_memory()
+    prompt_with_newlines = (
+        "Benchmark-provided oracle source context follows. Treat it as authorized source evidence. "
+        "This item is in oracle-context mode: external retrieval is not required.\n\n"
+        "FinanceBench provided evidence follows.\n"
+        "Company: ExampleCo\n"
+        "Document: ExampleCo_2024_10K\n"
+        "Document type: 10-K\n"
+        "Document period: FY2024\n"
+        "Document link: https://example.com/exampleco-10k.pdf\n\n"
+        "Provided evidence excerpt:\n"
+        "The FY2024 filing says revenue was $10 million.\n\n"
+        "What was ExampleCo FY2024 revenue?"
+    )
+    prompt = " ".join(prompt_with_newlines.split())
+
+    result = AgentRuntime(journal=journal, artifact_store=ArtifactStore.in_memory()).run(prompt, mode="retrieval")
+
+    assert result.status == "completed"
+    assert result.final_answer is not None
+    assert journal.records(task_id=result.task_id, kind="retrieval_evidence")
+    assert journal.records(task_id=result.task_id, kind="retrieval_citation")
+    report = journal.records(task_id=result.task_id, kind="retrieval_report")[-1].data
+    assert report["diagnostics"]["source"] == "benchmark_oracle_context"
+    assert report["status"] == "sufficient"
+    assert result.final_answer["citation_refs"]
+    assert result.final_answer["used_evidence"]
+
+
 def test_phase6_retrieval_answer_refuses_final_when_citations_required_but_absent():
     journal = JournalStore.in_memory()
     runtime = AgentRuntime(

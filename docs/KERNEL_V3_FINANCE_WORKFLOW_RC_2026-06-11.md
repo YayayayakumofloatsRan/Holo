@@ -73,17 +73,18 @@ annotations instead of plain QA metadata: context/input/formula/unit slots,
 provided-report-context evidence policy, expected calculator/verifier/synthesis
 traces, and scoring-only reference program policy.
 
-The first live gold-backed smoke after this import work is intentionally
-recorded as a partial failure. FinanceBench `oracle_evidence` now enters the
-host-owned generic substrate path: claim ledger, slot frame, transform plan, and
-verifier gate are all present, and the first item re-scores to substrate `1.0`
-and workflow `0.8571`. It still fails numeric accuracy because the agent returns
-a retrieval-failure template instead of synthesizing from the provided context.
-FinQA `oracle_context` shows the same pattern: source/context scoring is aligned
-and workflow re-score reaches `0.9`, but the answer still lacks
-`calculator.compute` and synthesis-gate traces. The next RC task is therefore
-oracle-context final synthesis plus calculator closure, not another benchmark
-import pass.
+The first gold-backed oracle smoke after this import work is now closed for
+FinanceBench source-grounded extraction. `oracle_evidence` is promoted inside
+runtime to citable retrieval evidence before finalization, so the task can
+finish from benchmark-provided source excerpts without live retrieval and
+without seeing the reference answer. The first FinanceBench oracle item
+(`run_financebench_oracle_smoke1_after_scale_fallback`) passes in a no-network
+fake-processor smoke with numeric accuracy `1.0`, citation preservation `1.0`,
+answer numeric support `1.0`, and claim/slot/transform/verifier presence `1.0`.
+FinQA `oracle_context` shows the same source/context path and workflow re-score
+`0.9`, but it still lacks `calculator.compute` / formula traces, so the next RC
+task is FinQA-style calculator/formula binding rather than another benchmark
+import or source-acquisition pass.
 
 DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional

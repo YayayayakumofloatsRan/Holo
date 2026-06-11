@@ -272,6 +272,29 @@ def test_finance_fact_ledger_extracts_modeling_cash_flow_metrics() -> None:
     assert by_metric["capital expenditures"] == "710000000"
 
 
+def test_finance_fact_ledger_extracts_ppe_purchase_rows_with_millions_header() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="ppe-cash-flow-table",
+            title="3M 2018 Form 10-K",
+            text=(
+                "Consolidated Statement of Cash Flows Years ended December 31 (Millions) "
+                "2018 2017 2016 Cash Flows from Investing Activities "
+                "Purchases of property, plant and equipment (PP&E) (1,577) (1,373) (1,420) "
+                "Proceeds from sale of PP&E and other assets 262 49 58"
+            ),
+        )
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-ppe-table")],
+    )
+
+    capex_values = {fact.value for fact in facts if fact.metric == "capital expenditures"}
+    assert "-1577000000" in capex_values
+
+
 def test_finance_fact_ledger_extracts_adjusted_ebitda_bridge_components() -> None:
     evidence = [
         _finance_evidence(

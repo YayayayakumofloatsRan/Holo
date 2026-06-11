@@ -123,7 +123,19 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     ("free cash flow", ("free cash flow",)),
-    ("capital expenditures", ("capital expenditures", "capital expenditure", "capex", "property and equipment")),
+    (
+        "capital expenditures",
+        (
+            "capital expenditures",
+            "capital expenditure",
+            "capex",
+            "property and equipment",
+            "property, plant and equipment",
+            "purchases of property plant and equipment",
+            "purchases of property, plant and equipment",
+            "pp&e",
+        ),
+    ),
     ("income from continuing operations", ("income from continuing operations", "income from continuing ops")),
     ("net income", ("net income", "net loss", "net earnings")),
     ("operating income", ("operating income", "operating loss")),
@@ -556,7 +568,7 @@ def _looks_like_natural_context_noise(
         and not re.search(r"\bin\s+cash\b", own_after)
     ):
         return True
-    if not unit and not prefix and re.search(r"(?:%|\bpp\b|percentage\s+points?)", local):
+    if not unit and not prefix and re.search(r"(?:%|\bpp\b(?!\s*&|\s*and\s*e)|percentage\s+points?)", local):
         return True
     if unit or prefix:
         return False
@@ -639,11 +651,11 @@ def _context_scale_multiplier(context: str, *, raw_unit: str) -> Decimal:
     if raw_unit:
         return Decimal(1)
     text = str(context or "").lower()
-    if re.search(r"\(\s*in\s+millions\s*\)|\bin\s+millions\b|\bamounts?\s+in\s+millions\b", text):
+    if re.search(r"\(\s*millions\s*\)|\(\s*in\s+millions\s*\)|\bin\s+millions\b|\bamounts?\s+in\s+millions\b", text):
         return Decimal(1_000_000)
-    if re.search(r"\(\s*in\s+billions\s*\)|\bin\s+billions\b|\bamounts?\s+in\s+billions\b", text):
+    if re.search(r"\(\s*billions\s*\)|\(\s*in\s+billions\s*\)|\bin\s+billions\b|\bamounts?\s+in\s+billions\b", text):
         return Decimal(1_000_000_000)
-    if re.search(r"\(\s*in\s+thousands\s*\)|\bin\s+thousands\b|\bamounts?\s+in\s+thousands\b", text):
+    if re.search(r"\(\s*thousands\s*\)|\(\s*in\s+thousands\s*\)|\bin\s+thousands\b|\bamounts?\s+in\s+thousands\b", text):
         return Decimal(1_000)
     return Decimal(1)
 
