@@ -155,6 +155,160 @@ def test_retrieval_workbench_host_validation_drops_invented_ids() -> None:
     ]
 
 
+def test_retrieval_workbench_rescues_citable_evidence_from_threshold_rejection() -> None:
+    journal = JournalStore.in_memory()
+    goal = SearchGoal(
+        goal_id="goal-workbench-rescue",
+        query="ExampleCo revenue",
+        max_sources=3,
+        max_fetches=1,
+        max_spans_per_document=4,
+        metadata={"max_evidence_items": 1},
+    )
+    source = SearchSource(
+        source_id="source-example-rescue",
+        provider="fake",
+        uri="https://example.com/report-rescue",
+        title="ExampleCo Report",
+        snippet="Revenue.",
+    )
+    rescued_id = "evidence-span-doc-goal-workbench-rescue-1-2"
+    fabric = fake_fabric(
+        {
+            "retrieval.workbench": {
+                "decision": "sufficient",
+                "reason_summary": "The compacted-out second revenue span is relevant and should be cited.",
+                "accepted_evidence_ids": [rescued_id],
+                "rescued_evidence_ids": [rescued_id],
+                "rejected_evidence_ids": [],
+                "source_roles": [
+                    {
+                        "source_id": "source-example-rescue",
+                        "role": "annual_report",
+                        "confidence": 0.8,
+                        "reason": "Citable company report.",
+                    }
+                ],
+                "slot_assessments": [
+                    {
+                        "slot": "revenue",
+                        "status": "filled",
+                        "supporting_evidence_ids": [rescued_id],
+                        "reason": "The span states a revenue figure.",
+                    }
+                ],
+                "covered_slots": ["revenue"],
+                "missing_slots": [],
+                "assumptions_needed": [],
+                "next_queries": [],
+                "next_source_families": [],
+                "next_document_targets": [],
+                "limitations": [],
+            }
+        },
+        journal=journal,
+    )
+    body = (
+        "ExampleCo revenue was $10 million in FY2023. " + ("padding " * 40)
+        + "ExampleCo revenue was $12 million in FY2024. " + ("padding " * 40)
+        + "ExampleCo revenue guidance was not audited."
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider({goal.query: [source]}),
+        fetch_provider=FakeFetchProvider({source.uri: body}),
+        processor_fabric=fabric,
+    )
+
+    report = operator.run(
+        goal,
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-workbench-rescue",
+        run_id="run-workbench-rescue",
+    )
+
+    evidence = journal.records(task_id="task-workbench-rescue", kind="retrieval_evidence")
+    citations = journal.records(task_id="task-workbench-rescue", kind="retrieval_citation")
+    rescue = journal.records(task_id="task-workbench-rescue", kind="retrieval_workbench_rescue")[0].data
+    assert report.diagnostics["workbench_rescue"]["rescued_count"] == 1
+    assert rescue["rescued"][0]["evidence_id"] == rescued_id
+    assert any(record.data["evidence_id"] == rescued_id for record in evidence)
+    assert any(record.data["evidence_id"] == rescued_id for record in citations)
+    assert report.diagnostics["citation_count"] == 2
+
+
+def test_retrieval_workbench_next_query_becomes_tool_action_when_evidence_missing() -> None:
+    journal = JournalStore.in_memory()
+    goal = SearchGoal(
+        goal_id="goal-workbench-next-query",
+        query="ExampleCo operating income",
+        max_sources=3,
+        max_fetches=1,
+        max_spans_per_document=2,
+    )
+    source = SearchSource(
+        source_id="source-example-next-query",
+        provider="fake",
+        uri="https://example.com/irrelevant",
+        title="ExampleCo Empty Page",
+        snippet="No useful evidence.",
+    )
+    fabric = fake_fabric(
+        {
+            "retrieval.workbench": {
+                "decision": "continue",
+                "reason_summary": "No operating income evidence was extracted; target the income statement.",
+                "accepted_evidence_ids": [],
+                "rescued_evidence_ids": [],
+                "rejected_evidence_ids": [],
+                "source_roles": [
+                    {
+                        "source_id": "source-example-next-query",
+                        "role": "irrelevant",
+                        "confidence": 0.9,
+                        "reason": "The fetched page did not include the requested metric.",
+                    }
+                ],
+                "slot_assessments": [
+                    {
+                        "slot": "operating_income",
+                        "status": "missing",
+                        "supporting_evidence_ids": [],
+                        "reason": "No span was extracted.",
+                    }
+                ],
+                "covered_slots": [],
+                "missing_slots": ["operating_income"],
+                "assumptions_needed": [],
+                "next_queries": ["ExampleCo FY2024 operating income income statement annual report"],
+                "next_source_families": ["company_ir"],
+                "next_document_targets": ["annual report income statement"],
+                "limitations": [],
+            }
+        },
+        journal=journal,
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider({goal.query: [source]}),
+        fetch_provider=FakeFetchProvider({source.uri: "This page only says hello."}),
+        processor_fabric=fabric,
+    )
+
+    report = operator.run(
+        goal,
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-workbench-next-query",
+        run_id="run-workbench-next-query",
+    )
+
+    actions = report.diagnostics["next_tool_actions"]
+    assert any(action["action"] == "model_guided_query" for action in actions)
+    model_action = next(action for action in actions if action["action"] == "model_guided_query")
+    assert model_action["payload_hint"]["query"] == "ExampleCo FY2024 operating income income statement annual report"
+    assert model_action["payload_hint"]["missing_slots"] == ["operating_income"]
+
+
 def test_pdf_document_reader_diagnostics_are_exposed_on_spans() -> None:
     goal = SearchGoal(
         goal_id="goal-pdf-reader",

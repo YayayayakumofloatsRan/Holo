@@ -152,9 +152,15 @@ slot coverage, semantic missing slots, next queries, next source families, next
 document targets, assumptions, and limitations. The host still owns hard
 validation: the model may only reference existing IDs, cannot invent evidence or
 citations, and cannot bypass authority, policy, budget, provenance, numeric
-verification, or synthesis gates. Retrieval reports and finance benchmark
-metrics now expose workbench decisions so live runs can distinguish "search
-failed" from "document/evidence judgment found a semantic gap."
+verification, or synthesis gates. Host-approved workbench rescues now promote
+valid rejected/compacted evidence into real evidence and citation records, while
+hard rejections such as weak authority, target mismatch, wrong SEC entity, and
+template placeholders remain blocked. Workbench next queries/source families are
+also converted into retrieval next-tool actions when evidence is still
+insufficient. Retrieval reports and finance benchmark metrics expose workbench
+decisions, semantic missing slots, requested rescues, actual rescues, blocked
+rescues, and next moves so live runs can distinguish "search failed" from
+"document/evidence judgment found a semantic gap."
 The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime

@@ -25,6 +25,19 @@ semantic judgment lives.
 - Wired `RetrievalOperator` to journal `retrieval_workbench_decision` after
   extraction, deterministic qualification, compaction, evidence, citations, and
   rejected-evidence recording.
+- Workbench judgments now affect the retrieval result, not only diagnostics:
+  - if the model references an existing rejected/compacted evidence ID as
+    accepted or rescued, the host can promote it into real `retrieval_evidence`
+    and `retrieval_citation` records;
+  - hard host rejections remain non-rescuable, including weak source authority,
+    target-entity mismatch, wrong SEC companyfacts entity, and template
+    placeholder evidence;
+  - if deterministic coverage checks fail for semantic facet reasons while the
+    workbench judges the citable evidence sufficient, the host can mark the
+    retrieval sufficient with `workbench_semantic_sufficient`;
+  - workbench `next_queries`, `next_source_families`, and
+    `next_document_targets` are converted into `next_tool_actions` when the
+    report remains insufficient.
 - Added retrieval report diagnostics for:
   - `workbench_decision`
   - `rescued_count`
@@ -34,7 +47,8 @@ semantic judgment lives.
   - next document targets
   - host validation diagnostics
 - Added finance benchmark trace metrics and summary fields for workbench
-  participation and semantic gaps.
+  participation, semantic gaps, requested rescues, actual host-approved
+  rescues, and blocked rescues.
 - Added a `DocumentReader` boundary inside extraction:
   - PDF parsing tries optional `pypdf`, then optional `pdfminer.six`;
   - fallback remains the previous literal/hex PDF extractor;
@@ -42,12 +56,13 @@ semantic judgment lives.
   - extraction diagnostics expose parser used, chars extracted, table-like
     block count, pages, and fallback failure reason where available.
 
-## Deliberate v1 Limit
+## Host Boundary
 
-Workbench v1 records semantic judgment and feeds report/benchmark diagnostics.
-It does not yet let model-rescued evidence mutate the accepted evidence set.
-That next step should require host provenance validation and citation
-construction for rescued evidence before it can affect final answers.
+The workbench is the semantic judge, not an executor. It cannot create source,
+evidence, citation, formula, or numeric IDs. The host validates references,
+keeps provenance attached to rescued evidence, constructs citations itself, and
+still owns authority, permission, budget, numeric verification, and synthesis
+gates.
 
 ## Validation
 
@@ -85,5 +100,5 @@ Result:
 - Run FinanceBench doc-retrieval live3 with workbench enabled.
 - Check whether workbench decisions produce useful semantic missing slots and
   next source-family/document-target moves.
-- Only after that, allow rescued evidence into the evidence set through a
-  host-validated provenance and citation path.
+- Check whether model-guided rescues increase citable finance facts without
+  violating host authority/provenance gates.

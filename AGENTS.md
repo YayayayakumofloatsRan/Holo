@@ -18,6 +18,8 @@ You need to update the documents precisely and timely, as well as README.md on g
 Think before you act. Make sure of high code quality.
 
 It's preferred to do live tests, which are important. Fake offline tests often disturbs the whole process of iteration of the whole plan. You shouldn't do table cheating in real tests. The LLM should decide what it needs to do, then the harness system shouldn't be doing precomputation cheating. Do not expect the system to be responding in a fixed way and we shouldn't anyway.你不可以打表来骗过仿真测试！
+你不应该一直使用阈值方法，重要的逻辑判断应该交给llm进行处理，这样系统的泛化能力才能得到保障。
+
 
 You should be able to recognize problems, and realize what to do to achieve the final goal of Holo harness Kernel v3 system.
 

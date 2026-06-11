@@ -115,6 +115,8 @@ class FinanceBenchmarkSummary(Contract):
     workbench_continue_rate: float | None
     workbench_sufficient_rate: float | None
     average_workbench_rescued_count: float
+    average_workbench_actual_rescued_count: float
+    average_workbench_rescue_blocked_count: float
     average_workbench_semantic_missing_slots: float
     numeric_verifier_pass_rate: float | None
     verifier_gate_pass_rate: float | None
@@ -504,6 +506,8 @@ def summarize_finance_benchmark(
         if any(result.trace_metrics.get("workbench_decision") for result in results)
         else None,
         average_workbench_rescued_count=_average_metric(results, "workbench_rescued_count"),
+        average_workbench_actual_rescued_count=_average_metric(results, "workbench_actual_rescued_count"),
+        average_workbench_rescue_blocked_count=_average_metric(results, "workbench_rescue_blocked_count"),
         average_workbench_semantic_missing_slots=_average_metric(results, "workbench_semantic_missing_slot_count"),
         numeric_verifier_pass_rate=_rate(
             sum(1 for result in verifier_scored if result.trace_metrics.get("numeric_verifier_status") == "passed"),
@@ -677,6 +681,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     verifier_gates = [record.data for record in records if record.kind == "verifier_gate_result"]
     synthesis_gates = [record.data for record in records if record.kind == "synthesis_gate_result"]
     workbench_decisions = [record.data for record in records if record.kind == "retrieval_workbench_decision"]
+    workbench_rescues = [record.data for record in records if record.kind == "retrieval_workbench_rescue"]
     retrieval_evidence_records = [record.data for record in records if record.kind == "retrieval_evidence"]
     retrieval_citation_records = [record.data for record in records if record.kind == "retrieval_citation"]
     retrieval = retrieval_behavior_benchmark(journal, task_id)
@@ -706,6 +711,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     latest_verifier_gate = verifier_gates[-1] if verifier_gates else {}
     latest_synthesis_gate = synthesis_gates[-1] if synthesis_gates else {}
     latest_workbench = workbench_decisions[-1] if workbench_decisions else {}
+    latest_workbench_rescue = workbench_rescues[-1] if workbench_rescues else {}
     synthesis_gate_statuses = [
         str(item.get("status"))
         for item in synthesis_gates
@@ -783,6 +789,8 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "workbench_status": workbench_status,
         "workbench_decision": workbench_decision,
         "workbench_rescued_count": len(latest_workbench.get("rescued_evidence_ids") or []) if isinstance(latest_workbench, dict) else 0,
+        "workbench_actual_rescued_count": _int_value(latest_workbench_rescue.get("rescued_count")) if isinstance(latest_workbench_rescue, dict) else 0,
+        "workbench_rescue_blocked_count": _int_value(latest_workbench_rescue.get("blocked_count")) if isinstance(latest_workbench_rescue, dict) else 0,
         "workbench_semantic_missing_slot_count": len(workbench_missing_slots),
         "workbench_semantic_missing_slots": workbench_missing_slots[:32],
         "workbench_next_queries": workbench_next_queries[:8],

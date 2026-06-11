@@ -26,6 +26,7 @@ from kernel_v3.retrieval.contracts import (
     QueryPlan,
     RankedSource,
     RankSources,
+    RetrievalNextAction,
     RetrievalReport,
     SearchAttempt,
     SearchGoal,
@@ -608,6 +609,7 @@ class RetrievalOperator:
 
         spans = []
         evidence_candidates: list[EvidenceCandidate] = []
+        all_evidence_candidates: dict[str, EvidenceCandidate] = {}
         evidence: list[EvidenceItem] = []
         citations = []
         rejected_evidence: list[JsonObject] = []
@@ -715,6 +717,8 @@ class RetrievalOperator:
                     payload_hash=item.payload_hash,
                     diagnostics={**item.diagnostics, "qualification": qualification},
                 )
+                candidate = EvidenceCandidate(evidence=item, span=span)
+                all_evidence_candidates[item.evidence_id] = candidate
                 if not bool(qualification.get("accepted")):
                     rejected_evidence.append(
                         {
@@ -734,7 +738,7 @@ class RetrievalOperator:
                         }
                     )
                     continue
-                evidence_candidates.append(EvidenceCandidate(evidence=item, span=span))
+                evidence_candidates.append(candidate)
 
         selected_candidates, compaction_rejections, compaction_diagnostics = compact_evidence_candidates(
             evidence_candidates,
@@ -812,6 +816,17 @@ class RetrievalOperator:
             action_ref=action_ref,
             artifact_refs=_ordered_unique([item.artifact_id for item in evidence if item.artifact_id]),
         )
+        workbench_rescue = _apply_workbench_evidence_rescue(
+            workbench_decision=workbench_decision,
+            all_candidates=all_evidence_candidates,
+            evidence=evidence,
+            citations=citations,
+            journal=journal,
+            task_id=task_id,
+            run_id=run_id,
+            step_id_prefix=step_id_prefix,
+            action_ref=action_ref,
+        )
 
         decision = self.evaluator.evaluate(
             goal=goal,
@@ -819,6 +834,28 @@ class RetrievalOperator:
             citations=citations,
             research_profile=research_profile,
         )
+        if _workbench_semantic_sufficient(
+            workbench_decision=workbench_decision,
+            decision=decision,
+            evidence=evidence,
+            citations=citations,
+            source_quality=source_quality,
+        ):
+            decision = EvidenceEvaluationDecision(
+                decision_id=decision.decision_id,
+                goal_id=decision.goal_id,
+                status="sufficient",
+                sufficient=True,
+                reason="workbench_semantic_sufficient",
+                evidence_count=len(evidence),
+                citation_count=len(citations),
+                diagnostics={
+                    **decision.diagnostics,
+                    "original_reason": decision.reason,
+                    "retrieval_workbench": _workbench_diagnostics(workbench_decision),
+                    "workbench_semantic_override": True,
+                },
+            )
         if _decision_has_source_authority_gap(
             decision=decision,
             source_quality=source_quality,
@@ -905,6 +942,10 @@ class RetrievalOperator:
                 fetch_summaries=fetch_summaries,
             )
         )
+        if not decision.sufficient:
+            next_tool_actions = _dedupe_next_actions(
+                [*next_tool_actions, *_workbench_next_tool_actions(goal, workbench_decision)]
+            )
         research_graph = build_research_graph(
             goal=goal,
             queries=queries,
@@ -922,9 +963,10 @@ class RetrievalOperator:
             "sufficient": decision.sufficient,
             "primary_failure_mode": failure_attribution.get("primary_failure_mode"),
             "next_strategy_hint": failure_attribution.get("next_strategy_hint"),
-            "next_tool_actions": [action.to_dict() for action in next_tool_actions],
-            "research_graph_summary": research_graph.diagnostics,
-            "diagnostics": {
+                "next_tool_actions": [action.to_dict() for action in next_tool_actions],
+                "workbench_rescue": workbench_rescue,
+                "research_graph_summary": research_graph.diagnostics,
+                "diagnostics": {
                 "source_rejection_reasons": _count_by_key(source_rejections, "reason"),
                 "fetch_failure_reasons": _count_by_key(
                     [item for item in fetch_summaries if item.get("reason")],
@@ -974,6 +1016,7 @@ class RetrievalOperator:
                 "research_graph": research_graph.to_dict(),
                 "operator_critic": operator_critic,
                 "retrieval_workbench": _workbench_diagnostics(workbench_decision),
+                "workbench_rescue": workbench_rescue,
                 "discovery_expansion_count": len(discovery_expansions),
                 "discovery_expanded_source_count": len(expanded_sources),
                 "document_expanded_source_count": len(document_expanded_sources),
@@ -2199,6 +2242,234 @@ def _workbench_diagnostics(decision: RetrievalWorkbenchResult) -> JsonObject:
         "limitations": decision.limitations[:12],
         "host_validation": decision.diagnostics.get("host_validation") if isinstance(decision.diagnostics, dict) else {},
     }
+
+
+SEMANTIC_EVALUATOR_REASONS = {
+    "query_facets_missing",
+    "finance_fundamental_facets_missing",
+    "profile_evidence_facets_missing",
+    "finance_specialized_query_terms_missing",
+    "query_topic_terms_missing",
+}
+HARD_RESCUE_REJECTION_REASONS = {
+    "weak_source_authority_for_research_profile",
+    "target_entity_mismatch",
+    "finance_companyfacts_entity_mismatch",
+    "template_placeholder_evidence",
+}
+
+
+def _apply_workbench_evidence_rescue(
+    *,
+    workbench_decision: RetrievalWorkbenchResult,
+    all_candidates: dict[str, EvidenceCandidate],
+    evidence: list[EvidenceItem],
+    citations: list[object],
+    journal: JournalStore,
+    task_id: str | None,
+    run_id: str,
+    step_id_prefix: str,
+    action_ref: str | None,
+) -> JsonObject:
+    current_ids = {item.evidence_id for item in evidence}
+    requested_ids = _ordered_unique(
+        [
+            *workbench_decision.rescued_evidence_ids,
+            *[item for item in workbench_decision.accepted_evidence_ids if item not in current_ids],
+        ]
+    )
+    rescued: list[JsonObject] = []
+    blocked: list[JsonObject] = []
+    if workbench_decision.status != "ok":
+        if requested_ids:
+            blocked.append({"reason": "workbench_not_ok", "evidence_ids": requested_ids[:16]})
+        return {
+            "requested_count": len(requested_ids),
+            "rescued_count": 0,
+            "blocked_count": len(blocked),
+            "rescued": rescued,
+            "blocked": blocked,
+        }
+    for evidence_id in requested_ids:
+        if evidence_id in current_ids:
+            continue
+        candidate = all_candidates.get(evidence_id)
+        if candidate is None:
+            blocked.append({"evidence_id": evidence_id, "reason": "unknown_evidence_id"})
+            continue
+        blocked_reason = _workbench_rescue_block_reason(candidate.evidence)
+        if blocked_reason is not None:
+            blocked.append({"evidence_id": evidence_id, "reason": blocked_reason})
+            continue
+        item = _rescue_evidence_item(candidate.evidence, workbench_decision=workbench_decision)
+        evidence.append(item)
+        current_ids.add(item.evidence_id)
+        _append(
+            journal,
+            task_id,
+            run_id,
+            f"{step_id_prefix}-workbench-evidence-{len(evidence)}",
+            "retrieval_evidence",
+            item.to_dict(),
+            action_ref=action_ref,
+            artifact_refs=[item.artifact_id],
+        )
+        citation = citation_from_evidence(item, candidate.span)
+        citations.append(citation)
+        _append(
+            journal,
+            task_id,
+            run_id,
+            f"{step_id_prefix}-workbench-citation-{len(citations)}",
+            "retrieval_citation",
+            citation.to_dict(),
+            action_ref=action_ref,
+            artifact_refs=[item.artifact_id],
+        )
+        rescued.append(
+            {
+                "evidence_id": item.evidence_id,
+                "source_id": item.source_id,
+                "document_id": item.document_id,
+                "artifact_id": item.artifact_id,
+                "reason": "model_guided_relevance_rescue",
+            }
+        )
+    result = {
+        "requested_count": len(requested_ids),
+        "rescued_count": len(rescued),
+        "blocked_count": len(blocked),
+        "rescued": rescued[:24],
+        "blocked": blocked[:24],
+    }
+    if requested_ids or rescued or blocked:
+        _append(
+            journal,
+            task_id,
+            run_id,
+            f"{step_id_prefix}-workbench-rescue",
+            "retrieval_workbench_rescue",
+            result,
+            action_ref=action_ref,
+            artifact_refs=_ordered_unique([str(item.get("artifact_id")) for item in rescued if item.get("artifact_id")]),
+        )
+    return result
+
+
+def _workbench_rescue_block_reason(evidence: EvidenceItem) -> str | None:
+    qualification = evidence.diagnostics.get("qualification") if isinstance(evidence.diagnostics, dict) else {}
+    reason = str(qualification.get("reason") or "").strip() if isinstance(qualification, dict) else ""
+    if reason in HARD_RESCUE_REJECTION_REASONS:
+        return f"hard_rejection:{reason}"
+    return None
+
+
+def _rescue_evidence_item(evidence: EvidenceItem, *, workbench_decision: RetrievalWorkbenchResult) -> EvidenceItem:
+    return EvidenceItem(
+        evidence_id=evidence.evidence_id,
+        goal_id=evidence.goal_id,
+        span_id=evidence.span_id,
+        document_id=evidence.document_id,
+        source_id=evidence.source_id,
+        artifact_id=evidence.artifact_id,
+        uri=evidence.uri,
+        title=evidence.title,
+        text=evidence.text,
+        score=evidence.score,
+        payload_hash=evidence.payload_hash,
+        diagnostics={
+            **evidence.diagnostics,
+            "workbench_rescue": {
+                "decision": workbench_decision.decision,
+                "reason_summary": workbench_decision.reason_summary,
+            },
+        },
+    )
+
+
+def _workbench_semantic_sufficient(
+    *,
+    workbench_decision: RetrievalWorkbenchResult,
+    decision: EvidenceEvaluationDecision,
+    evidence: list[EvidenceItem],
+    citations: list[object],
+    source_quality: JsonObject,
+) -> bool:
+    if decision.sufficient:
+        return False
+    if workbench_decision.status != "ok" or workbench_decision.decision != "sufficient":
+        return False
+    host_validation = workbench_decision.diagnostics.get("host_validation") if isinstance(workbench_decision.diagnostics, dict) else {}
+    if isinstance(host_validation, dict) and host_validation.get("valid") is False:
+        return False
+    if not evidence or not citations:
+        return False
+    if decision.reason not in SEMANTIC_EVALUATOR_REASONS:
+        return False
+    if source_quality and source_quality.get("authority_sufficient") is False:
+        return False
+    return True
+
+
+def _workbench_next_tool_actions(goal: SearchGoal, decision: RetrievalWorkbenchResult) -> list[RetrievalNextAction]:
+    if decision.status != "ok":
+        return []
+    actions: list[RetrievalNextAction] = []
+    for index, query in enumerate(decision.next_queries[:8], start=1):
+        actions.append(
+            RetrievalNextAction(
+                action_id=f"next-{goal.goal_id}-workbench-query-{index}",
+                action="model_guided_query",
+                tool_hint="retrieval.run",
+                reason=decision.reason_summary or "retrieval workbench identified a semantic missing slot",
+                payload_hint={
+                    "goal_id": goal.goal_id,
+                    "query": query,
+                    "source_families": decision.next_source_families[:12],
+                    "document_targets": decision.next_document_targets[:8],
+                    "missing_slots": decision.missing_slots[:24],
+                    "strategy": "model_guided_evidence_workbench",
+                },
+                diagnostics={
+                    "workbench_decision": decision.decision,
+                    "semantic_missing_slots": decision.missing_slots[:24],
+                },
+            )
+        )
+    if not actions and (decision.next_source_families or decision.next_document_targets or decision.missing_slots):
+        actions.append(
+            RetrievalNextAction(
+                action_id=f"next-{goal.goal_id}-workbench-acquisition",
+                action="model_guided_acquisition_plan",
+                tool_hint="planner.propose",
+                reason=decision.reason_summary or "retrieval workbench identified a missing evidence role",
+                payload_hint={
+                    "goal_id": goal.goal_id,
+                    "source_families": decision.next_source_families[:12],
+                    "document_targets": decision.next_document_targets[:8],
+                    "missing_slots": decision.missing_slots[:24],
+                    "strategy": "model_guided_evidence_workbench",
+                },
+                diagnostics={
+                    "workbench_decision": decision.decision,
+                    "semantic_missing_slots": decision.missing_slots[:24],
+                },
+            )
+        )
+    return actions
+
+
+def _dedupe_next_actions(actions: list[RetrievalNextAction]) -> list[RetrievalNextAction]:
+    result: list[RetrievalNextAction] = []
+    seen: set[tuple[str, str, str]] = set()
+    for action in actions:
+        payload = action.payload_hint if isinstance(action.payload_hint, dict) else {}
+        key = (action.action, str(payload.get("query") or ""), str(action.uri or payload.get("uri") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(action)
+    return result
 
 
 def _document_reader_diagnostics(spans: list[object]) -> JsonObject:
