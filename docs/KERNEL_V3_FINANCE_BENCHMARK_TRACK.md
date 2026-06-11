@@ -168,6 +168,31 @@ not repeatedly download these sources during benchmark iteration.
   synthesis-gate pass is `1.0`, and unsupported numeric claim rate is `0.0`.
   The remaining misses are formula-binding / target-cell-selection gaps; do not
   report this as an official FinQA score.
+- Full public gold-backed baseline runs have now started. See
+  `docs/KERNEL_V3_PUBLIC_BENCHMARK_BASELINES_2026-06-11.md` for the compact
+  table. FinanceBench-150 `oracle_evidence` no-network/fake-processor baseline
+  (`run_financebench_150_oracle_evidence_fake_v1`) produced pass rate `0.20`,
+  numeric accuracy `0.2381`, workflow score `0.9132`, substrate score `1.0`,
+  citation preservation `0.8733`, and unsupported numeric claim rate `0.1067`.
+  This proves the public FinanceBench oracle-evidence path reaches the generic
+  claim/slot/transform/verifier/synthesis spine, while exposing numeric target
+  selection and calculator-binding gaps.
+- FinanceBench `doc_retrieval` has been split into a negative-control result
+  and a true live probe. The full 150-row fake/no-network run
+  (`run_financebench_150_doc_retrieval_fake_v1`) is not a capability score; it
+  verifies that Holo does not fabricate support when only document metadata is
+  present and evidence acquisition is unavailable. A small live 3-item probe
+  (`run_financebench_doc_retrieval_live_limit3_v1`) did perform retrieval
+  (`1.3333` average retrieval runs, `8` to `16` fetches per item), but still
+  scored `0/3` because no citable finance facts, citations, or calculator inputs
+  were extracted. The next doc-retrieval work should therefore target source
+  acquisition and document-to-fact extraction, not more fixed answer heuristics.
+- FinQA `dev` oracle-context `100` no-network/fake-processor baseline
+  (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
+  `0.15`, workflow score `0.925`, substrate score `0.8816`,
+  calculator/formula-trace rate `0.37`, citation preservation `0.92`, and
+  unsupported numeric claim rate `0.06`. This confirms the larger FinQA gap is
+  formula/target binding rather than citation preservation.
 
 Finance Agent v2 public import:
 

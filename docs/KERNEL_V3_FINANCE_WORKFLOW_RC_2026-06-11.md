@@ -102,6 +102,32 @@ synthesis-gate pass `1.0`, and unsupported numeric claim rate `0.0`. Treat this
 as an oracle-context engineering diagnostic; the remaining failures are still
 formula-binding and target-cell-selection gaps.
 
+Public gold-backed baselines have now started and are summarized in
+`docs/KERNEL_V3_PUBLIC_BENCHMARK_BASELINES_2026-06-11.md`.
+FinanceBench-150 `oracle_evidence` no-network/fake-processor baseline
+(`run_financebench_150_oracle_evidence_fake_v1`) produced pass rate `0.20`,
+numeric accuracy `0.2381`, workflow score `0.9132`, substrate score `1.0`,
+citation preservation `0.8733`, and unsupported numeric claim rate `0.1067`.
+This is not a live-model leaderboard score; it is the first full public
+gold-backed oracle-evidence substrate baseline.
+
+FinanceBench `doc_retrieval` now has two deliberately separated records. The
+full 150-row fake/no-network run
+(`run_financebench_150_doc_retrieval_fake_v1`) is a negative control, not a
+capability score: with only document metadata and no live acquisition, pass rate
+is `0.0067`. A small true live probe
+(`run_financebench_doc_retrieval_live_limit3_v1`) performed retrieval
+(`1.3333` average retrieval runs; `8` to `16` fetches per item) but still scored
+`0/3` because retrieved sources were not converted into citable finance facts or
+calculator inputs. This is the current FinanceBench source-acquisition /
+document-extraction gap.
+
+FinQA `dev` oracle-context `100` no-network/fake-processor baseline
+(`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
+`0.15`, workflow score `0.925`, substrate score `0.8816`,
+calculator/formula-trace rate `0.37`, citation preservation `0.92`, and
+unsupported numeric claim rate `0.06`.
+
 DCF/LBO model traces now preserve full model schedules in `FormulaTrace`
 diagnostics: DCF projections, terminal value, enterprise/equity bridge, optional
 per-share output, and LBO debt-paydown / exit-equity / MOIC / IRR schedules.

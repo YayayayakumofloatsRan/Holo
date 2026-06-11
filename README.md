@@ -1153,6 +1153,33 @@ unsupported numeric claim rate is `0.0`. The remaining misses expose formula
 binding and target-cell selection gaps, so this is an oracle-context engineering
 diagnostic rather than an official FinQA score.
 
+Public gold-backed baseline runs have now started; see
+`docs/KERNEL_V3_PUBLIC_BENCHMARK_BASELINES_2026-06-11.md` for the compact table.
+The first FinanceBench-150 `oracle_evidence` no-network/fake-processor baseline
+(`run_financebench_150_oracle_evidence_fake_v1`) scores pass rate `0.20`,
+numeric accuracy `0.2381`, workflow score `0.9132`, substrate score `1.0`,
+citation preservation `0.8733`, and unsupported numeric claim rate `0.1067`.
+This verifies that public FinanceBench oracle evidence can drive the generic
+claim/slot/transform/verifier/synthesis spine, but it also exposes numerical
+target-selection and calculator-binding gaps.
+
+FinanceBench `doc_retrieval` was separately run as a no-network negative
+control (`run_financebench_150_doc_retrieval_fake_v1`) and as a live 3-item
+source-acquisition probe (`run_financebench_doc_retrieval_live_limit3_v1`). The
+negative control is not a capability score; it only confirms Holo does not
+fabricate support when evidence is absent. The live3 probe performed real
+retrieval work (`1.3333` average retrieval runs, `8` to `16` fetches per item)
+but still scored `0/3` because it did not convert retrieved sources into citable
+finance facts or formula inputs. This is now the concrete FinanceBench
+doc-retrieval gap.
+
+FinQA `dev` oracle-context `100` no-network/fake-processor baseline
+(`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
+workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate
+`0.37`, citation preservation `0.92`, and unsupported numeric claim rate `0.06`.
+The larger sample confirms that the remaining FinQA weakness is formula and
+target binding, not citation preservation or unsupported-number hallucination.
+
 FinanceBench-150 can be normalized from a local CSV/JSON/JSONL export in three
 explicit modes:
 
