@@ -90,6 +90,33 @@ def test_phase100_issuer_identity_ignores_finance_acronyms_as_us_tickers():
     assert identity.confidence == 0.0
 
 
+def test_issuer_identity_ignores_source_url_label_as_us_ticker():
+    identity = resolve_issuer_identity(
+        "Source URL: https://example.com/annual-report.pdf in USD millions",
+        {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+    )
+
+    assert identity.ticker is None
+    assert identity.cik is None
+
+
+def test_builtin_issuer_registry_does_not_match_benchmark_target_label_as_target_corp():
+    matches = builtin_issuers_for_text("Benchmark target source follows. Source URL: https://example.com/report.pdf")
+
+    assert all(match["ticker"] != "TGT" for match in matches)
+
+
+def test_issuer_identity_resolves_3m_company_name_in_finance_context():
+    identity = resolve_issuer_identity(
+        "3M 2018 10-K capital expenditure",
+        {"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID, "company": "3M"},
+    )
+
+    assert identity.ticker == "MMM"
+    assert identity.cik == "0000066740"
+    assert identity.company == "3M"
+
+
 def test_issuer_identity_ignores_finance_formula_acronyms_as_us_tickers():
     identity = resolve_issuer_identity(
         "Compare Home Depot and Lowe's fiscal 2024 DIO using SEC 10-K companyfacts.",

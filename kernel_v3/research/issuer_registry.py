@@ -20,6 +20,14 @@ class BuiltinIssuerEntry:
 
 BUILTIN_US_ISSUERS: tuple[BuiltinIssuerEntry, ...] = (
     BuiltinIssuerEntry(
+        ticker="MMM",
+        cik="0000066740",
+        company="3M Company",
+        aliases=("3m", "3m company", "3m co", "mmm"),
+        market="NYSE",
+        investor_relations_url="https://investors.3m.com/",
+    ),
+    BuiltinIssuerEntry(
         ticker="AAPL",
         cik="0000320193",
         company="Apple Inc.",
@@ -408,6 +416,10 @@ def _ambiguous_alias_in_non_issuer_context(*, normalized: str, alias: str, entry
         return any(
             _phrase_present(normalized, phrase)
             for phrase in (
+                "benchmark target",
+                "target source",
+                "target document",
+                "target url",
                 "target revenue",
                 "target company",
                 "target business",

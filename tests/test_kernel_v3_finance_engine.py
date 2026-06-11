@@ -11,6 +11,7 @@ from kernel_v3.agent.runtime import (
     _RecipeEvaluator,
     _apply_recipe_profile_defaults,
     _augment_finance_modeling_retrieval_payload,
+    _finance_fallback_fact_lines,
     _finance_missing_fact_retrieval_action,
     _finance_missing_fact_retrieval_payload,
     _finance_formula_preflight_plans,
@@ -193,6 +194,78 @@ def test_planner_processor_failure_rescues_to_targeted_finance_retrieval() -> No
     assert action.payload["max_sources"] >= 24
 
 
+def test_planner_processor_failure_preserves_benchmark_doc_target() -> None:
+    class FailedPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-processor-failed",
+                kind="respond",
+                name="respond",
+                description="processor failed",
+                score=0.0,
+                payload={"error": "processor_failed"},
+                reasons=["processor_failed"],
+                side_effect_class="none",
+            )
+
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.\n\n"
+        "Source URL: https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf\n"
+        "Company: 3M\n"
+        "Document: 3M_2018_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2018\n\n"
+        "What is the FY2018 capital expenditure amount for 3M?"
+    )
+    profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
+    recipe = task_recipe("retrieval_answer", metadata=profile_metadata)
+    planner = _RecipeBoundPlanner(
+        inner=FailedPlanner(),
+        goal=goal,
+        recipe=recipe,
+        journal=JournalStore.in_memory(),
+    )
+    context = ContextBundle(
+        context_id="ctx-financebench-doc-rescue",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-doc",
+            "run_id": "run-doc",
+            "sections": [
+                {
+                    "name": "recent_observations",
+                    "content": [
+                        {
+                            "source": "tool:retrieval.run",
+                            "status": "ok",
+                            "content": {
+                                "query": "SEC companyfacts official financial statements entityName=TARGET CORPORATION",
+                                "queries": ["SEC companyfacts official financial statements entityName=TARGET CORPORATION"],
+                            },
+                        }
+                    ],
+                }
+            ],
+        },
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "retrieval.run"
+    assert action.payload["metadata"]["benchmark_doc_retrieval"] is True
+    assert action.payload["metadata"]["company"] == "3M"
+    assert action.payload["metadata"]["source_urls"] == [
+        "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
+    ]
+    assert "3M 2018 10k" in action.payload["query"]
+    assert "TARGET CORPORATION" not in action.payload["query"]
+    assert all("TARGET CORPORATION" not in query for query in action.payload["queries"])
+
+
 def test_target_entity_extraction_does_not_bind_leading_for_as_entity() -> None:
     phrases = target_entity_phrases(
         "For Pfizer's acquisition of Seagen, calculate the transaction EV / revenue multiple."
@@ -293,6 +366,58 @@ def test_finance_fact_ledger_extracts_ppe_purchase_rows_with_millions_header() -
 
     capex_values = {fact.value for fact in facts if fact.metric == "capital expenditures"}
     assert "-1577000000" in capex_values
+
+
+def test_finance_fallback_prefers_sec_companyfacts_over_secondary_market_sources() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="secondary-capex",
+            entity="3M Company",
+            ticker="MMM",
+            period="2018",
+            fiscal_year=2018,
+            metric="capital expenditures",
+            value="899000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-stockanalysis",
+            evidence_ref="ev-stockanalysis",
+            citation_ref="cite-stockanalysis",
+            metadata={
+                "source_uri": "https://stockanalysis.com/stocks/mmm/statistics/",
+                "source_title": "3M Statistics - StockAnalysis",
+                "supported_metric": True,
+            },
+        ),
+        FinanceFact(
+            fact_id="sec-capex",
+            entity="3M COMPANY",
+            ticker="MMM",
+            period="2018",
+            fiscal_year=2018,
+            metric="capital expenditures",
+            value="1577000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-sec-companyfacts",
+            evidence_ref="ev-sec-companyfacts",
+            citation_ref="cite-sec-companyfacts",
+            metadata={
+                "concept": "PaymentsToAcquirePropertyPlantAndEquipment",
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+                "source_title": "SEC companyfacts JSON for CIK 0000066740",
+                "supported_metric": True,
+            },
+        ),
+    ]
+
+    lines = _finance_fallback_fact_lines(
+        facts,
+        question="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        limit=1,
+    )
+
+    assert lines == ["- FY2018 capital expenditures: 1577（USD millions 口径） [cite-sec-companyfacts]"]
 
 
 def test_finance_fact_ledger_extracts_adjusted_ebitda_bridge_components() -> None:

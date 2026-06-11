@@ -87,6 +87,24 @@ def _issuer_identifier_candidates(query: str, metadata: JsonObject) -> list[Json
 
 
 def _issuer_intent_text(query: str, metadata: JsonObject) -> str:
+    if isinstance(metadata, dict) and metadata.get("benchmark_doc_retrieval") is True:
+        parts: list[str] = []
+        for key in (
+            "company",
+            "issuer",
+            "ticker",
+            "sec_cik",
+            "doc_name",
+            "doc_type",
+            "doc_period",
+        ):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+        text_query = str(query or "").strip()
+        if text_query and "Benchmark target source follows." not in text_query:
+            parts.append(text_query)
+        return "\n".join(parts)
     parts = [str(query or "")]
     for key in ("root_goal", "task_goal", "original_goal", "user_goal"):
         value = metadata.get(key) if isinstance(metadata, dict) else None

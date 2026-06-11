@@ -39,10 +39,35 @@ def test_phase95_direct_url_search_provider_extracts_safe_urls_without_network()
         "https://docs.example.com/aapl",
         "https://ir.example.com/report",
     ]
+    assert sources[0].metadata["explicit_source_url"] is True
+    assert sources[0].metadata["fetch_allowed_hosts"] == ["docs.example.com"]
     assert provider_capability(provider, provider_kind="search").live_network is False
     dumped = json.dumps([source.to_dict() for source in sources], ensure_ascii=False)
     assert "secret-token" not in dumped
     assert "access_token" not in dumped
+
+
+def test_phase95_http_fetch_allows_explicit_direct_url_host_without_global_allowlist() -> None:
+    source = DirectUrlSearchProvider().search(
+        "read https://docs.example.com/aapl",
+        goal=SearchGoal(goal_id="goal-direct-url-fetch", query="direct url", max_sources=1),
+        plan=_plan(),
+    )[0]
+    transport = _Transport(
+        {
+            "https://docs.example.com/aapl": HttpTransportResponse(
+                status_code=200,
+                body=b"direct URL evidence",
+                mime_type="text/plain",
+            )
+        }
+    )
+
+    response = HttpFetchProvider(enabled=True, allowed_hosts=[], transport=transport).fetch(source)
+
+    assert response.status == "ok"
+    assert response.body == "direct URL evidence"
+    assert response.diagnostics["host_allowed_by"] == "explicit_source_url"
 
 
 def test_phase95_source_directory_search_provider_exposes_finance_sources() -> None:

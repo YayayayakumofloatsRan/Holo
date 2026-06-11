@@ -20,6 +20,85 @@ from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.rank import rank_sources
 
 
+def test_direct_url_source_is_fetched_before_profile_discovery_sources():
+    query = "3M FY2018 capital expenditure https://investors.3m.com/2018-10k.pdf"
+    direct_url = "https://investors.3m.com/2018-10k.pdf"
+    direct_source = SearchSource(
+        source_id="direct-3m-10k",
+        uri=direct_url,
+        title="Direct 3M 2018 10-K PDF",
+        snippet="Direct URL supplied by benchmark or user source metadata.",
+        provider="direct_url_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "company_filing",
+            "authority_level": "primary",
+            "source_kind": "direct_url",
+        },
+    )
+    companyfacts = SearchSource(
+        source_id="wrong-companyfacts",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000027419.json",
+        title="SEC companyfacts JSON for CIK 0000027419",
+        snippet="SEC companyfacts official financial statements.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "structured_regulatory_data",
+            "authority_level": "primary",
+            "source_kind": "sec_companyfacts_json",
+            "sec_cik": "0000027419",
+        },
+    )
+    sec_directory = SearchSource(
+        source_id="sec-directory",
+        uri="https://www.sec.gov/edgar/search/",
+        title="SEC EDGAR filings and company submissions",
+        snippet="SEC EDGAR search page.",
+        provider="research_source_directory_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "regulatory_filing",
+            "authority_level": "primary",
+            "source_kind": "source_directory_entry",
+        },
+    )
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider({query: [companyfacts, sec_directory, direct_source]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                direct_url: "3M 2018 10-K cash flow statement. Purchases of property, plant and equipment (PP&E) were (1,577).",
+                companyfacts.uri: "Wrong companyfacts payload.",
+                sec_directory.uri: "SEC search directory page.",
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-direct-url-priority",
+            query=query,
+            max_sources=3,
+            max_fetches=1,
+            max_spans_per_document=2,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "source_authority_requirement": "primary",
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-direct-url-priority",
+        run_id="run-1",
+    )
+
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-direct-url-priority", kind="retrieval_fetch_attempt")
+    ]
+    assert fetch_uris[:1] == [direct_url]
+
+
 def test_retrieval_expands_issuer_ir_page_links_into_report_documents():
     ir_page = SearchSource(
         source_id="issuer-ir-annuals",

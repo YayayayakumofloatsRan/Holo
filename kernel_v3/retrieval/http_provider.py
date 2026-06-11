@@ -118,6 +118,7 @@ class HttpFetchProvider:
                 self.allow_all_hosts
                 or self._allows_discovered_search_host(source)
                 or self._allows_discovery_expansion_host(source)
+                or self._allows_explicit_source_url_host(source)
             ),
         )
         if validation.get("status") != "ok":
@@ -196,10 +197,25 @@ class HttpFetchProvider:
         host = urllib.parse.urlparse(source.uri).hostname or ""
         return host.lower() in allowed_hosts
 
+    def _allows_explicit_source_url_host(self, source: SearchSource) -> bool:
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
+        if metadata.get("source_kind") != "direct_url" and metadata.get("explicit_source_url") is not True:
+            return False
+        allowed_hosts = _normalize_hosts(_string_list(metadata.get("fetch_allowed_hosts")))
+        if not allowed_hosts:
+            return False
+        host = urllib.parse.urlparse(source.uri).hostname or ""
+        return host.lower() in allowed_hosts
+
     def _source_discovery_diagnostics(self, source: SearchSource) -> JsonObject:
         if self._allows_discovery_expansion_host(source):
             return {
                 "host_allowed_by": "discovery_expansion",
+                "source_provider": source.provider,
+            }
+        if self._allows_explicit_source_url_host(source):
+            return {
+                "host_allowed_by": "explicit_source_url",
                 "source_provider": source.provider,
             }
         if self._allows_discovered_search_host(source):

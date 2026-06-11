@@ -43,6 +43,8 @@ _IGNORED_TICKERS = {
     "SGX",
     "UK",
     "US",
+    "URL",
+    "USD",
 }
 
 

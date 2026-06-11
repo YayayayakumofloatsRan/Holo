@@ -1629,6 +1629,7 @@ def _initial_fetch_queue_with_discovery_supplements(
         ranked_all=ranked_all,
         research_profile=research_profile,
     )
+    direct_url_priority = _priority_direct_url_sources(fetchable_ranked)
     if _wants_sec_filing_text(goal):
         priority_companyfacts = _priority_sec_companyfacts_sources(goal, ranked_all)
         priority_discovery = _priority_sec_filing_discovery_sources(discovery)
@@ -1638,6 +1639,7 @@ def _initial_fetch_queue_with_discovery_supplements(
             return _merge_ranked_sources(
                 max_count=goal.max_fetches,
                 groups=[
+                    direct_url_priority,
                     priority_discovery,
                     priority_companyfacts,
                     priority_event_sources,
@@ -1655,6 +1657,7 @@ def _initial_fetch_queue_with_discovery_supplements(
             return _merge_ranked_sources(
                 max_count=goal.max_fetches,
                 groups=[
+                    direct_url_priority,
                     priority_companyfacts,
                     priority_market_sources,
                     priority_discovery,
@@ -1669,14 +1672,14 @@ def _initial_fetch_queue_with_discovery_supplements(
                 ],
             )
     if not discovery:
-        return fetchable_ranked
+        return _merge_ranked_sources(max_count=goal.max_fetches, groups=[direct_url_priority, fetchable_ranked])
     reserved = min(len(discovery), _supplemental_discovery_fetch_limit(goal, research_profile=research_profile))
     if reserved <= 0 or goal.max_fetches <= 1:
-        return fetchable_ranked
+        return _merge_ranked_sources(max_count=goal.max_fetches, groups=[direct_url_priority, fetchable_ranked])
     primary_limit = max(1, goal.max_fetches - reserved)
     queue: list[RankedSource] = []
     seen: set[str] = set()
-    for source in fetchable_ranked[:primary_limit]:
+    for source in _merge_ranked_sources(max_count=primary_limit, groups=[direct_url_priority, fetchable_ranked]):
         queue.append(source)
         seen.add(source.uri)
     for source in discovery:
@@ -1687,6 +1690,18 @@ def _initial_fetch_queue_with_discovery_supplements(
         queue.append(source)
         seen.add(source.uri)
     return queue
+
+
+def _priority_direct_url_sources(sources: list[RankedSource]) -> list[RankedSource]:
+    """Explicit source URLs are acquisition targets, not ordinary search results."""
+
+    result = [
+        source
+        for source in sources
+        if source.provider == "direct_url_search" or _ranked_source_kind(source) == "direct_url"
+    ]
+    result.sort(key=lambda source: source.rank)
+    return result
 
 
 def _priority_sec_filing_discovery_sources(sources: list[RankedSource]) -> list[RankedSource]:

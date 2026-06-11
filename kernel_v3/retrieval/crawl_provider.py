@@ -615,13 +615,18 @@ def _source_from_url(
         return None
     parsed = urllib.parse.urlparse(url)
     display_title = title if title and title != "direct URL" else _title_from_url(url)
+    host = (parsed.hostname or "").lower()
+    source_metadata = {"rank": index, **metadata}
+    if source_metadata.get("source_kind") == "direct_url" and host:
+        source_metadata.setdefault("fetch_allowed_hosts", [host])
+        source_metadata.setdefault("explicit_source_url", True)
     return SearchSource(
         source_id=f"{provider_id}-{_hash(url)[:12]}-{index}",
         uri=url,
         title=_bounded_text(display_title, 240),
         snippet=_bounded_text(snippet, 800),
         provider=provider_id,
-        metadata={"rank": index, **metadata},
+        metadata=source_metadata,
     )
 
 

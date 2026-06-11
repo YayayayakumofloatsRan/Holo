@@ -320,7 +320,7 @@ def _fact_from_values(
     metric: str,
     value: str,
 ) -> FinanceFact:
-    fiscal_year = _int_or_none(values.get("fy"))
+    fiscal_year = _int_or_none(values.get("period_fy")) or _int_or_none(values.get("fy"))
     unit = values.get("unit")
     fact_id = "finfact-" + _short_hash(
         item.evidence_id,

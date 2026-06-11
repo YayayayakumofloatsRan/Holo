@@ -128,6 +128,10 @@ SEC_COMPANYFACTS_CONCEPTS = (
     ("CostOfSales", "cost of sales"),
     ("CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization", "cost of goods sold"),
     ("NetCashProvidedByUsedInOperatingActivities", "operating cash flow"),
+    ("PaymentsToAcquirePropertyPlantAndEquipment", "capital expenditures"),
+    ("PaymentsToAcquireProductiveAssets", "capital expenditures"),
+    ("PropertyPlantAndEquipmentAdditions", "capital expenditures"),
+    ("CapitalExpendituresIncurredButNotYetPaid", "capital expenditures"),
     ("CashAndCashEquivalentsAtCarryingValue", "cash and cash equivalents"),
     ("Assets", "assets"),
     ("Liabilities", "liabilities"),
@@ -170,6 +174,11 @@ SEC_COMPANYFACTS_DYNAMIC_KEYWORDS = (
     "cost of sales",
     "cost of goods",
     "cash flow",
+    "capital expenditure",
+    "capital expenditures",
+    "capex",
+    "property plant",
+    "payments to acquire",
     "cash",
     "assets",
     "liabilities",
@@ -253,7 +262,7 @@ def extract_spans(
     terms = _terms(goal.query, goal=goal)
     if not terms:
         return []
-    text, text_mode = readable_document_text(body, document=document)
+    text, text_mode = readable_document_text(body, document=document, goal=goal)
     if not text:
         return []
     spans: list[ExtractedSpan] = []
@@ -295,12 +304,17 @@ def extract_spans(
     return spans
 
 
-def readable_document_text(body: str, *, document: FetchedDocument) -> tuple[str, str]:
+def readable_document_text(
+    body: str,
+    *,
+    document: FetchedDocument,
+    goal: SearchGoal | None = None,
+) -> tuple[str, str]:
     mime_type = str(document.metadata.get("mime_type") or "").lower()
     if _looks_like_pdf(body, mime_type=mime_type):
         return _extract_pdf_text(body), "pdf_text_literals"
     if _looks_like_sec_companyfacts(body, document=document):
-        text = _extract_sec_companyfacts_readable_text(body)
+        text = _extract_sec_companyfacts_readable_text(body, goal=goal)
         if text:
             return text, "sec_companyfacts_readable_text"
     if _looks_like_scholarly_metadata(body, document=document, mime_type=mime_type):
@@ -1076,7 +1090,7 @@ def _looks_like_sec_companyfacts(body: str, *, document: FetchedDocument) -> boo
     return '"facts"' in prefix and '"entityName"' in prefix and "us-gaap" in prefix
 
 
-def _extract_sec_companyfacts_readable_text(body: str) -> str:
+def _extract_sec_companyfacts_readable_text(body: str, *, goal: SearchGoal | None = None) -> str:
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
@@ -1093,7 +1107,7 @@ def _extract_sec_companyfacts_readable_text(body: str) -> str:
             f"SEC companyfacts official financial statements entityName={entity_name} cik={cik} source=SEC_XBRL_companyfacts"
         )
     ]
-    lines.extend(_companyfacts_annual_summary_lines(facts, entity_name=entity_name, cik=cik))
+    lines.extend(_companyfacts_annual_summary_lines(facts, entity_name=entity_name, cik=cik, goal=goal))
     for taxonomy_name in ("us-gaap", "ifrs-full", "dei"):
         taxonomy = facts.get(taxonomy_name)
         if not isinstance(taxonomy, dict):
@@ -1151,10 +1165,15 @@ def _companyfacts_concept_specs(taxonomy: dict) -> list[tuple[str, str]]:
     return specs
 
 
-def _ordered_companyfacts_metrics(metrics: dict[str, object]) -> list[tuple[str, str]]:
+def _ordered_companyfacts_metrics(
+    metrics: dict[str, object],
+    *,
+    priority_metric_names: tuple[str, ...] = (),
+) -> list[tuple[str, str]]:
     order: list[tuple[str, str]] = []
     seen: set[str] = set()
     priority_metrics = (
+        *priority_metric_names,
         "inventory",
         "cost of revenue",
         "cost of goods sold",
@@ -1277,6 +1296,7 @@ def _companyfacts_dynamic_priority(*, concept: str, label: str, metric: str) -> 
         "inventory",
         "cost of revenue",
         "cost of goods sold",
+        "capital expenditures",
     }:
         priority += 40
     if "abstract" in text or "policy" in text or "schedule" in text:
@@ -1288,7 +1308,13 @@ def _compact_metric_text(value: str) -> str:
     return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
 
 
-def _companyfacts_annual_summary_lines(facts: dict, *, entity_name: str, cik: str) -> list[str]:
+def _companyfacts_annual_summary_lines(
+    facts: dict,
+    *,
+    entity_name: str,
+    cik: str,
+    goal: SearchGoal | None = None,
+) -> list[str]:
     groups: dict[tuple[int, str], dict[str, object]] = {}
     for taxonomy_name in ("us-gaap", "ifrs-full"):
         taxonomy = facts.get(taxonomy_name)
@@ -1340,6 +1366,7 @@ def _companyfacts_annual_summary_lines(facts: dict, *, entity_name: str, cik: st
                         "fp": record.get("fp"),
                         "form": record.get("form"),
                         "filed": record.get("filed"),
+                        "start": record.get("start"),
                         "end": record.get("end"),
                         "frame": record.get("frame"),
                         "accn": record.get("accn"),
@@ -1352,12 +1379,15 @@ def _companyfacts_annual_summary_lines(facts: dict, *, entity_name: str, cik: st
         key=lambda group: (int(group.get("year") or 0), str(group.get("filed") or ""), str(group.get("end") or "")),
         reverse=True,
     )
+    target_years = _companyfacts_target_years(goal.query if goal is not None else "")
+    query_priority_metrics = _companyfacts_query_priority_metrics(goal.query if goal is not None else "")
+    selected_groups = _companyfacts_selected_summary_groups(ordered, target_years=target_years)
     lines = []
-    for group in ordered[:SEC_COMPANYFACTS_SUMMARY_YEARS]:
+    for group in selected_groups:
         metrics = group.get("metrics") if isinstance(group.get("metrics"), dict) else {}
         metric_parts = []
         emitted_metrics: set[str] = set()
-        for _concept, metric in _ordered_companyfacts_metrics(metrics):
+        for _concept, metric in _ordered_companyfacts_metrics(metrics, priority_metric_names=query_priority_metrics):
             if metric in emitted_metrics:
                 continue
             entry = metrics.get(metric)
@@ -1386,16 +1416,98 @@ def _companyfacts_annual_summary_lines(facts: dict, *, entity_name: str, cik: st
     return lines
 
 
+def _companyfacts_query_priority_metrics(query: str) -> tuple[str, ...]:
+    normalized = " ".join(str(query or "").lower().replace("_", " ").split())
+    priorities: list[str] = []
+
+    def add(metric: str) -> None:
+        if metric not in priorities:
+            priorities.append(metric)
+
+    if any(
+        alias in normalized
+        for alias in (
+            "capital expenditure",
+            "capital expenditures",
+            "capex",
+            "property, plant and equipment",
+            "property plant and equipment",
+            "pp&e",
+            "purchases of property",
+            "payments to acquire property",
+        )
+    ):
+        add("capital expenditures")
+    if any(alias in normalized for alias in ("operating cash flow", "cash flow from operating", "operating activities")):
+        add("operating cash flow")
+    if any(alias in normalized for alias in ("revenue", "revenues", "sales", "net sales")):
+        add("revenue")
+        add("net sales")
+    if any(alias in normalized for alias in ("net income", "net earnings", "profit")):
+        add("net income")
+    if any(alias in normalized for alias in ("eps", "earnings per share")):
+        add("diluted earnings per share")
+        add("basic earnings per share")
+    if "inventory" in normalized or "inventories" in normalized:
+        add("inventory")
+    if any(alias in normalized for alias in ("cost of goods", "cost of sales", "cogs", "cost of revenue")):
+        add("cost of goods sold")
+        add("cost of sales")
+        add("cost of revenue")
+    return tuple(priorities)
+
+
+def _companyfacts_target_years(query: str) -> set[int]:
+    years: set[int] = set()
+    for match in re.finditer(r"\b(?:FY|fiscal\s+year\s*)?((?:19|20)\d{2})\b", str(query or ""), flags=re.IGNORECASE):
+        try:
+            years.add(int(match.group(1)))
+        except ValueError:
+            continue
+    return years
+
+
+def _companyfacts_selected_summary_groups(groups: list[dict[str, object]], *, target_years: set[int]) -> list[dict[str, object]]:
+    selected: list[dict[str, object]] = []
+    seen: set[tuple[int, str]] = set()
+
+    def append_group(group: dict[str, object]) -> None:
+        try:
+            year = int(group.get("year") or 0)
+        except (TypeError, ValueError):
+            year = 0
+        key = (year, str(group.get("end") or ""))
+        if key in seen:
+            return
+        seen.add(key)
+        selected.append(group)
+
+    if target_years:
+        for group in groups:
+            try:
+                year = int(group.get("year") or 0)
+            except (TypeError, ValueError):
+                continue
+            if year in target_years:
+                append_group(group)
+    for group in groups[:SEC_COMPANYFACTS_SUMMARY_YEARS]:
+        append_group(group)
+    return selected
+
+
 def _companyfacts_summary_metric_part(entry: dict, *, metric: str) -> str:
     parts = [
         f"metric={_structured_value(metric)}",
         f"concept={_structured_value(entry.get('concept'))}",
     ]
+    period_year = _companyfacts_year(entry)
+    if period_year is not None:
+        parts.append(f"period_fy={_structured_value(period_year)}")
     value = entry.get("val")
     if value is not None and value != "":
         parts.append(f"value={_structured_value(value)}")
         parts.append(f"val={_structured_value(value)}")
-    for key in ("unit", "fy", "fp", "form", "filed", "end", "frame", "accn"):
+    for key in ("unit", "fy", "fp", "form", "filed", "start", "end", "frame", "accn"):
         value = entry.get(key)
         if value is None or value == "":
             continue

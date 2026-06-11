@@ -1486,8 +1486,10 @@ def _benchmark_prompt(item: FinanceBenchmarkItem, *, question_prefix: str) -> st
             )
         elif import_mode == "doc_retrieval":
             instruction = (
-                "Benchmark-provided source metadata follows. Use it to acquire evidence; it is not answer evidence by itself."
+                "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+                "Prefer direct URL fetch before broad search."
             )
+            context = _doc_retrieval_context_for_prompt(item) or context
         else:
             instruction = "Benchmark-provided source context follows. Use it as evidence when relevant."
         parts.append(
@@ -1495,6 +1497,23 @@ def _benchmark_prompt(item: FinanceBenchmarkItem, *, question_prefix: str) -> st
         )
     parts.append(item.question)
     return "\n\n".join(parts)
+
+
+def _doc_retrieval_context_for_prompt(item: FinanceBenchmarkItem) -> str:
+    lines: list[str] = []
+    source_url = _benchmark_context_source_ref(item)
+    if source_url and not source_url.startswith("benchmark:"):
+        lines.append(f"Source URL: {source_url}")
+    for label, key in (
+        ("Company", "company"),
+        ("Document", "doc_name"),
+        ("Document type", "doc_type"),
+        ("Document period", "doc_period"),
+    ):
+        value = _benchmark_metadata_text(item, key)
+        if value:
+            lines.append(f"{label}: {value}")
+    return "\n".join(lines).strip()
 
 
 def _append_benchmark_provided_context_trace(
@@ -1505,6 +1524,9 @@ def _append_benchmark_provided_context_trace(
     run_id: str | None,
 ) -> None:
     if journal is None or not task_id:
+        return
+    import_mode = str(item.metadata.get("import_mode") or "").strip().lower()
+    if import_mode in {"doc_retrieval", "question_only"}:
         return
     context = item.evidence_excerpt or item.metadata.get("prompt_context")
     if not isinstance(context, str) or not context.strip():

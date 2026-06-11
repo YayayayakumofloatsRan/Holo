@@ -89,6 +89,61 @@ def test_sec_edgar_provider_uses_root_goal_for_issuer_candidates():
     assert "0001060736" in ciks
 
 
+def test_sec_edgar_provider_uses_benchmark_doc_metadata_for_issuer_candidate():
+    provider = SecEdgarSearchProvider()
+    goal = SearchGoal(
+        goal_id="goal-financebench-doc-target",
+        query="3M 2018 10k capital expenditure cash flow statement",
+        max_sources=8,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "benchmark_doc_retrieval": True,
+            "company": "3M",
+            "doc_type": "10k",
+            "doc_period": "2018",
+            "source_url": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+        },
+    )
+
+    sources = provider.search(goal.query, goal=goal, plan=_plan())
+    ciks = [source.metadata.get("sec_cik") for source in sources]
+
+    assert "0000066740" in ciks
+    assert all(cik != "0000027419" for cik in ciks if cik)
+
+
+def test_sec_edgar_provider_freezes_benchmark_doc_target_when_mission_mentions_target_label():
+    provider = SecEdgarSearchProvider()
+    prompt = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself.\n\n"
+        "Source URL: https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf\n"
+        "Company: 3M\n"
+        "Document: 3M_2018_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2018\n\n"
+        "What is the FY2018 capital expenditure amount for 3M?"
+    )
+    goal = SearchGoal(
+        goal_id="goal-financebench-doc-target-frozen",
+        query="3M 2018 10k capital expenditure cash flow statement",
+        max_sources=8,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "benchmark_doc_retrieval": True,
+            "company": "3M",
+            "doc_type": "10k",
+            "doc_period": "2018",
+            "research_mission": {"root_goal": prompt},
+        },
+    )
+
+    sources = provider.search(goal.query, goal=goal, plan=_plan())
+    ciks = [source.metadata.get("sec_cik") for source in sources]
+
+    assert "0000066740" in ciks
+    assert all(cik != "0000027419" for cik in ciks if cik)
+
+
 def test_phase98_sec_companyfacts_extracts_latest_annual_metric_summary_before_old_facts():
     goal = SearchGoal(
         goal_id="goal-sec-companyfacts-extract",
@@ -125,6 +180,37 @@ def test_phase98_sec_companyfacts_extracts_latest_annual_metric_summary_before_o
     assert "metric=diluted earnings per share" in first
     assert "value=6.08" in first
     assert "fy=2017" not in first
+
+
+def test_sec_companyfacts_extracts_capital_expenditures_for_cash_flow_questions():
+    goal = SearchGoal(
+        goal_id="goal-sec-companyfacts-capex",
+        query="3M FY2018 capital expenditure amount cash flow statement",
+        max_spans_per_document=4,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "filing_document_qa",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-companyfacts-capex",
+        goal_id=goal.goal_id,
+        source_id="source-sec-companyfacts-capex",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+        title="SEC companyfacts JSON for CIK 0000066740",
+        artifact_id="artifact-sec-companyfacts-capex",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_capex_companyfacts_json())
+    text = "\n".join(span.text for span in spans)
+
+    assert "metric=capital expenditures" in text
+    assert "value=1577000000" in text
+    assert "fy=2018" in text
 
 
 def test_sec_companyfacts_extracts_inventory_and_cost_inputs_for_dio():
@@ -717,6 +803,120 @@ def test_phase98_final_answer_quality_requires_citation_from_explicit_source_url
     assert "required_source_url_citation_missing" not in runtime._final_answer_quality_gaps(correct, recipe=recipe)
 
 
+def test_phase98_doc_retrieval_quality_accepts_cited_sec_structured_source_for_target_pdf():
+    journal = JournalStore.in_memory()
+    runtime = AgentRuntime(journal=journal, artifact_store=ArtifactStore.in_memory())
+    target_pdf = "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
+    sec_url = "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json"
+    prompt = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.\n\n"
+        f"Source URL: {target_pdf}\n"
+        "Company: 3M\n"
+        "Document: 3M_2018_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2018\n\n"
+        "What is the FY2018 capital expenditure amount for 3M?"
+    )
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"execution_metadata": {"research_mission": {"root_goal": prompt}}},
+    )
+    journal.append(
+        task_id="task-doc-quality",
+        run_id="run-doc-quality",
+        step_id=None,
+        kind="retrieval_citation",
+        data={
+            "citation_id": "cite-sec-companyfacts",
+            "goal_id": "goal-doc-quality",
+            "evidence_id": "ev-sec-companyfacts",
+            "artifact_id": "artifact-sec-companyfacts",
+            "uri": sec_url,
+            "title": "SEC companyfacts JSON for CIK 0000066740",
+            "quote": "metric=capital expenditures value=1577000000",
+            "span_start": 0,
+            "span_end": 46,
+            "metadata": {},
+        },
+    )
+    answer = FinalAnswer(
+        answer="3M FY2018 capital expenditures were $1,577 million.",
+        citation_refs=["cite-sec-companyfacts"],
+        used_evidence=["ev-sec-companyfacts"],
+        limitations=[],
+        confidence=0.8,
+        task_id="task-doc-quality",
+        run_id="run-doc-quality",
+        trace_refs=[],
+    )
+
+    assert "required_source_url_citation_missing" not in runtime._final_answer_quality_gaps(answer, recipe=recipe)
+
+
+def test_phase98_doc_retrieval_quality_reads_compiled_capability_target():
+    journal = JournalStore.in_memory()
+    runtime = AgentRuntime(journal=journal, artifact_store=ArtifactStore.in_memory())
+    target_pdf = "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
+    sec_url = "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json"
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "task_execution_plan": {
+                "steps": [
+                    {
+                        "required_capabilities": ["retrieval.run"],
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "3M 2018 10-K capital expenditures",
+                                    "metadata": {
+                                        "benchmark_doc_retrieval": True,
+                                        "source_url": target_pdf,
+                                        "source_urls": [target_pdf],
+                                        "company": "3M",
+                                        "doc_period": "2018",
+                                    },
+                                }
+                            }
+                        },
+                    }
+                ]
+            }
+        },
+    )
+    journal.append(
+        task_id="task-doc-quality-compiled",
+        run_id="run-doc-quality",
+        step_id=None,
+        kind="retrieval_citation",
+        data={
+            "citation_id": "cite-sec-companyfacts",
+            "goal_id": "goal-doc-quality",
+            "evidence_id": "ev-sec-companyfacts",
+            "artifact_id": "artifact-sec-companyfacts",
+            "uri": sec_url,
+            "title": "SEC companyfacts JSON for CIK 0000066740",
+            "quote": "metric=capital expenditures value=1577000000",
+            "span_start": 0,
+            "span_end": 46,
+            "metadata": {},
+        },
+    )
+    answer = FinalAnswer(
+        answer="3M FY2018 capital expenditures were $1,577 million.",
+        citation_refs=["cite-sec-companyfacts"],
+        used_evidence=["ev-sec-companyfacts"],
+        limitations=[],
+        confidence=0.8,
+        task_id="task-doc-quality-compiled",
+        run_id="run-doc-quality",
+        trace_refs=[],
+    )
+
+    assert "required_source_url_citation_missing" not in runtime._final_answer_quality_gaps(answer, recipe=recipe)
+
+
 def test_phase98_agent_uses_sec_provider_in_multi_step_finance_loop():
     journal = JournalStore.in_memory()
     goal = "Research AAPL SEC revenue and companyfacts"
@@ -1021,6 +1221,27 @@ def _retail_companyfacts_json() -> str:
         "]}},"
         '"IncomeTaxExpenseBenefit":{"label":"Income tax expense","units":{"USD":['
         '{"val":2100000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-03-14","end":"2025-02-01","accn":"0000354950-25-000010"}'
+        "]}}"
+        "}}}"
+    )
+
+
+def _capex_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"3M COMPANY",'
+        '"cik":66740,'
+        '"facts":{"us-gaap":{'
+        '"PaymentsToAcquirePropertyPlantAndEquipment":{"label":"Purchases of property, plant and equipment","units":{"USD":['
+        '{"val":1456000000,"fy":2017,"fp":"FY","form":"10-K","filed":"2018-02-08","start":"2017-01-01","end":"2017-12-31","accn":"0001558370-18-000535"},'
+        '{"val":1577000000,"fy":2018,"fp":"FY","form":"10-K","filed":"2019-02-07","start":"2018-01-01","end":"2018-12-31","accn":"0001558370-19-000470"},'
+        '{"val":1680000000,"fy":2019,"fp":"FY","form":"10-K","filed":"2020-02-06","start":"2019-01-01","end":"2019-12-31","accn":"0001558370-20-000470"},'
+        '{"val":1510000000,"fy":2020,"fp":"FY","form":"10-K","filed":"2021-02-05","start":"2020-01-01","end":"2020-12-31","accn":"0001558370-21-000470"},'
+        '{"val":1600000000,"fy":2021,"fp":"FY","form":"10-K","filed":"2022-02-04","start":"2021-01-01","end":"2021-12-31","accn":"0001558370-22-000470"},'
+        '{"val":1750000000,"fy":2022,"fp":"FY","form":"10-K","filed":"2023-02-03","start":"2022-01-01","end":"2022-12-31","accn":"0001558370-23-000470"},'
+        '{"val":1830000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2024-02-02","start":"2023-01-01","end":"2023-12-31","accn":"0001558370-24-000470"},'
+        '{"val":1720000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-07","start":"2024-01-01","end":"2024-12-31","accn":"0001558370-25-000470"},'
+        '{"val":1800000000,"fy":2025,"fp":"FY","form":"10-K","filed":"2026-02-06","start":"2025-01-01","end":"2025-12-31","accn":"0001558370-26-000470"}'
         "]}}"
         "}}}"
     )

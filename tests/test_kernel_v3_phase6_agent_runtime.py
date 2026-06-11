@@ -2,8 +2,10 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.runtime import task_recipe
 from kernel_v3.agent.workloop import WorkloopConfig
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
@@ -314,6 +316,84 @@ def test_phase6_model_planner_failure_in_retrieval_mode_is_not_misdiagnosed_as_m
     assert result.failure_report["next_possible_action"] == "retry_model_planner_or_reduce_context"
     assert "planner_action" in result.failure_report["missing_evidence"]
     assert not journal.records(task_id=result.task_id, kind="retrieval_report")
+
+
+def test_phase6_planner_failure_after_sufficient_retrieval_allows_finalization_path():
+    journal = JournalStore.in_memory()
+    task_id = "task-planner-failed-after-evidence"
+    run_id = "run-1"
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=None,
+        kind="processor_result",
+        data={"task_type": "planner.propose", "status": "failed", "error": "invalid_json"},
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=None,
+        kind="retrieval_report",
+        data={
+            "report_id": "report-1",
+            "goal_id": "goal-1",
+            "status": "sufficient",
+            "query_plan_id": "plan-1",
+            "search_attempt_ids": [],
+            "fetch_attempt_ids": [],
+            "evidence_ids": ["ev-1"],
+            "citation_ids": ["cite-1"],
+            "evaluation_id": "eval-1",
+            "artifact_refs": [],
+            "preview": "retrieval sufficient",
+            "diagnostics": {},
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=None,
+        kind="retrieval_evidence",
+        data={
+            "evidence_id": "ev-1",
+            "goal_id": "goal-1",
+            "span_id": "span-1",
+            "document_id": "doc-1",
+            "source_id": "source-1",
+            "artifact_id": "artifact-1",
+            "uri": "https://data.sec.gov/example.json",
+            "title": "SEC evidence",
+            "text": "3M FY2018 capital expenditures were $1,577 million.",
+            "score": 0.9,
+            "payload_hash": "hash",
+            "diagnostics": {},
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=None,
+        kind="retrieval_citation",
+        data={
+            "citation_id": "cite-1",
+            "goal_id": "goal-1",
+            "evidence_id": "ev-1",
+            "artifact_id": "artifact-1",
+            "uri": "https://data.sec.gov/example.json",
+            "title": "SEC evidence",
+            "quote": "capital expenditures were $1,577 million",
+            "span_start": 0,
+            "span_end": 44,
+            "metadata": {},
+        },
+    )
+
+    result = AgentRuntime(journal=journal)._planner_processor_failure_result(
+        SimpleNamespace(task_id=task_id, run_id=run_id),
+        recipe=task_recipe("retrieval_answer"),
+    )
+
+    assert result is None
 
 
 def test_phase6_trace_evidence_artifacts_and_retrieval_trace_render_complete_path():

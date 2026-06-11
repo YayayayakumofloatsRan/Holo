@@ -14,9 +14,10 @@ from kernel_v3.bench import (
     score_finance_answer,
     write_finance_dev_annotations_from_dataset,
 )
-from kernel_v3.bench.finance import summarize_finance_benchmark, trace_metrics
+from kernel_v3.bench.finance import _append_benchmark_provided_context_trace, summarize_finance_benchmark, trace_metrics
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.journal import JournalStore
+from kernel_v3.agent.runtime import _benchmark_doc_retrieval_payload
 
 
 def test_finance_benchmark_loads_common_jsonl_fields(tmp_path: Path) -> None:
@@ -367,7 +368,9 @@ def test_financebench_import_modes_keep_gold_out_of_prompt(tmp_path: Path) -> No
     doc_items = load_finance_benchmark_items(doc_output)
     doc_runtime = _StaticChatRuntime(JournalStore.in_memory())
     run_finance_benchmark(items=doc_items, runtime=doc_runtime)
+    assert "Source URL: https://example.com/exampleco-10k.pdf" in doc_runtime.seen_prompts[0]
     assert "https://example.com/exampleco-10k.pdf" in doc_runtime.seen_prompts[0]
+    assert "FinanceBench target document metadata follows" not in doc_runtime.seen_prompts[0]
     assert "The filing evidence says revenue" not in doc_runtime.seen_prompts[0]
     assert "Reference calculation" not in doc_runtime.seen_prompts[0]
     assert doc_items[0].metadata["reference_evidence_policy"] == "scoring_only_not_prompted"
@@ -386,6 +389,56 @@ def test_financebench_import_modes_keep_gold_out_of_prompt(tmp_path: Path) -> No
     assert "The filing evidence says revenue" not in question_runtime.seen_prompts[0]
     assert "Reference calculation" not in question_runtime.seen_prompts[0]
     assert question_items[0].metadata["source_refs"][0]["doc_type"] == "10-K"
+
+
+def test_financebench_doc_retrieval_prompt_compiles_to_structured_payload(tmp_path: Path) -> None:
+    source = tmp_path / "financebench.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "financebench_id": "fb-doc-payload",
+                "company": "3M",
+                "doc_name": "3M_2018_10K",
+                "question_type": "numeric",
+                "question_reasoning": "requires cash flow statement lookup",
+                "question": "What is the FY2018 capital expenditure amount for 3M?",
+                "answer": "$1577.00",
+                "evidence": "scoring-only evidence must not be prompted",
+                "doc_type": "10k",
+                "doc_period": "2018",
+                "doc_link": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "financebench.doc.jsonl"
+    convert_public_finance_benchmark(
+        benchmark="financebench",
+        input_path=source,
+        output_path=output,
+        mode="doc_retrieval",
+    )
+    item = load_finance_benchmark_items(output)[0]
+    runtime = _StaticChatRuntime(JournalStore.in_memory())
+    run_finance_benchmark(items=[item], runtime=runtime)
+
+    payload = _benchmark_doc_retrieval_payload(runtime.seen_prompts[0])
+
+    assert payload["query"] == "3M 2018 10k What is the FY2018 capital expenditure amount for 3M?"
+    assert payload["respect_explicit_budget"] is True
+    assert payload["metadata"]["benchmark_doc_retrieval"] is True
+    assert payload["metadata"]["retrieval_context_frozen"] is True
+    assert payload["metadata"]["respect_explicit_budget"] is True
+    assert payload["metadata"]["company"] == "3M"
+    assert payload["metadata"]["doc_type"] == "10k"
+    assert payload["metadata"]["sec_form"] == "10-K"
+    assert payload["metadata"]["doc_period"] == "2018"
+    assert payload["metadata"]["source_urls"] == [
+        "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
+    ]
+    assert "scoring-only evidence" not in runtime.seen_prompts[0]
 
 
 def test_financebench_import_can_emit_scoring_annotation_sidecar(tmp_path: Path) -> None:
@@ -482,6 +535,31 @@ def test_benchmark_provided_context_creates_source_grounded_trace(tmp_path: Path
     assert result.trace_metrics["transform_plan_count"] == 1
     assert result.trace_metrics["verifier_gate_status"] == "passed"
     assert "example.com" in result.trace_metrics["source_hosts"]
+
+
+def test_doc_retrieval_metadata_is_not_written_as_evidence_claim() -> None:
+    journal = JournalStore.in_memory()
+    item = FinanceBenchmarkItem(
+        item_id="fb-doc-001",
+        question="What was capex?",
+        evidence_excerpt="Reference evidence is scoring-only and must not become prompt evidence.",
+        source="financebench",
+        workflow_type="source_grounded_research",
+        required_slots=["entity", "period", "source"],
+        metadata={
+            "import_mode": "doc_retrieval",
+            "company": "ExampleCo",
+            "doc_period": "2024",
+            "prompt_context": "Document link: https://example.com/report.pdf",
+            "source_refs": [{"url": "https://example.com/report.pdf"}],
+        },
+    )
+
+    _append_benchmark_provided_context_trace(journal, item=item, task_id="task-doc", run_id="run-1")
+
+    metrics = trace_metrics(journal, task_id="task-doc")
+    assert metrics["claim_ledger_present"] is False
+    assert metrics["claim_count"] == 0
 
 
 def test_finqa_import_supports_oracle_context_and_question_only_modes(tmp_path: Path) -> None:
