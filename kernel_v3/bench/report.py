@@ -102,6 +102,8 @@ def _render_markdown(report: FinanceBenchmarkReport) -> str:
         f"| Avg answer numeric support | {_percent(summary.get('average_answer_numeric_support_rate'))} |",
         f"| Unsupported numeric claim rate | {_percent(summary.get('unsupported_numeric_claim_rate'))} |",
         f"| Missing-slot recovery rate | {_percent(summary.get('missing_slot_recovery_rate'))} |",
+        f"| Repeated item count | {_number(summary.get('repeated_item_count'))} |",
+        f"| Repeatability score | {_percent(summary.get('repeatability_score'))} |",
         f"| Avg tokens per passed item | {_number(summary.get('average_total_tokens_per_passed_item'))} |",
         f"| Avg answer chars | {_number(summary.get('average_final_answer_chars'))} |",
         "",

@@ -10,6 +10,7 @@ from kernel_v3.agent.runtime import (
     _RecipeBoundPlanner,
     _RecipeEvaluator,
     _apply_recipe_profile_defaults,
+    _augment_finance_modeling_retrieval_payload,
     _finance_missing_fact_retrieval_action,
     _finance_missing_fact_retrieval_payload,
     _finance_formula_preflight_plans,
@@ -248,6 +249,27 @@ def test_finance_fact_ledger_extracts_market_data_page_metrics() -> None:
     assert by_metric["debt"] == "1200000000"
     assert by_metric["cash and cash equivalents"] == "2800000000"
     assert by_metric["ebitda"] == "2600000000"
+
+
+def test_finance_fact_ledger_extracts_modeling_cash_flow_metrics() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="cash-flow",
+            text=(
+                "entityName=Salesforce ticker=CRM facts="
+                "metric=net cash provided by operating activities unit=USD fy=2024 form=10-K value=10234000000 ; "
+                "metric=capital expenditures unit=USD fy=2024 form=10-K value=710000000"
+            ),
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-cash-flow")],
+    )
+    by_metric = {fact.metric: fact.value for fact in facts}
+
+    assert by_metric["operating cash flow"] == "10234000000"
+    assert by_metric["capital expenditures"] == "710000000"
 
 
 def test_finance_fact_ledger_extracts_adjusted_ebitda_bridge_components() -> None:
@@ -1435,6 +1457,155 @@ def test_finance_formula_planner_derives_ebitda_from_components() -> None:
     assert Decimal(trace.result_value) == Decimal("6")
 
 
+def test_finance_formula_planner_generates_dcf_payload_with_assumptions() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="crm-cfo",
+            text=(
+                "entityName=Salesforce ticker=CRM facts="
+                "metric=operating cash flow unit=USD fy=2024 form=10-K value=10234000000 ; "
+                "metric=capital expenditures unit=USD fy=2024 form=10-K value=710000000"
+            ),
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-crm-cfo")],
+    )
+
+    plan = plan_finance_formula(
+        question=(
+            "Using a discounted cash flow analysis for CRM, forecast 5 years, "
+            "cash flow growth 4%, discount rate 9%, terminal growth 2%."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "dcf"
+    assert plan.payload is not None
+    assert plan.payload["variables"]["base_cash_flow"] == "9524000000"
+    assert plan.payload["variables"]["growth_rate"] == "0.04"
+    assert plan.payload["variables"]["discount_rate"] == "0.09"
+    assert plan.payload["variables"]["terminal_growth_rate"] == "0.02"
+    assert set(plan.payload["input_fact_ids"]) == {facts[0].fact_id, facts[1].fact_id}
+    assert plan.diagnostics["base_cash_flow_metric"] == "derived free cash flow"
+    assert plan.diagnostics["assumptions"]["forecast_years"] == 5
+    assert plan.diagnostics["defaulted_assumptions"] == []
+    trace = compute_formula(**plan.payload)
+    assert Decimal(trace.result_value) > Decimal("10234000000")
+
+
+def test_finance_formula_planner_generates_lbo_payload_with_assumptions() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="epam-market",
+            text="entityName=EPAM ticker=EPAM metric=market cap unit=USD fy=2024 value=12000000000",
+        ),
+        _finance_evidence(
+            evidence_id="epam-debt",
+            text="entityName=EPAM ticker=EPAM metric=debt unit=USD fy=2024 form=10-K value=1000000000",
+        ),
+        _finance_evidence(
+            evidence_id="epam-cash",
+            text="entityName=EPAM ticker=EPAM metric=cash and cash equivalents unit=USD fy=2024 form=10-K value=500000000",
+        ),
+        _finance_evidence(
+            evidence_id="epam-ebitda",
+            text="entityName=EPAM ticker=EPAM metric=adjusted ebitda unit=USD fy=2024 form=10-K value=2000000000",
+        ),
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence],
+    )
+
+    plan = plan_finance_formula(
+        question=(
+            "Build an LBO analysis for EPAM with leverage 4.0x, exit multiple 9.0x, "
+            "exit EV/EBITDA convention, EBITDA growth 3%, annual debt paydown 0.5x, "
+            "hold period 5 years."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "lbo"
+    assert plan.payload is not None
+    assert plan.payload["variables"]["debt_multiple"] == "4"
+    assert plan.payload["variables"]["exit_multiple"] == "9"
+    assert plan.payload["variables"]["ebitda_growth_rate"] == "0.03"
+    assert plan.payload["variables"]["annual_debt_paydown_multiple"] == "0.5"
+    assert plan.diagnostics["reported_output"] == "sponsor_irr"
+    trace = compute_formula(**plan.payload)
+    assert Decimal(trace.result_value) > Decimal("0")
+
+
+def test_finance_formula_planner_lbo_uses_assumed_entry_multiple_when_market_value_missing() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="epam-cfo",
+            text=(
+                "entityName=EPAM ticker=EPAM metric=operating cash flow "
+                "unit=USD fy=2024 form=10-K value=800000000"
+            ),
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-epam-cfo")],
+    )
+
+    plan = plan_finance_formula(
+        question=(
+            "Build a compact LBO analysis for EPAM with entry multiple 9.0x, "
+            "leverage 3.0x, exit multiple 10.0x, growth 4%, hold period 5 years."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "lbo"
+    assert plan.payload is not None
+    assert plan.payload["variables"]["equity_value"] == "7200000000"
+    assert plan.payload["variables"]["debt"] == "0"
+    assert plan.diagnostics["enterprise_value_source"] == "assumed_entry_enterprise_value_from_basis_multiple"
+    assert plan.diagnostics["ebitda_source"] == "cash_flow_basis"
+    trace = compute_formula(**plan.payload)
+    assert Decimal(trace.result_value) > Decimal("0")
+
+
+def test_finance_formula_planner_lbo_can_use_revenue_with_ebitda_margin_assumption() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="epam-revenue",
+            text="entityName=EPAM ticker=EPAM metric=revenue unit=USD fy=2024 form=10-K value=4650000000",
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-epam-revenue")],
+    )
+
+    plan = plan_finance_formula(
+        question=(
+            "Build a compact LBO analysis for EPAM with entry multiple 9.0x, "
+            "EBITDA margin 18%, leverage 3.0x, exit multiple 10.0x, growth 4%, hold period 5 years."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "lbo"
+    assert plan.payload is not None
+    assert plan.payload["variables"]["ebitda"] == "837000000"
+    assert plan.payload["variables"]["equity_value"] == "7533000000"
+    assert plan.diagnostics["ebitda_source"] == "assumed_ebitda_margin_on_revenue"
+    assert plan.diagnostics["basis_metric"] == "derived ebitda from revenue"
+    trace = compute_formula(**plan.payload)
+    assert Decimal(trace.result_value) > Decimal("0")
+
+
 def test_finance_missing_fact_retrieval_action_supports_ev_ebitda() -> None:
     plan = plan_finance_formula(question="Compare LULU and VSCO EV/EBITDA.", facts=[])
     source_action = CandidateAction(
@@ -1460,6 +1631,46 @@ def test_finance_missing_fact_retrieval_action_supports_ev_ebitda() -> None:
     assert action.payload["metadata"]["finance_formula_name"] == "ev_ebitda"
     assert "enterprise value" in action.payload["query"].lower()
     assert "ebitda" in action.payload["query"].lower()
+
+
+def test_finance_missing_fact_payload_for_modeling_uses_slot_frame_and_evidence_policy() -> None:
+    dcf_payload = _finance_missing_fact_retrieval_payload(
+        formula_name="dcf",
+        missing=["base_cash_flow", "growth_assumptions", "discount_rate", "terminal_value_assumption"],
+        goal="Using a discounted cash flow analysis for CRM, estimate enterprise value.",
+    )
+    lbo_payload = _finance_missing_fact_retrieval_payload(
+        formula_name="lbo",
+        missing=["entry_value", "debt_assumption", "cash_flow_or_ebitda", "exit_assumption"],
+        goal="Build a compact LBO-style analysis for EPAM using public filing data.",
+    )
+
+    assert dcf_payload["metadata"]["slot_frame"]["task_type"] == "model"
+    assert "operating cash flow" in dcf_payload["query"].lower()
+    assert dcf_payload["metadata"]["preferred_source_families"][0] == "structured_regulatory_data"
+    assert "cash flow" in dcf_payload["metadata"]["required_evidence_terms"]
+    assert lbo_payload["metadata"]["slot_frame"]["task_type"] == "model"
+    assert "adjusted ebitda" in lbo_payload["query"].lower()
+    assert "market_data_provider" in lbo_payload["metadata"]["preferred_source_families"]
+
+
+def test_finance_modeling_retrieval_payload_is_augmented_before_first_fetch() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+    )
+
+    payload = _augment_finance_modeling_retrieval_payload(
+        {"query": "EPAM LBO public filings", "queries": ["EPAM LBO public filings"], "max_fetches": 3},
+        root_goal="Build a compact LBO-style analysis for EPAM.",
+        recipe=recipe,
+    )
+
+    assert "operating cash flow" in payload["query"].lower()
+    assert "free cash flow" in payload["query"].lower()
+    assert "adjusted ebitda" in payload["query"].lower()
+    assert payload["max_fetches"] >= 12
+    assert payload["metadata"]["finance_modeling_intent"] == "lbo"
 
 
 def test_finance_fact_ledger_maps_pretax_income_concept_without_interest_pollution() -> None:

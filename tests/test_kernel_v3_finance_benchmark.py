@@ -79,6 +79,39 @@ def test_finance_benchmark_loads_workflow_annotations(tmp_path: Path) -> None:
     assert item.failure_taxonomy == ["slot_filling"]
 
 
+def test_checked_in_finance_workflow_datasets_are_trace_oriented() -> None:
+    dev10 = load_finance_benchmark_items(Path("data/bench/finance/fabv2_dev10.jsonl"))
+    public = load_finance_benchmark_items(Path("data/bench/finance/fabv2_public.jsonl"))
+    challenge = load_finance_benchmark_items(Path("data/bench/finance/holo_finance_workflow_challenge.jsonl"))
+    gold_records = _records(Path("data/bench/finance/fabv2_dev10.gold.jsonl"))
+
+    assert len(dev10) == 10
+    assert len(public) == 27
+    assert len(challenge) == 50
+    assert len(gold_records) == 10
+
+    for item in [*dev10, *public, *challenge]:
+        assert item.workflow_type
+        assert item.required_slots
+        assert item.evidence_policy.get("required_source_families")
+        assert item.expected_trace
+        assert item.failure_taxonomy
+        for trace_name in ("claim_ledger", "slot_frame", "transform_plan", "verifier_gate", "synthesis_gate", "citation"):
+            assert trace_name in item.expected_trace
+
+    for item in challenge:
+        assert item.gold_answer is None
+        assert item.source == "holo_finance_workflow_challenge"
+
+    for record in gold_records:
+        assert record.get("workflow_type")
+        assert record.get("required_slots")
+        assert record.get("evidence_policy", {}).get("required_source_families")
+        assert record.get("required_transforms") is not None
+        assert record.get("dealbreakers")
+        assert record.get("failure_taxonomy")
+
+
 def test_finance_benchmark_numeric_scoring_uses_tolerance() -> None:
     item = FinanceBenchmarkItem(
         item_id="num-1",
@@ -716,6 +749,7 @@ class _StaticChatRuntime:
                 "duration_ms": 7,
             },
         )
+
         return ChatRuntimeResult(
             status="completed",
             thread_id=thread_id,
@@ -737,3 +771,7 @@ class _StaticChatRuntime:
             summary=None,
             trace_refs=["ledger-1"],
         )
+
+
+def _records(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]

@@ -24,6 +24,57 @@ def test_finance_benchmark_report_renders_markdown_summary_and_recommendations(t
     assert "gold answers" in markdown
 
 
+def test_finance_benchmark_report_includes_repeatability_metrics(tmp_path: Path) -> None:
+    results = tmp_path / "repeat_results.jsonl"
+    rows = [
+        _row(
+            item_id="Q-repeat",
+            status="passed",
+            reason="numeric_within_tolerance",
+            citation_present=True,
+            numeric_passed=True,
+            tokens=1000,
+            retrieval_runs=1,
+            fetches=3,
+            repetition=0.0,
+            answer_chars=900,
+        ),
+        _row(
+            item_id="Q-repeat",
+            status="passed",
+            reason="numeric_within_tolerance",
+            citation_present=True,
+            numeric_passed=True,
+            tokens=1100,
+            retrieval_runs=1,
+            fetches=3,
+            repetition=0.0,
+            answer_chars=920,
+        ),
+        _row(
+            item_id="Q-other",
+            status="failed",
+            reason="missing_source",
+            citation_present=False,
+            numeric_passed=False,
+            tokens=1500,
+            retrieval_runs=2,
+            fetches=4,
+            repetition=0.0,
+            answer_chars=200,
+        ),
+    ]
+    results.write_text("\n".join(json.dumps(row, ensure_ascii=False, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+    report = build_finance_benchmark_report_from_path(results, benchmark_id="finance-repeat")
+    markdown = render_finance_benchmark_report(report, output_format="markdown")
+
+    assert report.summary["repeated_item_count"] == 1
+    assert report.summary["repeatability_score"] == 1.0
+    assert "| Repeated item count | 1 |" in markdown
+    assert "| Repeatability score | 100.0% |" in markdown
+
+
 def test_finance_benchmark_report_renders_html(tmp_path: Path) -> None:
     results = tmp_path / "results.jsonl"
     _write_results(results)

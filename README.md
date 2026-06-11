@@ -111,14 +111,17 @@ finance benchmark work and handoff status are tracked in
 v1 finance substrate with structured finance facts, deterministic calculator
 traces, numeric verification, FAB v2 public/dev10 import and scoring, and
 fast-lane budget controls. It has closed representative live tasks such as
-HD/LOW DIO, KHC adjusted EBITDA bridge, and WSC adjusted EBITDA add-back trend,
-but it should not yet be described as a stable Finance Agent v2 solver.
-PFE/Seagen transaction multiple has closed in earlier live smokes but is not
-repeatable: newer reruns expose retrieval/tool-observation failures, planner
-JSON repair failures, unbound acquisition-source templates, and transaction
-evidence acceptance gaps. The main open gap is robust generalization to harder
-filing/modeling tasks such as DCF/LBO, fixed-charge coverage, MLR, valuation
-multiples, transaction multiples, and purchase-price-allocation analysis.
+HD/LOW DIO, KHC adjusted EBITDA bridge, PFE/Seagen transaction multiple, and
+WSC adjusted EBITDA add-back trend, but it should not yet be described as a
+stable Finance Agent v2 solver. The main open gap is robust generalization to
+harder filing/modeling tasks such as DCF/LBO, fixed-charge coverage, MLR,
+valuation multiples, and purchase-price-allocation analysis.
+As of 2026-06-11, DCF/LBO are no longer only benchmark annotations: the finance
+domain pack has modeling-lite transform planning for DCF and LBO, operating
+cash flow / capex fact extraction, transparent assumption diagnostics, and
+missing-slot acquisition hints. This is a deterministic substrate v1 for
+auditable modeling traces, not a claim that Holo already solves full DCF/LBO
+benchmark tasks end to end.
 The newest substrate work starts lifting finance lessons into domain-general
 kernel primitives: `ClaimLedger`, `SlotFrame`, `EvidencePolicy`,
 `TransformPlan`, and `VerifierGateResult`. Finance now projects its fact ledger,
@@ -1159,7 +1162,8 @@ workflow pressure test, not just a finance question: `workflow_type`,
 numeric score, substrate score, workflow score, calculator usage, formula trace
 count, claim/slot/transform coverage, verifier and synthesis gate status,
 answer numeric support rate, unsupported numeric claim rate, missing-slot
-recovery, cost per solved task, and finance numeric failure taxonomy.
+recovery, cost per solved task, repeatability when duplicate item runs are
+present, workflow type distribution, and finance numeric failure taxonomy.
 
 The repository also keeps the official Finance Agent v2 public question file as
 `data/raw/fabv2_public.txt` and its normalized local import as
@@ -1167,9 +1171,11 @@ The repository also keeps the official Finance Agent v2 public question file as
 so use it for behavior/substrate/cost/failure-taxonomy coverage rather than
 official accuracy claims. A separate
 `data/bench/finance/holo_finance_workflow_challenge.jsonl` file defines
-workflow-oriented challenge tasks across compute/compare, reconciliation,
-event transactions, valuation multiples, coverage ratios, disclosure diff,
-market-event analysis, modeling-lite, and regulatory-ratio workflows.
+50 workflow-oriented challenge tasks across compute/compare, reconciliation,
+event transactions, valuation multiples, coverage ratios, earnings analysis,
+disclosure diff, market-event analysis, modeling-lite, and regulatory-ratio
+workflows. These items have workflow annotations and dealbreakers but no gold
+answers; they are a pressure suite for trace quality, not a score target.
 
 Latest public27 live workflow run:
 `run_public27_workflow_v1` ran all 27 public questions with `finance-fact-fast`,
@@ -1216,6 +1222,34 @@ cases Holo usually acquires claims and slot frames, but either does not yet
 produce a calculator trace or the SynthesisGate blocks unsupported numeric
 claims. That is the desired reliability posture: unsupported finance numbers
 should be stopped, not polished into a confident answer.
+
+2026-06-11 modeling-lite substrate update: DCF and LBO now have deterministic
+`TransformPlan` support in the finance formula planner. DCF can bind free cash
+flow directly or derive a base free-cash-flow input from operating cash flow
+less capital expenditures, then generate a discounted cash-flow calculator
+payload with explicit growth, discount-rate, terminal-growth, and forecast-year
+assumption diagnostics. LBO can bind entry enterprise value, debt/cash, EBITDA,
+leverage, exit multiple, EBITDA growth, debt-paydown, and hold-period
+assumptions into a sponsor IRR calculator payload. Missing DCF/LBO slots now
+feed structured retrieval hints and source-family policy back into the agent
+loop. This improves the workflow substrate for CRM DCF / EPAM LBO-style tasks,
+and fresh live reruns now show both tasks reaching formula traces; their dev10
+scores still should not be upgraded until the answer gate removes unsupported
+numeric claims and labels assumptions cleanly.
+
+Fresh 2026-06-11 live modeling-lite checks confirm the substrate enters the
+real loop but also show the remaining answer gate gap. A CRM DCF single-item
+run (`run_modeling_lite_dcf_lbo_v1`) produced `retrieval_runs=1`,
+`calculator_call_count=1`, `formula_trace_count=1`, `finance_fact_count=106`,
+and `claim_count=106`, but failed `finance.verify_numeric` because the final
+answer still contained unsupported material numbers. EPAM LBO initially had no
+calculator trace; after adding revenue-margin and entry-multiple modeling
+fallbacks, `run_epam_lbo_after_revenue_margin_fallback_v1` produced
+`calculator_call_count=1`, `formula_trace_count=1`, `transform_plan_count=2`,
+and `substrate_score=0.8889`. It still failed the verifier and synthesis gate
+because the answer path needs stronger assumption separation and removal of
+unsupported numeric claims. This is progress in the workflow substrate, not a
+full modeling benchmark pass.
 
 After adding workflow annotations, replay-scoring the same live dev10 results
 with `run_dev10_event_resolver_v1.workflow_scored` yields

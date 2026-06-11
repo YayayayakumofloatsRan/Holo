@@ -2592,6 +2592,10 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
         return any(marker in text for marker in ("ev/ebitda", "enterprise value", "market cap", "ebitda", "valuation"))
     if formula_name == "bridge_subtotal" and missing:
         return any(marker in text for marker in ("adjusted ebitda", "bridge", "addback", "add-back", "add back", "non-gaap"))
+    if formula_name == "dcf" and missing:
+        return any(marker in text for marker in ("dcf", "discounted cash flow", "cash flow", "wacc", "terminal growth"))
+    if formula_name == "lbo" and missing:
+        return any(marker in text for marker in ("lbo", "leveraged buyout", "ebitda", "exit multiple", "leverage"))
     return False
 
 
@@ -2626,6 +2630,16 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             f"{base_query} annual report 10-K 10-Q adjusted EBITDA reconciliation "
             "non-GAAP bridge add-backs deductions subtotal"
         )
+    elif formula_name == "dcf":
+        query = (
+            f"{base_query} 10-K operating cash flow free cash flow capital expenditures "
+            "discount rate WACC terminal growth DCF assumptions"
+        )
+    elif formula_name == "lbo":
+        query = (
+            f"{base_query} 10-K adjusted EBITDA operating cash flow free cash flow enterprise value market cap debt cash "
+            "LBO leverage exit multiple assumptions"
+        )
     else:
         query = f"{base_query} SEC filing missing finance facts {' '.join(missing)}"
     queries = _finance_missing_fact_queries(
@@ -2639,6 +2653,9 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
     if formula_name == "ev_ebitda" and len(tickers) > 1:
         max_queries = min(8, max(4, len(queries)))
         max_fetches = 24
+    if formula_name in {"dcf", "lbo"}:
+        max_queries = min(6, max(4, len(queries)))
+        max_fetches = 18
     return {
         "query": query,
         "queries": queries[:max_queries],
@@ -2662,7 +2679,7 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             "forbidden_source_families": evidence_policy.forbidden_source_families if evidence_policy is not None else [],
             "required_evidence_terms": evidence_policy.required_terms if evidence_policy is not None else [],
             "research_profile": "finance_fundamentals",
-            **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda"} else {}),
+            **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda", "dcf", "lbo"} else {}),
             **({"target_tickers": tickers} if tickers else {}),
         },
     }
@@ -2676,7 +2693,7 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             continue
         padded = cik.zfill(10)
         urls.append(f"https://data.sec.gov/submissions/CIK{padded}.json")
-        if formula_name in {"ev_revenue", "ev_ebitda", "margin", "cagr", "yoy_growth"}:
+        if formula_name in {"ev_revenue", "ev_ebitda", "margin", "cagr", "yoy_growth", "dcf", "lbo"}:
             urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
     return _ordered_unique(urls)[:12]
 
@@ -2792,6 +2809,14 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
         for ticker in tickers:
             add(f"{ticker} key statistics enterprise value market cap EBITDA total debt total cash")
             add(f"{ticker} 10-K EBITDA debt cash SEC")
+    elif formula_name == "dcf" and tickers:
+        for ticker in tickers:
+            add(f"{ticker} 10-K operating cash flow capital expenditures free cash flow SEC")
+            add(f"{ticker} DCF WACC terminal growth assumptions investor presentation")
+    elif formula_name == "lbo" and tickers:
+        for ticker in tickers:
+            add(f"{ticker} 10-K EBITDA operating cash flow free cash flow debt cash enterprise value market cap SEC")
+            add(f"{ticker} LBO leverage exit multiple assumptions")
     else:
         add(_finance_missing_fact_secondary_query(formula_name=formula_name, goal=goal))
         add(_finance_missing_fact_tertiary_query(formula_name=formula_name, goal=goal))
@@ -2799,7 +2824,7 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
 
 
 def _finance_missing_fact_authority_requirement(formula_name: str) -> str:
-    if formula_name == "ev_ebitda":
+    if formula_name in {"ev_ebitda", "dcf", "lbo"}:
         return "secondary_or_better"
     return "primary"
 
@@ -2807,6 +2832,8 @@ def _finance_missing_fact_authority_requirement(formula_name: str) -> str:
 def _finance_missing_fact_preferred_families(formula_name: str) -> list[str]:
     if formula_name == "ev_ebitda":
         return ["market_data_provider", "structured_regulatory_data", "regulatory_filing"]
+    if formula_name in {"dcf", "lbo"}:
+        return ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"]
     return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
 
 
@@ -2826,6 +2853,10 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} 10-K EBITDA debt cash market cap enterprise value"
     if formula_name == "bridge_subtotal":
         return f"{goal} annual report 10-K 10-Q non-GAAP adjusted EBITDA reconciliation add backs"
+    if formula_name == "dcf":
+        return f"{goal} annual report 10-K operating cash flow free cash flow capital expenditures"
+    if formula_name == "lbo":
+        return f"{goal} annual report 10-K adjusted EBITDA operating cash flow free cash flow debt cash enterprise value"
     return f"{goal} SEC Archives 8-K 10-K consideration revenue"
 
 
@@ -2834,6 +2865,10 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} official filing adjusted EBITDA market capitalization total debt cash equivalents"
     if formula_name == "bridge_subtotal":
         return f"{goal} investor relations annual report adjusted EBITDA non-GAAP reconciliation table"
+    if formula_name == "dcf":
+        return f"{goal} investor relations DCF assumptions WACC terminal growth cash flow"
+    if formula_name == "lbo":
+        return f"{goal} investor relations LBO assumptions leverage exit multiple EBITDA cash flow"
     return f"{goal} official filing transaction value revenue"
 
 
@@ -3056,6 +3091,7 @@ def _bind_model_action_to_recipe(
         payload = _apply_recipe_profile_defaults(payload, recipe)
         payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
         payload = _apply_research_depth_defaults(payload)
+        payload = _augment_finance_modeling_retrieval_payload(payload, root_goal=goal, recipe=recipe)
         decision = supervise_retrieval_payload(
             payload,
             replan_hints=_retrieval_hints_from_context(context),
@@ -3078,6 +3114,42 @@ def _retrieval_hints_from_context(context: ContextBundle) -> JsonObject:
     hints = hints if isinstance(hints, dict) else {}
     retrieval = hints.get("retrieval")
     return dict(retrieval) if isinstance(retrieval, dict) else {}
+
+
+def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goal: str, recipe: TaskRecipe) -> JsonObject:
+    if recipe.mode != "retrieval_answer":
+        return payload
+    text = f"{root_goal} {payload.get('query') or ''}".lower()
+    formula_name = "dcf" if ("discounted cash flow" in text or " dcf" in f" {text}") else "lbo" if (" lbo" in f" {text}" or "leveraged buyout" in text) else ""
+    if not formula_name:
+        return payload
+    updated = dict(payload)
+    query = " ".join(str(updated.get("query") or root_goal or "").split())
+    if formula_name == "dcf":
+        additions = "10-K operating cash flow free cash flow capital expenditures WACC discount rate terminal growth"
+    else:
+        additions = "10-K adjusted EBITDA operating cash flow free cash flow enterprise value market cap debt cash leverage exit multiple"
+    updated["query"] = _append_query_terms(query, additions)
+    queries = _string_list(updated.get("queries"))
+    if queries:
+        updated["queries"] = _ordered_unique([updated["query"], *[_append_query_terms(item, additions) for item in queries]])[: max(len(queries), 4)]
+        updated["max_queries"] = max(int(updated.get("max_queries") or 0), min(6, len(updated["queries"])))
+    metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
+    metadata["finance_modeling_intent"] = formula_name
+    metadata.setdefault("research_task_kind", "valuation")
+    metadata.setdefault("preferred_source_families", ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"])
+    updated["metadata"] = metadata
+    updated["max_sources"] = max(int(updated.get("max_sources") or 0), 24)
+    updated["max_fetches"] = max(int(updated.get("max_fetches") or 0), 12)
+    updated["max_spans_per_document"] = max(int(updated.get("max_spans_per_document") or 0), 8)
+    return updated
+
+
+def _append_query_terms(query: str, additions: str) -> str:
+    existing = " ".join(str(query or "").split())
+    lower = existing.lower()
+    missing_terms = [term for term in str(additions or "").split() if term.lower() not in lower]
+    return " ".join([existing, *missing_terms]).strip()
 
 
 def _preserve_retrieval_capability_context(payload: JsonObject, *, recipe: TaskRecipe) -> JsonObject:

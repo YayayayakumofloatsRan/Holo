@@ -179,10 +179,12 @@ score. This is intentionally stricter than answer-only scoring.
 
 The repository also includes
 `data/bench/finance/holo_finance_workflow_challenge.jsonl`, a workflow-oriented
-challenge set. It is not a gold-answer benchmark; it is a pressure suite for
-compute/compare, reconciliation, event transactions, valuation multiples, coverage
-ratios, earnings reconciliation, disclosure diff, market-event analysis, modeling-lite,
-and regulatory-ratio workflows.
+challenge set with `50` items. It is not a gold-answer benchmark; it is a pressure
+suite for compute/compare, reconciliation, event transactions, valuation multiples,
+coverage ratios, earnings reconciliation, disclosure diff, market-event analysis,
+modeling-lite, and regulatory-ratio workflows. Each item carries workflow slots,
+source policy, required transforms, dealbreakers, expected trace records, and
+failure taxonomy labels; it does not carry answer gold.
 
 Score existing predictions without running Holo:
 
@@ -236,13 +238,21 @@ The summary reports:
 - average token use,
 - average processor duration,
 - average retrieval runs,
-- average query repetition rate.
+- average query repetition rate,
+- claim-ledger, slot-frame, transform-plan, verifier-gate, and synthesis-gate coverage,
+- unsupported numeric claim rate,
+- missing-slot recovery rate,
+- cost per passed task,
+- repeatability score when duplicate item runs are present,
+- workflow type distribution and optional workflow annotation scores.
 
 The report renderer turns item results into Markdown, HTML, or JSON with:
 
 - score and efficiency summary,
 - status, failure-mode, and score-reason breakdowns,
 - weakest items ranked by score, citations, trace cost, repetition, and answer length,
+- workflow and substrate metrics including repeatability, synthesis-gate status,
+  verifier-gate status, and unsupported numeric claim rate,
 - recommended next experiments.
 
 ## Next Steps
@@ -742,10 +752,10 @@ Post-dev10 EV/EBITDA iteration:
   multi-entity compute/compare `1`, valuation multiple `1`. The main failure modes
   are `all_evidence_rejected`, `coverage_gap`, and
   `finance_numeric:unsupported_answer_number`.
-- `data/bench/finance/holo_finance_workflow_challenge.jsonl` adds a compact taxonomy
-  challenge set by workflow shape instead of company. It is designed to stop the project
-  from overfitting to dev10 while still keeping every task tied to a generic workflow
-  primitive.
+- `data/bench/finance/holo_finance_workflow_challenge.jsonl` now adds a 50-item
+  taxonomy challenge set by workflow shape instead of company. It is designed to
+  stop the project from overfitting to dev10 while still keeping every task tied
+  to a generic workflow primitive and trace expectation.
 - Future validation should keep the same failure taxonomy discipline: classify
   failures as source acquisition, fetch/parser, fact-ledger extraction, formula
   binding, verifier policy, synthesis gate, or model JSON repair before adding
@@ -767,9 +777,14 @@ Post-dev10 EV/EBITDA iteration:
    disclosure tasks, and SynthesisGate repair for numeric tasks with partial support.
    Because public27 has no public gold, do not call it an official accuracy score.
 3. Do not broaden new architecture before addressing the dev10 failure taxonomy.
-   The next substrate work should target transform-planning / modeling-policy
-   gaps that appear across several tasks: DCF, LBO, fixed-charge coverage,
-   EV/EBITDA, MLR rebate, and purchase price allocation.
+   The next substrate work should target remaining transform-planning /
+   modeling-policy gaps that appear across several tasks: fixed-charge
+   coverage, MLR rebate, purchase price allocation, and stronger market-data
+   acquisition for EV/EBITDA. DCF/LBO now have a first deterministic
+   modeling-lite transform planner and fresh single-item reruns show formula
+   traces; the dev10 status should still remain blocked until SynthesisGate
+   produces assumption-labeled, citation-preserving answers without unsupported
+   numeric claims.
 4. Add domain-pack formula templates and slot schemas only when they map to a
    reusable workflow primitive: valuation model, coverage ratio, regulatory
    rebate calculation, or purchase-price-allocation reconciliation. Do not add
@@ -783,19 +798,79 @@ Post-dev10 EV/EBITDA iteration:
 7. Run the curated dev10 in small batches and classify verifier failures into
    unsupported answer number, ledger extraction gap, missing formula trace, unit
    mismatch, period mismatch, and assumption-label issues.
-8. Expand the finance fact ledger and formula planner for bridge, transaction
-   multiple, fixed-charge coverage, DCF/LBO, MLR, and purchase price allocation
-   cases. EV/EBITDA now has formula intent and missing-fact fallback; it still
-   needs stronger acquisition for market cap, total debt, cash, and EBITDA
-   components.
-9. Reduce `finance-fact-fast` cost by shrinking processor prompts, using
-   structured retrieval results more directly, and avoiding synthesis context
-   duplication.
-10. Add repeated-run stability batches for stable4/dev10: each selected item should run
-   at least three times and report source-family, claim-count, slot-missing,
-   calculator-trace, verifier-gate, synthesis-gate, and final status stability.
-11. Add claim-level citation judging for non-numeric assertions.
-12. Add source-support scoring against benchmark evidence excerpts.
-13. Add PPT-ready rendering presets for task and benchmark graphs.
-14. Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
-   retrieval plus memory.
+8. Expand the finance fact ledger and formula planner for fixed-charge
+   coverage, MLR, and purchase price allocation cases. DCF/LBO v1 now binds
+   cash-flow / entry-value facts to explicit modeling assumptions and emits
+   calculator payloads. EV/EBITDA now has formula intent and missing-fact
+   fallback; it still needs stronger acquisition for market cap, total debt,
+   cash, and EBITDA components.
+
+## 2026-06-11 Modeling-Lite Substrate Update
+
+This iteration adds deterministic DCF/LBO support to the generic workflow
+spine, without adding fixed-answer benchmark heuristics:
+
+- `FinanceFactLedger` now recognizes operating cash flow, free cash flow, net
+  cash provided by operating activities, and capital expenditures from
+  structured facts and natural text.
+- `FinanceFormulaPlanner` now detects DCF and LBO intents. DCF binds free cash
+  flow directly, or derives base free cash flow from operating cash flow less
+  capital expenditures when both are available. LBO binds entry enterprise
+  value, EBITDA, leverage, exit multiple, EBITDA growth, debt-paydown, and hold
+  period into a sponsor-IRR calculator trace.
+- DCF/LBO assumptions are carried in diagnostics as `question_or_host_modeling_policy`
+  assumptions. This keeps generated numbers auditable and lets SynthesisGate
+  require explicit assumption labeling.
+- `SlotFrame` and `EvidencePolicy` now represent modeling-lite tasks directly:
+  DCF exposes `base_cash_flow`, `growth_assumptions`, `discount_rate`, and
+  `terminal_value_assumption`; LBO exposes `entry_value`, `debt_assumption`,
+  `cash_flow_or_ebitda`, and `exit_assumption`.
+- Missing DCF/LBO slots now feed targeted retrieval hints for SEC filings,
+  companyfacts, investor materials, cash-flow inputs, WACC / terminal growth,
+  EBITDA, leverage, exit multiple, debt, and cash.
+
+Verification so far is local regression plus targeted live checks, not a new
+full dev10 score:
+`tests/test_kernel_v3_finance_engine.py` covers DCF and LBO calculator payloads,
+derived free-cash-flow inputs, modeling slot frames, and missing-slot retrieval
+payloads. The broader finance benchmark / retrieval provider regression suite
+also passes. The live CRM DCF / EPAM LBO reruns below prove the paths enter the
+real loop, but they do not yet justify upgrading dev10 scores.
+
+Live follow-up:
+
+- `run_modeling_lite_dcf_lbo_v1` ran CRM DCF and EPAM LBO. CRM DCF reached
+  `retrieval_runs=1`, `calculator_call_count=1`, `formula_trace_count=1`,
+  `finance_fact_count=106`, and `claim_count=106`, proving the DCF transform
+  entered the real loop. It still failed numeric verification due to unsupported
+  final-answer numbers.
+- EPAM LBO initially still had no calculator trace because retrieval found
+  revenue/debt/cash-style facts but no EBITDA or cash-flow basis. The LBO
+  planner was then extended to use a clearly labeled `revenue * EBITDA margin`
+  modeling assumption when no direct EBITDA / cash-flow basis is available.
+- `run_epam_lbo_after_revenue_margin_fallback_v1` then produced
+  `calculator_call_count=1`, `formula_trace_count=1`, `transform_plan_count=2`,
+  `claim_ledger_present_rate=1.0`, and `substrate_score=0.8889`. It still failed
+  verifier / synthesis gates because material numeric claims need stronger
+  assumption separation and unsupported-number stripping before final answer
+  delivery.
+
+Conclusion: DCF/LBO are now real modeling-lite substrate paths with live
+calculator traces, but they are not yet solved benchmark items. The next
+engineering pressure should move from formula coverage to SynthesisGate repair,
+assumption-ledger display, and citation-preserving limitation answers.
+
+Additional follow-ups:
+
+- Reduce `finance-fact-fast` cost by shrinking processor prompts, using
+  structured retrieval results more directly, and avoiding synthesis context
+  duplication.
+- Add repeated-run stability batches for stable4/dev10: each selected item
+  should run at least three times and report source-family, claim-count,
+  slot-missing, calculator-trace, verifier-gate, synthesis-gate, and final
+  status stability.
+- Add claim-level citation judging for non-numeric assertions.
+- Add source-support scoring against benchmark evidence excerpts.
+- Add PPT-ready rendering presets for task and benchmark graphs.
+- Add ablation presets: bare LLM, simple retrieval, Holo retrieval, Holo
+  retrieval plus memory.

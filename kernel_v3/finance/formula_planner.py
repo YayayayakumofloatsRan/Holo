@@ -49,6 +49,10 @@ def plan_finance_formula(
         return _plan_yoy_growth(usable)
     if formula == "bridge_subtotal":
         return _plan_bridge_subtotal(usable)
+    if formula == "dcf":
+        return _plan_dcf(question=question, facts=usable)
+    if formula == "lbo":
+        return _plan_lbo(question=question, facts=usable)
     return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "unsupported_formula", "formula": formula})
 
 
@@ -59,6 +63,10 @@ def _detect_formula(question: str) -> str | None:
         return "cagr"
     if "dio" in text or "days inventory" in text or "days inventory outstanding" in text:
         return "dio"
+    if "discounted cash flow" in text or re.search(r"\bdcf\b", text):
+        return "dcf"
+    if re.search(r"\blbo\b", text) or "leveraged buyout" in text:
+        return "lbo"
     if "ev/revenue" in compact or "ev/rev" in compact or "enterprise value to revenue" in text:
         return "ev_revenue"
     if "ev/ebitda" in compact or "enterprise value to ebitda" in text:
@@ -518,6 +526,187 @@ def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     )
 
 
+def _plan_dcf(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    free_cash_flow = _latest_fact(facts, ("free cash flow",))
+    operating_cash_flow = _latest_fact(
+        facts,
+        (
+            "operating cash flow",
+            "cash flow from operations",
+            "net cash provided by operating activities",
+        ),
+    )
+    capex = _latest_fact(facts, ("capital expenditures", "capex"))
+    input_facts: list[FinanceFact] = []
+    base_cash_flow_metric = ""
+    base_cash_flow_unit: str | None = None
+    if free_cash_flow is not None:
+        base_cash_flow_value = free_cash_flow.value
+        base_cash_flow_unit = free_cash_flow.unit
+        base_cash_flow_metric = free_cash_flow.metric
+        input_facts = [free_cash_flow]
+    elif operating_cash_flow is not None and capex is not None:
+        operating_value = _decimal_or_none(operating_cash_flow.value)
+        capex_value = _decimal_or_none(capex.value)
+        if operating_value is None or capex_value is None:
+            return _missing("dcf", ["base_cash_flow"], facts=[operating_cash_flow, capex])
+        base_cash_flow_value = _decimal_string(operating_value - abs(capex_value))
+        base_cash_flow_unit = operating_cash_flow.unit
+        base_cash_flow_metric = "derived free cash flow"
+        input_facts = [operating_cash_flow, capex]
+    elif operating_cash_flow is not None:
+        base_cash_flow_value = operating_cash_flow.value
+        base_cash_flow_unit = operating_cash_flow.unit
+        base_cash_flow_metric = operating_cash_flow.metric
+        input_facts = [operating_cash_flow]
+    else:
+        return _missing("dcf", ["base_cash_flow"], facts=[])
+
+    assumptions = _dcf_assumptions(question)
+    discount_rate = assumptions["discount_rate"]
+    terminal_growth_rate = assumptions["terminal_growth_rate"]
+    if discount_rate <= terminal_growth_rate:
+        return _missing("dcf", ["discount_rate_above_terminal_growth"], facts=[base_cash_flow])
+    years = int(assumptions["forecast_years"])
+    variables: JsonObject = {
+        "base_cash_flow": base_cash_flow_value,
+        "growth_rate": _decimal_string(assumptions["growth_rate"]),
+        "discount_rate": _decimal_string(discount_rate),
+        "terminal_growth_rate": _decimal_string(terminal_growth_rate),
+    }
+    projected_terms = [
+        f"(base_cash_flow * ((1 + growth_rate) ** {year}) / ((1 + discount_rate) ** {year}))"
+        for year in range(1, years + 1)
+    ]
+    terminal_term = (
+        f"(base_cash_flow * ((1 + growth_rate) ** {years}) * (1 + terminal_growth_rate) "
+        f"/ (discount_rate - terminal_growth_rate) / ((1 + discount_rate) ** {years}))"
+    )
+    return _ready(
+        "dcf",
+        " + ".join([*projected_terms, terminal_term]),
+        variables,
+        unit=base_cash_flow_unit,
+        facts=input_facts,
+        diagnostics={
+            "modeling_workflow": "discounted_cash_flow",
+            "base_cash_flow_metric": base_cash_flow_metric,
+            "assumptions": _assumption_diagnostics(assumptions),
+            "defaulted_assumptions": assumptions["defaulted"],
+            "assumption_source": "question_or_host_modeling_policy",
+        },
+    )
+
+
+def _plan_lbo(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    ev_inputs = _enterprise_value_inputs(facts)
+    basis = _lbo_basis_fact(facts)
+    revenue_basis = _latest_fact(facts, ("revenue", "net sales", "net revenues", "total revenues", "sales"))
+    missing: list[str] = []
+    if basis is None and revenue_basis is None:
+        missing.append("cash_flow_or_ebitda")
+    if missing:
+        return _missing(
+            "lbo",
+            missing,
+            facts=[
+                item
+                for item in (
+                    ev_inputs.get("equity"),
+                    ev_inputs.get("debt"),
+                    ev_inputs.get("cash"),
+                    ev_inputs.get("investments"),
+                    basis,
+                )
+                if isinstance(item, FinanceFact)
+            ],
+        )
+
+    assumptions = _lbo_assumptions(question)
+    basis_value_fact = basis or revenue_basis
+    if basis_value_fact is None:
+        return _missing("lbo", ["cash_flow_or_ebitda"], facts=[])
+    basis_value = _decimal_or_none(basis_value_fact.value)
+    if basis_value is None:
+        return _missing("lbo", ["cash_flow_or_ebitda"], facts=[basis_value_fact])
+    if basis is None:
+        ebitda_variable_value = _decimal_string(basis_value * assumptions["ebitda_margin"])
+        ebitda_source = "assumed_ebitda_margin_on_revenue"
+        basis_metric = "derived ebitda from revenue"
+    else:
+        ebitda_variable_value = basis.value
+        ebitda_source = "direct" if _metric_text(basis.metric) in {"adjusted ebitda", "ebitda"} else "cash_flow_basis"
+        basis_metric = basis.metric
+    variables: JsonObject
+    input_facts: list[FinanceFact]
+    enterprise_value_source = str(ev_inputs["source"])
+    equity = ev_inputs.get("equity")
+    if isinstance(equity, FinanceFact):
+        variables = dict(ev_inputs["variables"])
+        input_facts = [*ev_inputs["facts"], basis_value_fact]
+        if "debt" in ev_inputs["missing"]:
+            assumptions["defaulted"].append("debt")
+        if "cash" in ev_inputs["missing"]:
+            assumptions["defaulted"].append("cash")
+    else:
+        entry_basis_value = _decimal_or_none(ebitda_variable_value)
+        if entry_basis_value is None:
+            return _missing("lbo", ["cash_flow_or_ebitda"], facts=[basis_value_fact])
+        variables = {
+            "equity_value": _decimal_string(entry_basis_value * assumptions["entry_multiple"]),
+            "debt": "0",
+            "cash": "0",
+            "investments": "0",
+        }
+        input_facts = [basis_value_fact]
+        enterprise_value_source = "assumed_entry_enterprise_value_from_basis_multiple"
+    variables.update(
+        {
+            "ebitda": ebitda_variable_value,
+            "debt_multiple": _decimal_string(assumptions["debt_multiple"]),
+            "exit_multiple": _decimal_string(assumptions["exit_multiple"]),
+            "ebitda_growth_rate": _decimal_string(assumptions["ebitda_growth_rate"]),
+            "annual_debt_paydown_multiple": _decimal_string(assumptions["annual_debt_paydown_multiple"]),
+            "hold_years": int(assumptions["hold_years"]),
+        }
+    )
+    entry_enterprise_value = _decimal_or_none(str(variables.get("equity_value") or "0"))
+    if entry_enterprise_value is not None:
+        entry_enterprise_value += _decimal_or_none(str(variables.get("debt") or "0")) or Decimal(0)
+        entry_enterprise_value -= _decimal_or_none(str(variables.get("cash") or "0")) or Decimal(0)
+        entry_enterprise_value -= _decimal_or_none(str(variables.get("investments") or "0")) or Decimal(0)
+    ebitda_value = _decimal_or_none(ebitda_variable_value)
+    if (
+        entry_enterprise_value is not None
+        and ebitda_value is not None
+        and entry_enterprise_value <= ebitda_value * assumptions["debt_multiple"]
+    ):
+        return _missing("lbo", ["positive_sponsor_equity_after_debt_assumption"], facts=input_facts)
+    expression = (
+        "(((ebitda * ((1 + ebitda_growth_rate) ** hold_years) * exit_multiple) "
+        "- max((ebitda * debt_multiple) - (ebitda * annual_debt_paydown_multiple * hold_years), 0)) "
+        "/ ((equity_value + debt - cash - investments) - (ebitda * debt_multiple))) "
+        "** (1 / hold_years) - 1"
+    )
+    return _ready(
+        "lbo",
+        expression,
+        variables,
+        unit="percent",
+        facts=input_facts,
+        diagnostics={
+            "modeling_workflow": "leveraged_buyout",
+            "enterprise_value_source": enterprise_value_source,
+            "ebitda_source": ebitda_source,
+            "basis_metric": basis_metric,
+            "assumptions": _assumption_diagnostics(assumptions),
+            "defaulted_assumptions": assumptions["defaulted"],
+            "assumption_source": "question_or_host_modeling_policy",
+            "reported_output": "sponsor_irr",
+        },
+    )
+
+
 def _best_bridge_group(facts: list[FinanceFact]) -> JsonObject | None:
     groups = _bridge_fact_groups(facts)
     candidates: list[JsonObject] = []
@@ -758,6 +947,213 @@ def _bridge_group_score(
     if base_value is not None and adjusted_value is not None and abs(adjusted_value) >= abs(base_value):
         score += 5
     return score
+
+
+def _dcf_assumptions(question: str) -> JsonObject:
+    defaulted: list[str] = []
+    growth_rate = _percentage_assumption(
+        question,
+        ("fcf growth", "free cash flow growth", "cash flow growth", "revenue growth", "growth"),
+        Decimal("0.03"),
+        defaulted=defaulted,
+        name="growth_rate",
+    )
+    discount_rate = _percentage_assumption(
+        question,
+        ("discount rate", "wacc", "cost of capital"),
+        Decimal("0.10"),
+        defaulted=defaulted,
+        name="discount_rate",
+    )
+    terminal_growth_rate = _percentage_assumption(
+        question,
+        ("terminal growth", "perpetuity growth", "long-term growth", "long term growth"),
+        Decimal("0.025"),
+        defaulted=defaulted,
+        name="terminal_growth_rate",
+    )
+    years = _integer_assumption(
+        question,
+        ("forecast", "projection", "projected", "year", "years"),
+        5,
+        defaulted=defaulted,
+        name="forecast_years",
+        minimum=1,
+        maximum=10,
+    )
+    return {
+        "growth_rate": growth_rate,
+        "discount_rate": discount_rate,
+        "terminal_growth_rate": terminal_growth_rate,
+        "forecast_years": years,
+        "defaulted": defaulted,
+    }
+
+
+def _lbo_assumptions(question: str) -> JsonObject:
+    defaulted: list[str] = []
+    debt_multiple = _multiple_assumption(
+        question,
+        ("debt multiple", "leverage", "debt"),
+        Decimal("4.0"),
+        defaulted=defaulted,
+        name="debt_multiple",
+    )
+    entry_multiple = _multiple_assumption(
+        question,
+        ("entry multiple", "purchase multiple", "entry ev/ebitda", "valuation multiple"),
+        Decimal("10.0"),
+        defaulted=defaulted,
+        name="entry_multiple",
+    )
+    exit_multiple = _multiple_assumption(
+        question,
+        ("exit multiple", "terminal multiple", "exit ev/ebitda"),
+        Decimal("10.0"),
+        defaulted=defaulted,
+        name="exit_multiple",
+    )
+    ebitda_growth_rate = _percentage_assumption(
+        question,
+        ("ebitda growth", "cash flow growth", "growth"),
+        Decimal("0.03"),
+        defaulted=defaulted,
+        name="ebitda_growth_rate",
+    )
+    ebitda_margin = _percentage_assumption(
+        question,
+        ("ebitda margin", "cash flow margin", "margin"),
+        Decimal("0.20"),
+        defaulted=defaulted,
+        name="ebitda_margin",
+    )
+    annual_debt_paydown_multiple = _multiple_assumption(
+        question,
+        ("annual debt paydown", "debt paydown", "paydown"),
+        Decimal("0.25"),
+        defaulted=defaulted,
+        name="annual_debt_paydown_multiple",
+    )
+    hold_years = _integer_assumption(
+        question,
+        ("hold period", "holding period", "exit year", "years"),
+        5,
+        defaulted=defaulted,
+        name="hold_years",
+        minimum=1,
+        maximum=10,
+    )
+    return {
+        "entry_multiple": entry_multiple,
+        "debt_multiple": debt_multiple,
+        "exit_multiple": exit_multiple,
+        "ebitda_growth_rate": ebitda_growth_rate,
+        "ebitda_margin": ebitda_margin,
+        "annual_debt_paydown_multiple": annual_debt_paydown_multiple,
+        "hold_years": hold_years,
+        "defaulted": defaulted,
+    }
+
+
+def _lbo_basis_fact(facts: list[FinanceFact]) -> FinanceFact | None:
+    return _latest_fact(
+        facts,
+        (
+            "adjusted ebitda",
+            "ebitda",
+            "free cash flow",
+            "operating cash flow",
+            "cash flow from operations",
+            "net cash provided by operating activities",
+        ),
+    )
+
+
+def _assumption_diagnostics(assumptions: JsonObject) -> JsonObject:
+    return {
+        key: _decimal_string(value) if isinstance(value, Decimal) else value
+        for key, value in assumptions.items()
+        if key != "defaulted"
+    }
+
+
+def _percentage_assumption(
+    question: str,
+    labels: tuple[str, ...],
+    default: Decimal,
+    *,
+    defaulted: list[str],
+    name: str,
+) -> Decimal:
+    text = _metric_text(question)
+    for label in labels:
+        compact_label = re.escape(_metric_text(label))
+        patterns = (
+            rf"{compact_label}[^\d%]{{0,60}}(?P<value>\d+(?:\.\d+)?)\s*%",
+            rf"(?P<value>\d+(?:\.\d+)?)\s*%[^\w%]{{0,40}}{compact_label}",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            value = _decimal_or_none(match.group("value"))
+            if value is not None:
+                return value / Decimal(100)
+    defaulted.append(name)
+    return default
+
+
+def _multiple_assumption(
+    question: str,
+    labels: tuple[str, ...],
+    default: Decimal,
+    *,
+    defaulted: list[str],
+    name: str,
+) -> Decimal:
+    text = _metric_text(question)
+    for label in labels:
+        compact_label = re.escape(_metric_text(label))
+        patterns = (
+            rf"{compact_label}[^\dx]{{0,60}}(?P<value>\d+(?:\.\d+)?)\s*x",
+            rf"(?P<value>\d+(?:\.\d+)?)\s*x[^\w]{{0,40}}{compact_label}",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            value = _decimal_or_none(match.group("value"))
+            if value is not None:
+                return value
+    defaulted.append(name)
+    return default
+
+
+def _integer_assumption(
+    question: str,
+    labels: tuple[str, ...],
+    default: int,
+    *,
+    defaulted: list[str],
+    name: str,
+    minimum: int,
+    maximum: int,
+) -> int:
+    text = _metric_text(question)
+    for label in labels:
+        compact_label = re.escape(_metric_text(label))
+        patterns = (
+            rf"{compact_label}[^\d]{{0,40}}(?P<value>\d{{1,2}})\s*(?:year|years|yr|yrs)?",
+            rf"(?P<value>\d{{1,2}})\s*(?:year|years|yr|yrs)[^\w]{{0,40}}{compact_label}",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            value = int(match.group("value"))
+            return max(minimum, min(maximum, value))
+    defaulted.append(name)
+    return default
 
 
 def _ready(

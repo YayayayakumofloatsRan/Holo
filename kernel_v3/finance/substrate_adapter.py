@@ -60,6 +60,10 @@ def finance_evidence_policy_for_question(question: str, *, formula_name: str | N
     elif _looks_like_transaction_task(text, formula_name=formula_name):
         required_terms.extend(["transaction", "acquisition", "merger", "consideration", "8-k", "form 8-k"])
         required_families.append("company_ir")
+    elif _looks_like_modeling_task(text, formula_name=formula_name):
+        required_terms.extend(["cash flow", "ebitda", "assumption", "discount rate", "exit multiple"])
+        required_families.append("market_data_provider")
+        authority = "primary_or_structured"
     elif _looks_like_valuation_task(text, formula_name=formula_name):
         required_families.extend(["market_data_provider", "company_ir"])
     return EvidencePolicy(
@@ -172,6 +176,8 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
         "margin": ["margin_numerator", "revenue_denominator"],
         "bps_difference": ["prior_rate_or_margin", "current_rate_or_margin"],
         "yoy_growth": ["prior_period_value", "current_period_value"],
+        "dcf": ["entity", "base_cash_flow", "growth_assumptions", "discount_rate", "terminal_value_assumption"],
+        "lbo": ["entity", "entry_value", "debt_assumption", "cash_flow_or_ebitda", "exit_assumption"],
     }
     names = slots_by_formula.get(str(formula_name or ""), [])
     return [
@@ -316,6 +322,25 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "current_rate_or_margin": ["margin", "rate", "yield"],
         "prior_period_value": ["revenue", "net sales", "net income", "operating income", "ebitda"],
         "current_period_value": ["revenue", "net sales", "net income", "operating income", "ebitda"],
+        "entity": ["entity", "ticker"],
+        "base_cash_flow": [
+            "free cash flow",
+            "operating cash flow",
+            "cash flow from operations",
+            "net cash provided by operating activities",
+        ],
+        "growth_assumptions": ["growth rate", "revenue growth", "cash flow growth"],
+        "discount_rate": ["discount rate", "wacc", "cost of capital"],
+        "terminal_value_assumption": ["terminal growth", "terminal multiple", "exit multiple"],
+        "entry_value": ["enterprise value", "market cap", "market capitalization", "equity value"],
+        "debt_assumption": ["debt multiple", "debt", "leverage"],
+        "cash_flow_or_ebitda": [
+            "free cash flow",
+            "operating cash flow",
+            "adjusted ebitda",
+            "ebitda",
+        ],
+        "exit_assumption": ["exit multiple", "terminal multiple", "exit value"],
     }
     return mapping.get(name, [name])
 
@@ -323,6 +348,8 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
 def _task_type_for_formula(formula_name: str, question: str) -> str:
     if formula_name == "bridge_subtotal" or _looks_like_reconciliation_task(_normalized(question), formula_name=formula_name):
         return "reconcile"
+    if formula_name in {"dcf", "lbo"}:
+        return "model"
     if formula_name in {"dio", "ev_revenue", "ev_ebitda", "cagr", "margin", "bps_difference", "yoy_growth"}:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
@@ -331,6 +358,10 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
 def _infer_formula_name(question: str) -> str:
     text = _normalized(question)
     compact = text.replace(" ", "")
+    if "discounted cash flow" in text or "dcf" in text:
+        return "dcf"
+    if "lbo" in text or "leveraged buyout" in text:
+        return "lbo"
     if "ev/ebitda" in compact:
         return "ev_ebitda"
     if "ev/revenue" in compact or "ev/rev" in compact:
@@ -365,6 +396,20 @@ def _looks_like_transaction_task(text: str, *, formula_name: str | None) -> bool
 def _looks_like_valuation_task(text: str, *, formula_name: str | None) -> bool:
     return str(formula_name or "") in {"ev_revenue", "ev_ebitda"} or any(
         marker in text for marker in ("ev/ebitda", "ev/revenue", "market cap", "enterprise value", "valuation")
+    )
+
+
+def _looks_like_modeling_task(text: str, *, formula_name: str | None) -> bool:
+    return str(formula_name or "") in {"dcf", "lbo"} or any(
+        marker in text
+        for marker in (
+            "discounted cash flow",
+            "dcf",
+            "lbo",
+            "leveraged buyout",
+            "financial model",
+            "modeling",
+        )
     )
 
 

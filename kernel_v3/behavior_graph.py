@@ -759,6 +759,7 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 values[key].append(float(value))
     item_count = len(results)
+    repeated_item_count, repeatability_score = _benchmark_repeatability_summary(results)
     return {
         "status_counts": status_counts,
         "reason_counts": reason_counts,
@@ -790,6 +791,8 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         "synthesis_gate_repair_rate": _rate(synthesis_gate_repaired, synthesis_gate_repairable) if synthesis_gate_repairable else None,
         "unsupported_numeric_claim_rate": _rate(unsupported_numeric_count, item_count),
         "missing_slot_recovery_rate": _rate(missing_slot_recovered, missing_slot_recovery_scored) if missing_slot_recovery_scored else None,
+        "repeated_item_count": repeated_item_count,
+        "repeatability_score": repeatability_score,
         "average_calculator_calls": _average(values["calculator_call_count"]),
         "average_formula_traces": _average(values["formula_trace_count"]),
         "average_finance_facts": _average(values["finance_fact_count"]),
@@ -823,6 +826,7 @@ def _benchmark_metric_nodes(summary: JsonObject) -> list[BehaviorGraphNode]:
         ("average_claims", "Avg claims"),
         ("average_answer_numeric_support_rate", "Avg numeric support"),
         ("unsupported_numeric_claim_rate", "Unsupported numeric"),
+        ("repeatability_score", "Repeatability"),
         ("average_final_answer_chars", "Avg answer chars"),
     ]
     nodes: list[BehaviorGraphNode] = []
@@ -839,6 +843,41 @@ def _benchmark_metric_nodes(summary: JsonObject) -> list[BehaviorGraphNode]:
             )
         )
     return nodes
+
+
+def _benchmark_repeatability_summary(results: list[JsonObject]) -> tuple[int, float | None]:
+    grouped: dict[str, list[JsonObject]] = {}
+    for index, result in enumerate(results, start=1):
+        item_id = _text(result.get("item_id")) or f"item-{index}"
+        grouped.setdefault(item_id, []).append(result)
+    repeated = {item_id: rows for item_id, rows in grouped.items() if len(rows) > 1}
+    if not repeated:
+        return 0, None
+    scores: list[float] = []
+    for rows in repeated.values():
+        statuses = {_text(row.get("status")) or _scorecard_text(row, "status") or "unknown" for row in rows}
+        citation_presence = {bool(_dict(row.get("scorecard")).get("citation_present")) for row in rows}
+        verifier_statuses = {_text(_dict(row.get("trace_metrics")).get("numeric_verifier_status")) for row in rows}
+        verifier_gate_statuses = {_text(_dict(row.get("trace_metrics")).get("verifier_gate_status")) for row in rows}
+        synthesis_gate_statuses = {_text(_dict(row.get("trace_metrics")).get("synthesis_gate_status")) for row in rows}
+        formula_presence = {
+            bool((_number(_dict(row.get("trace_metrics")).get("formula_trace_count")) or 0) > 0)
+            for row in rows
+        }
+        claim_counts = {_number(_dict(row.get("trace_metrics")).get("claim_count")) for row in rows}
+        missing_slot_counts = {_number(_dict(row.get("trace_metrics")).get("missing_slot_count")) for row in rows}
+        components = [
+            len(statuses) == 1,
+            len(citation_presence) == 1,
+            len(verifier_statuses) == 1,
+            len(verifier_gate_statuses) == 1,
+            len(synthesis_gate_statuses) == 1,
+            len(formula_presence) == 1,
+            len(claim_counts) == 1,
+            len(missing_slot_counts) == 1,
+        ]
+        scores.append(_rate(sum(1 for item in components if item), len(components)))
+    return len(repeated), _average(scores)
 
 
 def _processor_task_type(data: JsonObject) -> str:
