@@ -233,6 +233,16 @@ not repeatedly download these sources during benchmark iteration.
   `run_financebench_doc_live10_target_slots_v1` baseline is `3/10`: the closed
   slice holds, while later rows expose target PDF/table extraction,
   source-resolution, and qualitative disclosure-answer gaps.
+- A true model/network revalidation,
+  `run_financebench_doc_live3_model_net_v1`, keeps the closed live3 slice at
+  `3/3` with citation preservation `1.0`, unsupported numeric claim rate `0`,
+  and average retrieval runs `1.3333`. The fourth-row probe then isolates the
+  next gap. `run_financebench_doc_item4_model_net_v6` clears the
+  `investors.3m.com` source miss and reaches behavior/workflow/substrate score
+  `1.0`, but still fails answer scoring because qualitative MD&A driver
+  synthesis is not yet reliable. `run_financebench_doc_item4_model_net_v7`
+  is a benchmark-scorer pass but fails Holo's citation/verifier/synthesis gates;
+  treat it as a diagnostic, not as a quality pass.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,

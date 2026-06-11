@@ -741,6 +741,153 @@ def test_planner_processor_failure_prefers_retrieval_workbench_followup() -> Non
     assert all("TARGET CORPORATION" not in query for query in action.payload["queries"])
 
 
+def test_planner_uses_retrieval_workbench_followup_before_premature_answer() -> None:
+    class RespondingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-premature-answer",
+                kind="respond",
+                name="respond",
+                description="Premature answer",
+                score=0.55,
+                payload={"text": "A partial formula result is available."},
+                reasons=["model_answer_ready"],
+                side_effect_class="none",
+            )
+
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.\n\n"
+        "Source URL: https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/0000066740-23-000014.pdf\n"
+        "Company: 3M\n"
+        "Document: 3M_2022_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2022\n\n"
+        "What drove operating margin change as of FY2022 for 3M?"
+    )
+    recipe = task_recipe("retrieval_answer", metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")))
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-workbench-normal",
+        run_id="run-workbench-normal",
+        step_id="step-workbench",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "reason_summary": "Need the filing discussion of operating margin drivers.",
+            "missing_slots": ["operating_margin_driver", "cost_structure", "segment_breakdown"],
+            "next_queries": ["3M 2022 10-K operating margin cost of sales SG&A drivers"],
+            "next_source_families": ["regulatory_filing"],
+            "next_document_targets": ["https://www.sec.gov/Archives/edgar/data/66740/0000066740-23-000014/0000066740-23-000014-index.html"],
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=RespondingPlanner(),
+        goal=goal,
+        recipe=recipe,
+        journal=journal,
+    )
+    context = ContextBundle(
+        context_id="ctx-workbench-normal",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-workbench-normal",
+            "run_id": "run-workbench-normal",
+        },
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "retrieval.run"
+    assert action.payload["query"] == "3M 2022 10-K operating margin cost of sales SG&A drivers"
+    assert "retrieval_workbench_followup" in action.reasons
+    assert "workbench_semantic_continue" in action.reasons
+    assert "planner_processor_failed" not in action.reasons
+    assert action.payload["metadata"]["workbench_followup"] is True
+    assert action.payload["metadata"]["semantic_missing_slots"] == [
+        "operating_margin_driver",
+        "cost_structure",
+        "segment_breakdown",
+    ]
+    assert "https://www.sec.gov/Archives/edgar/data/66740/0000066740-23-000014/0000066740-23-000014-index.html" in action.payload["metadata"]["source_urls"]
+
+
+def test_planner_compiles_workbench_missing_slots_into_target_source_followup() -> None:
+    class RespondingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-premature-answer-no-query",
+                kind="respond",
+                name="respond",
+                description="Premature answer",
+                score=0.55,
+                payload={"text": "Answer from partial facts."},
+                reasons=["model_answer_ready"],
+                side_effect_class="none",
+            )
+
+    source_url = "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/0000066740-23-000014.pdf"
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.\n\n"
+        f"Source URL: {source_url}\n"
+        "Company: 3M\n"
+        "Document: 3M_2022_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2022\n\n"
+        "What drove operating margin change as of FY2022 for 3M?"
+    )
+    recipe = task_recipe("retrieval_answer", metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")))
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-workbench-missing-no-query",
+        run_id="run-workbench-missing-no-query",
+        step_id="step-workbench",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "reason_summary": "Need operating margin driver discussion from the target filing.",
+            "missing_slots": ["operating_margin_change_drivers", "mdna_analysis"],
+            "next_queries": [],
+            "next_source_families": [],
+            "next_document_targets": [],
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=RespondingPlanner(),
+        goal=goal,
+        recipe=recipe,
+        journal=journal,
+    )
+    context = ContextBundle(
+        context_id="ctx-workbench-missing-no-query",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-workbench-missing-no-query",
+            "run_id": "run-workbench-missing-no-query",
+        },
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "retrieval.run"
+    assert action.payload["query"].startswith(source_url)
+    assert "operating_margin_change_drivers" in action.payload["query"]
+    assert source_url in action.payload["metadata"]["source_urls"]
+    assert action.payload["metadata"]["semantic_missing_slots"] == [
+        "operating_margin_change_drivers",
+        "mdna_analysis",
+    ]
+
+
 def test_model_retrieval_action_enforces_benchmark_doc_binding_when_query_drifts() -> None:
     class DriftedPlanner:
         def propose(self, context, feedback=None):
@@ -1186,6 +1333,59 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
     evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
     assert evidence_slots["property_plant_and_equipment_net"].statement == "balance_sheet"
     assert evidence_slots["capital_expenditures"].statement == "cash_flow_statement"
+
+
+def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_formula() -> None:
+    plan = plan_finance_formula(
+        question=(
+            "What drove operating margin change as of FY2022 for 3M? "
+            "If operating margin is not a useful metric for a company like this, then please state that and explain why."
+        ),
+        facts=[],
+    )
+
+    assert plan.status == "not_applicable"
+
+
+def test_finance_formula_planner_still_allows_explicit_margin_calculation() -> None:
+    plan = plan_finance_formula(
+        question="Calculate FY2022 operating margin for 3M.",
+        facts=[
+            FinanceFact(
+                fact_id="operating-income-2022",
+                entity="3M",
+                ticker="MMM",
+                period="2022",
+                fiscal_year=2022,
+                metric="operating income",
+                value="3130000000",
+                unit="USD",
+                scale="actual",
+                source_ref="cite-operating-income",
+                evidence_ref="ev-operating-income",
+                citation_ref="cite-operating-income",
+                metadata={},
+            ),
+            FinanceFact(
+                fact_id="revenue-2022",
+                entity="3M",
+                ticker="MMM",
+                period="2022",
+                fiscal_year=2022,
+                metric="revenue",
+                value="34229000000",
+                unit="USD",
+                scale="actual",
+                source_ref="cite-revenue",
+                evidence_ref="ev-revenue",
+                citation_ref="cite-revenue",
+                metadata={},
+            ),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "margin"
 
 
 def test_finance_formula_planner_generates_capital_intensity_payload() -> None:

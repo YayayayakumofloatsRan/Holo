@@ -81,11 +81,56 @@ def _detect_formula(question: str) -> str | None:
         return "bridge_subtotal"
     if "yoy" in text or "year-over-year" in text or "year over year" in text:
         return "yoy_growth"
+    if _source_grounded_explanation_intent(text) and not _explicit_calculation_intent(text):
+        return None
     if "margin" in text or "利润率" in text:
         return "margin"
     if "growth" in text or "增长率" in text:
         return "yoy_growth"
     return None
+
+
+def _source_grounded_explanation_intent(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "what drove",
+            "what drives",
+            "why did",
+            "explain why",
+            "explain the",
+            "drivers of",
+            "driver of",
+            "main reasons",
+            "primary reasons",
+            "主要原因",
+            "驱动因素",
+            "为什么",
+        )
+    )
+
+
+def _explicit_calculation_intent(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "calculate",
+            "compute",
+            "quantify",
+            "what is the amount",
+            "how much",
+            "ratio",
+            "multiple",
+            "cagr",
+            "dio",
+            "ev/",
+            "basis point",
+            "bps",
+            "计算",
+            "量化",
+            "是多少",
+        )
+    )
 
 
 def _plan_cagr(facts: list[FinanceFact]) -> FinanceFormulaPlan:

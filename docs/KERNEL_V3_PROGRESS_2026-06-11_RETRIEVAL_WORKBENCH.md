@@ -225,3 +225,22 @@ unsupported numeric claim rate `0`. A broader live10 probe,
 `run_financebench_doc_live10_target_slots_v1`, is `3/10`; the remaining failures
 are mostly document/table extraction and source-resolution gaps for later
 FinanceBench rows, not the first-slice target binding bug.
+
+2026-06-12 follow-up:
+
+- `run_financebench_doc_live3_model_net_v1` revalidates the first live3 slice
+  with real model and network calls: pass rate / numeric accuracy `1.0`,
+  citation preservation `1.0`, unsupported numeric claim rate `0`, average
+  retrieval runs `1.3333`, and average tokens `116,822.7`. This is the
+  reportable live-model check for the closed first slice.
+- `run_financebench_doc_item4_model_net_v6` shows the next failure boundary.
+  The Workbench's semantic missing slots now prevent premature finalization and
+  trigger a second retrieval; source hosts include `investors.3m.com`, and the
+  required-source miss is cleared. The row still fails answer scoring because
+  the qualitative operating-margin driver explanation is not synthesized from
+  the target MD&A evidence.
+- `run_financebench_doc_item4_model_net_v7` is intentionally not counted as a
+  quality pass even though the benchmark scorer marks it passed: Holo's own
+  verifier gate and synthesis gate fail, citation preservation is `0`, and the
+  output is a failure report. It is useful as evidence that benchmark scoring
+  alone is weaker than the host-owned gate stack.

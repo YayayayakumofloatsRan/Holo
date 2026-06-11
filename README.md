@@ -1267,6 +1267,24 @@ PDF/table extraction and source acquisition are not yet robust beyond the
 closed 3M slice, while one disclosure-style row has facts but the answer
 contract does not match the qualitative security-list task.
 
+On 2026-06-12 the first slice was re-run with live model + live retrieval
+outside the sandbox network path as `run_financebench_doc_live3_model_net_v1`.
+It still closes `3/3` with pass rate / numeric accuracy `1.0`, citation
+preservation `1.0`, unsupported numeric claim rate `0`, and average retrieval
+runs `1.3333`; this is the current reportable evidence that the closed live3
+path is not only a fake/offline harness result. A follow-up on the fourth
+FinanceBench doc-retrieval row exposed the next real gap: the Retrieval
+Workbench correctly marks missing source-grounded operating-margin driver
+slots, and the host can now use those missing slots to force a target-source
+follow-up, but final synthesis/repair is not yet reliable for qualitative
+disclosure answers. `run_financebench_doc_item4_model_net_v6` reaches
+retrieval runs `2`, source hosts including `investors.3m.com`, behavior score
+`1.0`, workflow/substrate score `1.0`, citation preservation `1.0`, and
+unsupported numeric claim rate `0`; it still fails the numeric answer score.
+`run_financebench_doc_item4_model_net_v7` happens to pass the benchmark scorer,
+but fails Holo's own citation/verifier/synthesis gates and must be treated as a
+diagnostic, not a quality win.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

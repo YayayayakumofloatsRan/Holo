@@ -2733,6 +2733,8 @@ class _RecipeBoundPlanner:
         if rescue is not None:
             action = rescue
         bound = _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
+        if bound.name != "retrieval.run":
+            bound = self._retrieval_workbench_followup_action(context, bound) or bound
         bound = self._finance_formula_action(context, bound) or bound
         self._journal_plan_update(context, bound, feedback)
         return bound
@@ -2749,6 +2751,8 @@ class _RecipeBoundPlanner:
             recipe=self.recipe,
             journal=self.journal,
             call_index=self._calls,
+            trigger_reason="planner_processor_failed_after_retrieval_workbench",
+            include_planner_failure=True,
         )
         if workbench_followup is not None:
             return workbench_followup
@@ -2791,6 +2795,24 @@ class _RecipeBoundPlanner:
             payload=payload,
             reasons=["host_planner_failure_rescue", "planner_processor_failed"],
             side_effect_class="network",
+        )
+
+    def _retrieval_workbench_followup_action(
+        self,
+        context: ContextBundle,
+        action: CandidateAction,
+    ) -> CandidateAction | None:
+        if self.recipe.mode != "retrieval_answer" or "retrieval.run" not in self.recipe.allowed_tools:
+            return None
+        return _workbench_followup_retrieval_action(
+            action,
+            context=context,
+            goal=self.goal,
+            recipe=self.recipe,
+            journal=self.journal,
+            call_index=self._calls,
+            trigger_reason="workbench_semantic_continue",
+            include_planner_failure=False,
         )
 
     def _finance_formula_action(self, context: ContextBundle, action: CandidateAction) -> CandidateAction | None:
@@ -2939,6 +2961,8 @@ def _workbench_followup_retrieval_action(
     recipe: TaskRecipe,
     journal: JournalStore | None,
     call_index: int,
+    trigger_reason: str,
+    include_planner_failure: bool,
 ) -> CandidateAction | None:
     if journal is None:
         return None
@@ -2959,6 +2983,14 @@ def _workbench_followup_retrieval_action(
             *[target for target in _string_list(data.get("next_document_targets")) if _looks_like_url(target)],
         ]
     )
+    action_source_urls = _action_retrieval_source_urls(journal, task_id=task_id, run_id=run_id)
+    if not next_queries and _string_list(data.get("missing_slots")):
+        next_queries = _workbench_target_source_followup_queries(
+            data=data,
+            recipe=recipe,
+            goal=goal,
+            source_urls=action_source_urls,
+        )
     selected_query = next((query for query in next_queries if query.casefold() not in attempted), None)
     if not selected_query:
         return None
@@ -2968,6 +3000,9 @@ def _workbench_followup_retrieval_action(
     source_urls = _ordered_unique(
         [
             *_string_list(metadata.get("source_urls")),
+            *_required_retrieval_source_urls(recipe),
+            *_retrieval_payload_urls(_benchmark_doc_retrieval_payload(goal)),
+            *action_source_urls,
             *[target for target in _string_list(data.get("next_document_targets")) if _looks_like_url(target)],
             *([selected_query] if _looks_like_url(selected_query) else []),
         ]
@@ -2975,7 +3010,7 @@ def _workbench_followup_retrieval_action(
     metadata.update(
         {
             "host_rescue": True,
-            "host_rescue_reason": "planner_processor_failed_after_retrieval_workbench",
+            "host_rescue_reason": trigger_reason,
             "workbench_followup": True,
             "workbench_decision_ref": record.record_id,
             "workbench_reason_summary": _string_value(data.get("reason_summary")),
@@ -3010,17 +3045,74 @@ def _workbench_followup_retrieval_action(
         action_id=f"act-workbench-followup-retrieval-{call_index}",
         kind="tool",
         name="retrieval.run",
-        description="Execute retrieval workbench semantic next move after planner processor failure",
+        description="Execute retrieval workbench semantic next move",
         score=max(float(source_action.score or 0.0), 0.91),
         payload=payload,
-        reasons=[
+        reasons=_ordered_unique([
             "retrieval_workbench_followup",
-            "host_planner_failure_rescue",
-            "planner_processor_failed",
+            trigger_reason,
+            *(["host_planner_failure_rescue", "planner_processor_failed"] if include_planner_failure else []),
+            f"source_action:{source_action.name}",
             *[f"missing:{item}" for item in _string_list(data.get("missing_slots"))[:6]],
-        ],
+        ]),
         side_effect_class="network",
     )
+
+
+def _retrieval_workbench_followup_required(
+    journal: JournalStore | None,
+    *,
+    recipe: TaskRecipe,
+    context: ContextBundle,
+) -> bool:
+    if journal is None:
+        return False
+    if recipe.mode != "retrieval_answer" or "retrieval.run" not in recipe.allowed_tools:
+        return False
+    task_id = str(context.state.get("task_id") or "")
+    run_id = str(context.state.get("run_id") or "")
+    if not task_id or not run_id:
+        return False
+    record = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind="retrieval_workbench_decision")
+    if record is None:
+        return False
+    data = record.data if isinstance(record.data, dict) else {}
+    if data.get("status") != "ok" or data.get("decision") != "continue":
+        return False
+    if _string_list(data.get("missing_slots")):
+        return True
+    attempted = {query.casefold() for query in _action_retrieval_queries(journal, task_id=task_id, run_id=run_id)}
+    next_queries = _ordered_unique(
+        [
+            *_string_list(data.get("next_queries")),
+            *[target for target in _string_list(data.get("next_document_targets")) if _looks_like_url(target)],
+        ]
+    )
+    return any(query.casefold() not in attempted for query in next_queries)
+
+
+def _workbench_target_source_followup_queries(
+    *,
+    data: JsonObject,
+    recipe: TaskRecipe,
+    goal: str,
+    source_urls: list[str] | None = None,
+) -> list[str]:
+    missing = _string_list(data.get("missing_slots"))
+    if not missing:
+        return []
+    missing_text = " ".join(missing[:8])
+    source_urls = _ordered_unique(
+        [
+            *_required_retrieval_source_urls(recipe),
+            *_retrieval_payload_urls(_benchmark_doc_retrieval_payload(goal)),
+            *list(source_urls or []),
+        ]
+    )
+    queries = []
+    for url in source_urls[:4]:
+        queries.append(f"{url} {missing_text}")
+    return _ordered_unique(queries)
 
 
 def _finance_missing_fact_retrieval_action(
@@ -3519,6 +3611,19 @@ class _RecipeEvaluator:
             report = _nested(observation.content, "report")
             if isinstance(report, dict) and report.get("status") != "sufficient":
                 return _feedback(run_id, self.calls, "failed", "insufficient_evidence", None, ["sufficient retrieval evidence"])
+            if _retrieval_workbench_followup_required(
+                self.journal,
+                recipe=self.recipe,
+                context=context,
+            ):
+                return _feedback(
+                    run_id,
+                    self.calls,
+                    "continue",
+                    None,
+                    None,
+                    ["retrieval_workbench_followup"],
+                )
             if _finance_formula_work_required_before_final(
                 self.journal,
                 recipe=self.recipe,
@@ -5054,6 +5159,20 @@ def _action_retrieval_queries(journal: JournalStore, *, task_id: str, run_id: st
         if query:
             queries.append(query)
     return queries
+
+
+def _action_retrieval_source_urls(journal: JournalStore, *, task_id: str, run_id: str) -> list[str]:
+    urls: list[str] = []
+    for record in journal.records(task_id=task_id, kind="action"):
+        if record.run_id != run_id:
+            continue
+        if record.data.get("name") != "retrieval.run":
+            continue
+        payload = record.data.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        urls.extend(_retrieval_payload_urls(payload))
+    return _ordered_unique(urls)
 
 
 def _sec_ticker_cik_pairs_from_text(text: str) -> list[tuple[str, str]]:
@@ -8165,6 +8284,7 @@ def _looks_like_url(value: str) -> bool:
 def _required_retrieval_source_urls(recipe: TaskRecipe) -> list[str]:
     values: list[str] = []
     values.extend(_retrieval_payload_urls(_retrieval_capability_args(recipe)))
+    values.extend(_retrieval_payload_urls(_benchmark_doc_retrieval_payload(_root_goal_from_recipe(recipe))))
     execution = _execution_metadata(recipe)
     mission = execution.get("research_mission")
     if isinstance(mission, dict):
@@ -9154,15 +9274,27 @@ def _finance_retrieval_fallback_final(
         question = _benchmark_oracle_question_text(_root_goal_from_recipe(recipe))
         binding = _target_document_binding_from_recipe(recipe)
         facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
-        fact_lines = _finance_fallback_fact_lines(
-            facts,
-            question=question,
-            target_binding=binding,
-            limit=4,
-        )
-        if fact_lines:
-            lines.append("已由证据账本支持的关键数值：")
-            lines.extend(fact_lines)
+        formula_plan = plan_finance_formula(question=question, facts=facts, existing_traces=[])
+        if formula_plan.status == "not_applicable" and _required_retrieval_source_urls(recipe):
+            evidence_lines = _source_grounded_fallback_evidence_lines(
+                evidence=evidence,
+                citations=citations,
+                recipe=recipe,
+                limit=4,
+            )
+            if evidence_lines:
+                lines.append("已由引用证据支持的要点：")
+                lines.extend(evidence_lines)
+        else:
+            fact_lines = _finance_fallback_fact_lines(
+                facts,
+                question=question,
+                target_binding=binding,
+                limit=4,
+            )
+            if fact_lines:
+                lines.append("已由证据账本支持的关键数值：")
+                lines.extend(fact_lines)
     if evidence:
         lines.append("可审计证据摘要：")
         for item, citation in zip(evidence[:4], citations[:4]):
@@ -9179,6 +9311,37 @@ def _finance_retrieval_fallback_final(
         run_id=run_id,
         trace_refs=_trace_refs(journal, task_id),
     )
+
+
+def _source_grounded_fallback_evidence_lines(
+    *,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    recipe: TaskRecipe,
+    limit: int,
+) -> list[str]:
+    citation_by_evidence = {item.evidence_id: item for item in citations if item.evidence_id}
+    required_urls = _required_retrieval_source_urls(recipe)
+    scored: list[tuple[int, int, EvidenceItem, CitationItem]] = []
+    for index, item in enumerate(evidence):
+        citation = citation_by_evidence.get(item.evidence_id)
+        if citation is None or not citation.citation_id:
+            continue
+        source_text = f"{item.uri} {item.title}".lower()
+        score = 0
+        if any(_same_url_or_prefix(str(item.uri or ""), url) for url in required_urls):
+            score += 100
+        if any(url.lower().split("/")[2] in source_text for url in required_urls if _looks_like_url(url)):
+            score += 80
+        scored.append((score, -index, item, citation))
+    scored.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    lines: list[str] = []
+    for _, _, item, citation in scored[: max(1, limit)]:
+        preview = _text_preview(item.text, limit=360)
+        if not preview:
+            preview = _safe_fallback_source_label(item.title or item.uri, limit=160)
+        lines.append(f"- {preview} [{citation.citation_id}]")
+    return lines
 
 
 def _finance_fallback_fact_lines(

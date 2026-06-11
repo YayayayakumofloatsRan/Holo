@@ -39,7 +39,10 @@ model research quality.
 | FinanceBench doc retrieval live3 | 3 | pass `0.0`; numeric accuracy `0.0` | `0.8571` | `0.8571` | `0.0` / `0.0` | preservation `0.0` | `0.0` |
 | FinanceBench doc retrieval live3 target-binding v2 | 3 | pass `0.6667`; numeric accuracy `0.6667` | `0.9048` | `1.0` | `0.0` / `0.0` | preservation `0.6667` | `0.3333` |
 | FinanceBench doc retrieval live3 target-slots v4 | 3 | pass `1.0`; numeric accuracy `1.0` | `1.0` | `1.0` | `0.3333` / `0.3333` | preservation `1.0` | `0.0` |
+| FinanceBench doc retrieval live3 model-net v1 | 3 | pass `1.0`; numeric accuracy `1.0` | n/a | claim/slot/transform `1.0` | `0.3333` / `0.3333` | preservation `1.0` | `0.0` |
 | FinanceBench doc retrieval live10 target-slots v1 | 10 | pass `0.30`; numeric accuracy `0.30` | `0.6572` | `0.60` | `0.20` / `0.20` | preservation `0.40` | `0.0` |
+| FinanceBench doc retrieval item4 model-net v6 | 1 | pass `0.0`; behavior `1.0`; source missing cleared | `1.0` | `1.0` | `0.0` / `0.0` | preservation `1.0` | `0.0` |
+| FinanceBench doc retrieval item4 model-net v7 | 1 | benchmark scorer pass `1.0`, but Holo gates failed | `0.7143` | `1.0` | `0.0` / `0.0` | preservation `0.0` | `1.0` |
 | FinQA dev oracle100 fake | 100 | pass `0.15`; numeric accuracy `0.15` | `0.925` | `0.8816` | `0.37` / `0.37` | preservation `0.92` | `0.06` |
 
 ## Interpretation
@@ -89,6 +92,20 @@ three rows: later rows mostly fail before claim ledger creation because the
 document/table reader and source resolver do not yet extract the needed Adobe
 and 3M 10-Q/10-K tables, while a disclosure-style row retrieves facts but needs
 source-grounded qualitative answer handling instead of numeric fallback.
+
+The closed first slice was revalidated with true model/network access in
+`run_financebench_doc_live3_model_net_v1`: pass rate and numeric accuracy remain
+`1.0`, citation preservation is `1.0`, unsupported numeric claim rate is `0`,
+and average retrieval runs are `1.3333`. The fourth-row follow-up is more
+instructive than its raw status: `run_financebench_doc_item4_model_net_v6`
+forces a second retrieval from the model Workbench's semantic missing slots,
+clears the required `investors.3m.com` source miss, and reaches behavior /
+workflow / substrate score `1.0`, but still fails numeric scoring because the
+source-grounded synthesis path does not yet produce the required operating
+margin-change explanation. `run_financebench_doc_item4_model_net_v7` is a
+scorer pass but has no final answer citation and fails Holo's own verifier /
+synthesis gates; it should be reported only as a diagnostic showing why the
+internal gates matter.
 
 FinQA dev oracle100 confirms the FinQA oracle-context path scales beyond the
 earlier 20-row diagnostic, but the score drops from the small oracle20 sample:
