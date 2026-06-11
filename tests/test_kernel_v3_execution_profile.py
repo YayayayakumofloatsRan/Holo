@@ -52,7 +52,7 @@ def test_benchmark_runtime_metadata_uses_execution_profile_defaults() -> None:
     assert metadata["execution_profile"]["profile_id"] == "finance-fact-fast"
     assert metadata["context_budget"]["token_budget"] == 4096
     assert metadata["agent_loop"]["max_steps"] == 4
-    assert metadata["agent_loop"]["max_tool_calls"] == 3
+    assert metadata["agent_loop"]["max_tool_calls"] == 4
     assert metadata["retrieval"]["max_queries"] == 4
     assert metadata["retrieval"]["max_sources"] == 24
     assert metadata["retrieval"]["max_fetches"] == 8
@@ -89,7 +89,7 @@ def test_fast_execution_profile_loop_budget_is_hard_cap_for_model_planner() -> N
     bounded = _with_runtime_loop_budget(recipe, planner_mode="model")
 
     assert bounded.max_steps == 4
-    assert bounded.max_tool_calls == 3
+    assert bounded.max_tool_calls == 4
 
 
 def test_fast_execution_profile_disabled_workmethod_state_is_constructible() -> None:

@@ -178,6 +178,8 @@ def _answer_numeric_candidates(answer: str) -> list[JsonObject]:
         raw = match.group("number")
         unit = match.group("unit") or ""
         prefix = match.group("prefix") or ""
+        if _ambiguous_compact_scale_unit(text, match, raw=raw, prefix=prefix, unit=unit):
+            continue
         if _embedded_identifier_or_citation(text, number_start, number_end, unit=unit):
             continue
         value = _scaled_decimal(raw, unit)
@@ -651,6 +653,24 @@ def _scaled_decimal(raw: str, unit: str) -> Decimal | None:
     if normalized == "ten_thousand":
         return value * Decimal(10_000)
     return value
+
+
+def _ambiguous_compact_scale_unit(text: str, match: re.Match[str], *, raw: str, prefix: str, unit: str) -> bool:
+    normalized = _normalize_unit(unit)
+    if normalized not in {"million", "billion"} or unit.lower() not in {"m", "b"} or prefix:
+        return False
+    unit_start = match.start("unit")
+    if unit_start < 0:
+        return False
+    separator = text[match.end("number") : unit_start]
+    if separator:
+        return False
+    if "." in raw:
+        return False
+    # Bare compact tokens such as "3M" are often company names, tickers,
+    # product labels, or identifiers. Explicit currency/decimal/word-scale
+    # forms remain material numeric candidates.
+    return True
 
 
 def _normalize_unit(unit: str) -> str:

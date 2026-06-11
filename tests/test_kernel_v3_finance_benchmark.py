@@ -480,9 +480,10 @@ def test_financebench_doc_retrieval_prompt_compiles_to_structured_payload(tmp_pa
     assert payload["metadata"]["doc_type"] == "10k"
     assert payload["metadata"]["sec_form"] == "10-K"
     assert payload["metadata"]["doc_period"] == "2018"
-    assert payload["metadata"]["source_urls"] == [
-        "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
-    ]
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf" in source_urls
+    assert "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470.txt" in source_urls
+    assert "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470-index.html" in source_urls
     assert "scoring-only evidence" not in runtime.seen_prompts[0]
 
 

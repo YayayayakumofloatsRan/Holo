@@ -43,6 +43,8 @@ model research quality.
 | FinanceBench doc retrieval live10 target-slots v1 | 10 | pass `0.30`; numeric accuracy `0.30` | `0.6572` | `0.60` | `0.20` / `0.20` | preservation `0.40` | `0.0` |
 | FinanceBench doc retrieval item4 model-net v6 | 1 | pass `0.0`; behavior `1.0`; source missing cleared | `1.0` | `1.0` | `0.0` / `0.0` | preservation `1.0` | `0.0` |
 | FinanceBench doc retrieval item4 model-net v7 | 1 | post-fix scorer failed; old pass was a false positive | diagnostic only | `1.0` | `0.0` / `0.0` | preservation `0.0` | `1.0` |
+| FinanceBench doc retrieval item4 model-net v15 | 1 | pass `0.0`; trace complete; expected `1.7` not matched | `0.7143` | `1.0` | `0.0` / `0.0` | preservation `0.0` | `1.0` |
+| FinanceBench doc retrieval item4 model-net v17 | 1 | pass `0.0`; trace complete; evidence selection still wrong | `0.7143` | `1.0` | `0.0` / `0.0` | preservation `0.0` | `1.0` |
 | FinQA dev oracle100 fake | 100 | pass `0.15`; numeric accuracy `0.15` | `0.925` | `0.8816` | `0.37` / `0.37` | preservation `0.92` | `0.06` |
 
 ## Interpretation
@@ -108,6 +110,19 @@ as `3,000,000`, so a failure report could pass against the wrong gold numeric.
 The scorer now rejects that pattern and requires a real final answer for
 non-sentinel gold-backed rows; v7 re-scores as failed and should be reported
 only as a diagnostic showing why the internal gates matter.
+
+The follow-up item4 runs v15 through v17 show real loop progress but no score
+claim. The Workbench semantic follow-up is now honored for four retrieval runs,
+planner JSON repair failures no longer hide a partial retrieval finalization
+path, and the source-grounded workflow trace is complete. v17 records finance
+facts / claims `22`, transform plans `5`, compiled task program present `1.0`,
+required trace hit `7/7`, and substrate score `1.0`. It still fails because the
+material answer is unsupported: citation preservation is `0`, numeric verifier
+and synthesis gate fail, expected numeric `1.7` is not matched, and the selected
+evidence remains `data.sec.gov` companyfacts rather than target filing MD&A
+discussion. The SEC archive URL resolver is active, but document block selection
+and source-grounded synthesis are still the blocking FinanceBench doc-retrieval
+work.
 
 FinQA dev oracle100 confirms the FinQA oracle-context path scales beyond the
 earlier 20-row diagnostic, but the score drops from the small oracle20 sample:

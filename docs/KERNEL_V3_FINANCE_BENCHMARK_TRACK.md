@@ -246,6 +246,19 @@ not repeatedly download these sources during benchmark iteration.
   citation/verifier/synthesis gates. The scorer and FinanceBench annotation
   export now reject that pattern, and v7 re-scores as failed; treat it as a
   diagnostic, not as a quality pass.
+- 2026-06-12 later item4 follow-ups moved the boundary from retry mechanics to
+  document evidence selection. `run_financebench_doc_item4_model_net_v15`
+  reaches four retrieval runs, finance facts / claims `28`, compiled task
+  program present, required trace `7/7`, and substrate score `1.0`, but fails
+  because the answer contains unsupported numbers. `v16` adds SEC archive URL
+  derivation from the investor filing link and attempts the `.txt`, index, JSON,
+  and directory targets (`8.4MB` downloaded), but selected evidence still comes
+  from `data.sec.gov`. `v17` keeps the full trace spine with facts / claims
+  `22`, transform plans `5`, workflow score `0.7143`, and substrate score `1.0`,
+  while numeric verifier and SynthesisGate correctly fail because the required
+  FY2022 operating-margin driver is not grounded in target MD&A text. This is a
+  real document block selection and source-grounded synthesis gap, not a solved
+  score.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,

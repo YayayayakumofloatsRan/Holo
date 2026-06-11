@@ -660,9 +660,10 @@ def test_planner_processor_failure_preserves_benchmark_doc_target() -> None:
     assert action.name == "retrieval.run"
     assert action.payload["metadata"]["benchmark_doc_retrieval"] is True
     assert action.payload["metadata"]["company"] == "3M"
-    assert action.payload["metadata"]["source_urls"] == [
-        "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
-    ]
+    source_urls = action.payload["metadata"]["source_urls"]
+    assert "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470.txt" in source_urls
+    assert "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470-index.html" in source_urls
+    assert "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf" in source_urls
     assert "3M 2018 10k" in action.payload["query"]
     assert "TARGET CORPORATION" not in action.payload["query"]
 
@@ -813,7 +814,10 @@ def test_planner_uses_retrieval_workbench_followup_before_premature_answer() -> 
         "cost_structure",
         "segment_breakdown",
     ]
-    assert "https://www.sec.gov/Archives/edgar/data/66740/0000066740-23-000014/0000066740-23-000014-index.html" in action.payload["metadata"]["source_urls"]
+    source_urls = action.payload["metadata"]["source_urls"]
+    assert "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt" in source_urls
+    assert "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014-index.html" in source_urls
+    assert "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/0000066740-23-000014.pdf" in source_urls
 
 
 def test_planner_compiles_workbench_missing_slots_into_target_source_followup() -> None:
@@ -888,6 +892,77 @@ def test_planner_compiles_workbench_missing_slots_into_target_source_followup() 
     ]
 
 
+def test_planner_uses_workbench_semantic_missing_slots_for_followup() -> None:
+    class RespondingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-premature-answer-semantic-only",
+                kind="respond",
+                name="respond",
+                description="Premature answer",
+                score=0.55,
+                payload={"text": "Answer from partial facts."},
+                reasons=["model_answer_ready"],
+                side_effect_class="none",
+            )
+
+    source_url = "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/0000066740-23-000014.pdf"
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.\n\n"
+        f"Source URL: {source_url}\n"
+        "Company: 3M\n"
+        "Document: 3M_2022_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2022\n\n"
+        "What drove operating margin change as of FY2022 for 3M?"
+    )
+    recipe = task_recipe("retrieval_answer", metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")))
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-workbench-semantic-only",
+        run_id="run-workbench-semantic-only",
+        step_id="step-workbench",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "reason_summary": "Need operating margin driver discussion from the target filing.",
+            "semantic_missing_slots": ["operating_margin_change", "mdna_analysis"],
+            "next_queries": [],
+            "next_source_families": [],
+            "next_document_targets": [],
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=RespondingPlanner(),
+        goal=goal,
+        recipe=recipe,
+        journal=journal,
+    )
+    context = ContextBundle(
+        context_id="ctx-workbench-semantic-only",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-workbench-semantic-only",
+            "run_id": "run-workbench-semantic-only",
+        },
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "retrieval.run"
+    assert action.payload["query"].startswith(source_url)
+    assert "mdna_analysis" in action.payload["query"]
+    assert action.payload["metadata"]["semantic_missing_slots"] == [
+        "operating_margin_change",
+        "mdna_analysis",
+    ]
+
+
 def test_model_retrieval_action_enforces_benchmark_doc_binding_when_query_drifts() -> None:
     class DriftedPlanner:
         def propose(self, context, feedback=None):
@@ -941,9 +1016,10 @@ def test_model_retrieval_action_enforces_benchmark_doc_binding_when_query_drifts
     assert action.payload["metadata"]["benchmark_binding_enforced"] is True
     assert action.payload["metadata"]["target_document_binding"]["required_statement"] == "cash_flow_statement"
     assert action.payload["metadata"]["target_document_binding"]["required_line_item"] == "capital expenditures"
-    assert action.payload["metadata"]["source_urls"] == [
-        "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
-    ]
+    source_urls = action.payload["metadata"]["source_urls"]
+    assert "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470.txt" in source_urls
+    assert "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470-index.html" in source_urls
+    assert "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf" in source_urls
 
 
 def test_target_entity_extraction_does_not_bind_leading_for_as_entity() -> None:
@@ -2297,6 +2373,55 @@ def test_recipe_evaluator_continues_until_finance_formula_trace_exists() -> None
     assert "finance_formula_trace_required" in feedback.missing_evidence
 
 
+def test_recipe_evaluator_continues_on_report_workbench_semantic_missing_slots() -> None:
+    profile = execution_profile("finance-fact-fast")
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "What drove operating margin change as of FY2022 for 3M?",
+            "execution_metadata": execution_profile_runtime_metadata(profile),
+        },
+    )
+    evaluator = _RecipeEvaluator(recipe, journal=JournalStore.in_memory())
+    context = ContextBundle(
+        context_id="ctx-workbench-report",
+        thread_key="thread-1",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-workbench-report", "run_id": "run-1"},
+        token_budget=4096,
+    )
+    observation = Observation(
+        observation_id="obs-workbench-report",
+        run_id="run-1",
+        kind="tool_result",
+        status="ok",
+        source="tool:retrieval.run",
+        content={
+            "report": {
+                "status": "sufficient",
+                "diagnostics": {
+                    "retrieval_workbench": {
+                        "status": "ok",
+                        "decision": "continue",
+                        "semantic_missing_slots": ["operating_margin_change", "mdna_analysis"],
+                        "next_queries": [],
+                        "next_document_targets": [],
+                    }
+                },
+            }
+        },
+        observed_at_ms=1,
+        action_id="act-1",
+        tool_call_id="tool-1",
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "continue"
+    assert "retrieval_workbench_followup" in feedback.missing_evidence
+
+
 def test_finance_fact_ledger_ignores_press_release_time_and_exhibit_identifiers() -> None:
     evidence = [
         _finance_evidence(
@@ -2496,6 +2621,49 @@ def test_numeric_verifier_keeps_compact_billion_unit_numbers() -> None:
 
     assert verification.status == "passed"
     assert verification.missing_values == []
+
+
+def test_numeric_verifier_ignores_bare_compact_scale_entity_tokens() -> None:
+    facts = [_finance_fact("operating margin change", "1.7", fact_id="margin-change")]
+
+    verification = verify_finance_answer(
+        answer="3M 的经营利润率下降了 1.7，引用 cite-1。",
+        facts=facts,
+        question="Verify 3M operating margin change.",
+    )
+
+    assert verification.status == "passed"
+    assert verification.missing_values == []
+
+
+def test_numeric_verifier_keeps_explicit_compact_currency_amounts() -> None:
+    facts = [_finance_fact("operating margin change", "1.7", fact_id="margin-change")]
+
+    verification = verify_finance_answer(
+        answer="3M 的经营利润率下降了 1.7，但现金为 $3M。",
+        facts=facts,
+        question="Verify 3M operating margin and cash.",
+    )
+
+    assert verification.status == "failed"
+    assert any(item["raw"] == "$3M" for item in verification.missing_values)
+    assert all(item["raw"] != "3M" for item in verification.missing_values)
+
+
+def test_finance_fact_ledger_extracts_margin_percentage_point_changes() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="margin-change",
+            title="Company margin disclosure",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/example.htm",
+            text="Operating margin decreased by 1.7 percentage points primarily due to lower gross margin and one-off charges.",
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-margin-change")]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+
+    assert any(fact.metric == "margin" and Decimal(fact.value) == Decimal("1.7") and fact.unit == "percent" for fact in facts)
 
 
 def test_finance_fact_ledger_filters_eps_and_net_cash_from_ev_inputs() -> None:
@@ -3608,6 +3776,44 @@ def test_source_grounded_retrieval_finalization_journals_generic_workflow_trace(
     assert slot_frames[-1].data["missing_slots"] == []
     assert transform_plans[-1].data["method"] == "source_grounded_synthesis"
     assert transform_plans[-1].data["status"] == "ready"
+
+
+def test_finance_preflight_without_structured_facts_journals_source_grounded_trace() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(journal, answer="fallback")
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-margin",
+            title="3M 2022 10-K MD&A",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/mmm-20221231.htm",
+            text="Management says operating margin declined due to lower gross margin and one-off charges.",
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-margin")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "What drove operating margin change as of FY2022 for 3M?",
+            "require_numeric_verifier": True,
+        },
+    )
+
+    runtime._run_finance_numeric_preflight(  # noqa: SLF001
+        "task-source-grounded-preflight",
+        "run-1",
+        recipe=recipe,
+        evidence=evidence,
+        citations=citations,
+    )
+
+    claim_ledgers = journal.records(task_id="task-source-grounded-preflight", kind="claim_ledger")
+    slot_frames = journal.records(task_id="task-source-grounded-preflight", kind="slot_frame")
+    transform_plans = journal.records(task_id="task-source-grounded-preflight", kind="transform_plan")
+
+    assert claim_ledgers[-1].data["domain"] == "source_grounded_research"
+    assert claim_ledgers[-1].data["claim_count"] == 1
+    assert slot_frames[-1].data["task_type"] == "source_grounded_research"
+    assert any(record.data.get("method") == "source_grounded_synthesis" for record in transform_plans)
 
 
 def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calculator_trace() -> None:

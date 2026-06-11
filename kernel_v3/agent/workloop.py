@@ -779,6 +779,8 @@ def _feedback_requires_transform_work(feedback: Feedback) -> bool:
             "calculator required before final",
             "transform trace required",
             "transform work required",
+            "retrieval workbench followup",
+            "retrieval workbench follow up",
         )
     )
 

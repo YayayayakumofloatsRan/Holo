@@ -551,15 +551,20 @@ class AgentRuntime:
             return None
         if recipe.mode == "retrieval_answer":
             report = _latest_retrieval_report(self.journal, result.task_id, result.run_id)
-            if (
-                report is not None
-                and report.status == "sufficient"
-                and (
-                    _retrieval_evidence(self.journal, result.task_id, result.run_id)
-                    or _retrieval_citations(self.journal, result.task_id, result.run_id)
-                )
-            ):
-                return None
+            evidence = _retrieval_evidence(self.journal, result.task_id, result.run_id)
+            citations = _retrieval_citations(self.journal, result.task_id, result.run_id)
+            if report is not None and (evidence or citations):
+                if report.status == "sufficient":
+                    return None
+                if _can_attempt_finance_numeric_finalization(recipe=recipe, evidence=evidence, citations=citations):
+                    return None
+                if _can_synthesize_partial_retrieval(
+                    terminal_reason=getattr(result, "stop_reason", None),
+                    evidence=evidence,
+                    citations=citations,
+                    recipe=recipe,
+                ):
+                    return None
         if not _run_has_planner_processor_failure(self.journal, result.task_id, result.run_id):
             return None
         failure = self._failure(
@@ -1601,6 +1606,15 @@ class AgentRuntime:
             question=_root_goal_from_recipe(recipe),
             target_binding=_target_document_binding_from_recipe(recipe),
         )
+        if evidence and citations and _source_grounded_trace_required(recipe):
+            self._append_source_grounded_workflow_trace(
+                task_id,
+                run_id,
+                recipe=recipe,
+                evidence=evidence,
+                citations=citations,
+                purpose="finance_preflight_no_structured_facts",
+            )
         existing = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
         plans = _finance_formula_preflight_plans(
             question=_root_goal_from_recipe(recipe),
@@ -2984,7 +2998,8 @@ def _workbench_followup_retrieval_action(
         ]
     )
     action_source_urls = _action_retrieval_source_urls(journal, task_id=task_id, run_id=run_id)
-    if not next_queries and _string_list(data.get("missing_slots")):
+    missing_slots = _workbench_missing_slots(data)
+    if not next_queries and missing_slots:
         next_queries = _workbench_target_source_followup_queries(
             data=data,
             recipe=recipe,
@@ -3014,7 +3029,7 @@ def _workbench_followup_retrieval_action(
             "workbench_followup": True,
             "workbench_decision_ref": record.record_id,
             "workbench_reason_summary": _string_value(data.get("reason_summary")),
-            "semantic_missing_slots": _string_list(data.get("missing_slots")),
+            "semantic_missing_slots": missing_slots,
             "preferred_source_families": _ordered_unique(
                 [
                     *_string_list(metadata.get("preferred_source_families")),
@@ -3053,7 +3068,7 @@ def _workbench_followup_retrieval_action(
             trigger_reason,
             *(["host_planner_failure_rescue", "planner_processor_failed"] if include_planner_failure else []),
             f"source_action:{source_action.name}",
-            *[f"missing:{item}" for item in _string_list(data.get("missing_slots"))[:6]],
+            *[f"missing:{item}" for item in missing_slots[:6]],
         ]),
         side_effect_class="network",
     )
@@ -3079,7 +3094,7 @@ def _retrieval_workbench_followup_required(
     data = record.data if isinstance(record.data, dict) else {}
     if data.get("status") != "ok" or data.get("decision") != "continue":
         return False
-    if _string_list(data.get("missing_slots")):
+    if _workbench_missing_slots(data):
         return True
     attempted = {query.casefold() for query in _action_retrieval_queries(journal, task_id=task_id, run_id=run_id)}
     next_queries = _ordered_unique(
@@ -3091,6 +3106,26 @@ def _retrieval_workbench_followup_required(
     return any(query.casefold() not in attempted for query in next_queries)
 
 
+def _retrieval_report_workbench_followup_required(report: JsonObject) -> bool:
+    workbench = report.get("retrieval_workbench") if isinstance(report.get("retrieval_workbench"), dict) else {}
+    if not workbench:
+        diagnostics = report.get("diagnostics") if isinstance(report.get("diagnostics"), dict) else {}
+        workbench = diagnostics.get("retrieval_workbench") if isinstance(diagnostics.get("retrieval_workbench"), dict) else {}
+    if not workbench:
+        return False
+    if workbench.get("status") != "ok" or workbench.get("decision") != "continue":
+        return False
+    if _workbench_missing_slots(workbench):
+        return True
+    next_queries = _ordered_unique(
+        [
+            *_string_list(workbench.get("next_queries")),
+            *[target for target in _string_list(workbench.get("next_document_targets")) if _looks_like_url(target)],
+        ]
+    )
+    return bool(next_queries)
+
+
 def _workbench_target_source_followup_queries(
     *,
     data: JsonObject,
@@ -3098,7 +3133,7 @@ def _workbench_target_source_followup_queries(
     goal: str,
     source_urls: list[str] | None = None,
 ) -> list[str]:
-    missing = _string_list(data.get("missing_slots"))
+    missing = _workbench_missing_slots(data)
     if not missing:
         return []
     missing_text = " ".join(missing[:8])
@@ -3113,6 +3148,15 @@ def _workbench_target_source_followup_queries(
     for url in source_urls[:4]:
         queries.append(f"{url} {missing_text}")
     return _ordered_unique(queries)
+
+
+def _workbench_missing_slots(data: JsonObject) -> list[str]:
+    return _ordered_unique(
+        [
+            *_string_list(data.get("missing_slots")),
+            *_string_list(data.get("semantic_missing_slots")),
+        ]
+    )
 
 
 def _finance_missing_fact_retrieval_action(
@@ -3611,6 +3655,15 @@ class _RecipeEvaluator:
             report = _nested(observation.content, "report")
             if isinstance(report, dict) and report.get("status") != "sufficient":
                 return _feedback(run_id, self.calls, "failed", "insufficient_evidence", None, ["sufficient retrieval evidence"])
+            if isinstance(report, dict) and _retrieval_report_workbench_followup_required(report):
+                return _feedback(
+                    run_id,
+                    self.calls,
+                    "continue",
+                    None,
+                    None,
+                    ["retrieval_workbench_followup"],
+                )
             if _retrieval_workbench_followup_required(
                 self.journal,
                 recipe=self.recipe,
@@ -7504,18 +7557,20 @@ def _benchmark_doc_retrieval_payload(goal: str) -> JsonObject:
         metadata["doc_period"] = doc_period
         metadata["report_date"] = doc_period
     if source_url:
+        resolved_source_urls = _benchmark_doc_source_urls(source_url)
         metadata["source_url"] = source_url
-        metadata["source_urls"] = [source_url]
-        metadata["preferred_source_urls"] = [source_url]
-        metadata["queries"] = [source_url, " ".join(part for part in (company, doc_period, doc_type, question) if part)]
+        metadata["source_urls"] = resolved_source_urls
+        metadata["preferred_source_urls"] = resolved_source_urls[:8]
+        metadata["queries"] = _ordered_unique([*resolved_source_urls, " ".join(part for part in (company, doc_period, doc_type, question) if part)])
         metadata["suggested_source_targets"] = [
             {
                 "title": doc_name or source_url,
-                "uri": source_url,
-                "query_hints": [source_url],
+                "uri": url,
+                "query_hints": [url],
                 "source_family": "company_filing",
                 "reason": "FinanceBench doc_retrieval target source URL",
             }
+            for url in resolved_source_urls[:8]
         ]
     if question:
         metadata["root_goal"] = question
@@ -7676,10 +7731,11 @@ def _benchmark_doc_retrieval_payload_from_binding(
         if binding.get(key):
             payload_metadata[key] = binding[key]
     if doc_link:
+        resolved_source_urls = _benchmark_doc_source_urls(doc_link)
         payload_metadata["source_url"] = doc_link
-        payload_metadata["source_urls"] = [doc_link]
-        payload_metadata["preferred_source_urls"] = [doc_link]
-        payload_metadata["queries"] = [doc_link, query]
+        payload_metadata["source_urls"] = resolved_source_urls
+        payload_metadata["preferred_source_urls"] = resolved_source_urls[:8]
+        payload_metadata["queries"] = _ordered_unique([*resolved_source_urls, query])
     return {
         "query": query,
         "metadata": payload_metadata,
@@ -8279,6 +8335,58 @@ def _urls_in_text(text: str) -> list[str]:
 def _looks_like_url(value: str) -> bool:
     stripped = value.strip()
     return stripped.startswith("https://") or stripped.startswith("http://")
+
+
+def _benchmark_doc_source_urls(source_url: str) -> list[str]:
+    url = _string_value(source_url)
+    if not url:
+        return []
+    derived = _sec_archive_urls_from_accession_url(url)
+    return _ordered_unique([*derived, url])
+
+
+def _source_grounded_trace_required(recipe: TaskRecipe) -> bool:
+    metadata = recipe.metadata if isinstance(recipe.metadata, dict) else {}
+    if str(metadata.get("workflow_type") or "").strip() == "source_grounded_research":
+        return True
+    if _benchmark_doc_retrieval_payload_from_recipe(recipe):
+        return True
+    question = _root_goal_from_recipe(recipe).lower()
+    return any(
+        marker in question
+        for marker in (
+            "what drove",
+            "what drives",
+            "explain why",
+            "drivers of",
+            "driver of",
+            "main reasons",
+            "primary reasons",
+            "主要原因",
+            "驱动因素",
+            "为什么",
+        )
+    )
+
+
+def _sec_archive_urls_from_accession_url(source_url: str) -> list[str]:
+    text = _string_value(source_url)
+    if not text:
+        return []
+    match = re.search(r"(?P<cik>0*\d{4,10})-(?P<year>\d{2})-(?P<seq>\d{6,})", text)
+    if not match:
+        return []
+    raw_cik = match.group("cik")
+    cik = raw_cik.lstrip("0") or raw_cik
+    accession = f"{raw_cik}-{match.group('year')}-{match.group('seq')}"
+    compact_accession = accession.replace("-", "")
+    base = f"https://www.sec.gov/Archives/edgar/data/{cik}/{compact_accession}"
+    return [
+        f"{base}/{accession}.txt",
+        f"{base}/{accession}-index.html",
+        f"{base}/index.json",
+        f"{base}/",
+    ]
 
 
 def _required_retrieval_source_urls(recipe: TaskRecipe) -> list[str]:

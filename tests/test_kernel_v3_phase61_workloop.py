@@ -903,6 +903,61 @@ def test_phase61_evidence_sufficiency_does_not_override_required_formula_trace()
     assert decision.override is False
 
 
+def test_phase61_evidence_sufficiency_does_not_override_workbench_followup():
+    decision = decide_termination(
+        feedback=Feedback(
+            feedback_id="fb-workbench-followup",
+            run_id="run-1",
+            status="continue",
+            stop_reason=None,
+            answer=None,
+            missing_evidence=["retrieval_workbench_followup"],
+        ),
+        progress=ProgressAssessment(
+            assessment_id="progress-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            made_progress=True,
+            progress_score=1.0,
+            progress_type="new_citation",
+            new_refs=["cite-1"],
+            signals=[],
+        ),
+        repetition=RepetitionSignal(
+            signal_id="repeat-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            repeated=False,
+            repeat_type=None,
+            repeat_count=0,
+            threshold=2,
+            repeated_refs=[],
+        ),
+        evidence=EvidenceSufficiency(
+            sufficiency_id="evidence-1",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-1",
+            sufficient=True,
+            citations_required=True,
+            evidence_count=5,
+            citation_count=5,
+            valid_citation_refs=["cite-1", "cite-2", "cite-3", "cite-4", "cite-5"],
+            missing=[],
+            reason="sufficient",
+        ),
+        recipe=_retrieval_recipe(),
+        no_progress_count=0,
+        config=WorkloopConfig(),
+    )
+
+    assert decision.decision == "continue"
+    assert decision.reason == "transform_work_required"
+    assert decision.override is False
+
+
 def test_phase61_failure_report_contains_attempts_missing_evidence_observations_and_trace_refs():
     journal = JournalStore.in_memory()
     runtime = AgentRuntime(

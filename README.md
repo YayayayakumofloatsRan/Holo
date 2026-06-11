@@ -1288,6 +1288,22 @@ now reject bare compact company/name tokens as gold numerics and do not allow a
 non-sentinel `failure_report` with no `final_answer` to pass; the same v7 row
 re-scores as failed with expected numeric `1.7`.
 
+The later item4 passes (`run_financebench_doc_item4_model_net_v15` through
+`v17`) move the failure boundary from loop control to evidence selection. The
+agent now honors the model Workbench's semantic `continue` signal across four
+retrieval runs, no longer lets model-planner JSON failures mask partial
+retrieval finalization, derives SEC archive targets from investor filing links,
+and journals the full source-grounded workflow spine: claim ledger, slot frame,
+transform plan, verifier gate, synthesis gate, citation trace, and compiled task
+program are all present. The item still fails scoring. v17 has retrieval runs
+`4`, finance facts / claims `22`, transform plans `5`, substrate score `1.0`,
+and required trace `7/7`, but citation preservation remains `0`, numeric
+verification and synthesis gate fail, and the selected evidence still comes from
+`data.sec.gov` companyfacts rather than the target filing MD&A discussion needed
+for the operating-margin driver answer. This is the next real FinanceBench
+doc-retrieval gap: document block selection and source-grounded synthesis, not a
+permission problem or a missing agent loop retry.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

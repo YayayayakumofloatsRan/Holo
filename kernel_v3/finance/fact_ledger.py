@@ -95,7 +95,8 @@ KEY_PATTERN = re.compile(
 )
 AMOUNT_PATTERN = re.compile(
     r"(?P<prefix>[$€£¥])?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
-    r"(?P<unit>million|billion|trillion|thousand|mn|bn|m|b|usd|dollars|shares)?",
+    r"(?P<unit>%|bps|basis\s+points|basis\s+point|percentage\s+points|percentage\s+point|"
+    r"million|billion|trillion|thousand|mn|bn|m|b|usd|dollars|shares)?",
     re.IGNORECASE,
 )
 NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -156,6 +157,7 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("addback", ("other expense",)),
     ("deduction", ("other income",)),
     ("deduction", ("general corporate expenses", "corporate expenses")),
+    ("margin", ("operating margin", "gross margin", "margin")),
     ("interest expense", ("interest expense",)),
     ("tax", ("income taxes", "income tax", "provision for", "benefit from income taxes")),
     ("depreciation and amortization", ("depreciation and amortization", "d&a", "amortization")),
@@ -681,6 +683,9 @@ def _context_scale_multiplier(context: str, *, raw_unit: str) -> Decimal:
 
 def _natural_unit(prefix: str, unit: str) -> str | None:
     token = str(unit or "").strip().lower()
+    token = " ".join(token.split())
+    if token in {"%", "percentage point", "percentage points", "bps", "basis point", "basis points"}:
+        return "percent" if token in {"%", "percentage point", "percentage points"} else "bps"
     if prefix == "$" or token in {"usd", "dollars", "million", "billion", "trillion", "mn", "bn", "m", "b"}:
         return "USD"
     if prefix == "€":

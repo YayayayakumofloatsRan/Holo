@@ -245,3 +245,19 @@ FinanceBench rows, not the first-slice target binding bug.
   verifier and synthesis gates failed. The scorer now rejects bare compact
   company/name tokens as gold numerics and non-sentinel gold-backed rows cannot
   pass with only a `failure_report`; v7 re-scores as failed.
+- Follow-up runs `run_financebench_doc_item4_model_net_v15` through `v17` show
+  the Workbench control path is now working but the answer is still not solved.
+  Report-level Workbench `continue` decisions and semantic missing slots now
+  feed the next agent step, evidence sufficiency no longer overrides that
+  signal, and `finance-fact-fast` allows the fourth bounded retrieval needed by
+  the model-selected follow-up. Planner JSON failures after partial retrieval no
+  longer short-circuit finalization diagnostics. v17 reaches four retrieval
+  runs, finance facts / claims `22`, transform plans `5`, compiled task program
+  present, required trace `7/7`, and substrate score `1.0`.
+- The remaining item4 blocker is source-grounded document evidence selection.
+  The SEC archive URL resolver derives `.txt`, `-index.html`, `index.json`, and
+  directory targets from investor filing links, and v16 attempted those targets
+  with `8.4MB` downloaded. The selected facts and citations still collapse back
+  to `data.sec.gov` companyfacts, so the MD&A text explaining the FY2022
+  operating-margin driver is not preserved for synthesis. Numeric verifier and
+  SynthesisGate correctly fail rather than allowing unsupported values.
