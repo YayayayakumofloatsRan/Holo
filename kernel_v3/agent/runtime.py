@@ -718,6 +718,7 @@ class AgentRuntime:
                 goal=goal,
                 recipe=recipe,
                 journal=self.journal,
+                artifact_store=self.artifact_store,
             )
         return _RecipePlanner(goal=goal, recipe=recipe, journal=self.journal)
 
@@ -726,7 +727,7 @@ class AgentRuntime:
             if self.processor_fabric is None:
                 raise ValueError("model evaluator requires processor_fabric")
             return ModelEvaluator(fabric=self.processor_fabric)
-        return _RecipeEvaluator(recipe, journal=self.journal)
+        return _RecipeEvaluator(recipe, journal=self.journal, artifact_store=self.artifact_store)
 
     def _finalize(
         self,
@@ -794,30 +795,13 @@ class AgentRuntime:
         loop_stop_reason: str | None,
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
-        report = _latest_retrieval_report(self.journal, task_id, run_id)
-        evidence = _retrieval_evidence(self.journal, task_id, run_id)
-        citations = _retrieval_citations(self.journal, task_id, run_id)
-        if _toolchain_grounding_enabled(recipe):
-            context_budget = _context_budget_metadata(recipe)
-            toolchain_evidence, toolchain_citations, toolchain_report = _workspace_grounding(
-                self.journal,
-                task_id,
-                run_id,
-                artifact_store=self.artifact_store,
-                evidence_char_limit=int(context_budget["workspace_evidence_chars"]),
-                citation_char_limit=int(context_budget["workspace_citation_chars"]),
-                synthesis_evidence_preview_chars=int(context_budget["synthesis_evidence_preview_chars"]),
-                synthesis_citation_preview_chars=int(context_budget["synthesis_citation_preview_chars"]),
-            )
-            if toolchain_evidence:
-                evidence = _merge_evidence_items(evidence, toolchain_evidence)
-                citations = _merge_citation_items(citations, toolchain_citations)
-                report = _report_with_toolchain_grounding(
-                    report,
-                    toolchain_report=toolchain_report,
-                    evidence=evidence,
-                    citations=citations,
-                )
+        evidence, citations, report = _retrieval_and_toolchain_grounding(
+            self.journal,
+            task_id,
+            run_id,
+            recipe=recipe,
+            artifact_store=self.artifact_store,
+        )
         terminal_reason = (
             _latest_guard_stop_reason(self.journal, task_id, run_id)
             or _latest_termination_failure_reason(self.journal, task_id, run_id)
@@ -2859,11 +2843,20 @@ class _AgentContextCompiler:
 
 
 class _RecipeBoundPlanner:
-    def __init__(self, *, inner: Planner, goal: str, recipe: TaskRecipe, journal: JournalStore | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        inner: Planner,
+        goal: str,
+        recipe: TaskRecipe,
+        journal: JournalStore | None = None,
+        artifact_store: ArtifactStore | None = None,
+    ) -> None:
         self.inner = inner
         self.goal = goal
         self.recipe = recipe
         self.journal = journal
+        self.artifact_store = artifact_store
         self._calls = 0
         self._journaled_plan_refs: set[str] = set()
 
@@ -2966,10 +2959,15 @@ class _RecipeBoundPlanner:
         run_id = str(context.state.get("run_id") or "")
         if not task_id or not run_id:
             return None
-        evidence = _retrieval_evidence(self.journal, task_id, run_id)
+        evidence, citations, _ = _retrieval_and_toolchain_grounding(
+            self.journal,
+            task_id,
+            run_id,
+            recipe=self.recipe,
+            artifact_store=self.artifact_store,
+        )
         if not evidence:
             return None
-        citations = _retrieval_citations(self.journal, task_id, run_id)
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
         existing_traces = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
         plan = plan_finance_formula(question=self.goal, facts=facts, existing_traces=existing_traces)
@@ -3737,9 +3735,16 @@ class _RecipePlanner:
 
 
 class _RecipeEvaluator:
-    def __init__(self, recipe: TaskRecipe, *, journal: JournalStore | None = None) -> None:
+    def __init__(
+        self,
+        recipe: TaskRecipe,
+        *,
+        journal: JournalStore | None = None,
+        artifact_store: ArtifactStore | None = None,
+    ) -> None:
         self.recipe = recipe
         self.journal = journal
+        self.artifact_store = artifact_store
         self.calls = 0
         self.expected_action_count = _expected_action_count(recipe)
 
@@ -3809,6 +3814,7 @@ class _RecipeEvaluator:
                 self.journal,
                 recipe=self.recipe,
                 context=context,
+                artifact_store=self.artifact_store,
             ):
                 return _feedback(
                     run_id,
@@ -3829,6 +3835,7 @@ def _finance_formula_work_required_before_final(
     *,
     recipe: TaskRecipe,
     context: ContextBundle,
+    artifact_store: ArtifactStore | None = None,
 ) -> bool:
     if journal is None:
         return False
@@ -3840,10 +3847,15 @@ def _finance_formula_work_required_before_final(
     run_id = str(context.state.get("run_id") or "")
     if not task_id or not run_id:
         return False
-    evidence = _retrieval_evidence(journal, task_id, run_id)
+    evidence, citations, _ = _retrieval_and_toolchain_grounding(
+        journal,
+        task_id,
+        run_id,
+        recipe=recipe,
+        artifact_store=artifact_store,
+    )
     if not evidence:
         return False
-    citations = _retrieval_citations(journal, task_id, run_id)
     facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
     existing_traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
     plan = plan_finance_formula(question=_root_goal_from_recipe(recipe), facts=facts, existing_traces=existing_traces)
@@ -9618,6 +9630,43 @@ def _retrieval_citations(journal: JournalStore, task_id: str, run_id: str) -> li
         for record in journal.records(task_id=task_id, kind="retrieval_citation")
         if record.run_id == run_id
     ]
+
+
+def _retrieval_and_toolchain_grounding(
+    journal: JournalStore,
+    task_id: str,
+    run_id: str,
+    *,
+    recipe: TaskRecipe,
+    artifact_store: ArtifactStore | None = None,
+) -> tuple[list[EvidenceItem], list[CitationItem], RetrievalReport | None]:
+    report = _latest_retrieval_report(journal, task_id, run_id)
+    evidence = _retrieval_evidence(journal, task_id, run_id)
+    citations = _retrieval_citations(journal, task_id, run_id)
+    if not _toolchain_grounding_enabled(recipe):
+        return evidence, citations, report
+    context_budget = _context_budget_metadata(recipe)
+    toolchain_evidence, toolchain_citations, toolchain_report = _workspace_grounding(
+        journal,
+        task_id,
+        run_id,
+        artifact_store=artifact_store or ArtifactStore.in_memory(),
+        evidence_char_limit=int(context_budget["workspace_evidence_chars"]),
+        citation_char_limit=int(context_budget["workspace_citation_chars"]),
+        synthesis_evidence_preview_chars=int(context_budget["synthesis_evidence_preview_chars"]),
+        synthesis_citation_preview_chars=int(context_budget["synthesis_citation_preview_chars"]),
+    )
+    if not toolchain_evidence:
+        return evidence, citations, report
+    evidence = _merge_evidence_items(evidence, toolchain_evidence)
+    citations = _merge_citation_items(citations, toolchain_citations)
+    report = _report_with_toolchain_grounding(
+        report,
+        toolchain_report=toolchain_report,
+        evidence=evidence,
+        citations=citations,
+    )
+    return evidence, citations, report
 
 
 WORKSPACE_SYNTHESIS_EVIDENCE_CHARS = 12000

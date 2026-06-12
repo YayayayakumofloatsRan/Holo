@@ -1424,8 +1424,13 @@ into bounded evidence/citation candidates; if no normal retrieval report exists,
 the host creates a synthetic toolchain grounding report and runs the usual
 finance fact ledger, claim ledger, numeric verifier, and synthesis gate. This
 means a model-authored temporary parser can emit structured stdout such as
-`metric: revenue value: ...`, and the host can verify it as evidence instead of
-leaving it trapped as an unconsumed tool observation.
+`entityName=... concept=... metric=... value=...`, and the host can verify it as
+evidence instead of leaving it trapped as an unconsumed tool observation. The
+same merged retrieval/toolchain grounding is now used before finalization by the
+finance formula planner: if a model-selected `shell.exec` or `file.read` step
+fills enough source-backed facts, Holo will schedule `calculator.compute` before
+allowing a free-text final answer. This closes the loop from LLM-selected
+temporary tooling to host-validated deterministic calculation.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

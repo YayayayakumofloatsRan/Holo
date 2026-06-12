@@ -211,6 +211,18 @@ source acquisition, claim extraction, transform planning, calculator traces,
 verifier gates, synthesis gates, or failure recovery. The file is a trace-quality
 suite, not a scored public benchmark.
 
+## Composable Toolchain Grounding
+
+The finance fast lane now treats LLM-selected local tooling as part of the
+audited evidence workflow. Successful `workspace.list`, `workspace.search`,
+`file.read`, and `shell.exec` observations are converted into bounded
+evidence/citation candidates with provenance. That merged grounding is consumed
+by finance formula preflight, so a temporary parser or local inspection command
+can emit structured facts, trigger `calculator.compute`, and then pass through
+the same ClaimLedger, VerifierGate, and SynthesisGate path as retrieval evidence.
+The model chooses and assembles the local toolchain; the host still validates
+tool permission, provenance, citations, formulas, and numeric support.
+
 ## Current Gaps
 
 The next iteration should stay narrow:

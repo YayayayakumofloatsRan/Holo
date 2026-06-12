@@ -309,6 +309,12 @@ not repeatedly download these sources during benchmark iteration.
   claim ledger, numeric verifier, and synthesis gate. This lets temporary
   model-selected parsers feed structured stdout into the verified answer path
   without giving shell output unchecked authority.
+- Toolchain grounding now feeds formula preflight as well as final synthesis.
+  The finance formula planner and fake evaluator use the same merged
+  retrieval/toolchain evidence view, so facts produced by a model-selected
+  `shell.exec` or `file.read` step can trigger `calculator.compute` before a
+  premature final answer. This is the required bridge from LLM-assembled local
+  toolchains to host-owned deterministic calculation and numeric verification.
 - Retrieval Workbench packets now use task-aware compact selection. The
   selection score combines the compiled evidence/transform specs, target
   document contract, required statement/line item, and table-like signals, so

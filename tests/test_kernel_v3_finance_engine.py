@@ -1787,6 +1787,92 @@ def test_retrieval_finalizer_uses_shell_exec_output_as_toolchain_evidence() -> N
     assert any(fact["metric"] == "revenue" and fact["value"] == "123000000" for fact in facts)
 
 
+def test_shell_exec_facts_trigger_finance_calculator_before_final_answer() -> None:
+    class RespondingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-premature-shell-answer",
+                kind="respond",
+                name="respond",
+                description="Answer after local parsing",
+                score=0.58,
+                payload={"text": "TestCo net margin can now be answered."},
+                reasons=["model_answer_ready_after_shell_exec"],
+                side_effect_class="none",
+            )
+
+    journal = JournalStore.in_memory()
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "goal": "Calculate TestCo FY2024 net margin.",
+        },
+    )
+    for index, stdout in enumerate(
+        [
+            (
+                "entityName=TestCo ticker=TCO "
+                "concept=us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax "
+                "label=Revenue metric=revenue unit=USD fy=2024 form=10-K filed=2024-11-01 value=200"
+            ),
+            (
+                "entityName=TestCo ticker=TCO concept=us-gaap:NetIncomeLoss "
+                "label=Net income metric=net income unit=USD fy=2024 form=10-K filed=2024-11-01 value=50"
+            ),
+        ],
+        start=1,
+    ):
+        journal.append(
+            task_id="task-shell-formula",
+            run_id="run-shell-formula",
+            step_id=f"step-shell-{index}",
+            kind="observation",
+            data={
+                "observation_id": f"obs-shell-formula-{index}",
+                "run_id": "run-shell-formula",
+                "kind": "tool_result",
+                "status": "ok",
+                "source": "tool:shell.exec",
+                "content": {
+                    "argv": ["python3", "parse_cached_filing.py", str(index)],
+                    "exit_code": 0,
+                    "stdout": stdout,
+                    "stderr": "",
+                },
+                "observed_at_ms": index,
+                "action_id": f"act-shell-formula-{index}",
+                "tool_call_id": None,
+            },
+            observation_ref=f"obs-shell-formula-{index}",
+            state_delta={"observation_status": "ok"},
+        )
+
+    planner = _RecipeBoundPlanner(
+        inner=RespondingPlanner(),
+        goal="Calculate TestCo FY2024 net margin.",
+        recipe=recipe,
+        journal=journal,
+    )
+    context = ContextBundle(
+        context_id="ctx-shell-formula",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-shell-formula", "run_id": "run-shell-formula"},
+        token_budget=4096,
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == CALCULATOR_TOOL_NAME
+    assert action.payload["formula_name"] == "margin"
+    assert action.payload["variables"] == {"numerator": "50", "denominator": "200"}
+    assert "calculator_required_before_final" in action.reasons
+    plans = journal.records(task_id="task-shell-formula", kind="finance_formula_plan")
+    assert plans[-1].data["fact_count"] == 2
+
+
 def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_formula() -> None:
     plan = plan_finance_formula(
         question=(
