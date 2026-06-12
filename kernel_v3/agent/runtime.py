@@ -1099,6 +1099,41 @@ class AgentRuntime:
                     error=repaired.error if hasattr(repaired, "error") else "synthesis_failed",
                 )
         if quality_gaps:
+            if _source_grounded_limited_answer_should_stand(final, quality_gaps=quality_gaps, recipe=recipe):
+                if _finance_numeric_verifier_required(recipe):
+                    verification = self._append_finance_numeric_verification(
+                        final,
+                        recipe=recipe,
+                        evidence=evidence,
+                        citations=citations,
+                    )
+                    self._append_synthesis_gate_result(
+                        final,
+                        recipe=recipe,
+                        status="passed" if verification.status != "failed" else "failed",
+                        issues=list(verification.issues),
+                        diagnostics={
+                            "gate_id": "source_grounded_limited_answer_v1",
+                            "source": "model_answer_preserved_after_quality_gap",
+                            "answer_quality_gaps": list(quality_gaps),
+                            "verifier_status": verification.status,
+                            "answer_numeric_support_rate": _finance_answer_numeric_support_rate(verification),
+                            "policy": "preserve_cited_limited_answer_when_required_source_gap_is_acknowledged",
+                        },
+                    )
+                    if verification.status == "failed":
+                        missing = _finance_numeric_missing_evidence(verification)
+                        return None, self._failure(
+                            task_id,
+                            run_id,
+                            "finance_numeric_verification_failed",
+                            missing_evidence=missing or ["supported_finance_numeric_values"],
+                            next_action="collect_supported_finance_facts_or_run_calculator",
+                            recipe=recipe,
+                        )
+                final = self._append_final(final)
+                self._maybe_propose_research_memory(final, recipe=recipe)
+                return final, None
             fallback_final = None
             if _finance_numeric_verifier_required(recipe) and evidence and citations:
                 fallback_final = _finance_retrieval_fallback_final(
@@ -8255,8 +8290,8 @@ def _enforce_benchmark_doc_retrieval_binding(
         if binding.get("required_line_item"):
             metadata["required_line_item"] = binding["required_line_item"]
         hint_question = _root_goal_from_recipe(recipe) if recipe is not None else goal
-        hint = _compiled_task_hint_for_retrieval(question=hint_question, binding=binding)
-        if hint and not isinstance(metadata.get("compiled_task_hint"), dict):
+        hint = _compiled_task_hint_for_retrieval(question=hint_question, binding=binding, recipe=recipe)
+        if hint:
             metadata["compiled_task_hint"] = hint
     metadata["benchmark_binding_enforced"] = True
     metadata.setdefault("source_authority_requirement", "primary")
@@ -8350,7 +8385,7 @@ def _benchmark_doc_retrieval_payload_from_binding(
         payload_metadata["source_urls"] = resolved_source_urls
         payload_metadata["preferred_source_urls"] = resolved_source_urls[:8]
         payload_metadata["queries"] = _ordered_unique([*resolved_source_urls, query])
-    hint = _compiled_task_hint_for_retrieval(question=question or goal, binding=binding)
+    hint = _compiled_task_hint_for_retrieval(question=question or goal, binding=binding, recipe=recipe)
     if hint:
         payload_metadata["compiled_task_hint"] = hint
     return {
@@ -8364,60 +8399,84 @@ def _benchmark_doc_retrieval_payload_from_binding(
     }
 
 
-def _compiled_task_hint_for_retrieval(*, question: str, binding: JsonObject) -> JsonObject:
+def _compiled_task_hint_for_retrieval(*, question: str, binding: JsonObject, recipe: TaskRecipe | None = None) -> JsonObject:
     if not question.strip() or not isinstance(binding, dict) or not binding:
         return {}
+    if recipe is not None and isinstance(recipe.metadata, dict):
+        model_hint = _compiled_task_hint_from_program_dict(recipe.metadata.get("execution_program"))
+        if model_hint:
+            return model_hint
     try:
         compiled = compile_finance_task_program(question=question, facts=[], target_binding=binding)
     except Exception:
         return {}
-    task_spec = compiled.task_spec
-    tool_chain_plan = _json_object(compiled.diagnostics.get("tool_chain_plan"))
+    return _compiled_task_hint_from_program_dict(
+        {
+            **compiled.to_dict(),
+            "source": str(compiled.diagnostics.get("source") or "finance_task_compiler"),
+        }
+    )
+
+
+def _compiled_task_hint_from_program_dict(program: object) -> JsonObject:
+    data = _json_object(program)
+    if not data:
+        return {}
+    task_spec = _json_object(data.get("task_spec"))
+    if not task_spec:
+        return {}
+    evidence_specs = [item for item in list(data.get("evidence_specs") or []) if isinstance(item, dict)]
+    transform_specs = [item for item in list(data.get("transform_specs") or []) if isinstance(item, dict)]
+    slot_frame = _json_object(data.get("slot_frame"))
+    diagnostics = _json_object(data.get("diagnostics"))
+    tool_chain_plan = _json_object(diagnostics.get("tool_chain_plan") or data.get("tool_chain_plan"))
+    source = _string_value(data.get("source")) or _string_value(diagnostics.get("source")) or "compiled_task_program"
     return {
         "schema": "holo.kernel_v3.compiled_task_hint.v1",
-        "program_id": compiled.program_id,
-        "domain": compiled.domain,
+        "program_id": _string_value(data.get("program_id")) or "",
+        "domain": _string_value(data.get("domain")) or "finance",
         "task_spec": {
-            "task_type": task_spec.task_type,
-            "objective": task_spec.objective,
-            "target_entities": list(task_spec.target_entities),
-            "target_periods": list(task_spec.target_periods),
-            "success_criteria": list(task_spec.success_criteria)[:8],
+            "task_type": _string_value(task_spec.get("task_type")) or "lookup",
+            "objective": _string_value(task_spec.get("objective")) or "",
+            "target_entities": _string_list(task_spec.get("target_entities")),
+            "target_periods": _string_list(task_spec.get("target_periods")),
+            "success_criteria": _string_list(task_spec.get("success_criteria"))[:8],
             "diagnostics": {
                 key: value
-                for key, value in dict(task_spec.diagnostics).items()
+                for key, value in _json_object(task_spec.get("diagnostics")).items()
                 if key in {"formula_name", "formula_status", "fact_count"}
             },
         },
         "evidence_specs": [
             {
-                "slot_name": spec.slot_name,
-                "accepted_attributes": list(spec.accepted_attributes)[:8],
-                "source_role": spec.source_role,
-                "required_source_families": list(spec.required_source_families)[:8],
-                "target_period": spec.target_period,
-                "statement": spec.statement,
-                "line_item": spec.line_item,
-                "required": spec.required,
+                "slot_name": _string_value(spec.get("slot_name")) or "",
+                "accepted_attributes": _string_list(spec.get("accepted_attributes"))[:8],
+                "source_role": _string_value(spec.get("source_role")),
+                "required_source_families": _string_list(spec.get("required_source_families"))[:8],
+                "target_period": _string_value(spec.get("target_period")),
+                "statement": _string_value(spec.get("statement")),
+                "line_item": _string_value(spec.get("line_item")),
+                "required": bool(spec.get("required", True)),
             }
-            for spec in compiled.evidence_specs[:16]
+            for spec in evidence_specs[:16]
         ],
         "transform_specs": [
             {
-                "name": spec.name,
-                "required_slots": list(spec.required_slots)[:12],
-                "expression": spec.expression,
-                "output_unit": spec.output_unit,
-                "output_attribute": spec.output_attribute,
+                "name": _string_value(spec.get("name")) or "",
+                "required_slots": _string_list(spec.get("required_slots"))[:12],
+                "expression": _string_value(spec.get("expression")),
+                "output_unit": _string_value(spec.get("output_unit")),
+                "output_attribute": _string_value(spec.get("output_attribute")),
             }
-            for spec in compiled.transform_specs[:12]
+            for spec in transform_specs[:12]
         ],
-        "missing_slots": list((compiled.slot_frame.missing_slots if compiled.slot_frame is not None else []))[:16],
+        "missing_slots": _string_list(slot_frame.get("missing_slots"))[:16],
         "tool_chain_plan": _compact_tool_chain_plan_for_prompt(tool_chain_plan),
         "diagnostics": {
-            "source": "finance_task_compiler_pre_retrieval",
-            "evidence_spec_count": len(compiled.evidence_specs),
-            "transform_spec_count": len(compiled.transform_specs),
+            "source": "recipe_execution_program" if source == "task_compile_model" else "finance_task_compiler_pre_retrieval",
+            "program_source": source,
+            "evidence_spec_count": len(evidence_specs),
+            "transform_spec_count": len(transform_specs),
             "tool_chain_plan_present": bool(tool_chain_plan),
         },
     }
@@ -9152,6 +9211,21 @@ def _same_url_or_prefix(actual: str, required: str) -> bool:
     left = actual.strip().rstrip("/")
     right = required.strip().rstrip("/")
     return left == right or left.startswith(f"{right}?") or left.startswith(f"{right}#")
+
+
+def _source_grounded_limited_answer_should_stand(
+    answer: FinalAnswer,
+    *,
+    quality_gaps: list[str],
+    recipe: TaskRecipe,
+) -> bool:
+    if not answer.answer or not answer.citation_refs:
+        return False
+    if set(quality_gaps) - {"required_source_url_citation_missing"}:
+        return False
+    if not (_source_grounded_trace_required(recipe) or _benchmark_doc_retrieval_payload_from_recipe(recipe)):
+        return False
+    return bool(answer.limitations)
 
 
 def _benchmark_doc_retrieval_primary_citation_satisfies_required_source(

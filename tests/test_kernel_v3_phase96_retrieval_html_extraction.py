@@ -3,7 +3,7 @@ from kernel_v3.journal import JournalStore
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.retrieval.contracts import FetchedDocument
-from kernel_v3.retrieval.extract import extract_spans, readable_document_text
+from kernel_v3.retrieval.extract import extract_spans, readable_document_text, readable_document_text_with_diagnostics
 
 
 def test_phase96_html_extraction_prefers_readable_body_over_raw_markup() -> None:
@@ -81,6 +81,55 @@ def test_phase96_retrieval_journals_readable_html_evidence_but_artifacts_keep_ra
     assert "Authorization header" in evidence["text"]
     assert "<title" not in evidence["text"]
     assert extraction["diagnostics"]["text_modes"] == ["html_readable_text"]
+
+
+def test_phase96_sec_html_table_blocks_feed_model_and_fact_ledger() -> None:
+    document = FetchedDocument(
+        document_id="doc-sec-html",
+        goal_id="goal-sec-html",
+        source_id="src-sec-html",
+        uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/mmm-20221231.htm",
+        title="3M 2022 10-K SEC filing",
+        artifact_id="artifact-sec-html",
+        payload_hash="hash-sec-html",
+        preview="",
+        size_bytes=0,
+        metadata={
+            "mime_type": "text/html",
+            "source_metadata": {"source_kind": "sec_primary_filing_document"},
+        },
+    )
+    body = """
+    <html><body>
+      <ix:header><table><tr><td>taxonomy boilerplate</td><td>999</td></tr></table></ix:header>
+      <h2>Performance by Business Segment</h2>
+      <p>Dollars in millions. Net sales and organic growth by segment are shown below.</p>
+      <table>
+        <tr><th>Business Segment</th><th>2022</th><th>2021</th><th>Change</th></tr>
+        <tr><td>Safety and Industrial net sales</td><td>11639</td><td>12413</td><td>(6.2)</td></tr>
+        <tr><td>Transportation and Electronics net sales</td><td>8402</td><td>9150</td><td>(8.2)</td></tr>
+      </table>
+    </body></html>
+    """
+
+    text, mode, diagnostics = readable_document_text_with_diagnostics(
+        body,
+        document=document,
+        goal=SearchGoal(
+            goal_id="goal-sec-html",
+            query="3M 2022 business segment net sales organic growth",
+            max_spans_per_document=3,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+    )
+
+    assert mode == "html_readable_text"
+    assert diagnostics["table_like_blocks"] >= 1
+    assert "HTML table blocks" in text
+    assert "html_table_fact" in text
+    assert text.find("HTML table blocks") < text.find("Performance by Business Segment")
+    assert "metric=Safety and Industrial net sales fy=2022 value=11639 scale=millions" in text
+    assert "Business_Segment=Safety and Industrial net sales" in text
 
 
 def test_phase96_pdf_extraction_reads_text_literals_without_pdf_dependency() -> None:

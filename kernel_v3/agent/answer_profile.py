@@ -22,15 +22,20 @@ def infer_answer_profile(
     explicit = _explicit_profile(execution_metadata)
     if explicit is not None:
         return explicit
-    hinted = _profile_from_semantic_hint(semantic_intake, response_language=response_language)
-    if hinted is not None:
-        return hinted
     text = _normalized_text(goal)
+    source_grounded_single_question = _source_grounded_single_question(text)
+    if not source_grounded_single_question:
+        hinted = _profile_from_semantic_hint(semantic_intake, response_language=response_language)
+        if hinted is not None:
+            return hinted
     capabilities = _capabilities(semantic_intake=semantic_intake, task_plan=task_plan)
     domain = _domain(text, capabilities)
     strict_shape = _strict_output_shape(text)
     explicit_shape = _explicit_output_shape(text)
-    format_name, detail_level = explicit_shape or _default_shape(domain=domain, capabilities=capabilities)
+    if explicit_shape is None and source_grounded_single_question:
+        format_name, detail_level = "answer", "normal"
+    else:
+        format_name, detail_level = explicit_shape or _default_shape(domain=domain, capabilities=capabilities)
     sections = _target_sections(format_name=format_name, domain=domain)
     min_chars, min_sections = _minimum_shape(detail_level, format_name=format_name)
     quality_gate = _default_quality_gate(
@@ -252,6 +257,29 @@ def _explicit_output_shape(text: str) -> tuple[str, str] | None:
     return None
 
 
+def _source_grounded_single_question(text: str) -> bool:
+    if "benchmark target source follows" not in text and "source url:" not in text:
+        return False
+    if _contains_any(
+        text,
+        (
+            "detailed report",
+            "comprehensive report",
+            "research report",
+            "deep report",
+            "详细报告",
+            "完整报告",
+            "全面报告",
+            "深度报告",
+        ),
+    ):
+        return False
+    return _contains_any(
+        text,
+        ("?", "？", "which", "what", "how much", "calculate", "compare", "谁", "哪个", "多少", "计算"),
+    )
+
+
 def _strict_output_shape(text: str) -> tuple[str, str] | None:
     if _contains_any(
         text,
@@ -287,7 +315,7 @@ def _strict_output_shape(text: str) -> tuple[str, str] | None:
 
 
 def _target_sections(*, format_name: str, domain: str) -> list[str]:
-    if format_name == "brief_answer":
+    if format_name in {"brief_answer", "answer"}:
         return ["answer", "limitations"]
     if domain == "finance":
         return [
@@ -311,6 +339,8 @@ def _target_sections(*, format_name: str, domain: str) -> list[str]:
 
 
 def _minimum_coverage(*, domain: str, format_name: str) -> list[str]:
+    if format_name not in {"detailed_report", "deep_report", "memo"}:
+        return ["answer"]
     if domain == "finance":
         return [
             "business_overview",

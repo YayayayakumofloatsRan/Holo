@@ -33,6 +33,7 @@ class ProcessorOutcome:
     duration_ms: int
     repaired: bool = False
     repair_attempts: int = 0
+    raw_text: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

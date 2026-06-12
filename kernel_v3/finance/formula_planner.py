@@ -85,7 +85,7 @@ def _detect_formula(question: str) -> str | None:
         return None
     if "margin" in text or "利润率" in text:
         return "margin"
-    if "growth" in text or "增长率" in text:
+    if "growth rate" in text or "增长率" in text:
         return "yoy_growth"
     return None
 

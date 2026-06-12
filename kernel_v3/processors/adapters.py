@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation
@@ -187,6 +188,14 @@ class Synthesizer:
             )
             if retry.parsed is not None:
                 return _final_answer_from_json(retry.parsed, citations=citations, evidence=evidence)
+            salvaged = _salvage_final_answer_from_raw_text(
+                retry.raw_text or outcome.raw_text,
+                citations=citations,
+                evidence=evidence,
+                error=retry.result.error or outcome.result.error or "invalid_json",
+            )
+            if salvaged is not None:
+                return salvaged
             return FinalAnswer(
                 status="failed",
                 answer=None,
@@ -839,6 +848,121 @@ def _final_answer_from_json(
         limitations=_string_list(data.get("limitations")),
         used_evidence=used_evidence,
         error=None,
+    )
+
+
+def _salvage_final_answer_from_raw_text(
+    raw_text: str | None,
+    *,
+    citations: list[CitationItem],
+    evidence: list[EvidenceItem],
+    error: str,
+) -> FinalAnswer | None:
+    answer = _salvage_answer_text(raw_text)
+    if not answer:
+        return None
+    known_citations = {item.citation_id for item in citations}
+    citation_refs = [item.citation_id for item in citations if item.citation_id in str(raw_text or "")]
+    if not citation_refs and citations and _text_appears_source_grounded(answer):
+        citation_refs = [item.citation_id for item in citations]
+    citation_refs = [item for item in citation_refs if item in known_citations]
+    if not citation_refs:
+        return None
+    citation_evidence = {item.citation_id: item.evidence_id for item in citations}
+    known_evidence = {item.evidence_id for item in evidence}
+    used_evidence: list[str] = []
+    for citation_id in citation_refs:
+        evidence_id = citation_evidence.get(citation_id)
+        if evidence_id and evidence_id in known_evidence and evidence_id not in used_evidence:
+            used_evidence.append(evidence_id)
+    return FinalAnswer(
+        status="ok",
+        answer=answer,
+        citation_refs=citation_refs,
+        confidence=0.45,
+        limitations=["synthesizer_json_salvaged", f"synthesizer_error:{error}"],
+        used_evidence=used_evidence,
+        error=None,
+    )
+
+
+def _salvage_answer_text(raw_text: str | None) -> str | None:
+    text = str(raw_text or "").strip()
+    if not text:
+        return None
+    extracted = _extract_json_like_answer_field(text)
+    if extracted:
+        return _clean_salvaged_answer(extracted)
+    stripped = text
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    if stripped.startswith("{") and '"answer"' in stripped[:200]:
+        return None
+    return _clean_salvaged_answer(stripped)
+
+
+def _extract_json_like_answer_field(text: str) -> str | None:
+    match = re.search(r'"answer"\s*:\s*"', text)
+    if match is None:
+        return None
+    index = match.end()
+    chars: list[str] = []
+    escaped = False
+    while index < len(text):
+        char = text[index]
+        if escaped:
+            chars.append(_json_escape_char(char))
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            tail = text[index + 1 : index + 96]
+            if re.match(r"\s*,\s*\"(?:citation_refs|confidence|limitations|used_evidence|status)\"\s*:", tail):
+                break
+            chars.append(char)
+        else:
+            chars.append(char)
+        index += 1
+    value = "".join(chars).strip()
+    return value or None
+
+
+def _json_escape_char(char: str) -> str:
+    return {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\"}.get(char, char)
+
+
+def _clean_salvaged_answer(text: str) -> str | None:
+    value = str(text or "").strip()
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    value = value.strip()
+    return value or None
+
+
+def _text_appears_source_grounded(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "sec",
+            "10-k",
+            "10-q",
+            "filing",
+            "annual report",
+            "companyfacts",
+            "evidence",
+            "source",
+            "citation",
+            "证据",
+            "来源",
+            "申报",
+            "年报",
+            "财报",
+        )
     )
 
 

@@ -474,7 +474,13 @@ def _canonical_metric(value: str) -> str:
 
 
 def _looks_like_structured_companyfacts(text: str) -> bool:
-    return "facts=" in text or "SEC companyfacts official" in text or "entityName=" in text
+    normalized = str(text or "")
+    return (
+        "facts=" in normalized
+        or "SEC companyfacts official" in normalized
+        or "entityName=" in normalized
+        or ("metric=" in normalized and ("value=" in normalized or "val=" in normalized))
+    )
 
 
 def _looks_like_discovery_or_search_page(item: EvidenceItem) -> bool:
@@ -586,6 +592,8 @@ def _looks_like_natural_context_noise(
     local = text[max(0, offset - 70) : min(len(text), end + 70)]
     before_near = text[max(0, offset - 40) : offset]
     after = text[end : min(len(text), end + 80)]
+    if _looks_like_sec_metadata_context(local):
+        return True
     next_amount = AMOUNT_PATTERN.search(after)
     own_after = after[: next_amount.start()] if next_amount is not None else after
     net_cash_local = f"{before_near} {own_after}"
@@ -630,6 +638,25 @@ def _looks_like_natural_context_noise(
     if abs(value) < Decimal("1000") and metric not in {"margin", "rate", "yield"}:
         return True
     return False
+
+
+def _looks_like_sec_metadata_context(text: str) -> bool:
+    normalized = str(text or "").lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "former conformed name",
+            "date of name change",
+            "http://fasb.org/us-gaap",
+            "http://xbrl.sec.gov",
+            "dei:",
+            "document fiscal year focus",
+            "central index key",
+            "standard industrial classification",
+            "irs number",
+            "accession number",
+        )
+    )
 
 
 def _metric_from_context(context: str, *, amount_offset: int, amount_end: int) -> str | None:

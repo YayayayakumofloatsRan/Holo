@@ -400,7 +400,7 @@ def _infer_formula_name(question: str) -> str:
         return "bps_difference"
     if "margin" in text:
         return "margin"
-    if "growth" in text or "yoy" in text:
+    if "growth rate" in text or "yoy" in text:
         return "yoy_growth"
     return ""
 

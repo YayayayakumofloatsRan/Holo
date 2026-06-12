@@ -180,11 +180,15 @@ def _model_task_compile_prompt(
             "TaskSpec, EvidenceSpec, TransformSpec, and SlotFrame. Decide semantically; do not follow fixed query templates. "
             "The host fallback is a scaffold, not a constraint. Correct it when the question implies better slots, source roles, "
             "line items, periods, transforms, or tool-chain moves. Do not invent facts, evidence ids, citations, source ids, "
-            "numeric values, formulas with unsupported inputs, or final answers. Host will validate and execute tools."
+            "numeric values, formulas with unsupported inputs, or final answers. If the fallback inferred a formula from broad "
+            "language, verify that the user is actually asking for that calculation; explanation, attribution, disclosure, or "
+            "source-grounded lookup tasks should receive evidence slots and no calculator transform unless a deterministic "
+            "formula is truly required. Host will validate and execute tools."
         ),
         "target_binding": target_binding or {},
         "fact_ledger": [_fact_summary(fact) for fact in facts[:96]],
         "host_fallback_program": _compact_program_for_model(fallback),
+        "host_fallback_risks": _host_fallback_risks(fallback),
         "output_contract": {
             "task_spec": {
                 "task_type": "semantic work type such as filing_qa, compute, compare_compute, reconciliation, transaction_multiple, valuation_multiple, disclosure_analysis, modeling_lite",
@@ -230,6 +234,24 @@ def _model_task_compile_prompt(
         "Prefer the model's semantic judgment over the host fallback when they differ, but keep every required slot executable and auditable.\n\n"
         f"Packet:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
     )
+
+
+def _host_fallback_risks(fallback: CompiledTaskProgram) -> list[JsonObject]:
+    risks: list[JsonObject] = []
+    formula_name = str(fallback.task_spec.diagnostics.get("formula_name") or "")
+    if formula_name == "yoy_growth":
+        risks.append(
+            {
+                "risk": "fallback_yoy_growth_may_be_over_eager",
+                "decision_owner": "model",
+                "instruction": (
+                    "Keep yoy_growth only when the task asks for a numeric year-over-year or growth-rate calculation. "
+                    "If the task asks which source, segment, factor, or disclosure explains growth, compile source-grounded "
+                    "evidence slots instead of prior/current numeric formula slots."
+                ),
+            }
+        )
+    return risks
 
 
 def _compiled_program_from_model_output(

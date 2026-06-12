@@ -304,6 +304,9 @@ MARKET_SCRIPT_METRIC_LABELS = {
 }
 MARKET_SCRIPT_SNIPPET_LIMIT = 24
 MARKET_SCRIPT_WINDOW_CHARS = 700
+HTML_TABLE_BLOCK_LIMIT = 40
+HTML_TABLE_ROW_LIMIT = 36
+HTML_TABLE_CELL_CHARS = 240
 
 
 def extract_spans(
@@ -427,7 +430,13 @@ def readable_document_text_with_diagnostics(
         if text:
             return text, "csv_readable_text", {}
     if _looks_like_html(body, mime_type=mime_type):
-        return _extract_html_readable_text(body, limit=_readable_text_limit_for_document(document)), "html_readable_text", {}
+        text, diagnostics = _extract_html_readable_text_with_diagnostics(
+            body,
+            limit=_readable_text_limit_for_document(document),
+            document=document,
+            goal=goal,
+        )
+        return text, str(diagnostics.get("parser_used") or "html_readable_text"), diagnostics
     return _normalize_span(body[: _readable_text_limit_for_document(document)]), "plain_text", {}
 
 
@@ -2657,12 +2666,23 @@ def _looks_like_readable_pdf_text(text: str) -> bool:
     return True
 
 
-def _extract_html_readable_text(body: str, *, limit: int = READABLE_TEXT_LIMIT) -> str:
+def _extract_html_readable_text_with_diagnostics(
+    body: str,
+    *,
+    limit: int = READABLE_TEXT_LIMIT,
+    document: FetchedDocument | None = None,
+    goal: SearchGoal | None = None,
+) -> tuple[str, JsonObject]:
     parser = _ReadableHtmlParser()
     parser.feed(body[:limit])
     parser.close()
     parsed_text = parser.text()
-    text_parts = [parsed_text]
+    text_parts: list[str] = []
+    table_blocks = _extract_html_table_blocks(body[:limit], goal=goal, document=document)
+    if table_blocks:
+        text_parts.append("\nHTML table blocks:\n")
+        text_parts.extend(f"{line}\n" for line in table_blocks)
+    text_parts.append(parsed_text)
     visible_market_snippets = _extract_market_visible_snippets(parsed_text)
     if visible_market_snippets:
         text_parts.append("\nMarket data visible snippets:\n")
@@ -2671,7 +2691,274 @@ def _extract_html_readable_text(body: str, *, limit: int = READABLE_TEXT_LIMIT) 
     if market_snippets:
         text_parts.append("\nMarket data structured snippets:\n")
         text_parts.extend(f"{line}.\n" for line in market_snippets)
-    return _normalize_span("".join(text_parts))
+    text = _normalize_span("".join(text_parts))
+    return text, {
+        "parser_used": "html_readable_text",
+        "chars_extracted": len(text),
+        "table_like_blocks": len(table_blocks),
+        "market_visible_snippets": len(visible_market_snippets),
+        "market_structured_snippets": len(market_snippets),
+        "source_kind": _document_source_kind(document) if document is not None else "",
+    }
+
+
+def _extract_html_readable_text(body: str, *, limit: int = READABLE_TEXT_LIMIT) -> str:
+    text, _diagnostics = _extract_html_readable_text_with_diagnostics(body, limit=limit)
+    return text
+
+
+def _extract_html_table_blocks(
+    body: str,
+    *,
+    goal: SearchGoal | None = None,
+    document: FetchedDocument | None = None,
+) -> list[str]:
+    tables = _html_tables(body)
+    if not tables:
+        return []
+    goal_text = " ".join(
+        part
+        for part in (
+            goal.query if goal is not None else "",
+            _metadata_intent_text(goal.metadata) if goal is not None else "",
+            document.title if document is not None else "",
+        )
+        if part
+    )
+    terms = _ordered_normalized_terms([*_terms(goal_text, goal=goal), *_html_table_extra_terms(goal_text)])
+    ranked: list[tuple[tuple[int, int, int], list[str]]] = []
+    for index, table in enumerate(tables, start=1):
+        block = _html_table_block_lines(table, table_index=index)
+        if not block:
+            continue
+        table_text = _normalize_span(" ".join(block)).lower()
+        term_hits = sum(1 for term in terms if term and term in table_text)
+        numeric_cells = sum(1 for row in table.get("rows", []) for cell in row if _looks_numeric_cell(cell))
+        source_kind = _document_source_kind(document) if document is not None else ""
+        should_keep = bool(term_hits) or (
+            source_kind in {"sec_complete_submission_text", "sec_primary_filing_document", "sec_exhibit_document"}
+            and numeric_cells >= 3
+            and _looks_like_financial_table_text(table_text)
+        )
+        if not should_keep:
+            continue
+        ranked.append(((-term_hits, -numeric_cells, index), block))
+    result: list[str] = []
+    for _rank, block in sorted(ranked, key=lambda item: item[0])[:HTML_TABLE_BLOCK_LIMIT]:
+        result.extend(block)
+    return result
+
+
+def _html_table_extra_terms(goal_text: str) -> list[str]:
+    text = str(goal_text or "").lower()
+    extras: list[str] = []
+    for marker in (
+        "segment",
+        "business segment",
+        "organic",
+        "acquisition",
+        "divestiture",
+        "net sales",
+        "sales",
+        "revenue",
+        "operating",
+        "margin",
+        "liquidity",
+        "quick ratio",
+        "cash",
+        "inventory",
+        "debt securities",
+        "trading symbol",
+        "exchange",
+    ):
+        if marker in text:
+            extras.append(marker)
+    return extras
+
+
+def _html_table_block_lines(table: JsonObject, *, table_index: int) -> list[str]:
+    rows = table.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return []
+    heading = _normalize_span(str(table.get("heading") or ""))
+    scale = _html_table_scale(" ".join([heading, *(" ".join(row) for row in rows if isinstance(row, list))]))
+    lines: list[str] = [f"html_table_{table_index}: heading={heading or 'unknown'}" + (f" scale={scale}" if scale else "")]
+    header = _html_table_header(rows)
+    facts = _html_table_candidate_fact_lines(rows, header=header, scale=scale, table_index=table_index)
+    if facts:
+        lines.extend(facts)
+    for row_index, row in enumerate(rows[:HTML_TABLE_ROW_LIMIT], start=1):
+        if not isinstance(row, list) or not any(str(cell).strip() for cell in row):
+            continue
+        cells = [_truncate_html_cell(cell) for cell in row]
+        if header and len(cells) == len(header) and row_index > 1:
+            rendered = " ".join(f"{_structured_key(header[col_index])}={cells[col_index]}" for col_index in range(len(cells)))
+        else:
+            rendered = " | ".join(cells)
+        lines.append(_truncate_structured_line(f"html_table_{table_index}_row_{row_index}: {rendered}"))
+    return lines
+
+
+def _html_table_header(rows: list[object]) -> list[str]:
+    for row in rows[:4]:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        non_numeric = sum(1 for cell in row if not _looks_numeric_cell(str(cell)))
+        year_like = sum(1 for cell in row if _candidate_year_from_column(str(cell)) is not None)
+        if year_like or non_numeric >= max(1, len(row) // 2):
+            return [_normalize_span(str(cell)) or f"column_{index + 1}" for index, cell in enumerate(row)]
+    return []
+
+
+def _html_table_candidate_fact_lines(
+    rows: list[object],
+    *,
+    header: list[str],
+    scale: str,
+    table_index: int,
+) -> list[str]:
+    if not header or len(header) < 2:
+        return []
+    year_columns = [(index, _candidate_year_from_column(header[index])) for index in range(1, len(header))]
+    year_columns = [(index, year) for index, year in year_columns if year is not None]
+    if not year_columns:
+        return []
+    lines: list[str] = []
+    for row_index, row in enumerate(rows[1:HTML_TABLE_ROW_LIMIT], start=2):
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        metric = _normalize_span(str(row[0] or ""))
+        if not metric or _looks_numeric_cell(metric):
+            continue
+        for col_index, year in year_columns:
+            if col_index >= len(row):
+                continue
+            value = _normalize_html_numeric_cell(str(row[col_index] or ""))
+            if not value:
+                continue
+            parts = [
+                f"html_table_fact_{table_index}_{row_index}_{year}:",
+                f"metric={metric}",
+                f"fy={year}",
+                f"value={value}",
+            ]
+            if scale:
+                parts.append(f"scale={scale}")
+            lines.append(_truncate_structured_line(" ".join(parts)))
+    return lines[:HTML_TABLE_ROW_LIMIT]
+
+
+def _html_table_scale(text: str) -> str:
+    normalized = str(text or "").lower()
+    if "in millions" in normalized or "(millions" in normalized or "dollars in millions" in normalized:
+        return "millions"
+    if "in billions" in normalized or "(billions" in normalized or "dollars in billions" in normalized:
+        return "billions"
+    if "in thousands" in normalized or "(thousands" in normalized or "dollars in thousands" in normalized:
+        return "thousands"
+    return ""
+
+
+def _looks_like_financial_table_text(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "net sales",
+            "revenue",
+            "cash flows",
+            "balance sheet",
+            "assets",
+            "liabilities",
+            "operating income",
+            "operating margin",
+            "business segment",
+            "segment",
+            "organic",
+            "acquisition",
+            "divestiture",
+            "trading symbol",
+            "exchange",
+        )
+    )
+
+
+def _looks_numeric_cell(value: object) -> bool:
+    text = _normalize_html_numeric_cell(str(value or ""))
+    return bool(text)
+
+
+def _candidate_year_from_column(value: str) -> int | None:
+    text = str(value or "").strip()
+    match = re.search(r"\b((?:19|20)\d{2})\b", text)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _normalize_html_numeric_cell(value: str) -> str:
+    text = _normalize_span(str(value or ""))
+    text = text.replace("$", "").replace("%", "").strip()
+    if not text or text in {"-", "--", "—"}:
+        return ""
+    if re.fullmatch(r"\(?-?\d[\d,]*(?:\.\d+)?\)?", text):
+        return text
+    return ""
+
+
+def _truncate_html_cell(value: object) -> str:
+    text = _normalize_span(str(value or ""))
+    if len(text) <= HTML_TABLE_CELL_CHARS:
+        return text
+    return text[: HTML_TABLE_CELL_CHARS - 3] + "..."
+
+
+def _html_tables(body: str) -> list[JsonObject]:
+    tables: list[JsonObject] = []
+    for match in re.finditer(r"<table\b[^>]*>.*?</table\s*>", body, flags=re.IGNORECASE | re.DOTALL):
+        fragment = match.group(0)
+        rows = _html_table_rows(fragment)
+        if not rows:
+            continue
+        context = _html_fragment_text(body[max(0, match.start() - 1800) : match.start()])
+        heading = _html_table_heading(context)
+        tables.append({"heading": heading, "rows": rows})
+    return tables
+
+
+def _html_table_rows(fragment: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for row_match in re.finditer(r"<tr\b[^>]*>(.*?)</tr\s*>", fragment, flags=re.IGNORECASE | re.DOTALL):
+        row_html = row_match.group(1)
+        cells = [
+            _html_fragment_text(cell_match.group(1))
+            for cell_match in re.finditer(r"<t[dh]\b[^>]*>(.*?)</t[dh]\s*>", row_html, flags=re.IGNORECASE | re.DOTALL)
+        ]
+        cleaned = [_normalize_span(cell) for cell in cells if _normalize_span(cell)]
+        if cleaned:
+            rows.append(cleaned)
+    return rows
+
+
+def _html_fragment_text(fragment: str) -> str:
+    parser = _ReadableHtmlParser()
+    try:
+        parser.feed(fragment)
+        parser.close()
+    except Exception:
+        text = re.sub(r"<[^>]+>", " ", fragment)
+        return _normalize_span(html.unescape(text))
+    return _normalize_span(parser.text())
+
+
+def _html_table_heading(context: str) -> str:
+    normalized = _normalize_span(context)
+    if not normalized:
+        return ""
+    sentences = re.split(r"(?<=[.!?])\s+|\n+", normalized)
+    candidates = [item.strip() for item in sentences if item.strip()]
+    if not candidates:
+        return normalized[-320:]
+    return _normalize_span(" ".join(candidates[-3:]))[-420:]
 
 
 def _extract_market_visible_snippets(text: str) -> list[str]:

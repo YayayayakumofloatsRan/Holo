@@ -91,6 +91,21 @@ def test_phase109_finance_research_defaults_to_strict_answer_quality_gate() -> N
     assert "source_quality" in profile.minimum_coverage
 
 
+def test_phase109_source_url_single_question_uses_direct_answer_profile() -> None:
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first. "
+        "Source URL: https://example.com/filing.pdf "
+        "If we exclude the impact of M&A, which segment dragged down growth in 2022?"
+    )
+    profile = infer_answer_profile(goal, semantic_intake=_semantic_intake_contract(goal), response_language="zh")
+
+    assert profile.format == "answer"
+    assert profile.detail_level == "normal"
+    assert profile.metadata["quality_gate"] == "advisory"
+    assert profile.minimum_coverage == ["answer"]
+    assert profile.target_sections == ["answer", "limitations"]
+
+
 def test_phase109_answer_profile_preserves_explicit_brief_shape() -> None:
     profile = infer_answer_profile("简短说明什么是双曲动力学", response_language="zh")
 

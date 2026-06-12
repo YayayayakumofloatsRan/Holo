@@ -306,6 +306,7 @@ class ProcessorFabric:
             )
 
         text = _result_text(provider_result)
+        raw_text = _bounded_processor_raw_text(text)
         parsed = parse_json_object(text, max_repair_attempts=self.max_repair_attempts)
         schema_error = None if parsed.value is None else validate_json_schema(parsed.value, schema)
         status = "ok" if parsed.value is not None and schema_error is None else "failed"
@@ -351,6 +352,7 @@ class ProcessorFabric:
             duration_ms=duration_ms,
             repaired=parsed.repaired,
             repair_attempts=parsed.attempts,
+            raw_text=raw_text,
         )
 
     def _processor_budget_error(self, request: ProcessorRequest, *, task_id: str | None) -> JsonObject | None:
@@ -563,6 +565,13 @@ def _result_text(result: ProcessorResult) -> str:
     if isinstance(text, str):
         return text
     return json.dumps(result.output, ensure_ascii=False, sort_keys=True)
+
+
+def _bounded_processor_raw_text(text: str, *, limit: int = 20000) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit]
 
 
 def _external_private_context_boundary_error(

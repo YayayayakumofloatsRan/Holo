@@ -937,16 +937,22 @@ def _looks_like_reference_or_list_marker(
 def _embedded_identifier_or_citation(text: str, start: int, end: int, *, unit: str = "") -> bool:
     before = text[max(0, start - 32) : start]
     after = text[end : min(len(text), end + 32)]
+    if _inside_inline_formula_or_code_span(text, start, end):
+        return True
+    if _inside_reference_bracket(text, start, end):
+        return True
     token_start = start
-    while token_start > 0 and not text[token_start - 1].isspace():
+    while token_start > 0 and not _identifier_token_boundary(text[token_start - 1]):
         token_start -= 1
     token_end = end
-    while token_end < len(text) and not text[token_end].isspace():
+    while token_end < len(text) and not _identifier_token_boundary(text[token_end]):
         token_end += 1
     token = text[token_start:token_end].lower()
     before_token = before.strip().lower()
     identifier_window = text[max(0, start - 48) : min(len(text), end + 48)].lower()
     if "cite-" in token or "citation-" in token or "evidence-span" in token:
+        return True
+    if re.search(r"\b(?:cite|citation|evidence|source|ref)[-_][a-z0-9][a-z0-9_.:-]*\b", token):
         return True
     if re.search(r"(?:cite|citation|evidence|evidence-span)[-_]?$", before_token):
         return True
@@ -968,6 +974,42 @@ def _embedded_identifier_or_citation(text: str, start: int, end: int, *, unit: s
         if not prefix.strip():
             return True
     return False
+
+
+def _inside_inline_formula_or_code_span(text: str, start: int, end: int) -> bool:
+    open_index = text.rfind("`", 0, start)
+    if open_index < 0:
+        return False
+    close_index = text.find("`", end)
+    if close_index < 0 or close_index - open_index > 240:
+        return False
+    inner = text[open_index + 1 : close_index].strip()
+    if not inner:
+        return False
+    if re.fullmatch(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?\s*%?", inner):
+        return False
+    return bool(re.search(r"[A-Za-z_]", inner) and re.search(r"[+\-*/=^]", inner))
+
+
+def _inside_reference_bracket(text: str, start: int, end: int) -> bool:
+    brackets = (("[", "]"), ("【", "】"), ("(", ")"), ("（", "）"))
+    for left, right in brackets:
+        open_index = text.rfind(left, 0, start)
+        if open_index < 0:
+            continue
+        close_index = text.find(right, end)
+        if close_index < 0 or close_index - open_index > 160:
+            continue
+        inner = text[open_index + 1 : close_index].lower()
+        if any(marker in inner for marker in ("cite", "citation", "evidence", "source", "ref", "引用", "来源", "证据")):
+            return True
+    return False
+
+
+def _identifier_token_boundary(char: str) -> bool:
+    if char.isspace():
+        return True
+    return char in {"[", "]", "(", ")", "（", "）", "【", "】", "{", "}", "，", "。", ",", ";", "；", "："}
 
 
 def _looks_material_numeric_claim(

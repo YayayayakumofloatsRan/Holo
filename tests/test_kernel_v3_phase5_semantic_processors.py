@@ -531,6 +531,37 @@ def test_phase5_synthesizer_retries_invalid_json_once():
     assert [item.data["status"] for item in results] == ["failed", "ok"]
 
 
+def test_phase5_synthesizer_salvages_answer_text_after_json_repair_failure():
+    report, evidence, citation = _retrieval_contracts()
+    provider = AlwaysMalformedAnswerProvider(
+        '{"answer": "SEC filing evidence is insufficient to identify the segment. '
+        'The answer should be treated as a limitation.", "citation_refs": ["cite-1"], '
+    )
+    journal = JournalStore.in_memory()
+
+    answer = Synthesizer(
+        fabric=ProcessorFabric(
+            providers={"fake_salvage": provider},
+            router=ProcessorRouter(default_provider="fake_salvage", default_model="fake-salvage"),
+            journal=journal,
+        )
+    ).synthesize(
+        task_id="task-synth-json-salvage",
+        run_id="run-synth-json-salvage",
+        context_id="ctx-synth-json-salvage",
+        report=report,
+        evidence=[evidence],
+        citations=[citation],
+    )
+
+    assert answer.status == "ok"
+    assert "SEC filing evidence is insufficient" in str(answer.answer)
+    assert answer.citation_refs == ["cite-1"]
+    assert answer.used_evidence == ["ev-1"]
+    assert "synthesizer_json_salvaged" in answer.limitations
+    assert len(provider.prompts) == 2
+
+
 def test_phase5_timeout_provider_produces_failed_processor_result():
     journal = JournalStore.in_memory()
 
@@ -1715,5 +1746,29 @@ class MalformedThenJsonProvider:
             status="ok",
             output={"text": text, "provider": self.name, "model": self.model},
             usage={"prompt_tokens": len(request.prompt), "completion_tokens": len(text), "total_tokens": len(request.prompt) + len(text)},
+            error=None,
+        )
+
+
+class AlwaysMalformedAnswerProvider:
+    name = "fake_salvage"
+    model = "fake-salvage"
+
+    def __init__(self, text):
+        self.text = str(text)
+        self.prompts = []
+
+    def run(self, request):
+        self.prompts.append(request.prompt)
+        return ProcessorResult(
+            result_id=f"result-{request.request_id}",
+            request_id=request.request_id,
+            status="ok",
+            output={"text": self.text, "provider": self.name, "model": self.model},
+            usage={
+                "prompt_tokens": len(request.prompt),
+                "completion_tokens": len(self.text),
+                "total_tokens": len(request.prompt) + len(self.text),
+            },
             error=None,
         )

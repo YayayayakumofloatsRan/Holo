@@ -13,6 +13,7 @@ from kernel_v3.agent.runtime import (
     _agent_replan_hints,
     _apply_recipe_profile_defaults,
     _benchmark_doc_retrieval_primary_citation_satisfies_required_source,
+    _compiled_task_hint_for_retrieval,
     _augment_finance_modeling_retrieval_payload,
     _finance_fallback_fact_lines,
     _finance_missing_fact_retrieval_action,
@@ -102,6 +103,84 @@ def test_calculator_rejects_unsafe_expressions() -> None:
         assert "unsupported" in str(exc) or "unknown_variable" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("unsafe expression was accepted")
+
+
+def test_formula_planner_does_not_force_generic_growth_into_yoy_formula() -> None:
+    plan = plan_finance_formula(
+        question="If we exclude the impact of M&A, which segment dragged down 3M's overall growth in 2022?",
+        facts=[],
+    )
+
+    assert plan.status == "not_applicable"
+    assert plan.formula_name is None
+
+
+def test_formula_planner_keeps_explicit_growth_rate_formula() -> None:
+    plan = plan_finance_formula(question="What is the year-over-year revenue growth rate?", facts=[])
+
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "yoy_growth"
+    assert plan.missing_facts == ["prior_period_value", "current_period_value"]
+
+
+def test_retrieval_compiled_hint_prefers_model_execution_program_over_fallback() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "execution_program": {
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "program_id": "program-model-disclosure",
+                "domain": "finance",
+                "source": "task_compile_model",
+                "task_spec": {
+                    "task_type": "disclosure_analysis",
+                    "objective": "Identify the segment driver from the target filing discussion.",
+                    "target_entities": ["3M"],
+                    "target_periods": ["FY2022"],
+                    "success_criteria": ["cite the target filing discussion"],
+                    "diagnostics": {"source": "task_compile_model"},
+                },
+                "evidence_specs": [
+                    {
+                        "slot_name": "segment_discussion",
+                        "accepted_attributes": ["business segment discussion", "organic sales change"],
+                        "source_role": "primary_filing",
+                        "required_source_families": ["regulatory_filing"],
+                        "target_period": "FY2022",
+                        "statement": "business segment discussion",
+                        "line_item": "net sales by business segment",
+                        "required": True,
+                    }
+                ],
+                "transform_specs": [],
+                "slot_frame": {
+                    "task_type": "disclosure_analysis",
+                    "required_slots": [{"name": "segment_discussion"}],
+                    "missing_slots": ["segment_discussion"],
+                },
+                "diagnostics": {
+                    "source": "task_compile_model",
+                    "tool_chain_plan": {
+                        "schema": "holo.kernel_v3.tool_chain_plan.v1",
+                        "decision_owner": "model",
+                        "recommended_steps": [{"step": "read_target_filing_discussion", "tool": "retrieval.run"}],
+                    },
+                },
+            }
+        },
+    )
+
+    hint = _compiled_task_hint_for_retrieval(
+        question="If we exclude the impact of M&A, which segment dragged down growth in 2022?",
+        binding={"company": "3M", "doc_period": "FY2022", "doc_type": "10-K"},
+        recipe=recipe,
+    )
+
+    assert hint["diagnostics"]["source"] == "recipe_execution_program"
+    assert hint["task_spec"]["task_type"] == "disclosure_analysis"
+    assert hint["evidence_specs"][0]["slot_name"] == "segment_discussion"
+    assert hint["transform_specs"] == []
+    assert hint["missing_slots"] == ["segment_discussion"]
 
 
 def test_finance_fact_ledger_extracts_sec_companyfacts_spans() -> None:
@@ -2106,6 +2185,51 @@ def test_script_exec_table_rows_become_scaled_candidate_facts() -> None:
     assert facts[0].citation_ref == "cite-script"
 
 
+def test_structured_metric_value_evidence_does_not_emit_unscaled_natural_duplicate() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="html-table-fact",
+            title="html table candidate fact",
+            uri="workspace://html-table",
+            text=(
+                "html_table_fact_1_2_2022: metric=Safety and Industrial net sales "
+                "fy=2022 value=11639 scale=millions"
+            ),
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-html-table")],
+    )
+
+    assert len(facts) == 1
+    assert facts[0].metric == "safety and industrial net sales"
+    assert facts[0].fiscal_year == 2022
+    assert facts[0].value == "11639000000"
+    assert facts[0].scale == "millions"
+
+
+def test_sec_metadata_taxonomy_header_does_not_emit_natural_revenue_fact() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="sec-header-noise",
+            title="0000066740 23 000014",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+            text=(
+                "FORMER CONFORMED NAME: MINNESOTA MINING & MANUFACTURING CO "
+                "DATE OF NAME CHANGE: 19920703 10-K 1 mmm-20221231.htm "
+                "http://fasb.org/us-gaap/2022#Revenues 0000066740 FALSE 2022 FY"
+            ),
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-sec-header-noise")],
+    )
+
+    assert facts == []
+
+
 def test_toolchain_grounding_journals_failed_script_observation_for_replanning() -> None:
     journal = JournalStore.in_memory()
     journal.append(
@@ -3473,6 +3597,57 @@ def test_numeric_verifier_ignores_formula_trace_identifier_digits() -> None:
 
     assert verification.status == "passed"
     assert all(item["raw"] != "80087538433" for item in verification.missing_values)
+
+
+def test_numeric_verifier_ignores_complex_citation_identifier_digits() -> None:
+    traces = [
+        FormulaTrace(
+            formula_id="formula-growth",
+            formula_name="yoy_growth",
+            expression="current_value / prior_value - 1",
+            input_fact_ids=["current", "prior"],
+            result_value="67.458",
+            unit="percent",
+            diagnostics={"formatted_value": "6745.8%"},
+        )
+    ]
+
+    verification = verify_finance_answer(
+        answer=(
+            "该计算结果为 6745.8%，证据见 "
+            "[cite-evidence-span-doc-goal-agent-retrieval-8-1]。"
+        ),
+        facts=[],
+        formula_traces=traces,
+        question="What is the year-over-year growth?",
+    )
+
+    assert verification.status == "passed"
+    assert verification.missing_values == []
+
+
+def test_numeric_verifier_ignores_inline_formula_literal_numbers() -> None:
+    traces = [
+        FormulaTrace(
+            formula_id="formula-growth",
+            formula_name="yoy_growth",
+            expression="current_value / prior_value - 1",
+            input_fact_ids=["current", "prior"],
+            result_value="67.458",
+            unit="percent",
+            diagnostics={"formatted_value": "6745.8%"},
+        )
+    ]
+
+    verification = verify_finance_answer(
+        answer="yoy_growth: 6745.8%，公式 `current_value / prior_value - 1`。",
+        facts=[],
+        formula_traces=traces,
+        question="What is the year-over-year growth?",
+    )
+
+    assert verification.status == "passed"
+    assert verification.missing_values == []
 
 
 def test_numeric_verifier_keeps_compact_billion_unit_numbers() -> None:
