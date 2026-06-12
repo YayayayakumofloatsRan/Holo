@@ -1352,6 +1352,20 @@ iteration prioritizes functional packet completeness over token economy; live
 token reduction is a later optimization only after evidence and synthesis
 quality hold.
 
+The 2026-06-12 FinanceBench follow-up adds a small but general transform
+coverage improvement for fixed-asset-turnover questions. The finance task
+compiler now projects the requested ratio into explicit `revenue`,
+`property_plant_and_equipment_net_current`, and
+`property_plant_and_equipment_net_prior` slots plus a calculator transform:
+`revenue / ((current net PP&E + prior net PP&E) / 2)`. This is not an answer
+table; it exposes the evidence/computation program so the LLM workbench can
+decide how to acquire and bind source facts while host provenance, citation,
+numeric, and synthesis gates remain mandatory. Local regression confirms that
+FinanceBench row `financebench_id_02987` now compiles to that program. A live
+single-row rerun was attempted, but the CLI/model path produced no output rows
+for more than four minutes and was terminated; no new live score should be
+claimed from that run.
+
 A post-change no-network rescore of the existing stable4 live outputs
 (`run_stable4_event_resolver_v1_rescore_after_reader_packet`) confirms the
 regression contract for previously closed representative tasks: answer and

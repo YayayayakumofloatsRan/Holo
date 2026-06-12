@@ -1242,6 +1242,35 @@ assumption-ledger display, and citation-preserving limitation answers.
   upgrade CRM DCF / EPAM LBO benchmark status. A new live run is still required
   to measure the end-to-end score impact.
 
+2026-06-12 FinanceBench fixed-asset-turnover task compiler support:
+
+- FinanceBench doc-retrieval row `financebench_id_02987` exposed a general
+  transform gap rather than an answer-table problem. The question explicitly
+  defines fixed asset turnover as FY2019 revenue divided by average PP&E between
+  FY2018 and FY2019, but the task program previously did not compile that into
+  slots or a calculator transform.
+- The finance formula planner, generic substrate adapter, task compiler, and
+  missing-fact retrieval payload now recognize `fixed_asset_turnover` as a
+  finance transform with three required slots: `revenue`,
+  `property_plant_and_equipment_net_current`, and
+  `property_plant_and_equipment_net_prior`. The transform expression is
+  `revenue / ((property_plant_and_equipment_net_current + property_plant_and_equipment_net_prior) / 2)`
+  with output unit `x`.
+- This is a work-program improvement, not a benchmark answer shortcut. The LLM
+  still owns semantic acquisition and evidence judgment through the workbench,
+  while the host keeps source, citation, numeric, and synthesis verification.
+- Local validation passed:
+  `tests/test_kernel_v3_finance_engine.py` is `135 passed`; a benchmark-focused
+  selection in `tests/test_kernel_v3_finance_benchmark.py` is `12 passed`.
+  Direct compile inspection of FinanceBench row 9 now produces the expected
+  slot frame and transform spec.
+- A live single-row rerun
+  `run_financebench_doc_item9_fixed_asset_turnover_v1` was attempted with
+  `finance-capability`, but the process wrote `0` output bytes after more than
+  four minutes and was terminated. This run does not change the live10 score.
+  The next step is to diagnose the CLI/provider wait path or run a lower-level
+  trace that starts after task compilation and before final synthesis.
+
 Additional follow-ups:
 
 - Preserve `finance-fact-fast` evidence quality while improving how structured

@@ -624,6 +624,23 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             ),
         ]
+    if name == "fixed_asset_turnover":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "revenue_average_ppe"),
+                domain="finance",
+                name="fixed_asset_turnover",
+                required_slots=[
+                    "revenue",
+                    "property_plant_and_equipment_net_current",
+                    "property_plant_and_equipment_net_prior",
+                ],
+                expression="revenue / ((property_plant_and_equipment_net_current + property_plant_and_equipment_net_prior) / 2)",
+                output_unit="x",
+                output_attribute="fixed_asset_turnover",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
     payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
     return [
         TransformSpec(
@@ -847,7 +864,14 @@ def _source_role(*, binding: JsonObject, source_families: list[str]) -> str | No
 def _statement_for_slot(slot_name: str) -> str | None:
     if slot_name in {"capital_expenditures", "operating_cash_flow"}:
         return "cash_flow_statement"
-    if slot_name in {"assets", "property_plant_and_equipment_net", "debt", "cash"}:
+    if slot_name in {
+        "assets",
+        "property_plant_and_equipment_net",
+        "property_plant_and_equipment_net_current",
+        "property_plant_and_equipment_net_prior",
+        "debt",
+        "cash",
+    }:
         return "balance_sheet"
     if slot_name in {"revenue", "net_income", "ebitda_or_ebitda_components"}:
         return "income_statement"
@@ -859,6 +883,8 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "capital_expenditures": "capital expenditures",
         "operating_cash_flow": "operating cash flow",
         "property_plant_and_equipment_net": "property plant and equipment net",
+        "property_plant_and_equipment_net_current": "property plant and equipment net",
+        "property_plant_and_equipment_net_prior": "property plant and equipment net",
         "assets": "assets",
         "revenue": "revenue",
         "net_income": "net income",

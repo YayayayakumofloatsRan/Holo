@@ -3585,6 +3585,11 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             f"{base_query} SEC companyfacts capital expenditures revenue operating cash flow total assets "
             "PropertyPlantAndEquipmentNet PP&E net"
         )
+    elif formula_name == "fixed_asset_turnover":
+        query = (
+            f"{base_query} SEC companyfacts revenue PropertyPlantAndEquipmentNet PP&E net "
+            "balance sheet statement of income fixed asset turnover"
+        )
     else:
         query = f"{base_query} SEC filing missing finance facts {' '.join(missing)}"
     queries = _finance_missing_fact_queries(
@@ -3601,7 +3606,7 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
     if formula_name in {"dcf", "lbo"}:
         max_queries = min(6, max(4, len(queries)))
         max_fetches = 18
-    if formula_name == "capital_intensity":
+    if formula_name in {"capital_intensity", "fixed_asset_turnover"}:
         max_queries = min(5, max(3, len(queries)))
         max_fetches = 16
     return {
@@ -3650,6 +3655,7 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             "dcf",
             "lbo",
             "capital_intensity",
+            "fixed_asset_turnover",
         }:
             urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
     return _ordered_unique(urls)[:12]
@@ -3792,6 +3798,10 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts capital expenditures revenue operating cash flow total assets PropertyPlantAndEquipmentNet")
             add(f"{ticker} 10-K balance sheet PP&E assets cash flow capital expenditures")
+    elif formula_name == "fixed_asset_turnover" and tickers:
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
+            add(f"{ticker} 10-K statement of income balance sheet revenue PP&E net")
     else:
         add(_finance_missing_fact_secondary_query(formula_name=formula_name, goal=goal))
         add(_finance_missing_fact_tertiary_query(formula_name=formula_name, goal=goal))
@@ -3810,6 +3820,8 @@ def _finance_missing_fact_preferred_families(formula_name: str) -> list[str]:
     if formula_name in {"dcf", "lbo"}:
         return ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"]
     if formula_name == "capital_intensity":
+        return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
+    if formula_name == "fixed_asset_turnover":
         return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
     return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
 
@@ -3836,6 +3848,8 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} annual report 10-K adjusted EBITDA operating cash flow free cash flow debt cash enterprise value"
     if formula_name == "capital_intensity":
         return f"{goal} annual report 10-K PP&E total assets capital expenditures operating cash flow revenue"
+    if formula_name == "fixed_asset_turnover":
+        return f"{goal} annual report 10-K revenue property plant equipment net fixed asset turnover"
     return f"{goal} SEC Archives 8-K 10-K consideration revenue"
 
 
@@ -3850,6 +3864,8 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} investor relations LBO assumptions leverage exit multiple EBITDA cash flow"
     if formula_name == "capital_intensity":
         return f"{goal} SEC companyfacts PropertyPlantAndEquipmentNet Assets PaymentsToAcquirePropertyPlantAndEquipment NetCashProvidedByUsedInOperatingActivities Revenues"
+    if formula_name == "fixed_asset_turnover":
+        return f"{goal} SEC companyfacts Revenues PropertyPlantAndEquipmentNet 10-K balance sheet statement of income"
     return f"{goal} official filing transaction value revenue"
 
 

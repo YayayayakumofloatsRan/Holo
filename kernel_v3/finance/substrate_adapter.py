@@ -186,6 +186,11 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "assets",
             "net_income",
         ],
+        "fixed_asset_turnover": [
+            "revenue",
+            "property_plant_and_equipment_net_current",
+            "property_plant_and_equipment_net_prior",
+        ],
     }
     names = slots_by_formula.get(str(formula_name or ""), [])
     return [
@@ -362,6 +367,18 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "net ppne",
             "ppne",
         ],
+        "property_plant_and_equipment_net_current": [
+            "property plant and equipment net",
+            "net property plant and equipment",
+            "net ppne",
+            "ppne",
+        ],
+        "property_plant_and_equipment_net_prior": [
+            "property plant and equipment net",
+            "net property plant and equipment",
+            "net ppne",
+            "ppne",
+        ],
         "assets": ["assets", "total assets"],
     }
     return mapping.get(name, [name])
@@ -372,7 +389,17 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         return "reconcile"
     if formula_name in {"dcf", "lbo"}:
         return "model"
-    if formula_name in {"dio", "ev_revenue", "ev_ebitda", "cagr", "margin", "bps_difference", "yoy_growth", "capital_intensity"}:
+    if formula_name in {
+        "dio",
+        "ev_revenue",
+        "ev_ebitda",
+        "cagr",
+        "margin",
+        "bps_difference",
+        "yoy_growth",
+        "capital_intensity",
+        "fixed_asset_turnover",
+    }:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
 
@@ -390,6 +417,8 @@ def _infer_formula_name(question: str) -> str:
         return "ev_revenue"
     if "capital-intensive" in text or "capital intensive" in text or "capital intensity" in text:
         return "capital_intensity"
+    if "fixed asset turnover" in text or "fixed-asset turnover" in text:
+        return "fixed_asset_turnover"
     if "dio" in text or "days inventory" in text:
         return "dio"
     if "cagr" in text:

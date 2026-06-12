@@ -1629,6 +1629,42 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
     assert tool_chain["recommended_steps"][-1]["tool"] == "host.verifier_gate"
 
 
+def test_finance_task_compiler_emits_fixed_asset_turnover_program_missing_slots() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is the FY2019 fixed asset turnover ratio for Activision Blizzard? "
+            "Fixed asset turnover ratio is defined as: FY2019 revenue / "
+            "(average PP&E between FY2018 and FY2019)."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "compute"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == [
+        "revenue",
+        "property_plant_and_equipment_net_current",
+        "property_plant_and_equipment_net_prior",
+    ]
+    assert [spec.name for spec in program.transform_specs] == ["fixed_asset_turnover"]
+    transform = program.transform_specs[0]
+    assert transform.required_slots == [
+        "revenue",
+        "property_plant_and_equipment_net_current",
+        "property_plant_and_equipment_net_prior",
+    ]
+    assert transform.expression == (
+        "revenue / ((property_plant_and_equipment_net_current + property_plant_and_equipment_net_prior) / 2)"
+    )
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["revenue"].statement == "income_statement"
+    assert evidence_slots["property_plant_and_equipment_net_current"].statement == "balance_sheet"
+    assert evidence_slots["property_plant_and_equipment_net_prior"].statement == "balance_sheet"
+    tool_chain = program.diagnostics["tool_chain_plan"]
+    assert tool_chain["formula_name"] == "fixed_asset_turnover"
+    assert tool_chain["recommended_steps"][0]["decision_owner"] == "model"
+
+
 def test_model_first_finance_task_compiler_overrides_host_scaffold() -> None:
     fabric = ProcessorFabric(
         providers={
@@ -2500,6 +2536,85 @@ def test_finance_formula_planner_generates_capital_intensity_payload() -> None:
     }
 
 
+def test_finance_formula_planner_generates_fixed_asset_turnover_payload() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="revenue-2019",
+            entity="Activision Blizzard",
+            ticker="ATVI",
+            period="2019",
+            fiscal_year=2019,
+            metric="revenue",
+            value="6489",
+            unit="USD millions",
+            scale="millions",
+            source_ref="cite-revenue-2019",
+            evidence_ref="ev-revenue-2019",
+            citation_ref="cite-revenue-2019",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="ppe-2019",
+            entity="Activision Blizzard",
+            ticker="ATVI",
+            period="2019",
+            fiscal_year=2019,
+            metric="property plant and equipment net",
+            value="272",
+            unit="USD millions",
+            scale="millions",
+            source_ref="cite-ppe-2019",
+            evidence_ref="ev-ppe-2019",
+            citation_ref="cite-ppe-2019",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="ppe-2018",
+            entity="Activision Blizzard",
+            ticker="ATVI",
+            period="2018",
+            fiscal_year=2018,
+            metric="property plant and equipment net",
+            value="263",
+            unit="USD millions",
+            scale="millions",
+            source_ref="cite-ppe-2018",
+            evidence_ref="ev-ppe-2018",
+            citation_ref="cite-ppe-2018",
+            metadata={},
+        ),
+    ]
+
+    plan = plan_finance_formula(
+        question=(
+            "What is the FY2019 fixed asset turnover ratio for Activision Blizzard? "
+            "Fixed asset turnover ratio is defined as: FY2019 revenue / "
+            "(average PP&E between FY2018 and FY2019)."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "fixed_asset_turnover"
+    assert plan.payload["expression"] == (
+        "revenue / ((property_plant_and_equipment_net_current + property_plant_and_equipment_net_prior) / 2)"
+    )
+    assert plan.payload["variables"] == {
+        "revenue": "6489",
+        "property_plant_and_equipment_net_current": "272",
+        "property_plant_and_equipment_net_prior": "263",
+    }
+    assert set(plan.input_fact_ids) == {"revenue-2019", "ppe-2019", "ppe-2018"}
+
+    result = compute_formula(
+        expression=plan.payload["expression"],
+        variables=plan.payload["variables"],
+        unit=plan.payload["unit"],
+        formula_name=plan.formula_name,
+    )
+    assert Decimal(result.result_value).quantize(Decimal("0.01")) == Decimal("24.26")
+
+
 def test_capital_intensity_model_outputs_support_verifier_answer_numbers() -> None:
     facts = [
         FinanceFact(
@@ -3340,6 +3455,32 @@ def test_finance_missing_fact_payload_for_capital_intensity_seeds_companyfacts()
         "assets",
         "net_income",
     ]
+
+
+def test_finance_missing_fact_payload_for_fixed_asset_turnover_seeds_companyfacts() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="fixed_asset_turnover",
+        missing=[
+            "revenue",
+            "property_plant_and_equipment_net_current",
+            "property_plant_and_equipment_net_prior",
+        ],
+        goal=(
+            "Benchmark target source follows. Source URL: "
+            "https://investor.activision.com/static-files/32abe798-add2-4770-9c7d-4cd3a840ede2 "
+            "Company: Activision Blizzard Document: ACTIVISIONBLIZZARD_2019_10K Document type: 10k "
+            "Document period: 2019 What is the FY2019 fixed asset turnover ratio for Activision Blizzard?"
+        ),
+    )
+
+    assert payload["metadata"]["missing_slots"] == [
+        "revenue",
+        "property_plant_and_equipment_net_current",
+        "property_plant_and_equipment_net_prior",
+    ]
+    assert "PropertyPlantAndEquipmentNet" in payload["query"]
+    assert "fixed asset turnover" in payload["query"]
+    assert payload["metadata"]["preferred_source_families"][0] == "structured_regulatory_data"
 
 
 def test_finance_valuation_retrieval_defaults_allow_market_data_sources() -> None:

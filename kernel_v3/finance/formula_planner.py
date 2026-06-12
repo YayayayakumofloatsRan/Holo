@@ -11,6 +11,13 @@ from kernel_v3.finance.contracts import FinanceFact, FormulaTrace
 
 FormulaPlanStatus = Literal["ready", "missing_facts", "not_applicable"]
 
+_PPE_NET_METRICS = (
+    "property plant and equipment net",
+    "net property plant and equipment",
+    "net ppne",
+    "ppne",
+)
+
 
 @dataclass(frozen=True, kw_only=True)
 class FinanceFormulaPlan(Contract):
@@ -55,6 +62,8 @@ def plan_finance_formula(
         return _plan_lbo(question=question, facts=usable)
     if formula == "capital_intensity":
         return _plan_capital_intensity(question=question, facts=usable)
+    if formula == "fixed_asset_turnover":
+        return _plan_fixed_asset_turnover(question=question, facts=usable)
     return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "unsupported_formula", "formula": formula})
 
 
@@ -71,6 +80,8 @@ def _detect_formula(question: str) -> str | None:
         return "lbo"
     if "capital-intensive" in text or "capital intensive" in text or "capital intensity" in text:
         return "capital_intensity"
+    if "fixed asset turnover" in text or "fixed-asset turnover" in text:
+        return "fixed_asset_turnover"
     if "ev/revenue" in compact or "ev/rev" in compact or "enterprise value to revenue" in text:
         return "ev_revenue"
     if "ev/ebitda" in compact or "enterprise value to ebitda" in text:
@@ -202,7 +213,7 @@ def _plan_capital_intensity(*, question: str, facts: list[FinanceFact]) -> Finan
     )
     ppe = _latest_fact_for_year(
         facts,
-        ("property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"),
+        _PPE_NET_METRICS,
         target_year=target_year,
     )
     assets = _latest_fact_for_year(facts, ("assets", "total assets"), target_year=target_year)
@@ -265,6 +276,51 @@ def _plan_capital_intensity(*, question: str, facts: list[FinanceFact]) -> Finan
             },
             "model_outputs": {key: value for key, value in model_outputs.items() if value is not None},
             "target_fiscal_year": target_year,
+        },
+    )
+
+
+def _plan_fixed_asset_turnover(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    revenue = _latest_revenue_fact(facts, target_year=target_year)
+    ppe_current = _latest_fact_for_year(facts, _PPE_NET_METRICS, target_year=target_year)
+    ppe_prior = _latest_fact_for_year(
+        facts,
+        _PPE_NET_METRICS,
+        target_year=target_year - 1 if target_year is not None else None,
+        exclude_fact_ids={ppe_current.fact_id} if ppe_current is not None else None,
+    )
+    missing: list[str] = []
+    if revenue is None:
+        missing.append("revenue")
+    if ppe_current is None:
+        missing.append("property_plant_and_equipment_net_current")
+    if ppe_prior is None:
+        missing.append("property_plant_and_equipment_net_prior")
+    supporting = [item for item in (revenue, ppe_current, ppe_prior) if item is not None]
+    if missing:
+        return _missing(
+            "fixed_asset_turnover",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "reason": "fixed_asset_turnover_requires_revenue_and_average_ppe",
+                "target_fiscal_year": target_year,
+            },
+        )
+    return _ready(
+        "fixed_asset_turnover",
+        "revenue / ((property_plant_and_equipment_net_current + property_plant_and_equipment_net_prior) / 2)",
+        {
+            "revenue": revenue.value,
+            "property_plant_and_equipment_net_current": ppe_current.value,
+            "property_plant_and_equipment_net_prior": ppe_prior.value,
+        },
+        unit="x",
+        facts=supporting,
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "revenue divided by average net property, plant, and equipment",
         },
     )
 
