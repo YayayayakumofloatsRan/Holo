@@ -1197,7 +1197,29 @@ def _source_url_requirement_met(url: str, result: FinanceBenchmarkResult, *, hay
     required_accession = _sec_accession_key(normalized_url)
     if not required_accession:
         return False
-    return any(_sec_accession_key(item) == required_accession for item in observed)
+    if any(_sec_accession_key(item) == required_accession for item in observed):
+        return True
+    return _structured_sec_primary_binding_satisfies_required_url(url, result)
+
+
+def _structured_sec_primary_binding_satisfies_required_url(url: str, result: FinanceBenchmarkResult) -> bool:
+    metrics = result.trace_metrics if isinstance(result.trace_metrics, dict) else {}
+    if metrics.get("primary_source_numeric_binding_status") != "selected":
+        return False
+    selected_count = metrics.get("primary_source_numeric_binding_selected_count")
+    if isinstance(selected_count, (int, float)) and selected_count <= 0:
+        return False
+    required_accession = _sec_accession_key(url)
+    if not required_accession:
+        return False
+    target_urls = _result_target_document_urls(result)
+    if not any(_sec_accession_key(target_url) == required_accession for target_url in target_urls):
+        return False
+    source_hosts = {str(host).casefold() for host in metrics.get("source_hosts", []) if isinstance(host, str)}
+    if not source_hosts.intersection({"data.sec.gov", "sec.gov", "www.sec.gov"}):
+        return False
+    observed = _result_source_urls(result)
+    return any("data.sec.gov/api/xbrl/companyfacts/" in item.casefold() or "sec.gov" in item.casefold() for item in observed)
 
 
 def _source_requirement_met_by_required_url(name: str, *, required_source_urls: list[str], source_url_hits: list[str]) -> bool:

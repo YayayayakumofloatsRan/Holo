@@ -992,6 +992,40 @@ class AgentRuntime:
                     citations=citations,
                 )
                 if verification.status == "failed":
+                    formula_only_final = _finance_formula_trace_only_fallback_final(
+                        journal=self.journal,
+                        task_id=task_id,
+                        run_id=run_id,
+                        recipe=recipe,
+                        evidence=evidence,
+                        citations=citations,
+                        synthesis_error=synthesized.error or "synthesis_failed",
+                    )
+                    if formula_only_final is not None:
+                        formula_only_verification = self._append_finance_numeric_verification(
+                            formula_only_final,
+                            recipe=recipe,
+                            evidence=evidence,
+                            citations=citations,
+                        )
+                        self._append_synthesis_gate_result(
+                            formula_only_final,
+                            recipe=recipe,
+                            status="passed" if formula_only_verification.status != "failed" else "failed",
+                            issues=list(formula_only_verification.issues),
+                            diagnostics={
+                                "gate_id": "formula_trace_only_numeric_support_v1",
+                                "source": "finance_formula_trace_only_fallback_final",
+                                "attempt": "synthesis_failed_formula_trace_only_fallback",
+                                "verifier_status": formula_only_verification.status,
+                                "answer_numeric_support_rate": _finance_answer_numeric_support_rate(formula_only_verification),
+                                "policy": "strip_all_model_generated_numeric_claims_keep_formula_trace_and_ledger_numbers",
+                            },
+                        )
+                        if formula_only_verification.status != "failed":
+                            final = self._append_final(formula_only_final)
+                            self._maybe_propose_research_memory(final, recipe=recipe)
+                            return final, None
                     missing = _finance_numeric_missing_evidence(verification)
                     return None, self._failure(
                         task_id,
@@ -1065,6 +1099,43 @@ class AgentRuntime:
                     error=repaired.error if hasattr(repaired, "error") else "synthesis_failed",
                 )
         if quality_gaps:
+            fallback_final = None
+            if _finance_numeric_verifier_required(recipe) and evidence and citations:
+                fallback_final = _finance_retrieval_fallback_final(
+                    journal=self.journal,
+                    task_id=task_id,
+                    run_id=run_id,
+                    recipe=recipe,
+                    evidence=evidence,
+                    citations=citations,
+                    synthesis_error="final_answer_quality_insufficient",
+                    require_formula_trace=False,
+                )
+            if fallback_final is not None:
+                fallback_verification = self._append_finance_numeric_verification(
+                    fallback_final,
+                    recipe=recipe,
+                    evidence=evidence,
+                    citations=citations,
+                )
+                self._append_synthesis_gate_result(
+                    fallback_final,
+                    recipe=recipe,
+                    status="passed" if fallback_verification.status != "failed" else "failed",
+                    issues=list(fallback_verification.issues),
+                    diagnostics={
+                        "gate_id": "fallback_quality_gap_numeric_support_v1",
+                        "source": "finance_retrieval_fallback_final",
+                        "answer_quality_gaps": list(quality_gaps),
+                        "verifier_status": fallback_verification.status,
+                        "answer_numeric_support_rate": _finance_answer_numeric_support_rate(fallback_verification),
+                        "policy": "quality_gap_fallback_material_numeric_claims_require_claim_or_transform_support",
+                    },
+                )
+                if fallback_verification.status != "failed":
+                    final = self._append_final(fallback_final)
+                    self._maybe_propose_research_memory(final, recipe=recipe)
+                    return final, None
             return None, self._failure(
                 task_id,
                 run_id,
@@ -1129,6 +1200,40 @@ class AgentRuntime:
                         final = self._append_final(fallback_final)
                         self._maybe_propose_research_memory(final, recipe=recipe)
                         return final, None
+                    formula_only_final = _finance_formula_trace_only_fallback_final(
+                        journal=self.journal,
+                        task_id=task_id,
+                        run_id=run_id,
+                        recipe=recipe,
+                        evidence=evidence,
+                        citations=citations,
+                        synthesis_error="finance_numeric_verification_failed",
+                    )
+                    if formula_only_final is not None:
+                        formula_only_verification = self._append_finance_numeric_verification(
+                            formula_only_final,
+                            recipe=recipe,
+                            evidence=evidence,
+                            citations=citations,
+                        )
+                        self._append_synthesis_gate_result(
+                            formula_only_final,
+                            recipe=recipe,
+                            status="passed" if formula_only_verification.status != "failed" else "failed",
+                            issues=list(formula_only_verification.issues),
+                            diagnostics={
+                                "gate_id": "formula_trace_only_numeric_support_v1",
+                                "source": "finance_formula_trace_only_fallback_final",
+                                "attempt": "formula_trace_only_fallback",
+                                "verifier_status": formula_only_verification.status,
+                                "answer_numeric_support_rate": _finance_answer_numeric_support_rate(formula_only_verification),
+                                "policy": "strip_all_model_generated_numeric_claims_keep_formula_trace_and_ledger_numbers",
+                            },
+                        )
+                        if formula_only_verification.status != "failed":
+                            final = self._append_final(formula_only_final)
+                            self._maybe_propose_research_memory(final, recipe=recipe)
+                            return final, None
                 missing = _finance_numeric_missing_evidence(verification)
                 return None, self._failure(
                     task_id,
@@ -10725,6 +10830,60 @@ def _finance_retrieval_fallback_final(
     )
 
 
+def _finance_formula_trace_only_fallback_final(
+    *,
+    journal: JournalStore,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    synthesis_error: str,
+) -> FinalAnswer | None:
+    citation_ids = [item.citation_id for item in citations if item.citation_id]
+    traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    if not citation_ids or not traces:
+        return None
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    question = _benchmark_oracle_question_text(_root_goal_from_recipe(recipe))
+    binding = _target_document_binding_from_recipe(recipe)
+    facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+    lines = [
+        "模型合成阶段产生了 verifier 不接受的额外数字；以下回答只保留 ClaimLedger 和 FormulaTrace 支持的结论。",
+        "确定性计算结论：",
+    ]
+    for trace in traces[:4]:
+        formatted = str(trace.diagnostics.get("formatted_value") or "").strip()
+        value = formatted or f"{trace.result_value} {trace.unit or ''}".strip()
+        lines.append(f"- {trace.formula_name}: {value}，公式 `{trace.expression}`。")
+        for detail in _finance_model_trace_summary_lines(trace):
+            lines.append(f"  - {detail}")
+    fact_lines = _finance_fallback_fact_lines(
+        facts,
+        question=question,
+        target_binding=binding,
+        limit=6,
+    )
+    if fact_lines:
+        lines.append("使用的主要证据账本事实：")
+        lines.extend(fact_lines)
+    evidence_lines = _finance_fallback_evidence_summary_lines(evidence=evidence, citations=citations, recipe=recipe, limit=3)
+    if evidence_lines:
+        lines.append("可审计证据摘要：")
+        lines.extend(evidence_lines)
+    lines.append(f"局限：原合成/验证失败原因为 `{synthesis_error}`；没有出现在 FormulaTrace 或 ClaimLedger 中的数字已被省略。")
+    return FinalAnswer(
+        answer="\n".join(lines),
+        citation_refs=citation_ids,
+        used_evidence=[item.evidence_id for item in evidence],
+        limitations=[f"synthesizer_fallback:{synthesis_error}", "formula_trace_only_conservative_finance_answer"],
+        confidence=0.55,
+        task_id=task_id,
+        run_id=run_id,
+        trace_refs=_trace_refs(journal, task_id),
+    )
+
+
 def _finance_fallback_evidence_summary_lines(
     *,
     evidence: list[EvidenceItem],
@@ -11134,6 +11293,16 @@ def _finance_model_trace_summary_lines(trace: FormulaTrace) -> list[str]:
         summary = _finance_model_output_summary(model_outputs, lbo_keys)
         if summary:
             lines.append("LBO 核心模型输出: " + ", ".join(summary) + "。")
+    elif str(trace.formula_name).lower() == "capital_intensity":
+        capital_intensity_keys = (
+            "capex_to_revenue",
+            "capex_to_operating_cash_flow",
+            "ppe_to_assets",
+            "return_on_assets",
+        )
+        summary = _finance_model_output_summary(model_outputs, capital_intensity_keys)
+        if summary:
+            lines.append("资本密集度相关指标: " + ", ".join(summary) + "。")
     return lines[:3]
 
 
@@ -11157,7 +11326,10 @@ def _finance_model_value_display(value: object, *, key: str) -> str:
     normalized_key = str(key or "").lower()
     if numeric is None:
         return _shorten_for_fallback_answer(str(value), limit=80)
-    if any(marker in normalized_key for marker in ("irr", "growth", "rate", "margin")):
+    if any(
+        marker in normalized_key
+        for marker in ("irr", "growth", "rate", "margin", "_to_", "return_on_assets")
+    ):
         return f"{_decimal_string_runtime(numeric * Decimal(100))}%"
     if any(marker in normalized_key for marker in ("moic", "multiple", "discount_factor")):
         return f"{_decimal_string_runtime(numeric)}x"

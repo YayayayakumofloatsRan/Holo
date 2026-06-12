@@ -1256,6 +1256,23 @@ operating cash flow, capex, net PP&E, and assets, runs a host calculator trace
 for `capital_expenditures / revenue`, and answers the benchmark's `5.1%`
 numeric target with citable evidence.
 
+The finalization/toolchain follow-up closes the same slice more cleanly as
+`run_financebench_doc_live3_after_source_equivalence`: pass rate, numeric
+accuracy, verifier-gate pass rate, synthesis-gate pass rate, citation
+preservation, workflow score, substrate score, and dev annotation overall score
+are all `1.0`, with unsupported numeric claim rate `0`. This run validates two
+agent-loop fixes: quality-gated financial answers with an existing ledger now
+fall back to a host-owned ClaimLedger answer instead of returning a failure
+report, and synthesis/verifier failures with a valid FormulaTrace can fall back
+to a formula-trace-only answer that strips model-generated unsupported numbers.
+The capital-intensity workflow now carries `net_income` as a required slot and
+emits model-output ratios for capex/revenue, capex/operating cash flow,
+PPE/assets, and return on assets; item 3 matches the `5.1%`, `20.0%`, and
+`12.4%` gold numerics. The scorer also treats target-bound structured SEC
+companyfacts as an equivalent companion to the target filing only when
+`primary_source_numeric_binding_status=selected`, while generic companyfacts
+remain insufficient for FinanceBench `doc_retrieval`.
+
 The same changes were expanded to a first FinanceBench doc-retrieval live10
 baseline: `run_financebench_doc_live10_target_slots_v1` scores pass rate
 `0.30`, numeric accuracy `0.30`, workflow score `0.6572`, substrate score

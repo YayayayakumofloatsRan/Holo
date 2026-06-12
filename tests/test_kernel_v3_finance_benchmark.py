@@ -1331,6 +1331,21 @@ def test_financebench_source_url_scoring_accepts_same_sec_accession_not_companyf
         "required_source_url_missing": 1,
     }
 
+    bound_companyfacts_result = FinanceBenchmarkResult(
+        **base_kwargs,
+        trace_metrics={
+            "source_hosts": ["data.sec.gov"],
+            "source_uris": ["https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json"],
+            "target_document_source_urls": [required_url],
+            "primary_source_numeric_binding_status": "selected",
+            "primary_source_numeric_binding_selected_count": 1,
+        },
+    )
+    bound_companyfacts_score = score_finance_dev_annotations([bound_companyfacts_result], annotation_path=annotation)
+
+    assert bound_companyfacts_score["failure_reason_counts"] == {}
+    assert bound_companyfacts_score["items"][0]["required_source_url_hit_count"] == 1
+
 
 def test_finance_benchmark_fetch_downloads_and_imports_with_annotation(tmp_path: Path) -> None:
     remote = tmp_path / "remote-financebench.jsonl"

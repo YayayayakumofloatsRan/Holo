@@ -591,6 +591,16 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 output_attribute="ppe_to_assets",
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             ),
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "roa"),
+                domain="finance",
+                name="capital_intensity_return_on_assets",
+                required_slots=["net_income", "assets"],
+                expression="net_income / assets",
+                output_unit="percent",
+                output_attribute="return_on_assets",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            ),
         ]
     payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
     return [
@@ -829,6 +839,7 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "property_plant_and_equipment_net": "property plant and equipment net",
         "assets": "assets",
         "revenue": "revenue",
+        "net_income": "net income",
     }
     return mapping.get(slot_name)
 

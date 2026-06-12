@@ -1463,15 +1463,18 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
         "operating_cash_flow",
         "property_plant_and_equipment_net",
         "assets",
+        "net_income",
     ]
     assert [spec.name for spec in program.transform_specs] == [
         "capital_intensity_capex_revenue",
         "capital_intensity_capex_operating_cash_flow",
         "capital_intensity_ppe_assets",
+        "capital_intensity_return_on_assets",
     ]
     evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
     assert evidence_slots["property_plant_and_equipment_net"].statement == "balance_sheet"
     assert evidence_slots["capital_expenditures"].statement == "cash_flow_statement"
+    assert evidence_slots["net_income"].statement == "income_statement"
     tool_chain = program.diagnostics["tool_chain_plan"]
     assert tool_chain["schema"] == "holo.kernel_v3.tool_chain_plan.v1"
     assert tool_chain["decision_owner"] == "model"
@@ -2282,6 +2285,21 @@ def test_finance_formula_planner_generates_capital_intensity_payload() -> None:
             citation_ref="cite-assets",
             metadata={},
         ),
+        FinanceFact(
+            fact_id="net-income",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="net income",
+            value="5777000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-net-income",
+            evidence_ref="ev-net-income",
+            citation_ref="cite-net-income",
+            metadata={},
+        ),
     ]
 
     plan = plan_finance_formula(question="Is 3M a capital-intensive business based on FY2022 data?", facts=facts)
@@ -2290,7 +2308,120 @@ def test_finance_formula_planner_generates_capital_intensity_payload() -> None:
     assert plan.formula_name == "capital_intensity"
     assert plan.payload["expression"] == "capital_expenditures / revenue"
     assert plan.payload["variables"]["capital_expenditures"] == "1334000000"
-    assert set(plan.input_fact_ids) == {"capex", "revenue", "ocf", "ppe", "assets"}
+    assert set(plan.input_fact_ids) == {"capex", "revenue", "ocf", "ppe", "assets", "net-income"}
+    assert set(plan.payload["diagnostics"]["model_outputs"]) == {
+        "capex_to_revenue",
+        "capex_to_operating_cash_flow",
+        "ppe_to_assets",
+        "return_on_assets",
+    }
+
+
+def test_capital_intensity_model_outputs_support_verifier_answer_numbers() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="capex",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="capital expenditures",
+            value="1749000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-capex",
+            evidence_ref="ev-capex",
+            citation_ref="cite-capex",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="revenue",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="revenue",
+            value="34229000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-revenue",
+            evidence_ref="ev-revenue",
+            citation_ref="cite-revenue",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="ocf",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="operating cash flow",
+            value="5591000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-ocf",
+            evidence_ref="ev-ocf",
+            citation_ref="cite-ocf",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="ppe",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="property plant and equipment net",
+            value="9178000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-ppe",
+            evidence_ref="ev-ppe",
+            citation_ref="cite-ppe",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="assets",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="assets",
+            value="46455000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-assets",
+            evidence_ref="ev-assets",
+            citation_ref="cite-assets",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="net-income",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="net income",
+            value="5777000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-net-income",
+            evidence_ref="ev-net-income",
+            citation_ref="cite-net-income",
+            metadata={},
+        ),
+    ]
+    plan = plan_finance_formula(question="Is 3M a capital-intensive business based on FY2022 data?", facts=facts)
+
+    assert plan.status == "ready"
+    trace = compute_formula(**plan.payload)
+    verification = verify_finance_answer(
+        answer="FY2022 metrics: capex/revenue was 5.1%, PPE/assets was 19.8%, and ROA was 12.4%.",
+        facts=facts,
+        formula_traces=[trace],
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+    )
+
+    assert verification.status == "passed"
 
 
 def test_finance_formula_planner_does_not_fill_capital_intensity_with_wrong_year_or_cost_of_revenue() -> None:
@@ -2396,6 +2527,7 @@ def test_finance_formula_planner_does_not_fill_capital_intensity_with_wrong_year
         "operating_cash_flow",
         "property_plant_and_equipment_net",
         "assets",
+        "net_income",
     ]
 
 
@@ -3005,7 +3137,7 @@ def test_finance_missing_fact_payload_for_transaction_ev_revenue_seeds_sec_issue
 def test_finance_missing_fact_payload_for_capital_intensity_seeds_companyfacts() -> None:
     payload = _finance_missing_fact_retrieval_payload(
         formula_name="capital_intensity",
-        missing=["capital_expenditures", "operating_cash_flow", "property_plant_and_equipment_net", "assets"],
+        missing=["capital_expenditures", "operating_cash_flow", "property_plant_and_equipment_net", "assets", "net_income"],
         goal=(
             "Benchmark target source follows. Source URL: "
             "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
@@ -3023,6 +3155,7 @@ def test_finance_missing_fact_payload_for_capital_intensity_seeds_companyfacts()
         "operating_cash_flow",
         "property_plant_and_equipment_net",
         "assets",
+        "net_income",
     ]
 
 
@@ -4331,6 +4464,7 @@ def test_finance_missing_fact_retrieval_action_preserves_target_document_binding
         "operating_cash_flow",
         "property_plant_and_equipment_net",
         "assets",
+        "net_income",
     ]
 
 

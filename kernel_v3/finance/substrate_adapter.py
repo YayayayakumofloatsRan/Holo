@@ -184,6 +184,7 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "operating_cash_flow",
             "property_plant_and_equipment_net",
             "assets",
+            "net_income",
         ],
     }
     names = slots_by_formula.get(str(formula_name or ""), [])
@@ -349,6 +350,7 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         ],
         "exit_assumption": ["exit multiple", "terminal multiple", "exit value"],
         "capital_expenditures": ["capital expenditures", "capex"],
+        "net_income": ["net income", "net earnings", "profit"],
         "operating_cash_flow": [
             "operating cash flow",
             "cash flow from operations",

@@ -233,6 +233,21 @@ not repeatedly download these sources during benchmark iteration.
   `run_financebench_doc_live10_target_slots_v1` baseline is `3/10`: the closed
   slice holds, while later rows expose target PDF/table extraction,
   source-resolution, and qualitative disclosure-answer gaps.
+- The finalization/toolchain follow-up, `run_financebench_doc_live3_after_source_equivalence`,
+  keeps the first FinanceBench doc-retrieval slice at `3/3` and raises the dev
+  annotation overall score to `1.0`. Pass rate, numeric accuracy, workflow /
+  substrate score, citation preservation, numeric-verifier / verifier-gate /
+  synthesis-gate pass rate, and answer numeric support are all `1.0`; unsupported
+  numeric claim rate is `0`. Two harness gaps were closed: finance answers that
+  already have ClaimLedger evidence now fall back to a host-owned conservative
+  answer when answer-profile repair fails, and valid FormulaTrace outputs can
+  produce a formula-trace-only final answer when the model synthesizer emits
+  unsupported numbers or invalid JSON. The capital-intensity workflow now
+  requires `net_income` and exposes capex/revenue, capex/operating cash flow,
+  PPE/assets, and return-on-assets model outputs for verifier support. The
+  scorer accepts structured SEC companyfacts as a target-filing companion only
+  when primary-source numeric binding selected target facts; generic companyfacts
+  remain insufficient.
 - A true model/network revalidation,
   `run_financebench_doc_live3_model_net_v1`, keeps the closed live3 slice at
   `3/3` with citation preservation `1.0`, unsupported numeric claim rate `0`,

@@ -420,7 +420,7 @@ def _iter_model_output_numbers(value: object, *, prefix: str = "") -> list[tuple
 
 def _model_output_unit(path: str, trace: FormulaTrace) -> str:
     normalized = str(path or "").lower()
-    if any(marker in normalized for marker in ("irr", "growth", "rate", "margin")):
+    if any(marker in normalized for marker in ("irr", "growth", "rate", "margin", "_to_", "return_on_assets")):
         return "percent"
     if any(marker in normalized for marker in ("multiple", "moic", "discount_factor")):
         return "x"

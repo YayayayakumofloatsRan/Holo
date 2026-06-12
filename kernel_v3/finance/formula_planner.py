@@ -206,6 +206,7 @@ def _plan_capital_intensity(*, question: str, facts: list[FinanceFact]) -> Finan
         target_year=target_year,
     )
     assets = _latest_fact_for_year(facts, ("assets", "total assets"), target_year=target_year)
+    net_income = _latest_fact_for_year(facts, ("net income",), target_year=target_year)
     missing = []
     if capex is None:
         missing.append("capital_expenditures")
@@ -217,17 +218,31 @@ def _plan_capital_intensity(*, question: str, facts: list[FinanceFact]) -> Finan
         missing.append("property_plant_and_equipment_net")
     if assets is None:
         missing.append("assets")
+    if net_income is None:
+        missing.append("net_income")
     if missing:
         return _missing(
             "capital_intensity",
             missing,
-            facts=[item for item in (capex, revenue, operating_cash_flow, ppe, assets) if item is not None],
+            facts=[item for item in (capex, revenue, operating_cash_flow, ppe, assets, net_income) if item is not None],
             diagnostics={
-                "required_ratios": ["capex_to_revenue", "capex_to_operating_cash_flow", "ppe_to_assets"],
+                "required_ratios": ["capex_to_revenue", "capex_to_operating_cash_flow", "ppe_to_assets", "return_on_assets"],
                 "reason": "capital_intensity_requires_multiple_balance_sheet_and_cash_flow_slots",
                 "target_fiscal_year": target_year,
             },
         )
+    capex_value = _decimal_or_none(_absolute_decimal_string(capex.value))
+    revenue_value = _decimal_or_none(revenue.value)
+    operating_cash_flow_value = _decimal_or_none(operating_cash_flow.value)
+    ppe_value = _decimal_or_none(ppe.value)
+    assets_value = _decimal_or_none(assets.value)
+    net_income_value = _decimal_or_none(net_income.value)
+    model_outputs = {
+        "capex_to_revenue": _ratio_decimal_string(capex_value, revenue_value),
+        "capex_to_operating_cash_flow": _ratio_decimal_string(capex_value, operating_cash_flow_value),
+        "ppe_to_assets": _ratio_decimal_string(ppe_value, assets_value),
+        "return_on_assets": _ratio_decimal_string(net_income_value, assets_value),
+    }
     return _ready(
         "capital_intensity",
         "capital_expenditures / revenue",
@@ -237,15 +252,18 @@ def _plan_capital_intensity(*, question: str, facts: list[FinanceFact]) -> Finan
             "operating_cash_flow": operating_cash_flow.value,
             "property_plant_and_equipment_net": ppe.value,
             "assets": assets.value,
+            "net_income": net_income.value,
         },
         unit="percent",
-        facts=[capex, revenue, operating_cash_flow, ppe, assets],
+        facts=[capex, revenue, operating_cash_flow, ppe, assets, net_income],
         diagnostics={
-            "required_ratios": ["capex_to_revenue", "capex_to_operating_cash_flow", "ppe_to_assets"],
+            "required_ratios": ["capex_to_revenue", "capex_to_operating_cash_flow", "ppe_to_assets", "return_on_assets"],
             "secondary_expressions": {
                 "capex_to_operating_cash_flow": "capital_expenditures / operating_cash_flow",
                 "ppe_to_assets": "property_plant_and_equipment_net / assets",
+                "return_on_assets": "net_income / assets",
             },
+            "model_outputs": {key: value for key, value in model_outputs.items() if value is not None},
             "target_fiscal_year": target_year,
         },
     )
@@ -256,6 +274,12 @@ def _absolute_decimal_string(value: object) -> str:
     if decimal is None:
         return str(value)
     return str(abs(decimal))
+
+
+def _ratio_decimal_string(numerator: Decimal | None, denominator: Decimal | None) -> str | None:
+    if numerator is None or denominator is None or denominator == 0:
+        return None
+    return _decimal_string(numerator / denominator)
 
 
 def _plan_bps_difference(facts: list[FinanceFact]) -> FinanceFormulaPlan:

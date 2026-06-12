@@ -168,7 +168,21 @@ host calculator trace for `capital_expenditures / revenue` and matches the
 `5.1%` gold target. The first expanded doc-retrieval baseline,
 `run_financebench_doc_live10_target_slots_v1`, is `3/10`; the failures now
 cluster around target PDF/table extraction and source resolution beyond the
-closed first slice, plus disclosure-style qualitative answer contracts.
+closed slice.
+
+The next finalization/toolchain repair closes the first live slice with stronger
+answer reliability. `run_financebench_doc_live3_after_source_equivalence` passes
+`3/3` with dev annotation overall / workflow / substrate / numeric scores all
+`1.0`, citation preservation `1.0`, verifier-gate and synthesis-gate pass rate
+`1.0`, and unsupported numeric claim rate `0`. The change is not an answer
+table: quality-gated finance outputs now fall back to ClaimLedger-supported host
+answers, synthesizer/verifier failures with valid FormulaTrace can fall back to
+formula-trace-only answers, and the capital-intensity task requires net income
+so return on assets can be calculated and verified alongside capex/revenue and
+PPE/assets. Required-source scoring now treats target-bound structured SEC
+companyfacts as a valid companion only when primary-source numeric binding
+selected target facts; generic companyfacts are still rejected for
+`doc_retrieval`.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
