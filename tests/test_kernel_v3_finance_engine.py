@@ -1670,6 +1670,9 @@ def test_runtime_preflight_task_compile_injects_model_execution_program() -> Non
     assert preflight["preflight"] is True
     assert preflight["task_spec"]["task_type"] == "filing_metric_lookup"
     assert preflight["evidence_specs"][0]["line_item"] == "purchases of property and equipment"
+    toolchain_plans = fabric.journal.records(task_id=result.task_id, kind="toolchain_plan")
+    assert toolchain_plans
+    assert toolchain_plans[0].data["decision_owner"] == "model"
 
 
 def test_finance_fast_recipe_exposes_composable_toolchain_tools(tmp_path) -> None:
@@ -1717,6 +1720,60 @@ def test_finance_fast_recipe_exposes_composable_toolchain_tools(tmp_path) -> Non
     assert result.observation.content["stdout"].strip() == "toolchain-ok"
 
 
+def test_finance_capability_profile_exposes_write_and_script_exec_tools(tmp_path) -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+
+    assert "workspace.write" in recipe.allowed_tools
+    assert "script.exec" in recipe.allowed_tools
+    assert "workspace:write" in recipe.metadata["allowed_permissions"]
+    assert "shell:exec" in recipe.metadata["allowed_permissions"]
+
+    runtime = AgentRuntime(journal=JournalStore.in_memory(), workspace_root=tmp_path)
+    registry = runtime._registry(recipe, "Parse a local filing with a temporary script.")
+    manifests = {manifest.name: manifest for manifest in registry.manifests()}
+    assert {"workspace.write", "script.exec", "shell.exec", "retrieval.run", CALCULATOR_TOOL_NAME} <= set(manifests)
+
+    script_action = CandidateAction(
+        action_id="act-script-exec-json",
+        kind="tool",
+        name="script.exec",
+        description="Run temporary parser",
+        score=1.0,
+        payload={
+            "language": "python",
+            "script": (
+                "import json\n"
+                "print(json.dumps({'facts':["
+                "{'entityName':'TestCo','ticker':'TCO','concept':'us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax','label':'Revenue','metric':'revenue','unit':'USD','fy':2024,'form':'10-K','value':200}"
+                "]}))\n"
+            ),
+            "expected_output": "json",
+            "timeout_seconds": 10,
+        },
+        reasons=["capability_profile_script_exec_test"],
+        side_effect_class="shell",
+    )
+    decision = PolicyGate(permission=recipe.permission_profile, allowed_permissions=set(recipe.metadata["allowed_permissions"])).validate(
+        run_id="run-script",
+        action=script_action,
+        manifest=manifests["script.exec"],
+    )
+    result = registry.execute_with_artifacts(
+        script_action,
+        policy_decision=decision,
+        execution_context={"run_id": "run-script"},
+    )
+
+    assert decision.allowed is True
+    assert result.observation.status == "ok"
+    assert result.observation.content["stdout_json"]["facts"][0]["metric"] == "revenue"
+    assert result.observation.content["script_path"].startswith(".holo_toolchain/scripts/")
+    assert len(result.artifact_refs) >= 2
+
+
 def test_finance_fast_planner_directive_shows_composable_toolchain() -> None:
     recipe = task_recipe(
         "retrieval_answer",
@@ -1733,6 +1790,22 @@ def test_finance_fast_planner_directive_shows_composable_toolchain() -> None:
     assert "file.read" in tool_names
     assert "shell.exec" in tool_names
     assert "shell.exec" not in directive["forbidden"]
+
+
+def test_finance_capability_planner_directive_shows_script_toolchain() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+
+    directive = _planner_directive(recipe)
+    tool_names = [item["name"] for item in directive["tool_selection"]]
+
+    assert "workspace.write" in tool_names
+    assert "script.exec" in tool_names
+    assert "script.exec" not in directive["forbidden"]
+    script_entry = next(item for item in directive["tool_selection"] if item["name"] == "script.exec")
+    assert any(str(item).startswith("expected_output: json") for item in script_entry["payload_requirements"])
 
 
 def test_retrieval_finalizer_uses_shell_exec_output_as_toolchain_evidence() -> None:
@@ -1870,6 +1943,112 @@ def test_shell_exec_facts_trigger_finance_calculator_before_final_answer() -> No
     assert action.payload["variables"] == {"numerator": "50", "denominator": "200"}
     assert "calculator_required_before_final" in action.reasons
     plans = journal.records(task_id="task-shell-formula", kind="finance_formula_plan")
+    assert plans[-1].data["fact_count"] == 2
+
+
+def test_script_exec_json_facts_become_candidate_fact_evidence_and_calculator_inputs() -> None:
+    class RespondingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-premature-script-answer",
+                kind="respond",
+                name="respond",
+                description="Answer after script parser",
+                score=0.58,
+                payload={"text": "TestCo net margin can now be answered."},
+                reasons=["model_answer_ready_after_script_exec"],
+                side_effect_class="none",
+            )
+
+    journal = JournalStore.in_memory()
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "goal": "Calculate TestCo FY2024 net margin.",
+        },
+    )
+    journal.append(
+        task_id="task-script-formula",
+        run_id="run-script-formula",
+        step_id="step-script",
+        kind="observation",
+        data={
+            "observation_id": "obs-script-formula",
+            "run_id": "run-script-formula",
+            "kind": "tool_result",
+            "status": "ok",
+            "source": "tool:script.exec",
+            "content": {
+                "language": "python",
+                "script_path": ".holo_toolchain/scripts/parser.py",
+                "argv": ["python3", ".holo_toolchain/scripts/parser.py"],
+                "exit_code": 0,
+                "stdout": json.dumps(
+                    {
+                        "facts": [
+                            {
+                                "entityName": "TestCo",
+                                "ticker": "TCO",
+                                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                                "label": "Revenue",
+                                "metric": "revenue",
+                                "unit": "USD",
+                                "fy": 2024,
+                                "form": "10-K",
+                                "value": 200,
+                            },
+                            {
+                                "entityName": "TestCo",
+                                "ticker": "TCO",
+                                "concept": "us-gaap:NetIncomeLoss",
+                                "label": "Net income",
+                                "metric": "net income",
+                                "unit": "USD",
+                                "fy": 2024,
+                                "form": "10-K",
+                                "value": 50,
+                            },
+                        ]
+                    }
+                ),
+                "stderr": "",
+                "expected_output": "json",
+            },
+            "observed_at_ms": 1,
+            "action_id": "act-script-formula",
+            "tool_call_id": None,
+        },
+        observation_ref="obs-script-formula",
+        state_delta={"observation_status": "ok"},
+    )
+
+    planner = _RecipeBoundPlanner(
+        inner=RespondingPlanner(),
+        goal="Calculate TestCo FY2024 net margin.",
+        recipe=recipe,
+        journal=journal,
+    )
+    context = ContextBundle(
+        context_id="ctx-script-formula",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-script-formula", "run_id": "run-script-formula"},
+        token_budget=4096,
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == CALCULATOR_TOOL_NAME
+    assert action.payload["variables"] == {"numerator": "50", "denominator": "200"}
+    proposed_steps = journal.records(task_id="task-script-formula", kind="toolchain_step_proposed")
+    assert proposed_steps
+    assert proposed_steps[-1].data["tool"] == CALCULATOR_TOOL_NAME
+    assert journal.records(task_id="task-script-formula", kind="toolchain_step_executed")
+    candidates = journal.records(task_id="task-script-formula", kind="toolchain_grounding_candidate")
+    assert candidates[-1].data["candidate_fact_count"] == 2
+    plans = journal.records(task_id="task-script-formula", kind="finance_formula_plan")
     assert plans[-1].data["fact_count"] == 2
 
 

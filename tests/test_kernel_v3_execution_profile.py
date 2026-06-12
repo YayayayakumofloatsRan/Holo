@@ -35,6 +35,24 @@ def test_finance_fact_fast_profile_is_short_lane() -> None:
     assert metadata["composable_toolchain"]["enabled"] is True
     assert metadata["composable_toolchain"]["shell_exec"] is True
     assert metadata["composable_toolchain"]["model_task_compiler"] is True
+    assert metadata["composable_toolchain"].get("workspace_write") is False
+    assert metadata["composable_toolchain"].get("script_exec") is False
+
+
+def test_finance_capability_profile_is_high_budget_toolchain_lane() -> None:
+    profile = execution_profile("finance-capability")
+    metadata = execution_profile_runtime_metadata(profile)
+
+    assert profile.use_mission_supervisor is False
+    assert profile.use_semantic_intake_model is True
+    assert profile.max_agent_steps == 16
+    assert profile.max_agent_tool_calls == 16
+    assert profile.research_depth == "deep"
+    assert metadata["composable_toolchain"]["workspace_read"] is True
+    assert metadata["composable_toolchain"]["workspace_write"] is True
+    assert metadata["composable_toolchain"]["script_exec"] is True
+    assert metadata["composable_toolchain"]["shell_exec"] is True
+    assert metadata["composable_toolchain"]["shell_timeout_seconds"] >= 30
 
 
 def test_long_mission_profile_preserves_heavy_supervision() -> None:

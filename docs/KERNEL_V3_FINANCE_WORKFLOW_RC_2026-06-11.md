@@ -213,13 +213,18 @@ suite, not a scored public benchmark.
 
 ## Composable Toolchain Grounding
 
-The finance fast lane now treats LLM-selected local tooling as part of the
-audited evidence workflow. Successful `workspace.list`, `workspace.search`,
-`file.read`, and `shell.exec` observations are converted into bounded
-evidence/citation candidates with provenance. That merged grounding is consumed
-by finance formula preflight, so a temporary parser or local inspection command
-can emit structured facts, trigger `calculator.compute`, and then pass through
-the same ClaimLedger, VerifierGate, and SynthesisGate path as retrieval evidence.
+The finance lanes now treat LLM-selected local tooling as part of the audited
+evidence workflow. `finance-fact-fast` keeps the short benchmark path, while the
+new `finance-capability` profile opens workspace write and `script.exec` for
+capability-first runs. Successful `workspace.list`, `workspace.search`,
+`file.read`, `workspace.write`, `shell.exec`, and `script.exec` observations are
+converted into bounded evidence/citation candidates with provenance. JSON facts
+or key-value facts emitted by a temporary parser are journaled as
+`toolchain_grounding_candidate` records and promoted into separate evidence
+candidates before ClaimLedger extraction. That merged grounding is consumed by
+finance formula preflight, so a temporary parser or local inspection command can
+emit structured facts, trigger `calculator.compute`, and then pass through the
+same ClaimLedger, VerifierGate, and SynthesisGate path as retrieval evidence.
 The model chooses and assembles the local toolchain; the host still validates
 tool permission, provenance, citations, formulas, and numeric support.
 

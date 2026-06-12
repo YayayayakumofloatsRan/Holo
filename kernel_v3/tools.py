@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
+import re
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -114,6 +115,8 @@ class ToolRegistry:
         *,
         root: Path | str,
         shell_allowed_executables: set[str] | None = None,
+        shell_timeout_seconds: int = 5,
+        script_timeout_seconds: int = 30,
         artifact_store: ArtifactStore | None = None,
     ) -> "ToolRegistry":
         registry = cls.with_builtin_respond()
@@ -124,14 +127,47 @@ class ToolRegistry:
         registry.register("workspace.write", workspace.write, manifest=_workspace_manifest("workspace.write", "write", "write"))
         registry.register(
             "shell.exec",
-            _ShellExecutor(workspace.root, shell_allowed_executables or set()).execute,
+            _ShellExecutor(workspace.root, shell_allowed_executables or set(), timeout_seconds=shell_timeout_seconds).execute,
             manifest=_manifest(
                 "shell.exec",
                 "shell",
                 "exec",
                 "shell",
                 permissions_required=["shell:exec"],
-                input_schema={"argv": "list[str]"},
+                input_schema={
+                    "argv": "list[str]",
+                    "timeout_seconds": {"type": "int", "required": False, "min": 1, "max": 120},
+                },
+            ),
+        )
+        registry.register(
+            "script.exec",
+            _ScriptExecutor(
+                workspace.root,
+                shell_allowed_executables or set(),
+                artifact_store=artifact_store,
+                timeout_seconds=script_timeout_seconds,
+            ).execute,
+            manifest=_manifest(
+                "script.exec",
+                "script",
+                "exec",
+                "shell",
+                permissions_required=["shell:exec", "workspace:write"],
+                input_schema={
+                    "language": {"type": "str", "required": True, "min_length": 1},
+                    "script": {
+                        "type": "str",
+                        "required": True,
+                        "min_length": 1,
+                        "preserve_whitespace": True,
+                        "journal": "preview_hash",
+                        "preview_chars": WORKSPACE_PREVIEW_CHARS,
+                    },
+                    "args": {"type": "list[str]", "required": False},
+                    "timeout_seconds": {"type": "int", "required": False, "min": 1, "max": 120},
+                    "expected_output": {"type": "str", "required": False, "min_length": 1},
+                },
             ),
         )
         registry.register(
@@ -850,9 +886,10 @@ class _Workspace:
 
 
 class _ShellExecutor:
-    def __init__(self, root: Path, allowed_executables: set[str]) -> None:
+    def __init__(self, root: Path, allowed_executables: set[str], *, timeout_seconds: int = 5) -> None:
         self.root = root
         self.allowed_executables = set(allowed_executables)
+        self.timeout_seconds = max(1, min(120, int(timeout_seconds or 5)))
 
     def execute(self, action: CandidateAction) -> ToolResult:
         argv = action.payload.get("argv", [])
@@ -867,7 +904,7 @@ class _ShellExecutor:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=5,
+            timeout=_timeout_seconds(action.payload.get("timeout_seconds"), default=self.timeout_seconds),
             check=False,
         )
         return _tool_result(
@@ -880,6 +917,113 @@ class _ShellExecutor:
                 "stderr": completed.stderr,
             },
         )
+
+
+class _ScriptExecutor:
+    def __init__(
+        self,
+        root: Path,
+        allowed_executables: set[str],
+        *,
+        artifact_store: ArtifactStore | None = None,
+        timeout_seconds: int = 30,
+    ) -> None:
+        self.root = root
+        self.allowed_executables = set(allowed_executables)
+        self.artifact_store = artifact_store
+        self.timeout_seconds = max(1, min(120, int(timeout_seconds or 30)))
+
+    def execute(self, action: CandidateAction) -> ToolResult:
+        language = str(action.payload.get("language") or "").strip().lower()
+        script = str(action.payload.get("script") or "")
+        if language not in {"python", "python3", "py"}:
+            return _tool_result(action, "blocked", {"language": language, "error": "unsupported_script_language"})
+        exe_name = "python3" if "python3" in self.allowed_executables else "python"
+        if exe_name not in self.allowed_executables:
+            return _tool_result(action, "blocked", {"language": language, "error": "script_interpreter_not_allowed"})
+        if not script.strip():
+            return _tool_result(action, "failed", {"language": language, "error": "empty_script"})
+        args = action.payload.get("args", [])
+        if args is None:
+            args = []
+        if not isinstance(args, list) or any(not isinstance(item, str) for item in args):
+            return _tool_result(action, "failed", {"error": "args_must_be_list_of_strings"})
+        script_rel, script_path = self._write_script(action, script)
+        completed = subprocess.run(
+            [exe_name, str(script_path), *args],
+            cwd=self.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_timeout_seconds(action.payload.get("timeout_seconds"), default=self.timeout_seconds),
+            check=False,
+        )
+        expected_output = str(action.payload.get("expected_output") or "").strip().lower()
+        stdout_json: object | None = None
+        if expected_output == "json" and completed.stdout.strip():
+            try:
+                stdout_json = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                stdout_json = None
+        script_artifact = _workspace_payload_artifact(
+            artifact_store=self.artifact_store,
+            kind="script_exec_source",
+            path=script_rel,
+            text=script,
+        )
+        output_payload = json.dumps(
+            {
+                "script_path": script_rel,
+                "exit_code": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "stdout_json": stdout_json,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        output_artifact = _workspace_payload_artifact(
+            artifact_store=self.artifact_store,
+            kind="script_exec_output",
+            path=script_rel + ".output.json",
+            text=output_payload,
+        )
+        content: JsonObject = {
+            "language": "python",
+            "script_path": script_rel,
+            "argv": [exe_name, script_rel, *args],
+            "exit_code": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+            "expected_output": expected_output or "text",
+            "script_artifact_id": script_artifact.artifact_id,
+            "output_artifact_id": output_artifact.artifact_id,
+        }
+        if stdout_json is not None:
+            content["stdout_json"] = stdout_json
+        return ToolResult(
+            observation=_tool_observation(action, "ok" if completed.returncode == 0 else "failed", content),
+            artifact_refs=[script_artifact, output_artifact],
+        )
+
+    def _write_script(self, action: CandidateAction, script: str) -> tuple[str, Path]:
+        digest = hashlib.sha256(f"{action.action_id}\n{script}".encode("utf-8")).hexdigest()[:16]
+        rel = f".holo_toolchain/scripts/{digest}.py"
+        path = (self.root / rel).resolve()
+        try:
+            path.relative_to(self.root)
+        except ValueError:
+            raise ValueError("script_path_outside_workspace")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(script, encoding="utf-8")
+        return rel, path
+
+
+def _timeout_seconds(value: object, *, default: int) -> int:
+    parsed = _optional_int(value)
+    if parsed is None:
+        parsed = default
+    return max(1, min(120, parsed))
 
 
 def _execute_network_contract(action: CandidateAction) -> ToolResult:

@@ -28,6 +28,9 @@ def test_tool_registry_exposes_stable_manifests_for_resources_and_operators():
         assert manifests["file.read"].input_schema["path"]["min_length"] == 1
         assert manifests["workspace.write"].permissions_required == ["workspace:write"]
         assert manifests["shell.exec"].side_effect_class == "shell"
+        assert manifests["script.exec"].side_effect_class == "shell"
+        assert manifests["script.exec"].permissions_required == ["shell:exec", "workspace:write"]
+        assert manifests["script.exec"].input_schema["script"]["preserve_whitespace"] is True
         assert manifests["network.fetch"].side_effect_class == "network"
         assert manifests["network.fetch"].enabled is False
     finally:

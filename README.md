@@ -1396,6 +1396,15 @@ actual executable tools rather than capability-catalog promises. `shell.exec`
 is still host-owned: it requires `shell:exec`, an executable allowlist, PolicyGate
 validation, and journaled stdout/stderr observations.
 
+There is also a capability-first finance lane, `finance-capability`. It keeps
+the LLM-led task compiler and composable toolchain, but opens a stronger
+workbench surface: workspace read/write, `script.exec`, `shell.exec`, high
+retrieval budgets, and larger model/context budgets. `script.exec` is the
+preferred Codex-style temporary parser path: the model supplies a Python script
+and expected output shape, the host writes it under `.holo_toolchain/scripts`,
+runs it with bounded timeout, artifacts the script/output, and journals the
+step. This keeps the workflow flexible without making shell output sovereign.
+
 The execution program itself is now model-first in the finance fast lane.
 `task.compile` is a structured processor packet that asks the LLM to produce
 `TaskSpec`, `EvidenceSpec`, `TransformSpec`, `SlotFrame`, and a
@@ -1419,18 +1428,20 @@ model chooses a local parsing or analysis step.
 
 Composable tool outputs now enter the same grounding path used by retrieval
 evidence. In `retrieval_answer`, successful `workspace.list`,
-`workspace.search`, `file.read`, and `shell.exec` observations are converted
-into bounded evidence/citation candidates; if no normal retrieval report exists,
-the host creates a synthetic toolchain grounding report and runs the usual
-finance fact ledger, claim ledger, numeric verifier, and synthesis gate. This
-means a model-authored temporary parser can emit structured stdout such as
-`entityName=... concept=... metric=... value=...`, and the host can verify it as
-evidence instead of leaving it trapped as an unconsumed tool observation. The
-same merged retrieval/toolchain grounding is now used before finalization by the
-finance formula planner: if a model-selected `shell.exec` or `file.read` step
-fills enough source-backed facts, Holo will schedule `calculator.compute` before
-allowing a free-text final answer. This closes the loop from LLM-selected
-temporary tooling to host-validated deterministic calculation.
+`workspace.search`, `file.read`, `workspace.write`, `shell.exec`, and
+`script.exec` observations are converted into bounded evidence/citation
+candidates; if no normal retrieval report exists, the host creates a synthetic
+toolchain grounding report and runs the usual finance fact ledger, claim ledger,
+numeric verifier, and synthesis gate. Model-authored parsers can emit JSON
+`facts` or key-value lines such as
+`entityName=... concept=... metric=... value=...`; the host journals them as
+`toolchain_grounding_candidate` records and promotes each candidate fact into
+separate evidence/citation candidates before ClaimLedger extraction. The same
+merged retrieval/toolchain grounding is used before finalization by the finance
+formula planner: if a model-selected `script.exec`, `shell.exec`, or `file.read`
+step fills enough source-backed facts, Holo will schedule `calculator.compute`
+before allowing a free-text final answer. This closes the loop from
+LLM-selected temporary tooling to host-validated deterministic calculation.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
@@ -1530,6 +1541,11 @@ and `ProcessorFabric` blocks over-budget model calls before sending a provider
 request. The current `finance-fact-fast` token budget is intentionally relaxed
 for reliability while the finance substrate stabilizes; it is fast by
 mission/workmethod bypass and step/tool caps, not yet by a tight token envelope.
+Use `finance-capability` when the priority is problem-solving power over speed:
+it exposes workspace write and `script.exec` for temporary parsers, raises
+tool/model/retrieval budgets, and journals `toolchain_plan`,
+`toolchain_step_proposed`, `toolchain_step_executed`, and
+`toolchain_grounding_candidate` records for audit.
 
 Finance lanes also include a deterministic finance substrate:
 

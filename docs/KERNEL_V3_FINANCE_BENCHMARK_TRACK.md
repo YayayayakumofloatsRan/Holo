@@ -286,6 +286,14 @@ not repeatedly download these sources during benchmark iteration.
   scoring. The registry composes these tools before adding retrieval/calculator,
   while PolicyGate and the shell executable allowlist remain the hard safety
   boundary.
+- A stronger `finance-capability` execution profile now separates
+  capability-first work from the fast benchmark lane. It keeps model task
+  compilation and composable tooling, raises budgets, and exposes
+  `workspace.write` plus `script.exec` so the model can write and run temporary
+  Python parsers instead of squeezing complex extraction logic into inline
+  `python -c` commands. `script.exec` writes under `.holo_toolchain/scripts`,
+  runs with bounded timeout, artifacts source/output, and still requires
+  `shell:exec` plus `workspace:write`.
 - The task program compiler has moved from deterministic-owner to model-first
   owner for the finance fast lane. `task.compile` is now a processor packet:
   the LLM receives the objective, target binding, compact facts, and host
@@ -302,19 +310,27 @@ not repeatedly download these sources during benchmark iteration.
   proposal. This is the practical difference between an LLM-led workbench and a
   retrieval-only FSM with extra tool names.
 - The output side of that toolchain is now connected to grounding. Successful
-  `workspace.list`, `workspace.search`, `file.read`, and `shell.exec`
+  `workspace.list`, `workspace.search`, `file.read`, `workspace.write`,
+  `shell.exec`, and `script.exec`
   observations in `retrieval_answer` become bounded evidence/citation
   candidates. If retrieval did not produce a normal report, the host creates a
   synthetic toolchain grounding report and runs the same finance fact ledger,
   claim ledger, numeric verifier, and synthesis gate. This lets temporary
   model-selected parsers feed structured stdout into the verified answer path
   without giving shell output unchecked authority.
+- Toolchain execution is now journaled as an auditable state machine surface:
+  compiled programs emit a `toolchain_plan`; planner-selected composable tools
+  emit `toolchain_step_proposed`; successful local tool observations emit
+  `toolchain_step_executed`; and JSON/key-value parser outputs emit
+  `toolchain_grounding_candidate` records before candidate facts become
+  ClaimLedger inputs.
 - Toolchain grounding now feeds formula preflight as well as final synthesis.
   The finance formula planner and fake evaluator use the same merged
   retrieval/toolchain evidence view, so facts produced by a model-selected
-  `shell.exec` or `file.read` step can trigger `calculator.compute` before a
-  premature final answer. This is the required bridge from LLM-assembled local
-  toolchains to host-owned deterministic calculation and numeric verification.
+  `script.exec`, `shell.exec`, or `file.read` step can trigger
+  `calculator.compute` before a premature final answer. This is the required
+  bridge from LLM-assembled local toolchains to host-owned deterministic
+  calculation and numeric verification.
 - Retrieval Workbench packets now use task-aware compact selection. The
   selection score combines the compiled evidence/transform specs, target
   document contract, required statement/line item, and table-like signals, so

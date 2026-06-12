@@ -8,6 +8,7 @@ from kernel_v3.contracts import Contract, JsonObject
 EXECUTION_PROFILE_IDS = (
     "local-retrieval-fast",
     "finance-fact-fast",
+    "finance-capability",
     "finance-modeling",
     "web-research",
     "long-mission",
@@ -109,6 +110,8 @@ def _normalize_profile_id(profile_id: str | None) -> str:
         return "local-retrieval-fast"
     if normalized == "finance-fast":
         return "finance-fact-fast"
+    if normalized in {"finance-capable", "finance-toolchain", "finance-workbench"}:
+        return "finance-capability"
     if normalized == "long":
         return "long-mission"
     return normalized
@@ -168,6 +171,36 @@ _PROFILES: dict[str, ExecutionProfile] = {
         context_profile="compact",
         research_depth="light",
         notes=("Fast lane for public finance benchmark fact extraction and numeric answers.",),
+    ),
+    "finance-capability": ExecutionProfile(
+        profile_id="finance-capability",
+        use_chat_router=False,
+        use_semantic_intake_model=True,
+        use_workmethod=False,
+        use_mission_supervisor=False,
+        planner_mode="model",
+        evaluator_mode="fake",
+        synthesizer_mode="model",
+        max_processor_calls=16,
+        max_total_model_tokens=900_000,
+        max_prompt_chars_per_call=420_000,
+        max_agent_steps=16,
+        max_agent_tool_calls=16,
+        max_retrieval_runs=6,
+        retrieval_mode="mixed",
+        max_queries=24,
+        max_sources=120,
+        max_fetches=48,
+        max_spans_per_document=24,
+        require_citations=True,
+        require_numeric_verifier=True,
+        allow_partial_answer=True,
+        context_profile="provider",
+        research_depth="deep",
+        notes=(
+            "Capability-first finance workbench lane with model-compiled task programs, "
+            "workspace read/write, script execution, shell execution, and high budgets.",
+        ),
     ),
     "finance-modeling": ExecutionProfile(
         profile_id="finance-modeling",
@@ -254,13 +287,18 @@ _PROFILES: dict[str, ExecutionProfile] = {
 
 
 def _composable_toolchain_defaults(profile_id: str) -> JsonObject:
-    if profile_id not in {"finance-fact-fast", "finance-modeling", "web-research", "long-mission"}:
+    if profile_id not in {"finance-fact-fast", "finance-capability", "finance-modeling", "web-research", "long-mission"}:
         return {}
+    capability = profile_id == "finance-capability"
     return {
         "enabled": True,
         "workspace_read": True,
+        "workspace_write": capability,
+        "script_exec": capability,
         "shell_exec": True,
         "model_task_compiler": True,
+        "shell_timeout_seconds": 30 if profile_id.startswith("finance") else 10,
+        "script_timeout_seconds": 45 if capability else 30,
         "shell_allowed_executables": [
             "python",
             "python3",

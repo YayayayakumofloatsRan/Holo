@@ -634,11 +634,15 @@ class AgentRuntime:
         if not _composable_toolchain_enabled(recipe):
             return ToolRegistry.with_builtin_respond()
         shell_allowed = _composable_shell_allowed_executables(recipe)
+        shell_timeout = _composable_tool_timeout_seconds(recipe, key="shell_timeout_seconds", default=5)
+        script_timeout = _composable_tool_timeout_seconds(recipe, key="script_timeout_seconds", default=30)
         root = self.workspace_root or Path.cwd()
         if "shell.exec" in recipe.allowed_tools or self.workspace_root is not None:
             return ToolRegistry.with_permissioned_workspace(
                 root=root,
                 shell_allowed_executables=shell_allowed,
+                shell_timeout_seconds=shell_timeout,
+                script_timeout_seconds=script_timeout,
                 artifact_store=self.artifact_store,
             )
         if self.workspace_files:
@@ -646,6 +650,8 @@ class AgentRuntime:
         return ToolRegistry.with_permissioned_workspace(
             root=root,
             shell_allowed_executables=shell_allowed,
+            shell_timeout_seconds=shell_timeout,
+            script_timeout_seconds=script_timeout,
             artifact_store=self.artifact_store,
         )
 
@@ -1466,6 +1472,14 @@ class AgentRuntime:
                 "compiled_task_program_source": _string_value(program.get("source") or "recipe.execution_program"),
             },
         )
+        _append_toolchain_plan_record(
+            self.journal,
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            program=program,
+            source="compiled_task_program_preflight",
+        )
 
     def _append_workmethod_state(self, state: WorkMethodState, *, task_id: str, run_id: str) -> None:
         self.journal.append(
@@ -2017,6 +2031,14 @@ class AgentRuntime:
                     "compiled_evidence_spec_count": len(compiled.evidence_specs),
                     "compiled_transform_spec_count": len(compiled.transform_specs),
                 },
+            )
+            _append_toolchain_plan_record(
+                self.journal,
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                program=compiled.to_dict(),
+                source="finance_task_compiler",
             )
             frame = compiled.slot_frame or finance_slot_frame(question=question, facts=facts, plan=plan)
             self.journal.append(
@@ -3091,6 +3113,44 @@ class _RecipeBoundPlanner:
             action_ref=action.action_id,
             state_delta={"agent_work_plan_revision": self._calls},
         )
+        self._journal_toolchain_step_proposed(context, action, feedback)
+
+    def _journal_toolchain_step_proposed(
+        self,
+        context: ContextBundle,
+        action: CandidateAction,
+        feedback: Feedback | None,
+    ) -> None:
+        if self.journal is None or action.kind != "tool" or not _composable_toolchain_enabled(self.recipe):
+            return
+        if action.name not in set(self.recipe.allowed_tools):
+            return
+        task_id = str(context.state.get("task_id") or "")
+        run_id = str(context.state.get("run_id") or "")
+        if not task_id or not run_id:
+            return
+        for record in self.journal.records(task_id=task_id, kind="toolchain_step_proposed"):
+            if record.run_id == run_id and record.action_ref == action.action_id:
+                return
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=str(context.state.get("step_id") or ""),
+            kind="toolchain_step_proposed",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.toolchain_step_proposed.v1",
+                    "revision": self._calls,
+                    "tool": action.name,
+                    "action": _action_plan_preview(action),
+                    "feedback_status": feedback.status if feedback is not None else None,
+                    "missing_evidence": list(feedback.missing_evidence) if feedback is not None else [],
+                    "source": "model_planner_bound_to_composable_toolchain",
+                }
+            ),
+            action_ref=action.action_id,
+            state_delta={"toolchain_step": action.name},
+        )
 
 
 def _workbench_followup_retrieval_action(
@@ -4092,6 +4152,15 @@ def _composable_shell_allowed_executables(recipe: TaskRecipe) -> set[str]:
     return {Path(item).name for item in values if Path(item).name}
 
 
+def _composable_tool_timeout_seconds(recipe: TaskRecipe, *, key: str, default: int) -> int:
+    config = _composable_toolchain_config(recipe.metadata)
+    try:
+        value = int(config.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(120, value))
+
+
 def task_recipe(
     mode: str,
     *,
@@ -4111,9 +4180,16 @@ def task_recipe(
         toolchain = _composable_toolchain_config(recipe_metadata)
         if _truthy(toolchain.get("workspace_read")):
             allowed_tools.extend(["workspace.list", "workspace.search", "file.read"])
+        if _truthy(toolchain.get("workspace_write")):
+            allowed_tools.append("workspace.write")
+            recipe_metadata = _with_allowed_permission(recipe_metadata, "workspace:write")
         if _truthy(toolchain.get("shell_exec")):
             allowed_tools.append("shell.exec")
             recipe_metadata = _with_allowed_permission(recipe_metadata, "shell:exec")
+        if _truthy(toolchain.get("script_exec")):
+            allowed_tools.append("script.exec")
+            recipe_metadata = _with_allowed_permission(recipe_metadata, "shell:exec")
+            recipe_metadata = _with_allowed_permission(recipe_metadata, "workspace:write")
         return TaskRecipe(
             recipe_id="recipe-retrieval-answer",
             allowed_tools=_ordered_unique(allowed_tools),
@@ -4785,11 +4861,12 @@ def _plan_step_index(step: JsonObject) -> int:
 
 def _action_plan_preview(action: CandidateAction) -> JsonObject:
     payload = dict(action.payload)
-    text = payload.pop("text", None)
-    if isinstance(text, str):
-        payload["text_preview"] = _preview_text(text, 160)
-        payload["text_hash"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        payload["text_chars"] = len(text)
+    for raw_key, preview_key in (("text", "text"), ("script", "script")):
+        text = payload.pop(raw_key, None)
+        if isinstance(text, str):
+            payload[f"{preview_key}_preview"] = _preview_text(text, 160)
+            payload[f"{preview_key}_hash"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            payload[f"{preview_key}_chars"] = len(text)
     return {
         "action_id": action.action_id,
         "kind": action.kind,
@@ -4865,6 +4942,17 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "payload_requirements": ["path: workspace-relative file path"],
                 }
             )
+        if "workspace.write" in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": "workspace.write",
+                    "side_effect_class": "write",
+                    "use_when": "create a temporary parser, normalized evidence file, or intermediate JSON artifact under the workspace before running or reading it",
+                    "payload_requirements": ["path: workspace-relative file path", "text: complete UTF-8 body"],
+                    "host_boundary": "requires workspace:write permission; host journals preview/hash and artifact refs",
+                }
+            )
         if "shell.exec" in recipe.allowed_tools:
             tool_selection.append(
                 {
@@ -4877,6 +4965,25 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     ),
                     "payload_requirements": ["argv: list[str] using host-allowed executables only"],
                     "host_boundary": "requires shell:exec permission and executable allowlist; host audits stdout/stderr as observation",
+                }
+            )
+        if "script.exec" in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": "script.exec",
+                    "side_effect_class": "shell",
+                    "use_when": (
+                        "a multi-line temporary parser or local analysis program is more reliable than inline shell; "
+                        "emit JSON facts/tables/slot fills for host grounding"
+                    ),
+                    "payload_requirements": [
+                        "language: python",
+                        "script: complete script text",
+                        "expected_output: json when emitting structured facts",
+                        "timeout_seconds: optional bounded timeout",
+                    ],
+                    "host_boundary": "requires shell:exec and workspace:write; host writes the script under .holo_toolchain, audits stdout/stderr, and artifacts outputs",
                 }
             )
         forbidden = ["web_search", "page_open"]
@@ -6361,7 +6468,7 @@ def _finance_numeric_verifier_required(recipe: TaskRecipe) -> bool:
 def _toolchain_grounding_enabled(recipe: TaskRecipe) -> bool:
     return recipe.mode == "retrieval_answer" and any(
         name in set(recipe.allowed_tools)
-        for name in ("workspace.list", "workspace.search", "file.read", "shell.exec")
+        for name in ("workspace.list", "workspace.search", "file.read", "workspace.write", "shell.exec", "script.exec")
     )
 
 
@@ -8211,6 +8318,41 @@ def _compiled_task_hint_for_retrieval(*, question: str, binding: JsonObject) -> 
     }
 
 
+def _append_toolchain_plan_record(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    step_id: str | None,
+    program: JsonObject,
+    source: str,
+) -> None:
+    diagnostics = _json_object(program.get("diagnostics"))
+    tool_chain_plan = _json_object(diagnostics.get("tool_chain_plan") or program.get("tool_chain_plan"))
+    if not tool_chain_plan:
+        return
+    plan_id = str(tool_chain_plan.get("plan_id") or program.get("program_id") or f"toolchain-plan-{run_id}")
+    for record in journal.records(task_id=task_id, kind="toolchain_plan"):
+        if record.run_id == run_id and record.data.get("plan_id") == plan_id:
+            return
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=step_id,
+        kind="toolchain_plan",
+        data=redact_journal_data(
+            {
+                **tool_chain_plan,
+                "schema": tool_chain_plan.get("schema") or "holo.kernel_v3.tool_chain_plan.v1",
+                "plan_id": plan_id,
+                "source": source,
+                "program_id": program.get("program_id"),
+            }
+        ),
+        state_delta={"toolchain_plan_present": True},
+    )
+
+
 def _compact_tool_chain_plan_for_prompt(value: object) -> JsonObject:
     if not isinstance(value, dict):
         return {}
@@ -9692,51 +9834,107 @@ def _workspace_grounding(
     ]
     for index, record in enumerate(observations, start=1):
         data = record.data
-        if data.get("source") not in {"tool:workspace.list", "tool:workspace.search", "tool:file.read", "tool:shell.exec"} or data.get("status") != "ok":
+        source = str(data.get("source") or "")
+        if source not in {"tool:workspace.list", "tool:workspace.search", "tool:file.read", "tool:workspace.write", "tool:shell.exec", "tool:script.exec"} or data.get("status") != "ok":
             continue
         content = data.get("content", {})
         if not isinstance(content, dict):
             continue
+        candidate_facts = _toolchain_candidate_facts(content, source=source)
+        _journal_toolchain_step_executed(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            observation_record=record,
+            source=source,
+            candidate_fact_count=len(candidate_facts),
+        )
         text = _workspace_observation_text(
             content,
             artifact_store=artifact_store,
             evidence_char_limit=evidence_char_limit,
-            source=str(data.get("source") or ""),
+            source=source,
         )
-        if not text.strip():
-            continue
-        path = _workspace_observation_title(content, source=str(data.get("source") or ""))
-        evidence_id = f"workspace-evidence-{index}"
-        citation_id = f"workspace-cite-{index}"
-        artifact_id = record.artifact_refs[0] if record.artifact_refs else f"artifact-{record.observation_ref or evidence_id}"
-        item = EvidenceItem(
-            evidence_id=evidence_id,
-            goal_id="goal-workspace",
-            span_id=f"workspace-span-{index}",
-            document_id=f"workspace-doc-{index}",
-            source_id=path,
-            artifact_id=artifact_id,
-            uri=f"workspace://{path}",
-            title=path,
-            text=text,
-            score=1.0,
-            payload_hash=str(data.get("payload_hash") or record.payload_hash),
-            diagnostics={"record_ref": record.record_id, "source": str(data.get("source") or "")},
+        path = _workspace_observation_title(content, source=source)
+        artifact_id = record.artifact_refs[0] if record.artifact_refs else f"artifact-{record.observation_ref or 'workspace-evidence-' + str(index)}"
+        emit_full_text_evidence = text.strip() and not (
+            candidate_facts and source in {"tool:shell.exec", "tool:script.exec"}
         )
-        evidence.append(item)
-        citations.append(
-            CitationItem(
-                citation_id=citation_id,
-                goal_id="goal-workspace",
+        if emit_full_text_evidence:
+            evidence_id = f"workspace-evidence-{index}"
+            citation_id = f"workspace-cite-{index}"
+            item = EvidenceItem(
                 evidence_id=evidence_id,
+                goal_id="goal-workspace",
+                span_id=f"workspace-span-{index}",
+                document_id=f"workspace-doc-{index}",
+                source_id=path,
                 artifact_id=artifact_id,
                 uri=f"workspace://{path}",
                 title=path,
-                quote=text[:citation_char_limit],
-                span_start=0,
-                span_end=min(len(text), citation_char_limit),
-                metadata={"record_ref": record.record_id},
+                text=text,
+                score=1.0,
+                payload_hash=str(data.get("payload_hash") or record.payload_hash),
+                diagnostics={"record_ref": record.record_id, "source": source},
             )
+            evidence.append(item)
+            citations.append(
+                CitationItem(
+                    citation_id=citation_id,
+                    goal_id="goal-workspace",
+                    evidence_id=evidence_id,
+                    artifact_id=artifact_id,
+                    uri=f"workspace://{path}",
+                    title=path,
+                    quote=text[:citation_char_limit],
+                    span_start=0,
+                    span_end=min(len(text), citation_char_limit),
+                    metadata={"record_ref": record.record_id},
+                )
+            )
+        for fact_index, fact in enumerate(candidate_facts, start=1):
+            fact_text = _candidate_fact_evidence_text(fact)
+            if not fact_text:
+                continue
+            evidence_id = f"toolchain-candidate-fact-{index}-{fact_index}"
+            citation_id = f"toolchain-candidate-cite-{index}-{fact_index}"
+            evidence.append(
+                EvidenceItem(
+                    evidence_id=evidence_id,
+                    goal_id="goal-workspace",
+                    span_id=f"toolchain-candidate-span-{index}-{fact_index}",
+                    document_id=f"workspace-doc-{index}",
+                    source_id=path,
+                    artifact_id=artifact_id,
+                    uri=f"workspace://{path}",
+                    title=f"{path} candidate fact {fact_index}",
+                    text=fact_text[:evidence_char_limit],
+                    score=1.0,
+                    payload_hash=str(data.get("payload_hash") or record.payload_hash),
+                    diagnostics={"record_ref": record.record_id, "source": source, "structured_candidate": True},
+                )
+            )
+            citations.append(
+                CitationItem(
+                    citation_id=citation_id,
+                    goal_id="goal-workspace",
+                    evidence_id=evidence_id,
+                    artifact_id=artifact_id,
+                    uri=f"workspace://{path}",
+                    title=f"{path} candidate fact {fact_index}",
+                    quote=fact_text[:citation_char_limit],
+                    span_start=0,
+                    span_end=min(len(fact_text), citation_char_limit),
+                    metadata={"record_ref": record.record_id, "structured_candidate": True},
+                )
+            )
+        _journal_toolchain_grounding_candidate(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            observation_record=record,
+            source=source,
+            candidate_facts=candidate_facts,
         )
     evidence = sorted(evidence, key=_workspace_evidence_priority)
     citation_by_evidence = {item.evidence_id: item for item in citations}
@@ -9765,15 +9963,219 @@ def _workspace_grounding(
     return evidence, citations, report
 
 
+def _toolchain_candidate_facts(content: JsonObject, *, source: str) -> list[JsonObject]:
+    if source not in {"tool:shell.exec", "tool:script.exec", "tool:file.read", "tool:workspace.write"}:
+        return []
+    texts: list[str] = []
+    stdout = content.get("stdout")
+    if isinstance(stdout, str) and stdout.strip():
+        texts.append(stdout)
+    stdout_json = content.get("stdout_json")
+    if stdout_json is not None:
+        return _candidate_facts_from_json(stdout_json)
+    text = content.get("text")
+    if isinstance(text, str) and text.strip():
+        texts.append(text)
+    preview = content.get("text_preview")
+    if isinstance(preview, str) and preview.strip():
+        texts.append(preview)
+    candidates: list[JsonObject] = []
+    for value in texts:
+        candidates.extend(_candidate_facts_from_text(value))
+    return _dedupe_candidate_facts(candidates)
+
+
+def _candidate_facts_from_text(text: str) -> list[JsonObject]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    candidates: list[JsonObject] = []
+    try:
+        candidates.extend(_candidate_facts_from_json(json.loads(stripped)))
+    except json.JSONDecodeError:
+        pass
+    for line in stripped.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            candidates.extend(_candidate_facts_from_json(json.loads(raw)))
+            continue
+        except json.JSONDecodeError:
+            pass
+        parsed = _candidate_fact_from_key_value_line(raw)
+        if parsed:
+            candidates.append(parsed)
+    return candidates
+
+
+def _candidate_facts_from_json(value: object) -> list[JsonObject]:
+    if isinstance(value, list):
+        return [fact for item in value for fact in _candidate_facts_from_json(item)]
+    if not isinstance(value, dict):
+        return []
+    for key in ("facts", "candidate_facts", "candidateFacts", "finance_facts", "financeFacts"):
+        nested = value.get(key)
+        if isinstance(nested, list):
+            return [fact for item in nested for fact in _candidate_facts_from_json(item)]
+    if "value" not in value and "val" not in value:
+        return []
+    metric = value.get("metric") or value.get("label") or value.get("concept") or value.get("attribute")
+    if not metric:
+        return []
+    result: JsonObject = {}
+    key_map = {
+        "entity": "entityName",
+        "entity_name": "entityName",
+        "entityName": "entityName",
+        "ticker": "ticker",
+        "cik": "cik",
+        "concept": "concept",
+        "label": "label",
+        "metric": "metric",
+        "attribute": "metric",
+        "unit": "unit",
+        "fy": "fy",
+        "fiscal_year": "fy",
+        "period": "period",
+        "form": "form",
+        "filed": "filed",
+        "value": "value",
+        "val": "value",
+    }
+    for raw_key, normalized in key_map.items():
+        raw_value = value.get(raw_key)
+        if raw_value is None or raw_value == "":
+            continue
+        result[normalized] = str(raw_value)
+    return [result] if result.get("metric") and result.get("value") else []
+
+
+def _candidate_fact_from_key_value_line(line: str) -> JsonObject:
+    if "value=" not in line and "val=" not in line:
+        return {}
+    pairs = dict(re.findall(r"([A-Za-z_][A-Za-z0-9_:-]*)=([^=\s][^=]*?)(?=\s+[A-Za-z_][A-Za-z0-9_:-]*=|$)", line))
+    if not pairs:
+        return {}
+    return _candidate_facts_from_json(pairs)[0] if _candidate_facts_from_json(pairs) else {}
+
+
+def _dedupe_candidate_facts(candidates: list[JsonObject]) -> list[JsonObject]:
+    result: list[JsonObject] = []
+    seen: set[str] = set()
+    for item in candidates:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _candidate_fact_evidence_text(fact: JsonObject) -> str:
+    order = ["entityName", "ticker", "cik", "concept", "label", "metric", "unit", "fy", "period", "form", "filed", "value"]
+    parts = []
+    for key in order:
+        value = fact.get(key)
+        if value is None or value == "":
+            continue
+        parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def _journal_toolchain_step_executed(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    observation_record,
+    source: str,
+    candidate_fact_count: int,
+) -> None:
+    observation_ref = str(observation_record.observation_ref or observation_record.data.get("observation_id") or "")
+    if not observation_ref or _journal_has_observation_record(journal, task_id, run_id, kind="toolchain_step_executed", observation_ref=observation_ref):
+        return
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=observation_record.step_id,
+        kind="toolchain_step_executed",
+        data=redact_journal_data(
+            {
+                "schema": "holo.kernel_v3.toolchain_step_executed.v1",
+                "source": source,
+                "status": observation_record.data.get("status"),
+                "action_id": observation_record.data.get("action_id"),
+                "observation_id": observation_ref,
+                "candidate_fact_count": candidate_fact_count,
+                "artifact_refs": list(observation_record.artifact_refs),
+            }
+        ),
+        observation_ref=observation_ref,
+        action_ref=str(observation_record.action_ref or observation_record.data.get("action_id") or ""),
+    )
+
+
+def _journal_toolchain_grounding_candidate(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    observation_record,
+    source: str,
+    candidate_facts: list[JsonObject],
+) -> None:
+    observation_ref = str(observation_record.observation_ref or observation_record.data.get("observation_id") or "")
+    if not observation_ref or not candidate_facts:
+        return
+    if _journal_has_observation_record(journal, task_id, run_id, kind="toolchain_grounding_candidate", observation_ref=observation_ref):
+        return
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=observation_record.step_id,
+        kind="toolchain_grounding_candidate",
+        data=redact_journal_data(
+            {
+                "schema": "holo.kernel_v3.toolchain_grounding_candidate.v1",
+                "source": source,
+                "observation_id": observation_ref,
+                "candidate_fact_count": len(candidate_facts),
+                "candidate_facts": candidate_facts[:128],
+            }
+        ),
+        observation_ref=observation_ref,
+        action_ref=str(observation_record.action_ref or observation_record.data.get("action_id") or ""),
+    )
+
+
+def _journal_has_observation_record(
+    journal: JournalStore,
+    task_id: str,
+    run_id: str,
+    *,
+    kind: str,
+    observation_ref: str,
+) -> bool:
+    for record in journal.records(task_id=task_id, kind=kind):
+        if record.run_id == run_id and str(record.observation_ref or record.data.get("observation_id") or "") == observation_ref:
+            return True
+    return False
+
+
 def _workspace_evidence_priority(item: EvidenceItem) -> tuple[int, str]:
     source = str(item.diagnostics.get("source") or "")
     if source == "tool:file.read":
         return 0, item.evidence_id
-    if source == "tool:shell.exec":
+    if source == "tool:script.exec":
         return 1, item.evidence_id
-    if source == "tool:workspace.list":
+    if source == "tool:shell.exec":
         return 2, item.evidence_id
-    return 3, item.evidence_id
+    if source == "tool:workspace.write":
+        return 3, item.evidence_id
+    if source == "tool:workspace.list":
+        return 4, item.evidence_id
+    return 5, item.evidence_id
 
 
 def _workspace_write_observations(journal: JournalStore, task_id: str, run_id: str):
@@ -9809,6 +10211,8 @@ def _workspace_observation_text(
         return _workspace_search_text(content)[:evidence_char_limit]
     if source == "tool:shell.exec":
         return _shell_exec_observation_text(content)[:evidence_char_limit]
+    if source == "tool:script.exec":
+        return _script_exec_observation_text(content)[:evidence_char_limit]
     artifact_id = content.get("artifact_id")
     if isinstance(artifact_id, str) and artifact_store.has_blob(artifact_id):
         payload = artifact_store.read_blob(artifact_id)
@@ -9829,6 +10233,9 @@ def _workspace_observation_title(content: JsonObject, *, source: str) -> str:
         if isinstance(argv, list) and argv:
             return "shell exec: " + " ".join(str(item) for item in argv[:4])
         return "shell exec"
+    if source == "tool:script.exec":
+        path = content.get("script_path")
+        return f"script exec: {path}" if isinstance(path, str) and path else "script exec"
     path = content.get("path")
     return str(path) if isinstance(path, str) and path else "workspace"
 
@@ -9888,6 +10295,33 @@ def _shell_exec_observation_text(content: JsonObject) -> str:
         lines.append("stderr:")
         lines.append(stderr)
     return "\n".join(lines)
+
+
+def _script_exec_observation_text(content: JsonObject) -> str:
+    script_path = str(content.get("script_path") or "")
+    argv = content.get("argv")
+    command = " ".join(str(item) for item in argv[:8]) if isinstance(argv, list) else ""
+    exit_code = content.get("exit_code")
+    stdout = str(content.get("stdout") or "").strip()
+    stderr = str(content.get("stderr") or "").strip()
+    lines = ["Script execution output:"]
+    if script_path:
+        lines.append(f"script_path: {script_path}")
+    if command:
+        lines.append(f"command: {command}")
+    if isinstance(exit_code, int):
+        lines.append(f"exit_code: {exit_code}")
+    facts = _toolchain_candidate_facts(content, source="tool:script.exec")
+    if facts:
+        lines.append("candidate_facts:")
+        lines.extend(_candidate_fact_evidence_text(fact) for fact in facts[:64])
+    if stdout:
+        lines.append("stdout:")
+        lines.append(stdout)
+    if stderr:
+        lines.append("stderr:")
+        lines.append(stderr)
+    return "\n".join(line for line in lines if line)
 
 
 def _grounded_answer(*, report: RetrievalReport, evidence: list[EvidenceItem], citations: list[CitationItem]) -> str:

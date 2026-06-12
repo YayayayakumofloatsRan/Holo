@@ -632,7 +632,7 @@ def _tool_chain_plan(
         recommended_steps.append(
             {
                 "step": "acquire_or_read_evidence",
-                "tool": "retrieval.run | workspace.search | file.read | shell.exec",
+                "tool": "retrieval.run | workspace.search | file.read | workspace.write | script.exec | shell.exec",
                 "decision_owner": "model",
                 "when": "required slots are missing, source evidence has not been accepted, or local/cached documents need parsing",
                 "missing_slots": missing_slots[:16],
@@ -719,6 +719,16 @@ def _tool_chain_plan(
             {
                 "name": "file.read",
                 "use_for": "inspect known local files, cached benchmark artifacts, scripts, traces, and extracted document text",
+            },
+            {
+                "name": "workspace.write",
+                "use_for": "write temporary parsers, normalized extraction artifacts, or intermediate JSON files when the recipe exposes workspace write",
+                "host_boundary": "requires workspace:write permission and workspace-relative paths",
+            },
+            {
+                "name": "script.exec",
+                "use_for": "run a host-written temporary Python parser or local analysis program and emit JSON facts/tables/slot fills",
+                "host_boundary": "requires shell:exec and workspace:write; outputs are audited before grounding",
             },
             {
                 "name": "shell.exec",
