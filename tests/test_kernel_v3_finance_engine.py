@@ -1665,6 +1665,184 @@ def test_finance_task_compiler_emits_fixed_asset_turnover_program_missing_slots(
     assert tool_chain["recommended_steps"][0]["decision_owner"] == "model"
 
 
+def test_target_document_extraction_exposes_fixed_asset_turnover_statement_rows() -> None:
+    question = (
+        "What is the FY2019 fixed asset turnover ratio for Activision Blizzard? "
+        "Fixed asset turnover ratio is defined as: FY2019 revenue / "
+        "(average PP&E between FY2018 and FY2019)."
+    )
+    binding = {
+        "company": "Activision Blizzard",
+        "doc_link": "https://investor.activision.com/static-files/example",
+        "doc_type": "10k",
+        "doc_period": "2019",
+        "required_line_item": "revenue",
+        "required_statement": "income_statement",
+        "primary_source_required": True,
+    }
+    hint = _compiled_task_hint_for_retrieval(question=question, binding=binding)
+    body = """
+    ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES
+    CONSOLIDATED BALANCE SHEETS
+    (Amounts in millions, except share data)
+    At December 31, 2019 At December 31, 2018
+    Assets
+    Current assets:
+    Total current assets 7,292 6,106
+    Property and equipment, net 253 282
+    Total assets $ 19,845 $ 17,890
+
+    ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES
+    CONSOLIDATED STATEMENTS OF OPERATIONS
+    (Amounts in millions, except per share data)
+    For the Years Ended December 31,
+    2019 2018 2017
+    Total net revenues 6,489 7,500 7,017
+    Net income $ 1,503 $ 1,848 $ 273
+    """
+    spans = extract_spans(
+        goal=SearchGoal(
+            goal_id="goal-fixed-asset-turnover-extract",
+            query=question,
+            max_spans_per_document=8,
+            metadata={
+                "target_document_binding": binding,
+                "compiled_task_hint": hint,
+            },
+        ),
+        document=FetchedDocument(
+            document_id="doc-fixed-asset-turnover",
+            goal_id="goal-fixed-asset-turnover-extract",
+            source_id="source-fixed-asset-turnover",
+            uri=binding["doc_link"],
+            title="Activision 2019 10-K",
+            artifact_id="artifact-fixed-asset-turnover",
+            payload_hash="hash",
+            preview=body[:120],
+            size_bytes=len(body),
+            metadata={"target_document_binding": binding},
+        ),
+        body=body,
+    )
+
+    slots = {span.metadata.get("target_slot") for span in spans}
+    assert "revenue" in slots
+    assert "property_plant_and_equipment_net_current" in slots
+    assert "property_plant_and_equipment_net_prior" in slots
+    assert any("Property and equipment, net 253 282" in span.text for span in spans)
+
+
+def test_fixed_asset_turnover_filing_rows_feed_formula_planner() -> None:
+    question = (
+        "What is the FY2019 fixed asset turnover ratio for Activision Blizzard? "
+        "Fixed asset turnover ratio is defined as: FY2019 revenue / "
+        "(average PP&E between FY2018 and FY2019)."
+    )
+    binding = {
+        "company": "Activision Blizzard",
+        "doc_link": "https://investor.activision.com/static-files/example",
+        "doc_type": "10k",
+        "doc_period": "2019",
+        "required_line_item": "revenue",
+        "required_statement": "income_statement",
+        "primary_source_required": True,
+    }
+    hint = _compiled_task_hint_for_retrieval(question=question, binding=binding)
+    body = """
+    Item 6. SELECTED FINANCIAL DATA
+    For the Years Ended December 31, 2019 2018 2017 2016 2015
+    Statement of Operations Data:
+    Net revenues $ 6,489 $ 7,500 $ 7,017 $ 6,608 $ 4,664
+    Net income 1,503 1,848 273 966 892
+
+    ACTIVISION BLIZZARD, INC. AND SUBSIDIARIES
+    CONSOLIDATED BALANCE SHEETS
+    At December 31, 2019 At December 31, 2018
+    Assets
+    Current assets:
+    Accounts receivable, net of allowances of $132 and $190, at December 31, 2019 and December 31, 2018, respectively 848 1,035
+    Software development 54 65
+    Property and equipment, net 253 282
+    Deferred income taxes, net 1,293 458
+    Total assets $ 19,845 $ 17,890
+
+    6. Property and Equipment, Net
+    Property and equipment, net was comprised of the following (amounts in millions):
+    At December 31, 2019 2018
+    Land $ 1 $ 1
+    Buildings 4 4
+    Total cost of property and equipment 1,002 1,052
+    Less accumulated depreciation (749) (770)
+    Property and equipment, net $ 253 $ 282
+    """
+    goal = SearchGoal(
+        goal_id="goal-fixed-asset-turnover-ledger",
+        query=question,
+        max_spans_per_document=8,
+        metadata={
+            "target_document_binding": binding,
+            "compiled_task_hint": hint,
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-fixed-asset-turnover-ledger",
+        goal_id=goal.goal_id,
+        source_id="source-fixed-asset-turnover-ledger",
+        uri=binding["doc_link"],
+        title="Activision 2019 10-K",
+        artifact_id="artifact-fixed-asset-turnover-ledger",
+        payload_hash="hash",
+        preview=body[:120],
+        size_bytes=len(body),
+        metadata={"target_document_binding": binding},
+    )
+    spans = extract_spans(goal=goal, document=document, body=body)
+    evidence = []
+    citations = []
+    for index, span in enumerate(spans, start=1):
+        evidence_id = f"evidence-fixed-asset-turnover-{index}"
+        evidence.append(
+            EvidenceItem(
+                evidence_id=evidence_id,
+                goal_id=goal.goal_id,
+                span_id=span.span_id,
+                document_id=document.document_id,
+                source_id=document.source_id,
+                artifact_id=document.artifact_id,
+                uri=document.uri,
+                title=document.title,
+                text=span.text,
+                score=span.score,
+                payload_hash=document.payload_hash,
+                diagnostics=span.metadata,
+            )
+        )
+        citations.append(
+            CitationItem(
+                citation_id=f"cite-fixed-asset-turnover-{index}",
+                goal_id=goal.goal_id,
+                evidence_id=evidence_id,
+                artifact_id=document.artifact_id,
+                uri=document.uri,
+                title=document.title,
+                quote=span.text[:120],
+                span_start=span.start_offset,
+                span_end=span.end_offset,
+            )
+        )
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    formula_plan = plan_finance_formula(question=question, facts=facts)
+
+    assert formula_plan.status == "ready"
+    assert formula_plan.payload["variables"] == {
+        "revenue": "6489000000",
+        "property_plant_and_equipment_net_current": "253000000",
+        "property_plant_and_equipment_net_prior": "282000000",
+    }
+    assert all(fact_id.startswith("finfact-table-row-") for fact_id in formula_plan.input_fact_ids)
+
+
 def test_model_first_finance_task_compiler_overrides_host_scaffold() -> None:
     fabric = ProcessorFabric(
         providers={

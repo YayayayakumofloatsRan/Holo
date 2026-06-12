@@ -626,7 +626,7 @@ def test_retrieval_workbench_packet_compacts_but_preserves_target_and_task_relev
     )
 
     assert packet["selection_diagnostics"]["raw_accepted_evidence_count"] == 71
-    assert packet["selection_diagnostics"]["selected_accepted_evidence_count"] == 12
+    assert packet["selection_diagnostics"]["selected_accepted_evidence_count"] == 6
     accepted_ids = {item["evidence_id"] for item in packet["accepted_evidence"]}
     assert "evidence-target-mdna" in accepted_ids
     assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-target-mdna"
@@ -745,13 +745,13 @@ def test_retrieval_workbench_packet_stays_compact_on_large_candidate_sets() -> N
         rejected_evidence=rejected,
     )
 
-    assert packet["selection_diagnostics"]["selected_source_count"] == 16
-    assert packet["selection_diagnostics"]["selected_document_count"] == 4
-    assert packet["selection_diagnostics"]["selected_span_count"] == 16
-    assert packet["selection_diagnostics"]["selected_rejected_evidence_count"] == 12
+    assert packet["selection_diagnostics"]["selected_source_count"] == 10
+    assert packet["selection_diagnostics"]["selected_document_count"] == 3
+    assert packet["selection_diagnostics"]["selected_span_count"] == 8
+    assert packet["selection_diagnostics"]["selected_rejected_evidence_count"] == 6
     assert packet["document_summaries"][0]["is_target_document"] is True
     assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-rejected-0"
-    assert len(json.dumps(packet, ensure_ascii=False, sort_keys=True)) < 55_000
+    assert len(json.dumps(packet, ensure_ascii=False, sort_keys=True)) < 25_000
 
 
 def test_retrieval_workbench_packet_exposes_target_document_candidates_for_llm_judgment() -> None:

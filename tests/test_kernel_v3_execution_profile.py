@@ -55,6 +55,14 @@ def test_finance_capability_profile_is_high_budget_toolchain_lane() -> None:
     assert metadata["composable_toolchain"]["shell_timeout_seconds"] >= 30
 
 
+def test_profile_processor_mode_respects_explicit_fake_lightweight_frontend() -> None:
+    profile = execution_profile("finance-capability")
+
+    assert profile_processor_mode(profile, "semantic_intake", "fake", online=True) == "fake"
+    assert profile_processor_mode(profile, "turn_router", "fake", online=True) == "fake"
+    assert profile_processor_mode(profile, "semantic_intake", "model", online=True) == "model"
+
+
 def test_long_mission_profile_preserves_heavy_supervision() -> None:
     profile = execution_profile("long-mission")
 

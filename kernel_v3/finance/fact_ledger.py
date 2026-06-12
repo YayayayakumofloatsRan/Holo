@@ -143,8 +143,11 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "property, plant and equipment, net",
             "property plant and equipment net",
+            "property and equipment, net",
+            "property and equipment net",
             "net property, plant and equipment",
             "net property plant and equipment",
+            "net property and equipment",
             "net pp&e",
             "net ppe",
             "net ppne",
@@ -211,7 +214,16 @@ def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: Citatio
     if not normalized_text or _looks_like_structured_companyfacts(normalized_text) or _looks_like_discovery_or_search_page(item):
         return []
     document_scale_context = normalized_text[:1000]
-    facts: list[FinanceFact] = []
+    facts: list[FinanceFact] = (
+        _natural_table_row_facts_from_text(
+            normalized_text,
+            item=item,
+            citation=citation,
+            document_scale_context=document_scale_context,
+        )
+        if _natural_table_row_extraction_enabled(item=item, text=normalized_text)
+        else []
+    )
     for index, match in enumerate(AMOUNT_PATTERN.finditer(normalized_text), start=1):
         raw_number = match.group("number")
         raw_unit = match.group("unit") or ""
@@ -305,6 +317,148 @@ def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: Citatio
             )
         )
     return facts
+
+
+def _evidence_has_target_line_item(item: EvidenceItem) -> bool:
+    diagnostics = item.diagnostics if isinstance(item.diagnostics, dict) else {}
+    return bool(
+        diagnostics.get("target_slot")
+        or diagnostics.get("target_line_item")
+        or isinstance(diagnostics.get("target_document_binding"), dict)
+    )
+
+
+def _natural_table_row_extraction_enabled(*, item: EvidenceItem, text: str) -> bool:
+    if _evidence_has_target_line_item(item):
+        return True
+    lower = str(text or "").lower()
+    if "adjusted ebitda" in lower and "reconciliation" in lower:
+        return False
+    return True
+
+
+def _natural_table_row_facts_from_text(
+    text: str,
+    *,
+    item: EvidenceItem,
+    citation: CitationItem | None,
+    document_scale_context: str,
+) -> list[FinanceFact]:
+    normalized_text = " ".join(str(text or "").split())
+    lower = normalized_text.lower()
+    facts: list[FinanceFact] = []
+    seen: set[str] = set()
+    for metric, markers in NATURAL_METRIC_MARKERS:
+        metric = _canonical_metric(metric)
+        if metric not in SUPPORTED_FINANCE_METRICS:
+            continue
+        for marker in markers:
+            normalized_marker = " ".join(str(marker or "").lower().split())
+            if not normalized_marker:
+                continue
+            for match in re.finditer(re.escape(normalized_marker), lower):
+                years = _table_header_years(normalized_text[max(0, match.start() - 600) : match.start()])
+                if not years:
+                    continue
+                after = normalized_text[match.end() : min(len(normalized_text), match.end() + 240)]
+                amounts = _table_row_amounts(after, max_count=len(years))
+                if len(amounts) < 2:
+                    continue
+                row_context = normalized_text[max(0, match.start() - 180) : min(len(normalized_text), match.end() + 240)]
+                scale_multiplier = _context_scale_multiplier(row_context, raw_unit="")
+                if scale_multiplier == Decimal(1):
+                    scale_multiplier = _context_scale_multiplier(document_scale_context, raw_unit="")
+                for year, amount in zip(years, amounts):
+                    raw_number, raw_unit, prefix, display_raw, signed_number = amount
+                    value = _scaled_amount(signed_number, raw_unit, prefix)
+                    if value is None:
+                        continue
+                    value *= scale_multiplier
+                    fact_key = f"{metric}|{year}|{_decimal_string(value)}|{item.evidence_id}"
+                    if fact_key in seen:
+                        continue
+                    seen.add(fact_key)
+                    fact_id = "finfact-table-row-" + _short_hash(
+                        item.evidence_id,
+                        marker,
+                        metric,
+                        str(year),
+                        _decimal_string(value),
+                    )
+                    facts.append(
+                        FinanceFact(
+                            fact_id=fact_id,
+                            entity=_natural_entity(item=item, text=normalized_text),
+                            ticker=None,
+                            period=str(year),
+                            fiscal_year=year,
+                            metric=metric,
+                            value=_decimal_string(value),
+                            unit=_natural_unit(prefix, raw_unit),
+                            scale="actual",
+                            source_ref=citation.citation_id if citation is not None else item.evidence_id,
+                            evidence_ref=item.evidence_id,
+                            citation_ref=citation.citation_id if citation is not None else None,
+                            metadata={
+                                "source": "natural_table_row",
+                                "raw": display_raw,
+                                "row_marker": marker,
+                                "context": row_context[:500],
+                                "source_uri": item.uri,
+                                "source_title": item.title,
+                                "supported_metric": True,
+                                "per_share": False,
+                            },
+                        )
+                    )
+    return facts
+
+
+def _table_header_years(text: str) -> list[int]:
+    matches = list(re.finditer(r"\b(20\d{2}|19\d{2})\b", str(text or "")))
+    if not matches:
+        return []
+    cluster = [matches[-1]]
+    cluster_start = matches[-1].start()
+    for match in reversed(matches[:-1]):
+        if cluster_start - match.end() > 80:
+            break
+        cluster.append(match)
+        cluster_start = match.start()
+    years: list[int] = []
+    for match in reversed(cluster):
+        year = int(match.group(1))
+        if year not in years:
+            years.append(year)
+    return years[-6:]
+
+
+def _table_row_amounts(after_marker: str, *, max_count: int) -> list[tuple[str, str, str, str, str]]:
+    amounts: list[tuple[str, str, str, str, str]] = []
+    first_amount = True
+    for match in AMOUNT_PATTERN.finditer(str(after_marker or "")):
+        if first_amount and match.start() > 80:
+            return []
+        gap_before_amount = str(after_marker or "")[: match.start()]
+        normalized_gap = re.sub(r"\([^)]{0,40}\)", "", gap_before_amount)
+        if first_amount and re.search(r"[A-Za-z]", normalized_gap):
+            return []
+        first_amount = False
+        raw_number = match.group("number") or ""
+        raw_unit = match.group("unit") or ""
+        prefix = match.group("prefix") or ""
+        if not raw_number:
+            continue
+        if _looks_like_standalone_year(raw_number, raw_unit, prefix):
+            continue
+        if raw_unit.lower() in {"m", "b"} and match.end() < len(after_marker) and after_marker[match.end()].isalpha():
+            raw_unit = ""
+        signed_number = f"-{raw_number}" if _is_parenthesized_amount(after_marker, match.start(), match.end()) else raw_number
+        display_raw = f"({match.group(0).strip()})" if signed_number.startswith("-") else match.group(0).strip()
+        amounts.append((raw_number, raw_unit, prefix, display_raw, signed_number))
+        if len(amounts) >= max_count:
+            break
+    return amounts
 
 
 def _metric_segments(text: str) -> tuple[str, list[str]]:
@@ -449,7 +603,10 @@ def _canonical_metric(value: str) -> str:
         "capital expenditures": "capital expenditures",
         "propertyplantandequipmentnet": "property plant and equipment net",
         "property plant and equipment net": "property plant and equipment net",
+        "property and equipment net": "property plant and equipment net",
         "net property plant and equipment": "property plant and equipment net",
+        "net property and equipment": "property plant and equipment net",
+        "net ppe": "property plant and equipment net",
         "net ppne": "property plant and equipment net",
         "ppne": "property plant and equipment net",
         "free cash flow": "free cash flow",
@@ -680,6 +837,8 @@ def _metric_from_context(context: str, *, amount_offset: int, amount_end: int) -
         return "depreciation and amortization"
     if re.search(r"\b(?:divestiture-related\s+license\s+income|license\s+income|gain\s+on\s+sale|gains?)\b[^.]{0,80}$", before_near):
         return "deduction"
+    if re.search(r"\b(?:property,\s*plant\s+and\s+equipment|property\s+plant\s+and\s+equipment|property\s+and\s+equipment|net\s+pp&e|net\s+ppe|ppne)\b[^.]{0,80}$", before_near):
+        return "property plant and equipment net"
     if re.search(r"\b(?:add-back|add back|addback|add-backs|add backs|restructuring)\b[^.]{0,60}$", before_near):
         return "addback"
     if re.search(r"\b(?:less|deduction|deducted)\b[^.]{0,60}$", before_near):

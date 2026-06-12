@@ -99,6 +99,109 @@ def test_direct_url_source_is_fetched_before_profile_discovery_sources():
     assert fetch_uris[:1] == [direct_url]
 
 
+def test_explicit_source_url_metadata_is_injected_and_fetched_before_search_noise():
+    query = "Activision Blizzard FY2019 fixed asset turnover"
+    direct_url = "https://investor.activision.com/static-files/32abe798-add2-4770-9c7d-4cd3a840ede2"
+    noisy_search = SearchSource(
+        source_id="sec-search-noise",
+        uri="https://www.sec.gov/edgar/search/",
+        title="SEC EDGAR search",
+        snippet="Search filings, not the target document.",
+        provider="research_source_directory_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "regulatory_filing",
+            "authority_level": "primary",
+            "source_kind": "source_directory_entry",
+        },
+    )
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider({query: [noisy_search]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                direct_url: "Activision Blizzard FY2019 Form 10-K. Net revenues were 6,489. Property and equipment facts appear in the balance sheet.",
+                noisy_search.uri: "Generic SEC search page.",
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-explicit-source-url-injection",
+            query=query,
+            max_sources=3,
+            max_fetches=1,
+            max_spans_per_document=2,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "source_authority_requirement": "primary",
+                "source_urls": [direct_url],
+                "preferred_source_urls": [direct_url],
+                "target_document_binding": {
+                    "company": "Activision Blizzard",
+                    "doc_name": "ACTIVISIONBLIZZARD_2019_10K",
+                    "doc_type": "10k",
+                    "doc_period": "2019",
+                    "doc_link": direct_url,
+                },
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-explicit-source-url-injection",
+        run_id="run-1",
+    )
+
+    direct_target_records = list(
+        journal.records(task_id="task-explicit-source-url-injection", kind="retrieval_direct_url_targets")
+    )
+    assert direct_target_records
+    assert direct_target_records[0].data["sources"][0]["uri"] == direct_url
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-explicit-source-url-injection", kind="retrieval_fetch_attempt")
+    ]
+    assert fetch_uris[:1] == [direct_url]
+
+
+def test_empty_pdf_extraction_records_reader_diagnostics():
+    pdf_url = "https://investors.example.com/report.pdf"
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider({}),
+        fetch_provider=FakeFetchProvider({pdf_url: "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF"}),
+    ).run(
+        SearchGoal(
+            goal_id="goal-empty-pdf-diagnostics",
+            query="target pdf revenue",
+            max_sources=1,
+            max_fetches=1,
+            max_spans_per_document=2,
+            metadata={
+                "source_urls": [pdf_url],
+                "preferred_source_urls": [pdf_url],
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-empty-pdf-diagnostics",
+        run_id="run-1",
+    )
+
+    extraction_records = list(
+        journal.records(task_id="task-empty-pdf-diagnostics", kind="retrieval_extraction")
+    )
+    assert extraction_records
+    diagnostics = extraction_records[0].data["diagnostics"]
+    assert diagnostics["span_count"] == 0
+    assert diagnostics["text_modes"]
+    reader = diagnostics["document_reader"]
+    assert reader["parser_used"] in {"pdf_text_literals", "pdf_text_pypdf", "pdf_text_pdfminer"}
+    assert "chars_extracted" in reader
+    assert "extraction_failure_reason" in reader
+
+
 def test_retrieval_expands_issuer_ir_page_links_into_report_documents():
     ir_page = SearchSource(
         source_id="issuer-ir-annuals",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Protocol
@@ -40,7 +41,7 @@ from kernel_v3.retrieval.discovery import (
 )
 from kernel_v3.retrieval.document_expansion import expand_document_links
 from kernel_v3.retrieval.evaluate import EvidenceEvaluator, is_discovery_goal, qualify_evidence_candidate
-from kernel_v3.retrieval.extract import extract_spans
+from kernel_v3.retrieval.extract import extract_spans, readable_document_text_with_diagnostics
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
 from kernel_v3.retrieval.query_campaign import build_query_campaign
 from kernel_v3.retrieval.rank import rank_sources
@@ -211,6 +212,27 @@ class RetrievalOperator:
                 f"{step_id_prefix}-search-{index}",
                 "retrieval_search_attempt",
                 attempt.to_dict(),
+                action_ref=action_ref,
+            )
+
+        direct_target_sources = _explicit_direct_url_sources(goal, existing_sources=sources)
+        if direct_target_sources:
+            sources.extend(direct_target_sources)
+            _append(
+                journal,
+                task_id,
+                run_id,
+                f"{step_id_prefix}-direct-url-targets",
+                "retrieval_direct_url_targets",
+                {
+                    "goal_id": goal.goal_id,
+                    "source_count": len(direct_target_sources),
+                    "sources": [_safe_source_dict(source) for source in direct_target_sources[:24]],
+                    "diagnostics": {
+                        "reason": "explicit_source_url_metadata",
+                        "metadata_keys": _explicit_direct_url_metadata_keys(goal.metadata),
+                    },
+                },
                 action_ref=action_ref,
             )
 
@@ -654,6 +676,24 @@ class RetrievalOperator:
                 )
                 continue
             spans.extend(document_spans)
+            empty_extraction_diagnostics = (
+                _empty_extraction_diagnostics(goal=goal, document=document, body=body)
+                if not document_spans
+                else {}
+            )
+            extraction_diagnostics = {
+                "span_count": len(document_spans),
+                "text_modes": _ordered_unique(
+                    [
+                        str(span.metadata.get("text_mode"))
+                        for span in document_spans
+                        if isinstance(span.metadata.get("text_mode"), str)
+                    ]
+                ),
+                "document_reader": _document_reader_diagnostics(document_spans),
+            }
+            if empty_extraction_diagnostics:
+                extraction_diagnostics.update(empty_extraction_diagnostics)
             _append(
                 journal,
                 task_id,
@@ -664,17 +704,7 @@ class RetrievalOperator:
                     "goal_id": goal.goal_id,
                     "document": document.to_dict(),
                     "spans": [span.to_dict() for span in document_spans],
-                    "diagnostics": {
-                        "span_count": len(document_spans),
-                        "text_modes": _ordered_unique(
-                            [
-                                str(span.metadata.get("text_mode"))
-                                for span in document_spans
-                                if isinstance(span.metadata.get("text_mode"), str)
-                            ]
-                        ),
-                        "document_reader": _document_reader_diagnostics(document_spans),
-                    },
+                    "diagnostics": extraction_diagnostics,
                 },
                 action_ref=action_ref,
                 artifact_refs=[document.artifact_id],
@@ -1670,6 +1700,98 @@ def _dedupe_sources(sources: list[SearchSource]) -> list[SearchSource]:
     return result
 
 
+DIRECT_URL_METADATA_KEYS = (
+    "preferred_source_urls",
+    "required_source_urls",
+    "target_document_source_urls",
+    "source_urls",
+    "source_url",
+    "urls",
+    "url",
+)
+
+
+def _explicit_direct_url_sources(goal: SearchGoal, *, existing_sources: list[SearchSource]) -> list[SearchSource]:
+    urls = _explicit_direct_url_values(goal.metadata)
+    if not urls:
+        return []
+    existing_uris = {source.uri for source in existing_sources}
+    result: list[SearchSource] = []
+    binding = _dict_or_empty(goal.metadata.get("target_document_binding"))
+    for index, url in enumerate(urls, start=1):
+        if url in existing_uris:
+            continue
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if not host:
+            continue
+        metadata: JsonObject = {
+            "rank": index,
+            "source_kind": "direct_url",
+            "explicit_source_url": True,
+            "fetch_allowed_hosts": [host],
+            "source_family": "company_filing",
+            "authority_level": "primary",
+            "explicit_acquisition_target": True,
+        }
+        if binding:
+            metadata["target_document_binding"] = binding
+            if binding.get("doc_type"):
+                metadata["doc_type"] = binding["doc_type"]
+            if binding.get("doc_period"):
+                metadata["doc_period"] = binding["doc_period"]
+            if binding.get("doc_name"):
+                metadata["doc_name"] = binding["doc_name"]
+        result.append(
+            SearchSource(
+                source_id=f"direct-url-{_stable_hash(url)[:12]}-{index}",
+                uri=url,
+                title=_direct_url_title(url, binding=binding),
+                snippet="Explicit source URL supplied by the task metadata; fetch this document before broad search results.",
+                provider="direct_url_search",
+                metadata=metadata,
+            )
+        )
+        existing_uris.add(url)
+    return result
+
+
+def _explicit_direct_url_values(metadata: JsonObject) -> list[str]:
+    values: list[str] = []
+    for key in DIRECT_URL_METADATA_KEYS:
+        value = metadata.get(key)
+        if isinstance(value, str) and _is_http_url(value):
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(str(item).strip() for item in value if _is_http_url(item))
+    nested = metadata.get("metadata")
+    if isinstance(nested, dict):
+        values.extend(_explicit_direct_url_values(nested))
+    return _ordered_unique(values)
+
+
+def _explicit_direct_url_metadata_keys(metadata: JsonObject) -> list[str]:
+    keys = [key for key in DIRECT_URL_METADATA_KEYS if metadata.get(key)]
+    nested = metadata.get("metadata")
+    if isinstance(nested, dict):
+        keys.extend(f"metadata.{key}" for key in _explicit_direct_url_metadata_keys(nested))
+    return _ordered_unique(keys)
+
+
+def _direct_url_title(url: str, *, binding: JsonObject) -> str:
+    doc_name = str(binding.get("doc_name") or "").strip()
+    if doc_name:
+        return _preview(doc_name, 240)
+    path = urllib.parse.urlparse(url).path.strip("/")
+    if path:
+        return _preview(path.rsplit("/", 1)[-1] or path, 240)
+    return _preview(url, 240)
+
+
+def _stable_hash(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()
+
+
 def _fetchable_ranked_sources(goal: SearchGoal, ranked: list[RankedSource]) -> tuple[list[RankedSource], list[JsonObject]]:
     fetchable: list[RankedSource] = []
     rejections: list[JsonObject] = []
@@ -2546,6 +2668,34 @@ def _document_reader_diagnostics(spans: list[object]) -> JsonObject:
         "table_like_blocks": latest.get("table_like_blocks"),
         "extraction_failure_reason": latest.get("extraction_failure_reason"),
     }
+
+
+def _empty_extraction_diagnostics(*, goal: SearchGoal, document: FetchedDocument, body: str) -> JsonObject:
+    try:
+        text, text_mode, reader = readable_document_text_with_diagnostics(body, document=document, goal=goal)
+    except Exception as exc:  # pragma: no cover - exact optional parser failures vary.
+        return {
+            "span_count": 0,
+            "text_modes": [],
+            "document_reader": {
+                "parser_used": "unknown",
+                "chars_extracted": 0,
+                "table_like_blocks": 0,
+                "extraction_failure_reason": f"reader_diagnostics_failed:{type(exc).__name__}",
+            },
+        }
+    diagnostics: JsonObject = {
+        "span_count": 0,
+        "text_modes": [text_mode] if text_mode else [],
+        "document_reader": reader if isinstance(reader, dict) else {},
+    }
+    if not text:
+        doc_reader = dict(diagnostics.get("document_reader") or {})
+        doc_reader.setdefault("chars_extracted", 0)
+        doc_reader.setdefault("table_like_blocks", 0)
+        doc_reader.setdefault("extraction_failure_reason", "empty_readable_text")
+        diagnostics["document_reader"] = doc_reader
+    return diagnostics
 
 
 def _next_strategy_hint(primary_failure_mode: str) -> str:

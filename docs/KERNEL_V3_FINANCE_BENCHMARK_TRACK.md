@@ -1264,12 +1264,11 @@ assumption-ledger display, and citation-preserving limitation answers.
   selection in `tests/test_kernel_v3_finance_benchmark.py` is `12 passed`.
   Direct compile inspection of FinanceBench row 9 now produces the expected
   slot frame and transform spec.
-- A live single-row rerun
+- The initial live single-row rerun
   `run_financebench_doc_item9_fixed_asset_turnover_v1` was attempted with
   `finance-capability`, but the process wrote `0` output bytes after more than
-  four minutes and was terminated. This run does not change the live10 score.
-  The next step is to diagnose the CLI/provider wait path or run a lower-level
-  trace that starts after task compilation and before final synthesis.
+  four minutes and was terminated. That earlier run did not change the live10
+  score; the later v8 rerun below is the first scored closure for this row.
 
 2026-06-12 follow-up trace and guardrails:
 
@@ -1298,16 +1297,47 @@ assumption-ledger display, and citation-preserving limitation answers.
   `bench finance-progress --thread-prefix <prefix>`. The command reads the
   journal with a light JSONL scan and reports task compiler, retrieval,
   workbench, toolchain, claim/slot, transform/calculator, verifier/synthesis,
-  latest error, counters, and recent events. On the item9 v2 trace it shows the
-  run completed four retrieval/workbench rounds with 48 fetch attempts and 44
+  latest error, counters, and recent events. The latest renderer also includes
+  a diagnostics block for DocumentReader parser counts / latest parser /
+  target-span counts, Workbench decision and semantic missing slots, SlotFrame
+  missing slots, formula status and missing facts, fact-ledger metric/source
+  coverage, and benchmark status/reason. On the item9 v2 trace it shows the run
+  completed four retrieval/workbench rounds with 48 fetch attempts and 44
   extractions, but never reached claim ledger, slot frame, transform plan, or
   calculator records. This makes the old 0-byte benchmark output diagnosable as
   a workflow-stage failure instead of an opaque hang.
-- No new live score is claimed yet. The next validation is
-  `run_financebench_doc_item9_fixed_asset_turnover_v3` under
-  `finance-capability`; success means either a scored pass or at least a trace
-  that reaches claim ledger / transform / calculator instead of dying at
-  task-compilation or workbench JSON.
+
+2026-06-12 FinanceBench item9 document/fact closure:
+
+- The fresh live `finance-capability` rerun
+  `run_financebench_doc_item9_fixed_asset_turnover_v8` passes FinanceBench
+  doc-retrieval row `financebench_id_02987` with `numeric_within_tolerance`.
+  The run reports `retrieval_runs=1`, `fetches=12`, `facts=369`, `claims=369`,
+  `slots_missing=0`, `calculator_call_count=1`, `formula_trace_count=1`,
+  numeric verifier / verifier gate / synthesis gate all `passed`, citation
+  preservation `1.0`, answer numeric support `100%`, unsupported numeric claim
+  rate `0`, and dev annotation overall/workflow/substrate/numeric scores all
+  `1.0`.
+- The fix is in the general document-to-workflow handoff, not an answer table.
+  Target filing PDF extraction now prefers optional PyMuPDF, pypdf/PyPDF2, and
+  pdfminer readers before the literal fallback. Compiled EvidenceSpecs drive
+  statement/line-item span selection, target slots are preserved during span
+  dedupe, target-bound natural table rows become structured facts, and the
+  formula planner prefers those filing table-row facts over noisy narrative
+  values.
+- `bench finance-progress` distinguishes the old failure and the new pass
+  without waiting for final JSONL output: the old v7/v2-style trace showed
+  missing PP&E slots and formula `missing_facts`, while the v8 trace shows
+  formula `ready`, `facts=369`, no missing slots, and benchmark status
+  `passed`. Recovered synthesizer JSON-repair errors are no longer surfaced as
+  the current latest error once the final benchmark item result is passed.
+- Regression after the document/fact/progress update:
+  `tests/test_kernel_v3_retrieval_document_expansion.py`,
+  `tests/test_kernel_v3_execution_profile.py`,
+  `tests/test_kernel_v3_retrieval_workbench.py`, and
+  `tests/test_kernel_v3_finance_engine.py` selected together are `175 passed`.
+  This confirms no regression on previously closed representative finance
+  engine paths.
 
 Additional follow-ups:
 

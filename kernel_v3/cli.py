@@ -2396,6 +2396,7 @@ def _finance_progress_command(args, journal: JournalStore) -> dict[str, object]:
         "latest_error": latest_error,
         "stages": stages,
         "counters": _finance_progress_counters(records),
+        "diagnostics": _finance_progress_diagnostics(records),
         "recent_events": [
             _finance_progress_record_summary(record)
             for record in records[-max(1, int(getattr(args, "limit_events", 24) or 24)) :]
@@ -2495,6 +2496,7 @@ def _finance_progress_payload_from_records(args, *, task_id: str, records: list[
         "latest_error": latest_error,
         "stages": stages,
         "counters": _finance_progress_counters(records),
+        "diagnostics": _finance_progress_diagnostics(records),
         "recent_events": [
             _finance_progress_record_summary(record)
             for record in records[-max(1, int(getattr(args, "limit_events", 24) or 24)) :]
@@ -2658,12 +2660,20 @@ def _finance_progress_open_processor(records: list[object]) -> JsonObject | None
 
 
 def _finance_progress_latest_error(records: list[object]) -> JsonObject | None:
+    failure_kinds = {
+        "agent_failure_report",
+        "toolchain_failure",
+        "retrieval_failure_attribution",
+        "retrieval_source_rejections",
+    }
     for record in reversed(records):
         data = getattr(record, "data", {})
         kind = str(getattr(record, "kind", "") or "")
-        error = data.get("error") or data.get("reason") or data.get("failure_reason")
-        status = data.get("status")
-        if error or status in {"failed", "blocked", "error"} or kind in {"agent_failure_report", "toolchain_failure"}:
+        status = str(data.get("status") or "").strip().lower()
+        if kind == "finance_benchmark_item_result" and status in {"passed", "ok"}:
+            return None
+        error = data.get("error") or data.get("failure_reason")
+        if error or status in {"failed", "blocked", "error"} or kind in failure_kinds:
             return _finance_progress_record_summary(record)
     return None
 
@@ -2694,6 +2704,99 @@ def _finance_progress_counters(records: list[object]) -> JsonObject:
         "toolchain_steps": kinds.get("toolchain_step_executed", 0),
         "by_kind": dict(sorted(kinds.items())),
     }
+
+
+def _finance_progress_diagnostics(records: list[object]) -> JsonObject:
+    latest_by_kind: dict[str, JsonObject] = {}
+    reader_parser_counts: dict[str, int] = {}
+    reader_latest: JsonObject = {}
+    target_span_count = 0
+    for record in records:
+        kind = str(getattr(record, "kind", "") or "")
+        data = getattr(record, "data", {})
+        if isinstance(data, dict):
+            latest_by_kind[kind] = data
+        if kind != "retrieval_extraction" or not isinstance(data, dict):
+            continue
+        diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
+        reader = diagnostics.get("document_reader") if isinstance(diagnostics.get("document_reader"), dict) else {}
+        parser = str(reader.get("parser_used") or reader.get("parser_library") or "")
+        if parser:
+            reader_parser_counts[parser] = reader_parser_counts.get(parser, 0) + 1
+            reader_latest = {
+                "parser_used": parser,
+                "chars_extracted": reader.get("chars_extracted"),
+                "pages_extracted": reader.get("pages_extracted"),
+                "table_like_blocks": reader.get("table_like_blocks"),
+                "readable_text_limit": reader.get("readable_text_limit"),
+            }
+        spans = data.get("spans") if isinstance(data.get("spans"), list) else []
+        for span in spans:
+            if isinstance(span, dict):
+                metadata = span.get("metadata") if isinstance(span.get("metadata"), dict) else {}
+                if metadata.get("target_slot") or metadata.get("target_line_item"):
+                    target_span_count += 1
+    fact_metrics: dict[str, int] = {}
+    fact_sources: dict[str, int] = {}
+    fact_ledger = latest_by_kind.get("finance_fact_ledger") or {}
+    facts = fact_ledger.get("facts") if isinstance(fact_ledger.get("facts"), list) else []
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        metric = str(fact.get("metric") or "")
+        if metric:
+            fact_metrics[metric] = fact_metrics.get(metric, 0) + 1
+        metadata = fact.get("metadata") if isinstance(fact.get("metadata"), dict) else {}
+        source = str(metadata.get("source") or "")
+        if source:
+            fact_sources[source] = fact_sources.get(source, 0) + 1
+    slot_frame = latest_by_kind.get("slot_frame") or {}
+    formula_plan = latest_by_kind.get("finance_formula_plan") or {}
+    workbench = latest_by_kind.get("retrieval_workbench_decision") or {}
+    benchmark = latest_by_kind.get("finance_benchmark_item_result") or {}
+    benchmark_scorecard = benchmark.get("scorecard") if isinstance(benchmark.get("scorecard"), dict) else {}
+    return {
+        "document_reader": {
+            "parser_counts": dict(sorted(reader_parser_counts.items())),
+            "latest": {key: value for key, value in reader_latest.items() if value is not None},
+            "target_span_count": target_span_count,
+        },
+        "workbench": {
+            "decision": workbench.get("decision"),
+            "rescued_count": workbench.get("rescued_count"),
+            "missing_slots": workbench.get("missing_slots"),
+            "next_queries": workbench.get("next_queries"),
+            "next_source_families": workbench.get("next_source_families"),
+            "reason_summary": workbench.get("reason_summary"),
+        },
+        "slot_frame": {
+            "task_type": slot_frame.get("task_type"),
+            "missing_slots": slot_frame.get("missing_slots"),
+        },
+        "formula_plan": {
+            "status": formula_plan.get("status"),
+            "formula_name": formula_plan.get("formula_name"),
+            "missing_facts": formula_plan.get("missing_facts"),
+            "source": formula_plan.get("source"),
+        },
+        "fact_ledger": {
+            "fact_count": len(facts),
+            "top_metrics": _top_counts(fact_metrics, limit=8),
+            "top_sources": _top_counts(fact_sources, limit=6),
+        },
+        "benchmark": {
+            "status": benchmark.get("status"),
+            "reason": benchmark.get("reason") or benchmark_scorecard.get("reason"),
+            "item_id": benchmark.get("item_id"),
+        },
+    }
+
+
+def _top_counts(counts: dict[str, int], *, limit: int) -> list[JsonObject]:
+    return [
+        {"name": key, "count": value}
+        for key, value in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    ]
 
 
 def _finance_progress_record_summary(record: object | None) -> JsonObject | None:
@@ -2755,6 +2858,9 @@ def _finance_progress_record_summary(record: object | None) -> JsonObject | None
         summary.update({"status": data.get("status"), "reason": data.get("reason") or data.get("failure_reason")})
     elif kind in {"agent_final_answer", "agent_failure_report"}:
         summary.update({"status": data.get("status"), "reason": data.get("reason") or data.get("failure_reason")})
+    elif kind == "finance_benchmark_item_result":
+        scorecard = data.get("scorecard") if isinstance(data.get("scorecard"), dict) else {}
+        summary.update({"status": data.get("status"), "reason": data.get("reason") or scorecard.get("reason")})
     else:
         for key in ("status", "reason", "name", "source", "tool", "action_id", "observation_id"):
             if data.get(key) is not None:
@@ -2811,6 +2917,57 @@ def _render_finance_progress(payload: JsonObject) -> str:
             if latest.get("prompt_chars"):
                 latest_text += f" prompt_chars={latest.get('prompt_chars')}"
         lines.append(f"  [{marker}] {stage.get('label')} count={stage.get('count')}{latest_text}")
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    if diagnostics:
+        lines.append("diagnostics:")
+        reader = diagnostics.get("document_reader") if isinstance(diagnostics.get("document_reader"), dict) else {}
+        if reader:
+            latest_reader = reader.get("latest") if isinstance(reader.get("latest"), dict) else {}
+            lines.append(
+                "  reader="
+                + f"target_spans={reader.get('target_span_count') or 0} "
+                + f"parsers={_compact_progress_dict_counts(reader.get('parser_counts'))} "
+                + f"latest_parser={latest_reader.get('parser_used') or '-'} "
+                + f"chars={latest_reader.get('chars_extracted') or '-'} "
+                + f"pages={latest_reader.get('pages_extracted') or '-'}"
+            )
+        slot_frame = diagnostics.get("slot_frame") if isinstance(diagnostics.get("slot_frame"), dict) else {}
+        if slot_frame:
+            lines.append(
+                "  slots="
+                + f"task_type={slot_frame.get('task_type') or '-'} "
+                + f"missing={_compact_progress_list(slot_frame.get('missing_slots'))}"
+            )
+        formula_plan = diagnostics.get("formula_plan") if isinstance(diagnostics.get("formula_plan"), dict) else {}
+        if formula_plan:
+            lines.append(
+                "  formula="
+                + f"status={formula_plan.get('status') or '-'} "
+                + f"name={formula_plan.get('formula_name') or '-'} "
+                + f"missing={_compact_progress_list(formula_plan.get('missing_facts'))}"
+            )
+        facts = diagnostics.get("fact_ledger") if isinstance(diagnostics.get("fact_ledger"), dict) else {}
+        if facts:
+            lines.append(
+                "  facts="
+                + f"count={facts.get('fact_count') or 0} "
+                + f"metrics={_compact_progress_counts(facts.get('top_metrics'))} "
+                + f"sources={_compact_progress_counts(facts.get('top_sources'))}"
+            )
+        workbench = diagnostics.get("workbench") if isinstance(diagnostics.get("workbench"), dict) else {}
+        if workbench:
+            lines.append(
+                "  workbench="
+                + f"decision={workbench.get('decision') or '-'} "
+                + f"missing={_compact_progress_list(workbench.get('missing_slots'))} "
+                + f"next_queries={_compact_progress_list(workbench.get('next_queries'))}"
+            )
+        benchmark = diagnostics.get("benchmark") if isinstance(diagnostics.get("benchmark"), dict) else {}
+        if benchmark and (benchmark.get("status") or benchmark.get("reason")):
+            lines.append(
+                "  benchmark="
+                + f"status={benchmark.get('status') or '-'} reason={benchmark.get('reason') or '-'}"
+            )
     counters = payload.get("counters") if isinstance(payload.get("counters"), dict) else {}
     lines.append(
         "counters: "
@@ -2843,6 +3000,39 @@ def _render_finance_progress(payload: JsonObject) -> str:
                 details.append(f"{key}={event.get(key)}")
         lines.append(f"  {event.get('record_id')} {event.get('kind')} " + " ".join(details))
     return "\n".join(lines)
+
+
+def _compact_progress_list(value: object, *, limit: int = 4) -> str:
+    if not isinstance(value, list) or not value:
+        return "-"
+    items = [str(item) for item in value[:limit]]
+    if len(value) > limit:
+        items.append(f"+{len(value) - limit}")
+    return ",".join(items)
+
+
+def _compact_progress_counts(value: object, *, limit: int = 5) -> str:
+    if not isinstance(value, list) or not value:
+        return "-"
+    parts: list[str] = []
+    for item in value[:limit]:
+        if isinstance(item, dict):
+            parts.append(f"{item.get('name') or '-'}:{item.get('count') or 0}")
+    if len(value) > limit:
+        parts.append(f"+{len(value) - limit}")
+    return ",".join(parts) if parts else "-"
+
+
+def _compact_progress_dict_counts(value: object, *, limit: int = 5) -> str:
+    if not isinstance(value, dict) or not value:
+        return "-"
+    parts = [
+        f"{key}:{count}"
+        for key, count in sorted(value.items(), key=lambda item: (-int(item[1] or 0), str(item[0])))[:limit]
+    ]
+    if len(value) > limit:
+        parts.append(f"+{len(value) - limit}")
+    return ",".join(parts)
 
 
 def _finance_benchmark_progress_callback(

@@ -1747,10 +1747,11 @@ def _is_revenue_fact(fact: FinanceFact) -> bool:
     return any(text in exact for text in texts)
 
 
-def _revenue_fact_sort_key(fact: FinanceFact) -> tuple[int, Decimal, int, str, str, str]:
+def _revenue_fact_sort_key(fact: FinanceFact) -> tuple[int, int, Decimal, int, str, str, str]:
     value = _decimal_or_none(fact.value) or Decimal(0)
     return (
         _revenue_concept_priority(fact),
+        _fact_source_priority(fact),
         abs(value),
         fact.fiscal_year or 0,
         str(fact.metadata.get("end") or ""),
@@ -1959,12 +1960,24 @@ def _sort_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
         facts,
         key=lambda fact: (
             fact.fiscal_year or 0,
+            _fact_source_priority(fact),
             str(fact.metadata.get("end") or ""),
             str(fact.metadata.get("filed") or ""),
             str(fact.period or ""),
             fact.fact_id,
         ),
     )
+
+
+def _fact_source_priority(fact: FinanceFact) -> int:
+    source = str(fact.metadata.get("source") or "").strip().lower()
+    if source in {"structured", "sec_companyfacts", "sec_xbrl_companyfacts"}:
+        return 4
+    if source == "natural_table_row":
+        return 3
+    if source == "natural_text":
+        return 1
+    return 0
 
 
 def _fact_sort_token(fact: FinanceFact | None) -> tuple[int, str, str, str]:

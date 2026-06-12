@@ -390,7 +390,44 @@ def _dedupe_candidate_windows(candidates: list[dict]) -> list[dict]:
             continue
         seen.add(key)
         result.append(candidate)
-    return result
+    return _prioritize_target_slot_diversity(result)
+
+
+def _prioritize_target_slot_diversity(candidates: list[dict]) -> list[dict]:
+    target_candidates = [item for item in candidates if item.get("target_slot")]
+    if len(target_candidates) < 2:
+        return candidates
+    remaining = list(candidates)
+    prioritized: list[dict] = []
+    emitted_ids: set[int] = set()
+    target_slots = []
+    for item in target_candidates:
+        slot = str(item.get("target_slot") or "")
+        if slot and slot not in target_slots:
+            target_slots.append(slot)
+    while target_slots:
+        emitted_in_pass = False
+        for slot in list(target_slots):
+            match = next(
+                (
+                    item
+                    for item in remaining
+                    if id(item) not in emitted_ids and str(item.get("target_slot") or "") == slot
+                ),
+                None,
+            )
+            if match is None:
+                target_slots.remove(slot)
+                continue
+            prioritized.append(match)
+            emitted_ids.add(id(match))
+            emitted_in_pass = True
+        if not emitted_in_pass:
+            break
+        if len(prioritized) >= len(candidates):
+            break
+    prioritized.extend(item for item in candidates if id(item) not in emitted_ids)
+    return prioritized
 
 
 def readable_document_text(
@@ -411,7 +448,10 @@ def readable_document_text_with_diagnostics(
 ) -> tuple[str, str, JsonObject]:
     mime_type = str(document.metadata.get("mime_type") or "").lower()
     if _looks_like_pdf(body, mime_type=mime_type):
-        text, diagnostics = _extract_pdf_text_with_diagnostics(body)
+        text, diagnostics = _extract_pdf_text_with_diagnostics(
+            body,
+            limit=_readable_text_limit_for_document(document),
+        )
         return text, str(diagnostics.get("parser_used") or "pdf_text_literals"), diagnostics
     if _looks_like_sec_companyfacts(body, document=document):
         text = _extract_sec_companyfacts_readable_text(body, goal=goal)
@@ -441,6 +481,14 @@ def readable_document_text_with_diagnostics(
 
 
 def _readable_text_limit_for_document(document: FetchedDocument) -> int:
+    metadata = document.metadata if isinstance(document.metadata, dict) else {}
+    source_metadata = metadata.get("source_metadata") if isinstance(metadata.get("source_metadata"), dict) else {}
+    if isinstance(metadata.get("target_document_binding"), dict):
+        return SEC_FILING_TEXT_LIMIT
+    if bool(source_metadata.get("explicit_source_url")):
+        return SEC_FILING_TEXT_LIMIT
+    if str(source_metadata.get("source_family") or "").lower() in {"company_filing", "regulatory_filing"}:
+        return SEC_FILING_TEXT_LIMIT
     source_kind = _document_source_kind(document)
     if source_kind in {"sec_complete_submission_text", "sec_primary_filing_document", "sec_exhibit_document"}:
         return SEC_FILING_TEXT_LIMIT
@@ -527,7 +575,7 @@ def _target_document_binding_candidates(text: str, *, goal: SearchGoal, terms: l
         line_item = spec["line_item"]
         if not marker_positions and line_item:
             marker_positions = _target_marker_positions(lower, [line_item])
-        for marker, index in marker_positions[:40]:
+        for marker, index in marker_positions:
             statement_index = _nearest_preceding_marker(lower, statement_aliases, index)
             if _target_should_use_structured_line(text, index):
                 window_start, window_end = _line_bounds(text, index)
@@ -751,10 +799,12 @@ def _target_document_evidence_specs(*, goal: SearchGoal, binding: JsonObject) ->
             }
         )
 
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    compiled_specs = _compiled_task_evidence_specs(metadata)
     binding_line = _string_value(binding.get("required_line_item")).lower()
     binding_statement = _string_value(binding.get("required_statement")).lower()
     binding_period = _string_value(binding.get("doc_period"))
-    if binding_line or binding_statement:
+    if (binding_line or binding_statement) and not compiled_specs:
         add_spec(
             slot_name=_slot_name_from_line_item(binding_line),
             line_item=binding_line,
@@ -763,8 +813,7 @@ def _target_document_evidence_specs(*, goal: SearchGoal, binding: JsonObject) ->
             attributes=[],
         )
 
-    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
-    for spec in _compiled_task_evidence_specs(metadata):
+    for spec in compiled_specs:
         line_item = _string_value(spec.get("line_item")).lower()
         slot_name = _string_value(spec.get("slot_name")).lower().replace(" ", "_")
         statement = _string_value(spec.get("statement")).lower() or binding_statement
@@ -843,8 +892,11 @@ def _target_line_item_aliases(line_item: str) -> list[str]:
             "property, plant and equipment, net",
             "property plant and equipment net",
             "property, plant and equipment net",
+            "property and equipment, net",
+            "property and equipment net",
             "net property, plant and equipment",
             "net property plant and equipment",
+            "net property and equipment",
             "net pp&e",
             "net ppe",
             "net ppne",
@@ -882,7 +934,18 @@ def _target_statement_aliases(statement: str) -> list[str]:
             "cash flows",
         ]
     if normalized == "income_statement":
-        return ["consolidated statement of income", "statement of income", "statement of operations", "income statement"]
+        return [
+            "consolidated statement of income",
+            "consolidated statements of income",
+            "statement of income",
+            "statements of income",
+            "consolidated statement of operations",
+            "consolidated statements of operations",
+            "statement of operations",
+            "statements of operations",
+            "income statement",
+            "income statements",
+        ]
     if normalized == "balance_sheet":
         return ["consolidated balance sheet", "balance sheet", "assets", "liabilities"]
     if normalized == "non_gaap_reconciliation":
@@ -2469,38 +2532,102 @@ def _extract_pdf_text(body: str) -> str:
     return text
 
 
-def _extract_pdf_text_with_diagnostics(body: str) -> tuple[str, JsonObject]:
+def _extract_pdf_text_with_diagnostics(body: str, *, limit: int = READABLE_TEXT_LIMIT) -> tuple[str, JsonObject]:
     failures: list[str] = []
-    for parser_name, parser in (("pdf_text_pypdf", _extract_pdf_text_pypdf), ("pdf_text_pdfminer", _extract_pdf_text_pdfminer)):
+    for parser_name, parser in (
+        ("pdf_text_pymupdf", _extract_pdf_text_pymupdf),
+        ("pdf_text_pypdf", _extract_pdf_text_pypdf),
+        ("pdf_text_pdfminer", _extract_pdf_text_pdfminer),
+    ):
         try:
             text, diagnostics = parser(body)
         except Exception as exc:  # pragma: no cover - optional parser failures vary by dependency/version.
             failures.append(f"{parser_name}:{type(exc).__name__}")
             continue
+        if text and _pdf_text_quality_too_low(text, body=body, limit=limit):
+            failures.append(f"{parser_name}:low_quality_chars={len(text)}")
+            continue
         if text:
-            return text[:READABLE_TEXT_LIMIT], {
+            return text[:limit], {
                 **diagnostics,
                 "parser_used": parser_name,
                 "chars_extracted": len(text),
+                "readable_text_limit": limit,
                 "table_like_blocks": _table_like_block_count(text),
                 **({"fallback_failures": failures} if failures else {}),
             }
         failures.append(f"{parser_name}:empty")
-    fallback = _extract_pdf_text_literals(body)
+    fallback = _extract_pdf_text_literals(body, limit=limit)
     return fallback, {
         "parser_used": "pdf_text_literals",
         "pages_extracted": 0,
         "chars_extracted": len(fallback),
+        "readable_text_limit": limit,
         "table_like_blocks": _table_like_block_count(fallback),
         "extraction_failure_reason": ";".join(failures) if failures else "optional_pdf_parser_unavailable",
     }
 
 
+def _pdf_text_quality_too_low(text: str, *, body: str, limit: int) -> bool:
+    if len(body or "") < 200_000:
+        return False
+    if limit <= READABLE_TEXT_LIMIT:
+        return False
+    return len(str(text or "").strip()) < 10_000
+
+
+def _extract_pdf_text_pymupdf(body: str) -> tuple[str, JsonObject]:
+    try:
+        import fitz  # type: ignore
+    except Exception as exc:  # pragma: no cover - dependency is optional.
+        raise RuntimeError("pymupdf_unavailable") from exc
+    data = _pdf_body_bytes(body)
+    try:
+        fitz.TOOLS.reset_mupdf_warnings()
+        fitz.TOOLS.mupdf_display_errors(False)
+        fitz.TOOLS.mupdf_display_warnings(False)
+    except Exception:
+        pass
+    document = fitz.open(stream=data, filetype="pdf")
+    pieces: list[str] = []
+    try:
+        for page in document:
+            try:
+                pieces.append(page.get_text("text") or "")
+            except Exception:
+                continue
+        warnings = ""
+        try:
+            warnings = str(fitz.TOOLS.mupdf_warnings() or "")
+        except Exception:
+            warnings = ""
+    finally:
+        try:
+            fitz.TOOLS.mupdf_display_errors(True)
+            fitz.TOOLS.mupdf_display_warnings(True)
+        except Exception:
+            pass
+    text = _normalize_span("\n".join(piece for piece in pieces if piece.strip()))
+    diagnostics: JsonObject = {
+        "pages_extracted": int(getattr(document, "page_count", len(pieces))),
+        "parser_library": "PyMuPDF",
+    }
+    if warnings:
+        diagnostics["parser_warning_count"] = len([line for line in warnings.splitlines() if line.strip()])
+        diagnostics["parser_warning_preview"] = warnings[:500]
+    return text, diagnostics
+
+
 def _extract_pdf_text_pypdf(body: str) -> tuple[str, JsonObject]:
+    library = "pypdf"
     try:
         from pypdf import PdfReader  # type: ignore
-    except Exception as exc:  # pragma: no cover - dependency is optional.
-        raise RuntimeError("pypdf_unavailable") from exc
+    except Exception:
+        try:
+            from PyPDF2 import PdfReader  # type: ignore
+            library = "PyPDF2"
+        except Exception as exc:  # pragma: no cover - dependency is optional.
+            raise RuntimeError("pypdf_unavailable") from exc
     data = _pdf_body_bytes(body)
     reader = PdfReader(io.BytesIO(data))
     pieces: list[str] = []
@@ -2510,7 +2637,7 @@ def _extract_pdf_text_pypdf(body: str) -> tuple[str, JsonObject]:
         except Exception:
             continue
     text = _normalize_span("\n".join(piece for piece in pieces if piece.strip()))
-    return text, {"pages_extracted": len(pieces)}
+    return text, {"pages_extracted": len(pieces), "parser_library": library}
 
 
 def _extract_pdf_text_pdfminer(body: str) -> tuple[str, JsonObject]:
@@ -2529,12 +2656,12 @@ def _pdf_body_bytes(body: str) -> bytes:
     return str(body or "").encode("latin-1", errors="ignore")
 
 
-def _extract_pdf_text_literals(body: str) -> str:
-    sample = body[:READABLE_TEXT_LIMIT]
+def _extract_pdf_text_literals(body: str, *, limit: int = READABLE_TEXT_LIMIT) -> str:
+    sample = body[:limit]
     pieces = []
     pieces.extend(_pdf_literal_strings(sample))
     pieces.extend(_pdf_hex_strings(sample))
-    return _normalize_span(" ".join(pieces)[:READABLE_TEXT_LIMIT])
+    return _normalize_span(" ".join(pieces)[:limit])
 
 
 def _pdf_page_marker_count(body: str) -> int:

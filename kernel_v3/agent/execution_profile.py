@@ -89,8 +89,12 @@ def profile_processor_mode(profile: ExecutionProfile, name: str, requested: str,
     if name == "synthesizer":
         return profile.synthesizer_mode
     if name == "semantic_intake":
+        if str(requested or "").strip().lower() == "fake":
+            return "fake"
         return "model" if profile.use_semantic_intake_model else "fake"
     if name == "turn_router":
+        if str(requested or "").strip().lower() == "fake":
+            return "fake"
         return "model" if profile.use_chat_router else "fake"
     return "model" if online and requested == "fake" else requested
 

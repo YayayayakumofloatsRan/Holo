@@ -1361,10 +1361,15 @@ compiler now projects the requested ratio into explicit `revenue`,
 table; it exposes the evidence/computation program so the LLM workbench can
 decide how to acquire and bind source facts while host provenance, citation,
 numeric, and synthesis gates remain mandatory. Local regression confirms that
-FinanceBench row `financebench_id_02987` now compiles to that program. A live
-single-row rerun was attempted, but the CLI/model path produced no output rows
-for more than four minutes and was terminated; no new live score should be
-claimed from that run.
+FinanceBench row `financebench_id_02987` now compiles to that program. The
+later live `finance-capability` rerun
+`run_financebench_doc_item9_fixed_asset_turnover_v8` passes that row with
+`numeric_within_tolerance`: `retrieval_runs=1`, `fetches=12`, `facts=369`,
+`claims=369`, `slots_missing=0`, `calculator_call_count=1`,
+`formula_trace_count=1`, numeric verifier / verifier gate / synthesis gate all
+`passed`, citation preservation `1.0`, answer numeric support `100%`, and
+unsupported numeric claim rate `0`. This is a one-row capability closure, not a
+claim that the broader FinanceBench live10 baseline is solved.
 
 The follow-up trace narrowed that failure into two concrete harness issues.
 First, the model-first task compiler could downgrade an explicit user-defined
@@ -1388,10 +1393,17 @@ journal. It can select by `--task-id`, `--thread-id`, or `--thread-prefix`, and
 shows task compile, retrieval, workbench, toolchain, claim/slot, transform,
 calculator, verifier, synthesis, latest error, open processor calls, and recent
 events. The command uses a light JSONL scan rather than rebuilding the journal
-SQLite index, so it is usable while a run is still in progress. On the old
-item9 v2 trace it exposes the real failure shape: four retrieval/workbench
-rounds, 48 fetch attempts, 44 extractions, a toolchain plan, but zero
-claim-ledger/slot-frame/transform/calculator records.
+SQLite index, so it is usable while a run is still in progress. The diagnostic
+block now exposes DocumentReader parser counts / latest parser / target-span
+counts, Workbench decision and semantic missing slots, SlotFrame missing slots,
+formula status and missing facts, fact-ledger metric/source coverage, and the
+latest benchmark status/reason. On the old item9 v2 trace it exposes the real
+failure shape: four retrieval/workbench rounds, 48 fetch attempts, 44
+extractions, a toolchain plan, but zero
+claim-ledger/slot-frame/transform/calculator records. On the passing item9 v8
+trace it instead shows formula `ready`, `facts=369`, no missing slots, and
+benchmark status `passed`, so users can tell whether a long live run is stuck,
+still acquiring evidence, or already through the verifier/synthesis gates.
 
 A post-change no-network rescore of the existing stable4 live outputs
 (`run_stable4_event_resolver_v1_rescore_after_reader_packet`) confirms the
@@ -1420,6 +1432,14 @@ and operating-cash-flow rows as separate citable candidates from the same
 filing. Companyfacts readable-text projection also receives those compiled
 terms through metadata intent text, improving multi-slot fact projection without
 hard-coding item answers.
+
+The fixed-asset-turnover fix also improves the document/fact handoff rather
+than adding an item-specific answer table. Target filing PDF extraction now
+prefers optional PyMuPDF, pypdf/PyPDF2, and pdfminer readers before the literal
+fallback. Compiled EvidenceSpecs drive statement and line-item span selection,
+target slots are preserved during span dedupe, target-bound natural table rows
+become structured facts, and the formula planner prefers those filing table-row
+facts over noisy narrative values.
 
 Retrieval finalization now also treats loop budget exhaustion as a partial-answer
 condition when citable evidence already exists. `max_tool_calls`,
