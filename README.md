@@ -1441,6 +1441,37 @@ target slots are preserved during span dedupe, target-bound natural table rows
 become structured facts, and the formula planner prefers those filing table-row
 facts over noisy narrative values.
 
+FinanceBench `doc_retrieval` is now treated as a split evaluation program, not
+one monolithic tuning set. The first ten rows (`live10`) are the development
+and failure-taxonomy slice used to inspect traces and improve generic workflow
+mechanisms. Later rows should be used as validation/holdout slices: run them for
+accuracy and failure distribution, but do not tune against individual hidden
+rows. This keeps the project narrative honest: Holo uses a small public
+debugging slice to improve source acquisition, document reading, fact binding,
+toolchain use, and synthesis gates, then checks those mechanisms on unseen
+FinanceBench rows.
+
+The `live10` development slice also exposed a source-acquisition boundary that
+looked like an agent-loop failure but was actually a missing host handoff. In
+some `finance-capability` runs the planner carried the FinanceBench target
+document URL inside the natural-language objective or
+`compiled_task_hint.task_spec.objective`, while the retrieval host only promoted
+structured `source_urls` fields to direct fetch targets. Retrieval therefore
+wasted turns on SEC search/index pages instead of fetching the benchmark target
+PDF first. The host now extracts explicit HTTP URLs from
+`target_document_binding`, `source_refs`, prompt context, the root goal, and the
+compiled task objective, then creates direct acquisition sources from them. The
+URL is still not evidence; it is only an acquisition target. The LLM workbench
+judges the retrieved document and the host still enforces citation, primary
+source, numeric, verifier, and synthesis gates. A focused
+`finance-capability` rerun, `run_financebench_doc_item1_target_doclink_v1`,
+passes FinanceBench row `financebench_id_03029` with target PDF extraction,
+`facts=373`, `claims=373`, source URL hit `1/1`, numeric verifier / verifier
+gate / synthesis gate all passed, and answer numeric support `100%`. The
+current complete live10 score to report remains the prior completed best
+`5/10`; the next full live10 run should measure whether the target-URL
+promotion and item9 document/fact closure lift that completed score.
+
 Retrieval finalization now also treats loop budget exhaustion as a partial-answer
 condition when citable evidence already exists. `max_tool_calls`,
 `model_planner_processor_failed`, and `planner_processor_failed` can enter

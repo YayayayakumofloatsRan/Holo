@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Protocol
@@ -1712,7 +1713,7 @@ DIRECT_URL_METADATA_KEYS = (
 
 
 def _explicit_direct_url_sources(goal: SearchGoal, *, existing_sources: list[SearchSource]) -> list[SearchSource]:
-    urls = _explicit_direct_url_values(goal.metadata)
+    urls = _ordered_unique([*_explicit_direct_url_values(goal.metadata), *_urls_from_text(goal.query)])
     if not urls:
         return []
     existing_uris = {source.uri for source in existing_sources}
@@ -1764,10 +1765,55 @@ def _explicit_direct_url_values(metadata: JsonObject) -> list[str]:
             values.append(value)
         elif isinstance(value, list):
             values.extend(str(item).strip() for item in value if _is_http_url(item))
+    binding = metadata.get("target_document_binding")
+    if isinstance(binding, dict):
+        for key in ("doc_link", "source_url", "url"):
+            value = binding.get(key)
+            if isinstance(value, str) and _is_http_url(value):
+                values.append(value)
+    source_refs = metadata.get("source_refs")
+    if isinstance(source_refs, list):
+        for item in source_refs:
+            if not isinstance(item, dict):
+                continue
+            for key in ("url", "doc_link", "source_url"):
+                value = item.get(key)
+                if isinstance(value, str) and _is_http_url(value):
+                    values.append(value)
+    for key in ("prompt_context", "root_goal", "question", "goal", "objective"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            values.extend(_urls_from_text(value))
+    compiled_hint = metadata.get("compiled_task_hint")
+    if isinstance(compiled_hint, dict):
+        task_spec = compiled_hint.get("task_spec")
+        if isinstance(task_spec, dict):
+            for key in ("objective", "current_objective"):
+                value = task_spec.get(key)
+                if isinstance(value, str):
+                    values.extend(_urls_from_text(value))
+        tool_chain_plan = compiled_hint.get("tool_chain_plan")
+        if isinstance(tool_chain_plan, dict):
+            for key in ("next_action", "rationale", "reason", "summary"):
+                value = tool_chain_plan.get(key)
+                if isinstance(value, str):
+                    values.extend(_urls_from_text(value))
     nested = metadata.get("metadata")
     if isinstance(nested, dict):
         values.extend(_explicit_direct_url_values(nested))
     return _ordered_unique(values)
+
+
+URL_TEXT_RE = re.compile(r"https?://[^\s<>'\")\]]+")
+
+
+def _urls_from_text(text: str) -> list[str]:
+    urls: list[str] = []
+    for raw in URL_TEXT_RE.findall(str(text or "")):
+        url = raw.rstrip(".,;:，。；：")
+        if _is_http_url(url):
+            urls.append(url)
+    return _ordered_unique(urls)
 
 
 def _explicit_direct_url_metadata_keys(metadata: JsonObject) -> list[str]:

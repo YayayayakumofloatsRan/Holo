@@ -1339,6 +1339,41 @@ assumption-ledger display, and citation-preserving limitation answers.
   This confirms no regression on previously closed representative finance
   engine paths.
 
+2026-06-12 FinanceBench split policy and target-URL acquisition fix:
+
+- FinanceBench `doc_retrieval` is now treated as a split benchmark program.
+  Rows 1-10 are the `live10` development/debugging slice: use them for trace
+  inspection, failure taxonomy, and generic harness fixes. Later rows should be
+  used as validation/holdout slices: run them for accuracy and aggregate failure
+  distribution, but do not target single validation rows with custom fixes.
+- The current best completed `live10` artifact remains
+  `run_financebench_doc_live10_after_source_equivalence` at `5/10`. The latest
+  full `finance-capability` attempt was stopped after row 1 exposed the same
+  source-acquisition shape in a more visible way: the planner carried the
+  FinanceBench target URL in the natural-language objective /
+  `compiled_task_hint.task_spec.objective`, but retrieval direct-fetch injection
+  only read structured `source_urls`-style metadata. The run therefore spent
+  turns on SEC search/index pages instead of fetching the target PDF first.
+- Retrieval now promotes explicit HTTP URLs found in `target_document_binding`,
+  `source_refs`, prompt context, root goal / question text, and compiled task
+  objective into direct acquisition sources. This does not treat the URL as
+  evidence; it only ensures the target document is fetched before search noise.
+  The LLM workbench still judges document relevance, while host citation,
+  primary-source, numeric-support, verifier, and synthesis gates remain
+  mandatory.
+- Focused validation of the acquisition fix:
+  `run_financebench_doc_item1_target_doclink_v1` passes FinanceBench row
+  `financebench_id_03029` with `numeric_within_tolerance`, target PDF extraction
+  via the document reader, `facts=373`, `claims=373`, `slots_missing=0`,
+  source URL hit `1/1`, citation preservation `1.0`, numeric verifier /
+  verifier gate / synthesis gate all `passed`, and answer numeric support
+  `100%`.
+- Code regression for this specific source-acquisition boundary:
+  `tests/test_kernel_v3_retrieval_document_expansion.py` now covers direct fetch
+  from `target_document_binding.doc_link` and from
+  `compiled_task_hint.task_spec.objective` source URLs. The focused test
+  selection is `4 passed`.
+
 Additional follow-ups:
 
 - Preserve `finance-fact-fast` evidence quality while improving how structured
