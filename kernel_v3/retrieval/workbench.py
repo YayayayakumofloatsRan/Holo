@@ -8,6 +8,7 @@ from kernel_v3.contracts import JsonObject
 from kernel_v3.processors.contracts import RETRIEVAL_WORKBENCH_SCHEMA
 from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, ExtractedSpan, FetchedDocument, SearchGoal, SearchSource
+from kernel_v3.retrieval.extract import readable_document_text_with_diagnostics
 
 
 RETRIEVAL_WORKBENCH_TASK = "retrieval.workbench"
@@ -174,6 +175,7 @@ def retrieval_workbench_packet(
     selected_spans = _select_spans(spans, target_contract=target_contract, terms=selection_terms, limit=64)
     selected_evidence = _select_evidence(evidence, target_contract=target_contract, terms=selection_terms, limit=32)
     selected_rejected = _select_rejected_evidence(rejected_evidence, target_contract=target_contract, terms=selection_terms, limit=48)
+    span_readers = _span_reader_diagnostics_by_document(spans)
     accepted = [_evidence_summary(item, target_contract=target_contract) for item in selected_evidence]
     rejected = [_rejected_summary(item, target_contract=target_contract) for item in selected_rejected]
     return {
@@ -190,7 +192,17 @@ def retrieval_workbench_packet(
         "required_line_item": _string_value(metadata.get("required_line_item")),
         "source_summaries": [_source_summary(item) for item in selected_sources],
         "fetch_summaries": [_bounded_dict(item, text_limit=240) for item in fetch_summaries[-24:]],
-        "document_summaries": [_document_summary(document, body, target_contract=target_contract) for document, body in selected_documents],
+        "document_summaries": [
+            _document_summary(
+                document,
+                body,
+                goal=goal,
+                target_contract=target_contract,
+                terms=selection_terms,
+                span_reader_diagnostics=span_readers.get(document.document_id),
+            )
+            for document, body in selected_documents
+        ],
         "extracted_spans": [_span_summary(item, target_contract=target_contract) for item in selected_spans],
         "accepted_evidence": accepted,
         "rejected_evidence": rejected,
@@ -754,6 +766,7 @@ def _workbench_retry_packet(packet: JsonObject) -> JsonObject:
         "required_transforms": packet.get("required_transforms"),
         "compiled_task_hint": packet.get("compiled_task_hint"),
         "target_document_contract": packet.get("target_document_contract"),
+        "document_summaries": (packet.get("document_summaries") or [])[:8],
         "target_document_candidates": packet.get("target_document_candidates"),
         "accepted_evidence": packet.get("accepted_evidence"),
         "rejected_evidence": (packet.get("rejected_evidence") or [])[:32],
@@ -793,19 +806,127 @@ def _source_summary(source: SearchSource) -> JsonObject:
     }
 
 
-def _document_summary(document: FetchedDocument, body: str, *, target_contract: JsonObject | None = None) -> JsonObject:
+def _span_reader_diagnostics_by_document(spans: list[ExtractedSpan]) -> dict[str, JsonObject]:
+    result: dict[str, JsonObject] = {}
+    for span in spans:
+        if span.document_id in result:
+            continue
+        metadata = span.metadata if isinstance(span.metadata, dict) else {}
+        reader = metadata.get("document_reader")
+        if isinstance(reader, dict) and reader:
+            result[span.document_id] = _document_reader_summary(reader, text_mode=_string_value(metadata.get("text_mode")))
+    return result
+
+
+def _document_summary(
+    document: FetchedDocument,
+    body: str,
+    *,
+    goal: SearchGoal,
+    target_contract: JsonObject | None = None,
+    terms: list[str] | None = None,
+    span_reader_diagnostics: JsonObject | None = None,
+) -> JsonObject:
     metadata = document.metadata if isinstance(document.metadata, dict) else {}
-    return {
+    readable_text, text_mode, reader_diagnostics = _readable_document_summary_text(document=document, body=body, goal=goal)
+    reader = _document_reader_summary(
+        span_reader_diagnostics if isinstance(span_reader_diagnostics, dict) else {},
+        reader_diagnostics if isinstance(reader_diagnostics, dict) else {},
+        text_mode=text_mode,
+    )
+    summary = {
         "document_id": document.document_id,
         "source_id": document.source_id,
         "uri": document.uri,
         "title": _truncate(document.title, 180),
         "artifact_id": document.artifact_id,
         "chars": len(body or ""),
-        "preview": _truncate(" ".join(str(body or "").split()), 360),
+        "readable_chars": len(readable_text or ""),
+        "preview": _truncate(" ".join(str(readable_text or body or "").split()), 360),
         "is_target_document": _target_document_uri_match(document.uri, target_contract or {}),
         "target_document_binding": _json_object(metadata.get("target_document_binding")),
     }
+    if reader:
+        summary["document_reader"] = reader
+    snippets = _table_like_snippets(readable_text or body, terms=terms or [])
+    if snippets:
+        summary["table_like_snippets"] = snippets
+    return summary
+
+
+def _readable_document_summary_text(*, document: FetchedDocument, body: str, goal: SearchGoal) -> tuple[str, str, JsonObject]:
+    try:
+        return readable_document_text_with_diagnostics(body or "", document=document, goal=goal)
+    except Exception as exc:  # pragma: no cover - parser failures depend on document/dependency details.
+        return (
+            _truncate(" ".join(str(body or "").split()), 12_000),
+            "raw_body_fallback",
+            {"extraction_failure_reason": f"{type(exc).__name__}: {exc}"},
+        )
+
+
+def _document_reader_summary(*diagnostics: JsonObject, text_mode: str = "") -> JsonObject:
+    merged: JsonObject = {}
+    for item in diagnostics:
+        if not isinstance(item, dict):
+            continue
+        for key in (
+            "parser_used",
+            "pages_extracted",
+            "chars_extracted",
+            "table_like_blocks",
+            "extraction_failure_reason",
+            "fallback_failures",
+        ):
+            value = item.get(key)
+            if value not in (None, "", [], {}):
+                merged[key] = value
+    if text_mode:
+        merged["text_mode"] = text_mode
+    return merged
+
+
+def _table_like_snippets(text: str, *, terms: list[str], limit: int = 4) -> list[JsonObject]:
+    lines = _candidate_table_lines(text)
+    if not lines:
+        return []
+    ranked: list[tuple[float, int, JsonObject]] = []
+    normalized_terms = [term for term in terms if term and len(term) >= 3]
+    for index, line in enumerate(lines):
+        numeric_count = len(re.findall(r"\b-?\(?\d[\d,]*(?:\.\d+)?\)?%?\b", line))
+        term_hits = _selection_score(line, terms=normalized_terms)
+        statement_bonus = 3.0 if _table_or_statement_hint(line.casefold()) else 0.0
+        if numeric_count < 2 and term_hits <= 0.0 and statement_bonus <= 0.0:
+            continue
+        if numeric_count == 0:
+            continue
+        start = max(0, index - 1)
+        end = min(len(lines), index + 2)
+        snippet = " ".join(lines[start:end])
+        score = float(numeric_count) * 2.0 + term_hits + statement_bonus
+        ranked.append(
+            (
+                score,
+                index,
+                {
+                    "line_index": index,
+                    "numeric_count": numeric_count,
+                    "selection_score": round(score, 3),
+                    "text": _truncate(snippet, 560),
+                },
+            )
+        )
+    selected = sorted(ranked, key=lambda item: (-item[0], item[1]))[:limit]
+    return [item for _score, _index, item in selected]
+
+
+def _candidate_table_lines(text: str) -> list[str]:
+    raw = str(text or "")
+    lines = [re.sub(r"\s+", " ", line).strip() for line in raw.splitlines() if line.strip()]
+    if len(lines) >= 2:
+        return lines[:1_500]
+    chunks = re.split(r"(?<=[.;:])\s+", re.sub(r"\s+", " ", raw).strip())
+    return [chunk.strip() for chunk in chunks if chunk.strip()][:1_500]
 
 
 def _span_summary(span: ExtractedSpan, *, target_contract: JsonObject | None = None) -> JsonObject:

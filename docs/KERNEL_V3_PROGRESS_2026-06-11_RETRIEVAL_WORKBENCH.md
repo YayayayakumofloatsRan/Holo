@@ -282,3 +282,18 @@ FinanceBench rows, not the first-slice target binding bug.
   specs, transform specs, target document contract, statement, line item, and
   table-like signals. This preserves late-arriving target filing evidence while
   reducing the packet size presented to the LLM.
+- Workbench document summaries now expose bounded document-reader diagnostics
+  and task-ranked table-like snippets. The packet can show parser mode,
+  extracted character/page/table-like-block diagnostics, readable preview text,
+  and row-like numeric excerpts selected against the compiled task terms. This
+  keeps source/table relevance as an LLM semantic judgment while the host
+  continues to enforce provenance, source authority, numeric support, and
+  synthesis gates.
+- Regression guard after the document-reader packet change:
+  `.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py tests/test_kernel_v3_retrieval_workbench.py tests/test_kernel_v3_retrieval_document_expansion.py tests/test_kernel_v3_finance_engine.py`
+  completed with `205 passed`. A no-network rescore of the existing stable4
+  live outputs (`run_stable4_event_resolver_v1_rescore_after_reader_packet`)
+  preserved answer/citation presence, claim ledger, slot frame, transform plan,
+  calculator/formula trace, verifier gate, and unsupported-numeric rates at
+  `1.0`/`0.0` as applicable; the slice remains annotation-scored rather than
+  official FAB pass/fail.

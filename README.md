@@ -1323,8 +1323,23 @@ blindly sending the first large batch of sources, spans, accepted evidence, and
 rejected evidence, it scores candidates against the compiled evidence specs,
 transform specs, target document contract, statement, line item, and table-like
 signals, then preserves high-value target filing candidates inside a compact
-packet. This is the first cost-control step; full live-token reduction still
-needs another model-net rerun.
+packet. Document summaries now also expose bounded reader diagnostics and
+task-ranked table-like snippets, so the LLM workbench can judge whether a target
+PDF/filing was parsed, whether table rows were visible, and which row-like
+numeric excerpts may fill the compiled slots. These snippets are context for
+semantic judgment, not evidence by themselves; final citations, source
+authority, numeric support, and synthesis gates remain host-owned. This is the
+first cost-control step; full live-token reduction still needs another
+model-net rerun.
+
+A post-change no-network rescore of the existing stable4 live outputs
+(`run_stable4_event_resolver_v1_rescore_after_reader_packet`) confirms the
+regression contract for previously closed representative tasks: answer and
+citation presence remain `1.0`, claim ledger / slot frame / transform plan /
+calculator / formula trace / verifier gate rates remain `1.0`, and unsupported
+numeric claim rate remains `0.0`. The four rows are still ungraded with respect
+to public pass/fail because this curated dev slice has annotation signals rather
+than official FAB gold.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

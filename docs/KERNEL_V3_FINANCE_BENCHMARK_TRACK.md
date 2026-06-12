@@ -275,6 +275,19 @@ not repeatedly download these sources during benchmark iteration.
   document contract, required statement/line item, and table-like signals, so
   late target-filing candidates are preserved while low-value noise is dropped
   before the LLM call.
+- Workbench document summaries now carry bounded reader diagnostics and
+  task-ranked table-like snippets. For filing/PDF-heavy rows this gives the LLM
+  the missing intermediate state: parser/text mode, extracted character/page
+  diagnostics, table-like block counts, readable preview text, and candidate
+  row-like numeric excerpts selected against the compiled task. The rows are not
+  treated as facts until the host can bind them to evidence/citations or
+  formula traces.
+- Regression check after this packet change: the workbench/finance/document
+  expansion suite completed with `205 passed`, and
+  `run_stable4_event_resolver_v1_rescore_after_reader_packet` preserved
+  stable4 answer/citation presence, claim-ledger, slot-frame, transform-plan,
+  calculator/formula-trace, verifier-gate, and unsupported numeric rates at
+  `1.0`/`0.0` as applicable.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,

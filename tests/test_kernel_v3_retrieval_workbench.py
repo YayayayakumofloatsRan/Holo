@@ -6,7 +6,7 @@ from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.retrieval.extract import extract_spans
-from kernel_v3.retrieval.contracts import EvidenceItem, FetchedDocument
+from kernel_v3.retrieval.contracts import EvidenceItem, ExtractedSpan, FetchedDocument
 from kernel_v3.retrieval.http_provider import HttpFetchProvider, HttpTransportResponse
 from kernel_v3.retrieval.workbench import retrieval_workbench_packet, validate_workbench_output
 
@@ -673,6 +673,109 @@ def test_retrieval_workbench_packet_exposes_target_document_candidates_for_llm_j
     assert packet["rejected_evidence"][0]["review_hint"]
     assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-span-target-mdna"
     assert packet["target_document_candidates"][0]["rescuable"] is True
+
+
+def test_retrieval_workbench_packet_exposes_reader_diagnostics_and_table_snippets() -> None:
+    doc_link = "https://www.sec.gov/Archives/edgar/data/66740/000155837019000470/mmm-20181231x10k.htm"
+    binding = {
+        "company": "3M",
+        "doc_link": doc_link,
+        "doc_period": "2018",
+        "required_statement": "cash_flow_statement",
+        "required_line_item": "capital expenditures",
+    }
+    goal = SearchGoal(
+        goal_id="goal-workbench-reader-table",
+        query="3M FY2018 capital expenditures",
+        metadata={
+            "benchmark_doc_retrieval": True,
+            "source_url": doc_link,
+            "target_document_binding": binding,
+            "compiled_task_hint": {
+                "schema": "holo.kernel_v3.compiled_task_hint.v1",
+                "domain": "finance",
+                "task_spec": {"task_type": "compute", "target_entities": ["3M"], "target_periods": ["2018"]},
+                "evidence_specs": [
+                    {
+                        "slot_name": "capital_expenditures",
+                        "accepted_attributes": ["capital expenditures", "purchases of property plant and equipment"],
+                        "source_role": "primary_filing",
+                        "target_period": "2018",
+                        "statement": "cash_flow_statement",
+                        "line_item": "capital expenditures",
+                    }
+                ],
+                "transform_specs": [
+                    {
+                        "name": "capital_intensity_capex_revenue",
+                        "required_slots": ["capital_expenditures", "revenue"],
+                        "expression": "capital_expenditures / revenue",
+                    }
+                ],
+            },
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-workbench-reader-table",
+        goal_id=goal.goal_id,
+        source_id="source-workbench-reader-table",
+        uri=doc_link,
+        title="3M 2018 10-K",
+        artifact_id="artifact-workbench-reader-table",
+        payload_hash="hash",
+        preview="",
+        size_bytes=2_000,
+        metadata={"mime_type": "text/plain", "target_document_binding": binding},
+    )
+    body = "\n".join(
+        [
+            "3M Company annual report",
+            "Consolidated Statement of Cash Flows Years ended December 31 (Millions)",
+            "2018 2017 2016",
+            "Purchases of property, plant and equipment (PP&E) (1,577) (1,373) (1,420)",
+            "Proceeds from sale of PP&E and other assets 262 49 58",
+        ]
+    )
+    span = ExtractedSpan(
+        span_id="span-workbench-reader-table-1",
+        goal_id=goal.goal_id,
+        document_id=document.document_id,
+        source_id=document.source_id,
+        text="Purchases of property, plant and equipment (PP&E) (1,577) (1,373) (1,420)",
+        start_offset=0,
+        end_offset=80,
+        score=12.0,
+        metadata={
+            "source_uri": doc_link,
+            "text_mode": "plain_text",
+            "document_reader": {
+                "parser_used": "plain_text",
+                "pages_extracted": 1,
+                "chars_extracted": len(body),
+                "table_like_blocks": 2,
+            },
+        },
+    )
+
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=[],
+        fetch_summaries=[],
+        documents=[(document, body)],
+        spans=[span],
+        evidence=[],
+        citations=[],
+        rejected_evidence=[],
+    )
+
+    summary = packet["document_summaries"][0]
+    assert summary["document_reader"]["parser_used"] == "plain_text"
+    assert summary["document_reader"]["table_like_blocks"] == 2
+    assert summary["is_target_document"] is True
+    snippets = summary["table_like_snippets"]
+    assert snippets
+    assert any("Purchases of property, plant and equipment" in item["text"] for item in snippets)
+    assert any("1,577" in item["text"] for item in snippets)
 
 
 def test_retrieval_workbench_normalizes_object_query_items() -> None:
