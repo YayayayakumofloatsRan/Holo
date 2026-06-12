@@ -1384,6 +1384,18 @@ The host does not treat the plan as evidence or a fixed script; it only
 verifies provenance, source authority, citations, numeric support, policy, and
 budgets after the model chooses the next move.
 
+The finance/retrieval fast lane is now a real composable workbench instead of a
+fixed retrieval package. `finance-fact-fast` runtime metadata enables
+`composable_toolchain`, and `retrieval_answer` recipes built from that profile
+expose `retrieval.run`, read-only workspace tools (`workspace.list`,
+`workspace.search`, `file.read`), `shell.exec`, and `calculator.compute` to the
+model planner. The retrieval registry is built on the same permissioned
+workspace registry before adding retrieval and calculator tools, so local
+benchmark files, cached filings, traces, and temporary analysis commands are
+actual executable tools rather than capability-catalog promises. `shell.exec`
+is still host-owned: it requires `shell:exec`, an executable allowlist, PolicyGate
+validation, and journaled stdout/stderr observations.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

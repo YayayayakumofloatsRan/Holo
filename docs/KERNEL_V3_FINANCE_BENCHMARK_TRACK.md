@@ -278,6 +278,14 @@ not repeatedly download these sources during benchmark iteration.
   verified synthesis. The host still owns provenance, citation, source-authority,
   numeric-support, policy, and budget validation. This prevents the retrieval
   path from regressing into threshold-only filtering or benchmark answer tables.
+- The finance fast lane now opens the actual execution surface needed by that
+  assembly boundary. `finance-fact-fast` enables `composable_toolchain`, so
+  `retrieval_answer` no longer exposes only `retrieval.run` plus calculator; it
+  also exposes read-only workspace tools and `shell.exec` for host-permitted
+  local analysis scripts, JSONL/filing inspection, cache reads, and trace
+  scoring. The registry composes these tools before adding retrieval/calculator,
+  while PolicyGate and the shell executable allowlist remain the hard safety
+  boundary.
 - Retrieval Workbench packets now use task-aware compact selection. The
   selection score combines the compiled evidence/transform specs, target
   document contract, required statement/line item, and table-like signals, so

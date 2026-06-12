@@ -198,9 +198,9 @@ def _tool_chain_plan(
         recommended_steps.append(
             {
                 "step": "acquire_or_read_evidence",
-                "tool": "retrieval.run",
+                "tool": "retrieval.run | workspace.search | file.read | shell.exec",
                 "decision_owner": "model",
-                "when": "required slots are missing or source evidence has not been accepted",
+                "when": "required slots are missing, source evidence has not been accepted, or local/cached documents need parsing",
                 "missing_slots": missing_slots[:16],
                 "evidence_specs": [_tool_chain_evidence_spec(spec) for spec in evidence_specs[:12]],
             }
@@ -273,6 +273,23 @@ def _tool_chain_plan(
             {
                 "name": "retrieval.run",
                 "use_for": "source acquisition, document reading, evidence slot filling",
+            },
+            {
+                "name": "workspace.list",
+                "use_for": "discover local benchmark files, cached documents, reports, or trace directories when the recipe exposes workspace tools",
+            },
+            {
+                "name": "workspace.search",
+                "use_for": "locate local filings, JSONL rows, cached traces, scripts, or reports by keyword/path",
+            },
+            {
+                "name": "file.read",
+                "use_for": "inspect known local files, cached benchmark artifacts, scripts, traces, and extracted document text",
+            },
+            {
+                "name": "shell.exec",
+                "use_for": "run host-permitted local analysis scripts or CLI tools for document/table parsing, JSONL inspection, scoring, and evidence transformation",
+                "host_boundary": "requires shell:exec permission and executable allowlist",
             },
             {
                 "name": "calculator.compute",

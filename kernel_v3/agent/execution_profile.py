@@ -53,6 +53,7 @@ def execution_profile(profile_id: str | None) -> ExecutionProfile:
 
 
 def execution_profile_runtime_metadata(profile: ExecutionProfile) -> JsonObject:
+    composable_toolchain = _composable_toolchain_defaults(profile.profile_id)
     return {
         "execution_profile": profile.to_dict(),
         "agent_loop": {
@@ -75,6 +76,7 @@ def execution_profile_runtime_metadata(profile: ExecutionProfile) -> JsonObject:
             "max_total_tokens_per_task": profile.max_total_model_tokens,
             "max_prompt_chars_per_call": profile.max_prompt_chars_per_call,
         },
+        **({"composable_toolchain": composable_toolchain} if composable_toolchain else {}),
     }
 
 
@@ -149,11 +151,11 @@ _PROFILES: dict[str, ExecutionProfile] = {
         planner_mode="model",
         evaluator_mode="fake",
         synthesizer_mode="model",
-        max_processor_calls=6,
+        max_processor_calls=8,
         max_total_model_tokens=300_000,
         max_prompt_chars_per_call=260_000,
-        max_agent_steps=4,
-        max_agent_tool_calls=4,
+        max_agent_steps=8,
+        max_agent_tool_calls=8,
         max_retrieval_runs=2,
         retrieval_mode="structured_first",
         max_queries=4,
@@ -249,3 +251,30 @@ _PROFILES: dict[str, ExecutionProfile] = {
         notes=("Full resident-style mission loop for complex, long-running tasks.",),
     ),
 }
+
+
+def _composable_toolchain_defaults(profile_id: str) -> JsonObject:
+    if profile_id not in {"finance-fact-fast", "finance-modeling", "web-research", "long-mission"}:
+        return {}
+    return {
+        "enabled": True,
+        "workspace_read": True,
+        "shell_exec": True,
+        "shell_allowed_executables": [
+            "python",
+            "python3",
+            "rg",
+            "grep",
+            "sed",
+            "awk",
+            "cat",
+            "head",
+            "tail",
+            "wc",
+            "sort",
+            "uniq",
+            "cut",
+            "ls",
+        ],
+        "principle": "LLM assembles the work chain; host validates permissions, provenance, policy, and numeric support.",
+    }

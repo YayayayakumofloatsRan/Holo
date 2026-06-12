@@ -28,9 +28,12 @@ def test_finance_fact_fast_profile_is_short_lane() -> None:
     assert profile.use_workmethod is False
     assert profile_processor_mode(profile, "evaluator", "model", online=True) == "fake"
     assert profile_processor_mode(profile, "semantic_intake", "model", online=True) == "fake"
-    assert metadata["agent_loop"]["max_steps"] == 4
+    assert metadata["agent_loop"]["max_steps"] == 8
+    assert metadata["agent_loop"]["max_tool_calls"] == 8
     assert metadata["retrieval"]["max_fetches"] == 8
-    assert metadata["processor_budget"]["max_calls_per_task"] == 6
+    assert metadata["processor_budget"]["max_calls_per_task"] == 8
+    assert metadata["composable_toolchain"]["enabled"] is True
+    assert metadata["composable_toolchain"]["shell_exec"] is True
 
 
 def test_long_mission_profile_preserves_heavy_supervision() -> None:
@@ -51,8 +54,8 @@ def test_benchmark_runtime_metadata_uses_execution_profile_defaults() -> None:
     assert metadata is not None
     assert metadata["execution_profile"]["profile_id"] == "finance-fact-fast"
     assert metadata["context_budget"]["token_budget"] == 4096
-    assert metadata["agent_loop"]["max_steps"] == 4
-    assert metadata["agent_loop"]["max_tool_calls"] == 4
+    assert metadata["agent_loop"]["max_steps"] == 8
+    assert metadata["agent_loop"]["max_tool_calls"] == 8
     assert metadata["retrieval"]["max_queries"] == 4
     assert metadata["retrieval"]["max_sources"] == 24
     assert metadata["retrieval"]["max_fetches"] == 8
@@ -88,8 +91,8 @@ def test_fast_execution_profile_loop_budget_is_hard_cap_for_model_planner() -> N
 
     bounded = _with_runtime_loop_budget(recipe, planner_mode="model")
 
-    assert bounded.max_steps == 4
-    assert bounded.max_tool_calls == 4
+    assert bounded.max_steps == 8
+    assert bounded.max_tool_calls == 8
 
 
 def test_fast_execution_profile_disabled_workmethod_state_is_constructible() -> None:

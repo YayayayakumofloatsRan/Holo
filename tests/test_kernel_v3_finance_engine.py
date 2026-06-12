@@ -18,6 +18,7 @@ from kernel_v3.agent.runtime import (
     _finance_missing_fact_retrieval_action,
     _finance_missing_fact_retrieval_payload,
     _finance_formula_preflight_plans,
+    _planner_directive,
     task_recipe,
 )
 from kernel_v3.contracts import CandidateAction, ContextBundle, Observation
@@ -42,6 +43,7 @@ from kernel_v3.finance import (
 from kernel_v3.finance.calculator import register_finance_tools
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
+from kernel_v3.policy import PolicyGate
 from kernel_v3.research.profiles import finance_fundamentals_profile
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, FetchedDocument, RetrievalReport, SearchGoal
 from kernel_v3.retrieval.evaluate import qualify_evidence_candidate
@@ -1417,11 +1419,13 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
     assert tool_chain["decision_owner"] == "model"
     assert tool_chain["host_role"] == "verify_provenance_policy_budget_and_numeric_support"
     assert tool_chain["missing_slots"] == program.slot_frame.missing_slots
-    assert [item["name"] for item in tool_chain["available_tools"]] == [
-        "retrieval.run",
-        "calculator.compute",
-        "host.verifier_gate",
-    ]
+    tool_names = [item["name"] for item in tool_chain["available_tools"]]
+    assert "retrieval.run" in tool_names
+    assert "workspace.search" in tool_names
+    assert "file.read" in tool_names
+    assert "shell.exec" in tool_names
+    assert "calculator.compute" in tool_names
+    assert "host.verifier_gate" in tool_names
     assert tool_chain["next_action_candidates"][0]["tool"] == "retrieval.run"
     assert tool_chain["recommended_steps"][-1]["tool"] == "host.verifier_gate"
 
@@ -1453,6 +1457,69 @@ def test_planner_replan_hints_include_execution_program_for_model_tool_assembly(
         item["tool"] == "retrieval.run"
         for item in program["tool_chain_plan"]["next_action_candidates"]
     )
+
+
+def test_finance_fast_recipe_exposes_composable_toolchain_tools(tmp_path) -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+    )
+
+    assert "retrieval.run" in recipe.allowed_tools
+    assert CALCULATOR_TOOL_NAME in recipe.allowed_tools
+    assert "workspace.list" in recipe.allowed_tools
+    assert "workspace.search" in recipe.allowed_tools
+    assert "file.read" in recipe.allowed_tools
+    assert "shell.exec" in recipe.allowed_tools
+    assert "shell:exec" in recipe.metadata["allowed_permissions"]
+
+    runtime = AgentRuntime(journal=JournalStore.in_memory(), workspace_root=tmp_path)
+    registry = runtime._registry(recipe, "Analyze local finance evidence with a temporary script.")
+    manifests = {manifest.name: manifest for manifest in registry.manifests()}
+
+    assert {"retrieval.run", CALCULATOR_TOOL_NAME, "workspace.search", "file.read", "shell.exec"} <= set(manifests)
+    shell_action = CandidateAction(
+        action_id="act-shell-readonly-analysis",
+        kind="tool",
+        name="shell.exec",
+        description="Run a tiny local analysis command",
+        score=1.0,
+        payload={"argv": ["python3", "-c", "print('toolchain-ok')"]},
+        reasons=["composable_toolchain_test"],
+        side_effect_class="shell",
+    )
+    decision = PolicyGate(permission=recipe.permission_profile, allowed_permissions=set(recipe.metadata["allowed_permissions"])).validate(
+        run_id="run-toolchain",
+        action=shell_action,
+        manifest=manifests["shell.exec"],
+    )
+    result = registry.execute_with_artifacts(
+        shell_action,
+        policy_decision=decision,
+        execution_context={"run_id": "run-toolchain"},
+    )
+
+    assert decision.allowed is True
+    assert result.observation.status == "ok"
+    assert result.observation.content["stdout"].strip() == "toolchain-ok"
+
+
+def test_finance_fast_planner_directive_shows_composable_toolchain() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+    )
+
+    directive = _planner_directive(recipe)
+    tool_names = [item["name"] for item in directive["tool_selection"]]
+
+    assert "retrieval.run" in tool_names
+    assert CALCULATOR_TOOL_NAME in tool_names
+    assert "workspace.list" in tool_names
+    assert "workspace.search" in tool_names
+    assert "file.read" in tool_names
+    assert "shell.exec" in tool_names
+    assert "shell.exec" not in directive["forbidden"]
 
 
 def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_formula() -> None:

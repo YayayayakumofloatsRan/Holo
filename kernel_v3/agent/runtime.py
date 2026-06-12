@@ -597,7 +597,7 @@ class AgentRuntime:
 
     def _registry(self, recipe: TaskRecipe, goal: str) -> ToolRegistry:
         if recipe.mode == "retrieval_answer":
-            registry = ToolRegistry.with_builtin_respond()
+            registry = self._retrieval_base_registry(recipe)
             register_retrieval_tool(
                 registry,
                 operator=self.retrieval_operator or _default_retrieval_operator(
@@ -622,6 +622,25 @@ class AgentRuntime:
         if recipe.mode == "system_answer":
             return self._with_memory_tools(ToolRegistry.with_builtin_respond())
         return self._with_memory_tools(ToolRegistry.with_builtin_respond())
+
+    def _retrieval_base_registry(self, recipe: TaskRecipe) -> ToolRegistry:
+        if not _composable_toolchain_enabled(recipe):
+            return ToolRegistry.with_builtin_respond()
+        shell_allowed = _composable_shell_allowed_executables(recipe)
+        root = self.workspace_root or Path.cwd()
+        if "shell.exec" in recipe.allowed_tools or self.workspace_root is not None:
+            return ToolRegistry.with_permissioned_workspace(
+                root=root,
+                shell_allowed_executables=shell_allowed,
+                artifact_store=self.artifact_store,
+            )
+        if self.workspace_files:
+            return ToolRegistry.with_fake_workspace_tools(files=self.workspace_files, artifact_store=self.artifact_store)
+        return ToolRegistry.with_permissioned_workspace(
+            root=root,
+            shell_allowed_executables=shell_allowed,
+            artifact_store=self.artifact_store,
+        )
 
     def _with_memory_tools(self, registry: ToolRegistry) -> ToolRegistry:
         if self.memory_store is None:
@@ -3926,6 +3945,37 @@ def _next_required_retrieval_goal_id(context: ContextBundle, recipe: TaskRecipe)
     return goal_ids[0] if goal_ids else None
 
 
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
+
+
+def _composable_toolchain_config(metadata: JsonObject) -> JsonObject:
+    execution = metadata.get("execution_metadata")
+    execution = execution if isinstance(execution, dict) else {}
+    raw = metadata.get("composable_toolchain")
+    if not isinstance(raw, dict):
+        raw = execution.get("composable_toolchain")
+    if not isinstance(raw, dict) or not _truthy(raw.get("enabled")):
+        return {}
+    return dict(raw)
+
+
+def _composable_toolchain_enabled(recipe: TaskRecipe) -> bool:
+    return bool(_composable_toolchain_config(recipe.metadata))
+
+
+def _composable_shell_allowed_executables(recipe: TaskRecipe) -> set[str]:
+    config = _composable_toolchain_config(recipe.metadata)
+    values = _string_list(config.get("shell_allowed_executables"))
+    if not values:
+        values = ["python", "python3"]
+    return {Path(item).name for item in values if Path(item).name}
+
+
 def task_recipe(
     mode: str,
     *,
@@ -3942,9 +3992,15 @@ def task_recipe(
         allowed_tools = ["retrieval.run"]
         if _metadata_requires_finance_numeric_verifier(recipe_metadata):
             allowed_tools.append(CALCULATOR_TOOL_NAME)
+        toolchain = _composable_toolchain_config(recipe_metadata)
+        if _truthy(toolchain.get("workspace_read")):
+            allowed_tools.extend(["workspace.list", "workspace.search", "file.read"])
+        if _truthy(toolchain.get("shell_exec")):
+            allowed_tools.append("shell.exec")
+            recipe_metadata = _with_allowed_permission(recipe_metadata, "shell:exec")
         return TaskRecipe(
             recipe_id="recipe-retrieval-answer",
-            allowed_tools=allowed_tools,
+            allowed_tools=_ordered_unique(allowed_tools),
             max_steps=DEFAULT_RETRIEVAL_MAX_STEPS,
             max_tool_calls=DEFAULT_RETRIEVAL_MAX_TOOL_CALLS,
             max_network_fetches=max_network_fetches,
@@ -4663,6 +4719,53 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     ],
                 }
             )
+        if "workspace.list" in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": "workspace.list",
+                    "side_effect_class": "read",
+                    "use_when": "local workspace, cached benchmark data, generated artifacts, or directory context may guide the research workflow",
+                    "payload_requirements": ["path: optional workspace-relative directory"],
+                }
+            )
+        if "workspace.search" in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": "workspace.search",
+                    "side_effect_class": "read",
+                    "use_when": "find local filings, benchmark JSONL, cached traces, scripts, reports, or intermediate artifacts by keyword/path",
+                    "payload_requirements": ["query: non-empty keyword or path fragment", "max_matches: optional"],
+                }
+            )
+        if "file.read" in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": "file.read",
+                    "side_effect_class": "read",
+                    "use_when": "inspect a known local document, cached result, benchmark item, report, script, or trace before deciding next action",
+                    "payload_requirements": ["path: workspace-relative file path"],
+                }
+            )
+        if "shell.exec" in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": "shell.exec",
+                    "side_effect_class": "shell",
+                    "use_when": (
+                        "temporary local analysis is needed: parse downloaded filings/tables, inspect JSONL, run a small script, "
+                        "score outputs, or transform local evidence before calculator/verifier/synthesis"
+                    ),
+                    "payload_requirements": ["argv: list[str] using host-allowed executables only"],
+                    "host_boundary": "requires shell:exec permission and executable allowlist; host audits stdout/stderr as observation",
+                }
+            )
+        forbidden = ["web_search", "page_open"]
+        if "network.fetch" not in recipe.allowed_tools:
+            forbidden.append("network.fetch")
         return {
             "mode": recipe.mode,
             "initial_action": {
@@ -4699,7 +4802,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "use_when": "the host needs explicit user permission or a missing target cannot be inferred from context",
                 },
             ],
-            "forbidden": ["web_search", "page_open", "network.fetch"],
+            "forbidden": forbidden,
             "interaction_preferences": preferences,
             "answer_profile": answer_profile,
             "research_mission": research_mission,
@@ -6117,6 +6220,8 @@ def _metadata_requires_finance_numeric_verifier(metadata: JsonObject) -> bool:
     execution = metadata.get("execution_metadata")
     execution = execution if isinstance(execution, dict) else {}
     profile = execution.get("execution_profile")
+    if not isinstance(profile, dict):
+        profile = metadata.get("execution_profile")
     profile = profile if isinstance(profile, dict) else {}
     if bool(profile.get("require_numeric_verifier")):
         return True
