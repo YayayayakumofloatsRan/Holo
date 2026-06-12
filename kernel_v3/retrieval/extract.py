@@ -357,6 +357,7 @@ def extract_spans(
                     **({"target_document_binding": candidate["target_document_binding"]} if candidate.get("target_document_binding") else {}),
                     **({"target_statement": candidate["target_statement"]} if candidate.get("target_statement") else {}),
                     **({"target_line_item": candidate["target_line_item"]} if candidate.get("target_line_item") else {}),
+                    **({"target_slot": candidate["target_slot"]} if candidate.get("target_slot") else {}),
                     **({"target_period": candidate["target_period"]} if candidate.get("target_period") else {}),
                 },
             )
@@ -367,7 +368,7 @@ def extract_spans(
 
 
 def _dedupe_candidate_windows(candidates: list[dict]) -> list[dict]:
-    seen: set[tuple[int, int]] = set()
+    seen: set[tuple[object, ...]] = set()
     result: list[dict] = []
     for candidate in sorted(
         candidates,
@@ -379,7 +380,9 @@ def _dedupe_candidate_windows(candidates: list[dict]) -> list[dict]:
     ):
         start = int(candidate.get("start_offset") or 0)
         end = int(candidate.get("end_offset") or start)
-        key = _coarse_window_key(start, end)
+        coarse_key = _coarse_window_key(start, end)
+        target_key = str(candidate.get("target_slot") or candidate.get("target_line_item") or "")
+        key: tuple[object, ...] = (*coarse_key, target_key) if target_key else coarse_key
         if key in seen:
             continue
         seen.add(key)
@@ -501,58 +504,64 @@ def _target_document_binding_candidates(text: str, *, goal: SearchGoal, terms: l
     structured_companyfacts = _target_structured_companyfacts_candidates(text, goal=goal, binding=binding, terms=terms)
     if structured_companyfacts:
         return structured_companyfacts
-    line_item = _string_value(binding.get("required_line_item")).lower()
-    period = _string_value(binding.get("doc_period"))
-    statement = _string_value(binding.get("required_statement")).lower()
-    line_aliases = _target_line_item_aliases(line_item)
-    statement_aliases = _target_statement_aliases(statement)
-    if not line_aliases and not statement_aliases:
+    specs = _target_document_evidence_specs(goal=goal, binding=binding)
+    if not specs:
         return []
     lower = text.lower()
     candidates: list[dict] = []
-    marker_positions = _target_marker_positions(lower, line_aliases)
-    if not marker_positions and line_item:
-        marker_positions = _target_marker_positions(lower, [line_item])
-    for marker, index in marker_positions[:40]:
-        statement_index = _nearest_preceding_marker(lower, statement_aliases, index)
-        if _target_should_use_structured_line(text, index):
-            window_start, window_end = _line_bounds(text, index)
-        else:
-            window_start = max(0, (statement_index if statement_index >= 0 else index) - 900)
-            window_end = min(len(text), index + max(900, len(marker) + 700))
-        snippet = _normalize_span(text[window_start:window_end])
-        if not snippet:
+    for spec_index, spec in enumerate(specs):
+        line_aliases = spec["line_aliases"]
+        statement_aliases = spec["statement_aliases"]
+        if not line_aliases and not statement_aliases:
             continue
-        snippet_lower = snippet.lower()
-        period_match = bool(period and period in snippet_lower)
-        statement_match = not statement_aliases or any(alias in snippet_lower for alias in statement_aliases)
-        line_match = any(alias in snippet_lower for alias in line_aliases) or bool(line_item and line_item in snippet_lower)
-        if not line_match:
-            continue
-        matched = [candidate for candidate in terms if candidate in snippet_lower]
-        for alias in [*line_aliases, *statement_aliases, period]:
-            if alias and alias in snippet_lower and alias not in matched:
-                matched.append(alias)
-        score = 0.72
-        if period_match:
-            score += 0.12
-        if statement_match:
-            score += 0.10
-        if line_match:
-            score += 0.08
-        candidates.append(
-            {
-                "start_offset": window_start,
-                "end_offset": window_end,
-                "text": snippet,
-                "matched_terms": matched,
-                "score": min(1.0, score),
-                "target_document_binding": binding,
-                "target_statement": statement,
-                "target_line_item": line_item,
-                "target_period": period,
-            }
-        )
+        marker_positions = _target_marker_positions(lower, line_aliases)
+        line_item = spec["line_item"]
+        if not marker_positions and line_item:
+            marker_positions = _target_marker_positions(lower, [line_item])
+        for marker, index in marker_positions[:40]:
+            statement_index = _nearest_preceding_marker(lower, statement_aliases, index)
+            if _target_should_use_structured_line(text, index):
+                window_start, window_end = _line_bounds(text, index)
+            else:
+                window_start = max(0, (statement_index if statement_index >= 0 else index) - 900)
+                window_end = min(len(text), index + max(900, len(marker) + 700))
+            snippet = _normalize_span(text[window_start:window_end])
+            if not snippet:
+                continue
+            snippet_lower = snippet.lower()
+            period = spec["period"]
+            statement = spec["statement"]
+            period_match = bool(period and period in snippet_lower)
+            statement_match = not statement_aliases or any(alias in snippet_lower for alias in statement_aliases)
+            line_match = any(alias in snippet_lower for alias in line_aliases) or bool(line_item and line_item in snippet_lower)
+            if not line_match:
+                continue
+            matched = [candidate for candidate in terms if candidate in snippet_lower]
+            for alias in [*line_aliases, *statement_aliases, period, spec["slot_name"]]:
+                if alias and alias in snippet_lower and alias not in matched:
+                    matched.append(alias)
+            score = 0.72
+            if period_match:
+                score += 0.12
+            if statement_match:
+                score += 0.10
+            if line_match:
+                score += 0.08
+            score += max(0.0, 0.04 - spec_index * 0.002)
+            candidates.append(
+                {
+                    "start_offset": window_start,
+                    "end_offset": window_end,
+                    "text": snippet,
+                    "matched_terms": matched,
+                    "score": min(1.0, score),
+                    "target_document_binding": binding,
+                    "target_statement": statement,
+                    "target_line_item": line_item or spec["slot_name"],
+                    "target_period": period,
+                    "target_slot": spec["slot_name"],
+                }
+            )
     return candidates
 
 
@@ -703,6 +712,119 @@ def _target_document_binding(goal: SearchGoal) -> JsonObject:
     if isinstance(binding, dict):
         return dict(binding)
     return {}
+
+
+def _target_document_evidence_specs(*, goal: SearchGoal, binding: JsonObject) -> list[JsonObject]:
+    specs: list[JsonObject] = []
+
+    def add_spec(*, slot_name: str, line_item: str, statement: str, period: str, attributes: list[str]) -> None:
+        aliases = _ordered_normalized_terms([
+            *_target_line_item_aliases(line_item),
+            line_item,
+            slot_name.replace("_", " "),
+            *attributes,
+        ])
+        statements = _ordered_normalized_terms(_target_statement_aliases(statement))
+        if not aliases and not statements:
+            return
+        key = (slot_name, line_item, statement, period, tuple(aliases))
+        if any(item.get("_dedupe_key") == key for item in specs):
+            return
+        specs.append(
+            {
+                "_dedupe_key": key,
+                "slot_name": slot_name,
+                "line_item": line_item,
+                "statement": statement,
+                "period": period,
+                "line_aliases": aliases,
+                "statement_aliases": statements,
+            }
+        )
+
+    binding_line = _string_value(binding.get("required_line_item")).lower()
+    binding_statement = _string_value(binding.get("required_statement")).lower()
+    binding_period = _string_value(binding.get("doc_period"))
+    if binding_line or binding_statement:
+        add_spec(
+            slot_name=_slot_name_from_line_item(binding_line),
+            line_item=binding_line,
+            statement=binding_statement,
+            period=binding_period,
+            attributes=[],
+        )
+
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    for spec in _compiled_task_evidence_specs(metadata):
+        line_item = _string_value(spec.get("line_item")).lower()
+        slot_name = _string_value(spec.get("slot_name")).lower().replace(" ", "_")
+        statement = _string_value(spec.get("statement")).lower() or binding_statement
+        period = _string_value(spec.get("target_period")) or binding_period
+        attributes = [_string_value(item).lower() for item in _object_string_list(spec.get("accepted_attributes"))]
+        if not line_item and attributes:
+            line_item = attributes[0]
+        add_spec(
+            slot_name=slot_name or _slot_name_from_line_item(line_item),
+            line_item=line_item,
+            statement=statement,
+            period=period,
+            attributes=attributes,
+        )
+    for item in specs:
+        item.pop("_dedupe_key", None)
+    return specs[:24]
+
+
+def _compiled_task_evidence_specs(metadata: object) -> list[JsonObject]:
+    if not isinstance(metadata, dict):
+        return []
+    hint = metadata.get("compiled_task_hint")
+    if not isinstance(hint, dict):
+        return []
+    specs = hint.get("evidence_specs")
+    if not isinstance(specs, list):
+        return []
+    return [dict(item) for item in specs if isinstance(item, dict)]
+
+
+def _object_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = _string_value(item)
+        if text:
+            result.append(text)
+    return result
+
+
+def _ordered_normalized_terms(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _normalize_span(str(value or "").lower().replace("_", " "))
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def _slot_name_from_line_item(line_item: str) -> str:
+    normalized = _normalize_span(str(line_item or "").lower().replace("&", "and"))
+    if not normalized:
+        return ""
+    if "property plant and equipment" in normalized and "net" in normalized:
+        return "property_plant_and_equipment_net"
+    if "capital expenditure" in normalized or "capex" in normalized or "purchases of property" in normalized:
+        return "capital_expenditures"
+    if "operating cash flow" in normalized or "operating activities" in normalized:
+        return "operating_cash_flow"
+    if "revenue" in normalized or "sales" in normalized:
+        return "revenue"
+    if normalized == "assets" or "total assets" in normalized:
+        return "assets"
+    return re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
 
 
 def _target_line_item_aliases(line_item: str) -> list[str]:
@@ -2813,6 +2935,41 @@ def _metadata_intent_text(metadata: object) -> str:
         for item in slot_frame.get("missing_slots") or []:
             if isinstance(item, str):
                 parts.append(item)
+    compiled_hint = metadata.get("compiled_task_hint")
+    if isinstance(compiled_hint, dict):
+        task_spec = compiled_hint.get("task_spec")
+        if isinstance(task_spec, dict):
+            for key in ("task_type",):
+                value = task_spec.get(key)
+                if isinstance(value, str):
+                    parts.append(value)
+            for key in ("target_entities", "target_periods", "success_criteria"):
+                for item in task_spec.get(key) or []:
+                    if isinstance(item, str):
+                        parts.append(item)
+        for spec in compiled_hint.get("evidence_specs") or []:
+            if not isinstance(spec, dict):
+                continue
+            for key in ("slot_name", "source_role", "target_period", "statement", "line_item"):
+                value = spec.get(key)
+                if isinstance(value, str):
+                    parts.append(value)
+            for item in spec.get("accepted_attributes") or []:
+                if isinstance(item, str):
+                    parts.append(item)
+            for item in spec.get("required_source_families") or []:
+                if isinstance(item, str):
+                    parts.append(item)
+        for spec in compiled_hint.get("transform_specs") or []:
+            if not isinstance(spec, dict):
+                continue
+            for key in ("name", "expression", "output_unit", "output_attribute"):
+                value = spec.get(key)
+                if isinstance(value, str):
+                    parts.append(value)
+            for item in spec.get("required_slots") or []:
+                if isinstance(item, str):
+                    parts.append(item)
     return " ".join(parts)
 
 

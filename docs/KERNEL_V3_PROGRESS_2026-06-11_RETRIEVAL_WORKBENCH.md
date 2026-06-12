@@ -261,9 +261,10 @@ FinanceBench rows, not the first-slice target binding bug.
   accession. The scorer now exports `required_source_urls`, journals
   `target_document_source_urls`, and counts same-accession SEC archive documents
   as equivalent target filings while still rejecting generic companyfacts. The
-  major unresolved engineering gap is cost: v21 used roughly `382k` model
-  tokens and v22 roughly `523k`, so Workbench/planner context compression is the
-  next necessary optimization.
+  current unresolved engineering gap is evidence completeness on harder rows,
+  not premature token minimization: v21 used roughly `382k` model tokens and v22
+  roughly `523k`, which is acceptable while the Workbench packet is being made
+  semantically complete enough for model judgment.
 - `run_financebench_doc_item4_model_net_v22_rescore` is a no-model rescore of
   the existing v22 output after annotation/source-equivalence cleanup. It now
   gives the fourth row dev annotation overall score `1.0`, required source hit
@@ -280,8 +281,9 @@ FinanceBench rows, not the first-slice target binding bug.
   than fixed first-N truncation. Candidate sources, documents, spans, accepted
   evidence, and rejected evidence are scored against the compiled evidence
   specs, transform specs, target document contract, statement, line item, and
-  table-like signals. This preserves late-arriving target filing evidence while
-  reducing the packet size presented to the LLM.
+  table-like signals. The current priority is functional completeness: preserve
+  late-arriving target filing evidence and enough document/table context for
+  LLM judgment, even when that means a larger packet.
 - Workbench document summaries now expose bounded document-reader diagnostics
   and task-ranked table-like snippets. The packet can show parser mode,
   extracted character/page/table-like-block diagnostics, readable preview text,
@@ -304,3 +306,11 @@ FinanceBench rows, not the first-slice target binding bug.
   remain limited to claim-ledger facts and FormulaTrace outputs. Focused
   synthesis/fallback tests passed, and the same 205-test workbench/finance
   regression suite remained green after this answer-path change.
+- Compiled EvidenceSpec hints now drive document extraction as well as
+  Workbench judgment. `extract_spans()` reads `compiled_task_hint.evidence_specs`
+  and uses slot names, accepted attributes, target periods, statements, and line
+  items to create target-document table spans. Candidate dedupe is now
+  slot-aware for target rows, so adjacent filing rows for different required
+  slots can survive as separate citable candidates. The focused extraction
+  tests passed and the workbench/finance/document expansion suite now reports
+  `206 passed`.

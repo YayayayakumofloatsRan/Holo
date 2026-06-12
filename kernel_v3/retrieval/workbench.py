@@ -26,6 +26,18 @@ SOURCE_ROLES = {
 }
 SLOT_STATUSES = {"filled", "partial", "missing", "assumption_required", "not_applicable"}
 
+WORKBENCH_SOURCE_LIMIT = 64
+WORKBENCH_DOCUMENT_LIMIT = 32
+WORKBENCH_SPAN_LIMIT = 128
+WORKBENCH_ACCEPTED_EVIDENCE_LIMIT = 64
+WORKBENCH_REJECTED_EVIDENCE_LIMIT = 96
+WORKBENCH_FETCH_SUMMARY_LIMIT = 48
+WORKBENCH_CITATION_LIMIT = 128
+WORKBENCH_TARGET_CANDIDATE_LIMIT = 64
+WORKBENCH_RETRY_DOCUMENT_LIMIT = 16
+WORKBENCH_RETRY_REJECTED_LIMIT = 64
+WORKBENCH_TABLE_SNIPPET_LIMIT = 8
+
 
 @dataclass(frozen=True, kw_only=True)
 class RetrievalWorkbenchResult:
@@ -170,11 +182,21 @@ def retrieval_workbench_packet(
     target_contract = _target_document_contract(metadata)
     compiled_hint = _compiled_task_hint(metadata.get("compiled_task_hint"))
     selection_terms = _packet_selection_terms(goal=goal, metadata=metadata, compiled_hint=compiled_hint)
-    selected_sources = _select_sources(sources, target_contract=target_contract, terms=selection_terms, limit=32)
-    selected_documents = _select_documents(documents, target_contract=target_contract, terms=selection_terms, limit=16)
-    selected_spans = _select_spans(spans, target_contract=target_contract, terms=selection_terms, limit=64)
-    selected_evidence = _select_evidence(evidence, target_contract=target_contract, terms=selection_terms, limit=32)
-    selected_rejected = _select_rejected_evidence(rejected_evidence, target_contract=target_contract, terms=selection_terms, limit=48)
+    selected_sources = _select_sources(sources, target_contract=target_contract, terms=selection_terms, limit=WORKBENCH_SOURCE_LIMIT)
+    selected_documents = _select_documents(documents, target_contract=target_contract, terms=selection_terms, limit=WORKBENCH_DOCUMENT_LIMIT)
+    selected_spans = _select_spans(spans, target_contract=target_contract, terms=selection_terms, limit=WORKBENCH_SPAN_LIMIT)
+    selected_evidence = _select_evidence(
+        evidence,
+        target_contract=target_contract,
+        terms=selection_terms,
+        limit=WORKBENCH_ACCEPTED_EVIDENCE_LIMIT,
+    )
+    selected_rejected = _select_rejected_evidence(
+        rejected_evidence,
+        target_contract=target_contract,
+        terms=selection_terms,
+        limit=WORKBENCH_REJECTED_EVIDENCE_LIMIT,
+    )
     span_readers = _span_reader_diagnostics_by_document(spans)
     accepted = [_evidence_summary(item, target_contract=target_contract) for item in selected_evidence]
     rejected = [_rejected_summary(item, target_contract=target_contract) for item in selected_rejected]
@@ -191,7 +213,7 @@ def retrieval_workbench_packet(
         "required_statement": _string_value(metadata.get("required_statement")),
         "required_line_item": _string_value(metadata.get("required_line_item")),
         "source_summaries": [_source_summary(item) for item in selected_sources],
-        "fetch_summaries": [_bounded_dict(item, text_limit=240) for item in fetch_summaries[-24:]],
+        "fetch_summaries": [_bounded_dict(item, text_limit=360) for item in fetch_summaries[-WORKBENCH_FETCH_SUMMARY_LIMIT:]],
         "document_summaries": [
             _document_summary(
                 document,
@@ -214,7 +236,7 @@ def retrieval_workbench_packet(
         ),
         "current_slot_state": _json_object(metadata.get("slot_state")),
         "current_claim_state": _json_object(metadata.get("claim_state")),
-        "current_citations": [_citation_summary(item) for item in citations[:64]],
+        "current_citations": [_citation_summary(item) for item in citations[:WORKBENCH_CITATION_LIMIT]],
         "known_limitations": _string_list(metadata.get("known_limitations")),
         "selection_diagnostics": {
             "raw_source_count": len(sources),
@@ -766,10 +788,10 @@ def _workbench_retry_packet(packet: JsonObject) -> JsonObject:
         "required_transforms": packet.get("required_transforms"),
         "compiled_task_hint": packet.get("compiled_task_hint"),
         "target_document_contract": packet.get("target_document_contract"),
-        "document_summaries": (packet.get("document_summaries") or [])[:8],
+        "document_summaries": (packet.get("document_summaries") or [])[:WORKBENCH_RETRY_DOCUMENT_LIMIT],
         "target_document_candidates": packet.get("target_document_candidates"),
         "accepted_evidence": packet.get("accepted_evidence"),
-        "rejected_evidence": (packet.get("rejected_evidence") or [])[:32],
+        "rejected_evidence": (packet.get("rejected_evidence") or [])[:WORKBENCH_RETRY_REJECTED_LIMIT],
         "current_citations": packet.get("current_citations"),
         "known_limitations": packet.get("known_limitations"),
     }
@@ -886,7 +908,7 @@ def _document_reader_summary(*diagnostics: JsonObject, text_mode: str = "") -> J
     return merged
 
 
-def _table_like_snippets(text: str, *, terms: list[str], limit: int = 4) -> list[JsonObject]:
+def _table_like_snippets(text: str, *, terms: list[str], limit: int = WORKBENCH_TABLE_SNIPPET_LIMIT) -> list[JsonObject]:
     lines = _candidate_table_lines(text)
     if not lines:
         return []
@@ -912,7 +934,7 @@ def _table_like_snippets(text: str, *, terms: list[str], limit: int = 4) -> list
                     "line_index": index,
                     "numeric_count": numeric_count,
                     "selection_score": round(score, 3),
-                    "text": _truncate(snippet, 560),
+                    "text": _truncate(snippet, 760),
                 },
             )
         )
@@ -1074,7 +1096,7 @@ def _target_document_candidates(
                 "review_hint": "Extracted target-document span; if semantically useful, reference this evidence_id.",
             }
         )
-    return candidates[:32]
+    return candidates[:WORKBENCH_TARGET_CANDIDATE_LIMIT]
 
 
 def _target_review_hint(*, reason: str, is_target_document: bool) -> str:

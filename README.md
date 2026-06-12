@@ -1303,9 +1303,11 @@ annotations compressed the target investor filing URL down to
 accession. The benchmark scorer now preserves `required_source_urls` in new
 annotations, records `target_document_source_urls` in trace metrics, and treats
 same-accession SEC archive documents as equivalent target filings while still
-rejecting generic companyfacts. Cost remains the uncomfortable part: v21 used
-about `382k` model tokens and v22 about `523k`, so the next retrieval iteration
-must compress Workbench/planner context rather than broaden the loop.
+rejecting generic companyfacts. This iteration deliberately keeps the packet
+rich enough for the model to judge document role, row relevance, and missing
+slots. v21 used about `382k` model tokens and v22 about `523k`; that is an
+accepted reliability tradeoff until evidence capture and synthesis quality are
+stable.
 
 The next no-model scoring pass (`run_financebench_doc_item4_model_net_v22_rescore`)
 confirms that source-equivalence fix: the fourth-row dev annotation overall
@@ -1328,9 +1330,10 @@ task-ranked table-like snippets, so the LLM workbench can judge whether a target
 PDF/filing was parsed, whether table rows were visible, and which row-like
 numeric excerpts may fill the compiled slots. These snippets are context for
 semantic judgment, not evidence by themselves; final citations, source
-authority, numeric support, and synthesis gates remain host-owned. This is the
-first cost-control step; full live-token reduction still needs another
-model-net rerun.
+authority, numeric support, and synthesis gates remain host-owned. Current
+iteration prioritizes functional packet completeness over token economy; live
+token reduction is a later optimization only after evidence and synthesis
+quality hold.
 
 A post-change no-network rescore of the existing stable4 live outputs
 (`run_stable4_event_resolver_v1_rescore_after_reader_packet`) confirms the
@@ -1348,6 +1351,17 @@ excerpts while masking row/table numbers as `[number]`; exact financial outputs
 still have to come from the claim ledger or FormulaTrace. This makes fallback
 answers more useful than a bare source list without relaxing the unsupported
 numeric-claim policy.
+
+The same compiled work program now reaches document extraction, not just the
+Workbench prompt. `extract_spans()` reads `compiled_task_hint.evidence_specs`
+and uses each EvidenceSpec's slot, accepted attributes, target period,
+statement, and line item to generate target-document table spans. Adjacent rows
+for different compiled slots are deduplicated by slot instead of by position
+alone, so capital-intensity style tasks can expose revenue, capex, PP&E, assets,
+and operating-cash-flow rows as separate citable candidates from the same
+filing. Companyfacts readable-text projection also receives those compiled
+terms through metadata intent text, improving multi-slot fact projection without
+hard-coding item answers.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

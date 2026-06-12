@@ -256,9 +256,9 @@ not repeatedly download these sources during benchmark iteration.
   verifier and synthesis gates passed, and source hosts including `www.sec.gov`.
   The benchmark annotation scorer now preserves required source URLs and treats
   same-accession SEC archive documents as equivalent target filings while still
-  rejecting generic companyfacts. The open issue is cost, not this row's source
-  grounding: v21/v22 consumed roughly `382k`/`523k` model tokens, so the next
-  iteration must shrink Workbench/planner context.
+  rejecting generic companyfacts. The row's source grounding is the functional
+  baseline; near-term iteration should preserve or improve evidence completeness
+  even at high token cost.
 - A no-model rescore of v22 after this source-equivalence cleanup
   (`run_financebench_doc_item4_model_net_v22_rescore`) reaches dev annotation
   overall `1.0`, required source hit `4/4`, required source URL hit `1/1`,
@@ -1020,11 +1020,11 @@ Post-dev10 EV/EBITDA iteration:
   failures as source acquisition, fetch/parser, fact-ledger extraction, formula
   binding, verifier policy, synthesis gate, or model JSON repair before adding
   any task-specific heuristic.
-- Fast-lane cost is still high. Successful single-item runs often consume
-  60k-90k tokens, and hard cases can fail after model JSON repair issues. The
-  next executor work should shrink planner/evaluator context for finance facts,
-  keep retrieval diagnostics compact, and make processor budget failures return
-  actionable host replan hints instead of repeated `respond` fallbacks.
+- Fast-lane token use is intentionally relaxed for now. Successful single-item
+  runs often consume 60k-90k tokens, and hard cases can fail after model JSON
+  repair issues. The next executor work should prioritize richer finance facts,
+  better synthesis/verifier feedback, and actionable host replan hints before
+  returning to prompt compression.
 
 ## Next Steps
 
@@ -1155,9 +1155,10 @@ assumption-ledger display, and citation-preserving limitation answers.
 
 Additional follow-ups:
 
-- Reduce `finance-fact-fast` cost by shrinking processor prompts, using
-  structured retrieval results more directly, and avoiding synthesis context
-  duplication.
+- Preserve `finance-fact-fast` evidence quality while improving how structured
+  retrieval results and synthesis feedback are handed to the model. Prompt
+  shrinking is a later optimization after citable evidence, facts, formulas, and
+  gates remain stable.
 - Add repeated-run stability batches for stable4/dev10: each selected item
   should run at least three times and report source-family, claim-count,
   slot-missing, calculator-trace, verifier-gate, synthesis-gate, and final

@@ -605,7 +605,7 @@ def test_retrieval_workbench_packet_compacts_but_preserves_target_and_task_relev
     )
 
     assert packet["selection_diagnostics"]["raw_accepted_evidence_count"] == 71
-    assert packet["selection_diagnostics"]["selected_accepted_evidence_count"] == 32
+    assert packet["selection_diagnostics"]["selected_accepted_evidence_count"] == 64
     accepted_ids = {item["evidence_id"] for item in packet["accepted_evidence"]}
     assert "evidence-target-mdna" in accepted_ids
     assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-target-mdna"
@@ -893,6 +893,88 @@ def test_target_document_binding_extracts_cash_flow_ppe_purchase_row() -> None:
     assert "Consolidated Statement of Cash Flows" in spans[0].text
     assert "Purchases of property, plant and equipment" in spans[0].text
     assert "1,577" in spans[0].text
+
+
+def test_compiled_evidence_specs_drive_target_document_table_span_extraction() -> None:
+    doc_link = "https://www.sec.gov/Archives/edgar/data/66740/000155837019000470/mmm-20181231x10k.htm"
+    binding = {
+        "company": "3M",
+        "doc_link": doc_link,
+        "doc_period": "2018",
+        "doc_type": "10k",
+        "primary_source_required": True,
+    }
+    goal = SearchGoal(
+        goal_id="goal-compiled-spec-target-extract",
+        query="3M FY2018 capital intensity",
+        max_spans_per_document=4,
+        metadata={
+            "target_document_binding": binding,
+            "compiled_task_hint": {
+                "schema": "holo.kernel_v3.compiled_task_hint.v1",
+                "domain": "finance",
+                "task_spec": {"task_type": "compute", "target_entities": ["3M"], "target_periods": ["2018"]},
+                "evidence_specs": [
+                    {
+                        "slot_name": "revenue",
+                        "accepted_attributes": ["revenue", "net sales"],
+                        "source_role": "primary_filing",
+                        "target_period": "2018",
+                        "statement": "income_statement",
+                        "line_item": "revenue",
+                    },
+                    {
+                        "slot_name": "capital_expenditures",
+                        "accepted_attributes": ["capital expenditures", "purchases of property plant and equipment"],
+                        "source_role": "primary_filing",
+                        "target_period": "2018",
+                        "statement": "cash_flow_statement",
+                        "line_item": "capital expenditures",
+                    },
+                ],
+                "transform_specs": [
+                    {
+                        "name": "capital_intensity_capex_revenue",
+                        "required_slots": ["capital_expenditures", "revenue"],
+                        "expression": "capital_expenditures / revenue",
+                    }
+                ],
+            },
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-compiled-spec-target-extract",
+        goal_id=goal.goal_id,
+        source_id="source-compiled-spec-target-extract",
+        uri=doc_link,
+        title="3M 2018 10-K",
+        artifact_id="artifact-compiled-spec-target-extract",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"mime_type": "text/plain", "target_document_binding": binding},
+    )
+    body = "\n".join(
+        [
+            "3M Company annual report",
+            "Consolidated Statement of Income Years ended December 31 (Millions)",
+            "2018 2017 2016",
+            "Net sales 32765 31657 30109",
+            "Consolidated Statement of Cash Flows Years ended December 31 (Millions)",
+            "Purchases of property, plant and equipment (PP&E) (1,577) (1,373) (1,420)",
+        ]
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=body)
+    target_slots = {str(span.metadata.get("target_slot") or "") for span in spans}
+    target_line_items = {str(span.metadata.get("target_line_item") or "") for span in spans}
+
+    assert "revenue" in target_slots
+    assert "capital_expenditures" in target_slots
+    assert "revenue" in target_line_items
+    assert "capital expenditures" in target_line_items
+    assert any("Net sales" in span.text for span in spans)
+    assert any("Purchases of property, plant and equipment" in span.text for span in spans)
 
 
 def test_sec_companyfacts_reader_uses_target_binding_when_query_is_source_url() -> None:
