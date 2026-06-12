@@ -1409,6 +1409,14 @@ core judgment of "what work program should solve this task" to the LLM while the
 host continues to validate tool permissions, citations, source authority,
 numeric support, synthesis gates, and budgets.
 
+The planner binding path also preserves model-selected composable tools. A
+Retrieval Workbench `continue` decision still pulls premature `respond` actions
+back into source acquisition, but it no longer overrides an explicit allowed
+tool action such as `workspace.search`, `file.read`, `shell.exec`, or
+`calculator.compute`. This keeps the safety gate intact while preventing the
+finance fast lane from silently regressing into a retrieval-only loop after the
+model chooses a local parsing or analysis step.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

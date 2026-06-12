@@ -2854,7 +2854,7 @@ class _RecipeBoundPlanner:
         if rescue is not None:
             action = rescue
         bound = _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
-        if bound.name != "retrieval.run":
+        if bound.name != "retrieval.run" and not (bound.kind == "tool" and bound.name in set(self.recipe.allowed_tools)):
             bound = self._retrieval_workbench_followup_action(context, bound) or bound
         bound = self._finance_formula_action(context, bound) or bound
         self._journal_plan_update(context, bound, feedback)

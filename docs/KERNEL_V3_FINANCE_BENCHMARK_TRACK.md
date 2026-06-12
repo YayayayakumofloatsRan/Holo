@@ -295,6 +295,12 @@ not repeatedly download these sources during benchmark iteration.
   `compiled_task_program`; if the processor fails or emits invalid schema, the
   old host compiler is retained as fallback. This keeps host verification hard
   while moving the core decomposition judgment out of threshold-style code.
+- The planner binding path now preserves explicit model-selected composable
+  tools. Workbench follow-up retrieval still prevents premature free-text
+  answers when source slots are missing, but it does not override an allowed
+  `workspace.search`, `file.read`, `shell.exec`, or `calculator.compute`
+  proposal. This is the practical difference between an LLM-led workbench and a
+  retrieval-only FSM with extra tool names.
 - Retrieval Workbench packets now use task-aware compact selection. The
   selection score combines the compiled evidence/transform specs, target
   document contract, required statement/line item, and table-like signals, so

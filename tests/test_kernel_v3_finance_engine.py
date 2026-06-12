@@ -826,6 +826,59 @@ def test_planner_uses_retrieval_workbench_followup_before_premature_answer() -> 
     assert "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/0000066740-23-000014.pdf" in source_urls
 
 
+def test_planner_preserves_model_selected_composable_tool_over_workbench_followup() -> None:
+    class ShellPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-model-shell-parse",
+                kind="tool",
+                name="shell.exec",
+                description="Run a local parser over cached filing text",
+                score=0.91,
+                payload={"argv": ["python3", "-c", "print('parse cached filing')"]},
+                reasons=["model_selected_composable_tool", "execution_program_suggests_local_analysis"],
+                side_effect_class="shell",
+            )
+
+    recipe = task_recipe("retrieval_answer", metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")))
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-shell-choice",
+        run_id="run-shell-choice",
+        step_id="step-workbench",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "reason_summary": "Need parsing of a target filing table.",
+            "missing_slots": ["capital_expenditures"],
+            "next_queries": ["https://www.sec.gov/Archives/example/adbe-10k.htm capital expenditures"],
+            "next_source_families": ["primary_filing"],
+            "next_document_targets": ["https://www.sec.gov/Archives/example/adbe-10k.htm"],
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=ShellPlanner(),
+        goal="Parse the cached Adobe target filing and extract capex.",
+        recipe=recipe,
+        journal=journal,
+    )
+    context = ContextBundle(
+        context_id="ctx-shell-choice",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-shell-choice", "run_id": "run-shell-choice"},
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "shell.exec"
+    assert action.payload["argv"] == ["python3", "-c", "print('parse cached filing')"]
+    assert "retrieval_workbench_followup" not in action.reasons
+
+
 def test_planner_compiles_workbench_missing_slots_into_target_source_followup() -> None:
     class RespondingPlanner:
         def propose(self, context, feedback=None):
