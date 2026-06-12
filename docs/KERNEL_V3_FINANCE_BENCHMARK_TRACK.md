@@ -270,6 +270,14 @@ not repeatedly download these sources during benchmark iteration.
   rather than from raw snippets alone. The hint is advisory work context, not
   evidence, and still requires host-validated citations/facts/transforms before
   synthesis.
+- The compiled work program now includes a `tool_chain_plan` and the planner
+  replan packet exposes a compact `execution_program` before retrieval. This is
+  the intended model-led assembly boundary: the LLM sees missing slots, evidence
+  specs, transform specs, available tools, and candidate next moves, then
+  chooses whether to acquire evidence, prepare calculation, or proceed toward
+  verified synthesis. The host still owns provenance, citation, source-authority,
+  numeric-support, policy, and budget validation. This prevents the retrieval
+  path from regressing into threshold-only filtering or benchmark answer tables.
 - Retrieval Workbench packets now use task-aware compact selection. The
   selection score combines the compiled evidence/transform specs, target
   document contract, required statement/line item, and table-like signals, so

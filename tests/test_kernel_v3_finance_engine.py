@@ -10,6 +10,7 @@ from kernel_v3.agent.execution_profile import execution_profile, execution_profi
 from kernel_v3.agent.runtime import (
     _RecipeBoundPlanner,
     _RecipeEvaluator,
+    _agent_replan_hints,
     _apply_recipe_profile_defaults,
     _benchmark_doc_retrieval_primary_citation_satisfies_required_source,
     _augment_finance_modeling_retrieval_payload,
@@ -1411,6 +1412,47 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
     evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
     assert evidence_slots["property_plant_and_equipment_net"].statement == "balance_sheet"
     assert evidence_slots["capital_expenditures"].statement == "cash_flow_statement"
+    tool_chain = program.diagnostics["tool_chain_plan"]
+    assert tool_chain["schema"] == "holo.kernel_v3.tool_chain_plan.v1"
+    assert tool_chain["decision_owner"] == "model"
+    assert tool_chain["host_role"] == "verify_provenance_policy_budget_and_numeric_support"
+    assert tool_chain["missing_slots"] == program.slot_frame.missing_slots
+    assert [item["name"] for item in tool_chain["available_tools"]] == [
+        "retrieval.run",
+        "calculator.compute",
+        "host.verifier_gate",
+    ]
+    assert tool_chain["next_action_candidates"][0]["tool"] == "retrieval.run"
+    assert tool_chain["recommended_steps"][-1]["tool"] == "host.verifier_gate"
+
+
+def test_planner_replan_hints_include_execution_program_for_model_tool_assembly() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "research_profile": "finance_fundamentals",
+            "goal": "Is 3M a capital-intensive business based on FY2022 data?",
+        },
+    )
+
+    hints = _agent_replan_hints(
+        JournalStore.in_memory(),
+        task_id="task-execution-program",
+        run_id="run-execution-program",
+        recipe=recipe,
+    )
+
+    program = hints["execution_program"]
+    assert program["schema"] == "holo.kernel_v3.execution_program_prompt.v1"
+    assert program["task_spec"]["task_type"] == "compute"
+    assert "capital_expenditures" in program["missing_slots"]
+    assert program["tool_chain_plan"]["decision_owner"] == "model"
+    assert "retrieval.run" in [item["name"] for item in program["tool_chain_plan"]["available_tools"]]
+    assert any(
+        item["tool"] == "retrieval.run"
+        for item in program["tool_chain_plan"]["next_action_candidates"]
+    )
 
 
 def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_formula() -> None:

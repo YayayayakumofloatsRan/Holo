@@ -56,6 +56,12 @@ def compile_finance_task_program(
         target_period=task_spec.target_periods[0] if task_spec.target_periods else None,
     )
     transform_specs = _transform_specs(formula_plan=formula_plan, frame_missing_slots=frame.missing_slots)
+    tool_chain_plan = _tool_chain_plan(
+        frame=frame,
+        formula_plan=formula_plan,
+        evidence_specs=evidence_specs,
+        transform_specs=transform_specs,
+    )
     return CompiledTaskProgram(
         program_id="task-program-" + _short_hash(task_spec.spec_id, ",".join(spec.slot_name for spec in evidence_specs)),
         domain="finance",
@@ -69,6 +75,7 @@ def compile_finance_task_program(
             "evidence_spec_count": len(evidence_specs),
             "transform_spec_count": len(transform_specs),
             "missing_slots": list(frame.missing_slots),
+            "tool_chain_plan": tool_chain_plan,
         },
     )
 
@@ -164,6 +171,143 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
             diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
         )
     ]
+
+
+def _tool_chain_plan(
+    *,
+    frame,
+    formula_plan: FinanceFormulaPlan,
+    evidence_specs: list[EvidenceSpec],
+    transform_specs: list[TransformSpec],
+) -> JsonObject:
+    """Expose a model-readable assembly surface for the next workflow move.
+
+    The compiler does not answer the task and does not decide final relevance.
+    It makes the intermediate program explicit so the LLM planner/workbench can
+    choose how to assemble retrieval, calculator, verifier, and synthesis steps
+    while the host keeps provenance and numeric gates.
+    """
+
+    missing_slots = _ordered_unique([
+        *list(frame.missing_slots),
+        *list(formula_plan.missing_facts),
+    ])
+    recommended_steps: list[JsonObject] = []
+    next_action_candidates: list[JsonObject] = []
+    if missing_slots or evidence_specs:
+        recommended_steps.append(
+            {
+                "step": "acquire_or_read_evidence",
+                "tool": "retrieval.run",
+                "decision_owner": "model",
+                "when": "required slots are missing or source evidence has not been accepted",
+                "missing_slots": missing_slots[:16],
+                "evidence_specs": [_tool_chain_evidence_spec(spec) for spec in evidence_specs[:12]],
+            }
+        )
+        next_action_candidates.append(
+            {
+                "tool": "retrieval.run",
+                "reason": "fill_missing_evidence_slots",
+                "missing_slots": missing_slots[:16],
+                "target_source_roles": _ordered_unique([
+                    str(spec.source_role or "")
+                    for spec in evidence_specs
+                    if spec.source_role
+                ])[:8],
+            }
+        )
+    if formula_plan.status == "ready" and isinstance(formula_plan.payload, dict):
+        recommended_steps.append(
+            {
+                "step": "compute_supported_transform",
+                "tool": "calculator.compute",
+                "decision_owner": "model",
+                "when": "all formula inputs are supported by claim ledger facts and no equivalent formula trace exists",
+                "formula_name": formula_plan.formula_name,
+                "input_fact_ids": list(formula_plan.input_fact_ids)[:32],
+                "transform_specs": [_tool_chain_transform_spec(spec) for spec in transform_specs[:8]],
+            }
+        )
+        next_action_candidates.append(
+            {
+                "tool": "calculator.compute",
+                "reason": "supported_transform_ready",
+                "formula_name": formula_plan.formula_name,
+                "payload_available": True,
+            }
+        )
+    elif formula_plan.status == "missing_facts" and transform_specs:
+        recommended_steps.append(
+            {
+                "step": "do_not_compute_yet",
+                "tool": "calculator.compute",
+                "decision_owner": "model",
+                "when": "formula exists but required input slots are not supported yet",
+                "missing_slots": missing_slots[:16],
+                "transform_specs": [_tool_chain_transform_spec(spec) for spec in transform_specs[:8]],
+            }
+        )
+    recommended_steps.append(
+        {
+            "step": "verify_then_synthesize",
+            "tool": "host.verifier_gate",
+            "decision_owner": "host",
+            "when": "candidate answer material claims are backed by claim ledger, transform traces, or labeled assumptions",
+            "guards": [
+                "do not invent source ids, evidence ids, citations, facts, values, or formulas",
+                "material numeric claims must pass numeric support and synthesis gates",
+                "unsupported required slots must become explicit limitations, not fabricated answers",
+            ],
+        }
+    )
+    return {
+        "schema": "holo.kernel_v3.tool_chain_plan.v1",
+        "decision_owner": "model",
+        "host_role": "verify_provenance_policy_budget_and_numeric_support",
+        "task_type": frame.task_type,
+        "formula_status": formula_plan.status,
+        "formula_name": formula_plan.formula_name,
+        "missing_slots": missing_slots[:16],
+        "available_tools": [
+            {
+                "name": "retrieval.run",
+                "use_for": "source acquisition, document reading, evidence slot filling",
+            },
+            {
+                "name": "calculator.compute",
+                "use_for": "deterministic transforms after input facts are supported",
+            },
+            {
+                "name": "host.verifier_gate",
+                "use_for": "mandatory provenance, citation, assumption, and numeric support validation",
+            },
+        ],
+        "recommended_steps": recommended_steps,
+        "next_action_candidates": next_action_candidates,
+    }
+
+
+def _tool_chain_evidence_spec(spec: EvidenceSpec) -> JsonObject:
+    return {
+        "slot_name": spec.slot_name,
+        "accepted_attributes": list(spec.accepted_attributes)[:6],
+        "source_role": spec.source_role,
+        "target_period": spec.target_period,
+        "statement": spec.statement,
+        "line_item": spec.line_item,
+        "required": spec.required,
+    }
+
+
+def _tool_chain_transform_spec(spec: TransformSpec) -> JsonObject:
+    return {
+        "name": spec.name,
+        "required_slots": list(spec.required_slots)[:12],
+        "expression": spec.expression,
+        "output_unit": spec.output_unit,
+        "output_attribute": spec.output_attribute,
+    }
 
 
 def _target_entities(*, question: str, binding: JsonObject) -> list[str]:

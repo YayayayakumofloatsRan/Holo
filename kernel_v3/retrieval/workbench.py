@@ -488,6 +488,9 @@ def _compiled_task_hint(value: object) -> JsonObject:
         ],
         "missing_slots": _bounded_strings(value.get("missing_slots"), limit=16, item_limit=80),
     }
+    tool_chain_plan = _compiled_tool_chain_plan_summary(value.get("tool_chain_plan"))
+    if tool_chain_plan:
+        result["tool_chain_plan"] = tool_chain_plan
     diagnostics = _json_object(value.get("diagnostics"))
     if diagnostics:
         result["diagnostics"] = {
@@ -496,6 +499,35 @@ def _compiled_task_hint(value: object) -> JsonObject:
             if diagnostics.get(key) not in (None, "", [], {})
         }
     return result
+
+
+def _compiled_tool_chain_plan_summary(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "schema": _string_value(value.get("schema")),
+        "decision_owner": _string_value(value.get("decision_owner")),
+        "host_role": _string_value(value.get("host_role")),
+        "task_type": _string_value(value.get("task_type")),
+        "formula_status": _string_value(value.get("formula_status")),
+        "formula_name": _string_value(value.get("formula_name")),
+        "missing_slots": _bounded_strings(value.get("missing_slots"), limit=16, item_limit=80),
+        "available_tools": [
+            _bounded_dict(item, text_limit=160)
+            for item in list(value.get("available_tools") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "recommended_steps": [
+            _bounded_dict(item, text_limit=320)
+            for item in list(value.get("recommended_steps") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "next_action_candidates": [
+            _bounded_dict(item, text_limit=240)
+            for item in list(value.get("next_action_candidates") or [])[:6]
+            if isinstance(item, dict)
+        ],
+    }
 
 
 def _compiled_evidence_spec_summary(item: JsonObject) -> JsonObject:
@@ -757,7 +789,9 @@ def _workbench_prompt(packet: JsonObject) -> str:
         "You may only reference IDs present in the packet. Host will validate provenance, authority, policy, and numeric support. "
         "Use compiled_task_hint when present as the host-compiled work program: evidence_specs describe slots to fill, "
         "source roles and target periods; transform_specs describe computations that should not be attempted until their "
-        "input slots are supported. The hint is not evidence and does not by itself fill any slot. "
+        "input slots are supported. If compiled_task_hint.tool_chain_plan is present, use it as the model assembly surface "
+        "for deciding whether the next move should be retrieval, document targeting, calculator preparation, or verified synthesis. "
+        "The hint is not evidence and does not by itself fill any slot. "
         "Host rejection reasons are not final semantic judgments: if rejected_evidence or target_document_candidates contain useful "
         "target-document excerpts, rescue those existing evidence IDs and explain which slots they fill. "
         "Return exactly one JSON object with the requested schema. Decide whether evidence is sufficient for the task, "

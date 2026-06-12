@@ -4946,6 +4946,14 @@ def _agent_replan_hints(
         "avoid_repeating": _avoid_repeating_hints(actions),
         "suggested_next_action": "follow_recipe_or_answer_if_sufficient",
     }
+    execution_program = _execution_program_hint_for_planner(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+    )
+    if execution_program:
+        hints["execution_program"] = execution_program
     if recipe.mode != "retrieval_answer":
         return hints
     retrieval = _retrieval_replan_hints(
@@ -4970,6 +4978,87 @@ def _agent_replan_hints(
         hints["status"] = "continue_or_fail_under_host_guards"
         hints["suggested_next_action"] = "change_query_source_or_strategy_if_continuing"
     return hints
+
+
+def _execution_program_hint_for_planner(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+) -> JsonObject:
+    latest = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind="compiled_task_program")
+    if latest is not None and isinstance(latest.data, dict):
+        compact = _compact_compiled_task_program_for_prompt(latest.data)
+        if compact:
+            compact["source_record_ref"] = latest.record_id
+            return compact
+    if recipe.mode != "retrieval_answer":
+        return {}
+    question = _root_goal_from_recipe(recipe)
+    if not question or question == recipe.mode:
+        return {}
+    binding = _target_document_binding_from_recipe(recipe)
+    if _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID and not binding:
+        return {}
+    try:
+        compiled = compile_finance_task_program(question=question, facts=[], target_binding=binding)
+    except Exception:
+        return {}
+    return _compact_compiled_task_program_for_prompt(
+        {
+            **compiled.to_dict(),
+            "schema": "holo.kernel_v3.compiled_task_program.v1",
+            "source": "planner_preflight_task_compiler",
+        }
+    )
+
+
+def _compact_compiled_task_program_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    task_spec = _json_object(value.get("task_spec"))
+    slot_frame = _json_object(value.get("slot_frame"))
+    diagnostics = _json_object(value.get("diagnostics"))
+    tool_chain_plan = _compact_tool_chain_plan_for_prompt(diagnostics.get("tool_chain_plan"))
+    evidence_specs = [
+        _compact_simple_dict(item, limit=10)
+        for item in list(value.get("evidence_specs") or [])[:12]
+        if isinstance(item, dict)
+    ]
+    transform_specs = [
+        _compact_simple_dict(item, limit=9)
+        for item in list(value.get("transform_specs") or [])[:8]
+        if isinstance(item, dict)
+    ]
+    missing_slots = _ordered_unique(
+        [
+            *_string_list(diagnostics.get("missing_slots")),
+            *_string_list(slot_frame.get("missing_slots")),
+            *_string_list(tool_chain_plan.get("missing_slots")),
+        ]
+    )
+    return {
+        "schema": "holo.kernel_v3.execution_program_prompt.v1",
+        "source_schema": value.get("schema"),
+        "program_id": value.get("program_id"),
+        "domain": value.get("domain"),
+        "task_spec": {
+            "task_type": task_spec.get("task_type"),
+            "objective": _text_preview(task_spec.get("objective"), limit=480),
+            "target_entities": _string_list(task_spec.get("target_entities"))[:8],
+            "target_periods": _string_list(task_spec.get("target_periods"))[:8],
+            "success_criteria": _string_list(task_spec.get("success_criteria"))[:8],
+        },
+        "evidence_specs": evidence_specs,
+        "transform_specs": transform_specs,
+        "missing_slots": missing_slots[:16],
+        "tool_chain_plan": tool_chain_plan,
+        "planner_instruction": (
+            "Use this execution program as a workbench for assembling tools. "
+            "The model chooses next retrieval/calculation moves; host verifies provenance, policy, and numeric support."
+        ),
+    }
 
 
 def _retrieval_replan_hints(
@@ -7778,6 +7867,7 @@ def _compiled_task_hint_for_retrieval(*, question: str, binding: JsonObject) -> 
     except Exception:
         return {}
     task_spec = compiled.task_spec
+    tool_chain_plan = _json_object(compiled.diagnostics.get("tool_chain_plan"))
     return {
         "schema": "holo.kernel_v3.compiled_task_hint.v1",
         "program_id": compiled.program_id,
@@ -7818,11 +7908,42 @@ def _compiled_task_hint_for_retrieval(*, question: str, binding: JsonObject) -> 
             for spec in compiled.transform_specs[:12]
         ],
         "missing_slots": list((compiled.slot_frame.missing_slots if compiled.slot_frame is not None else []))[:16],
+        "tool_chain_plan": _compact_tool_chain_plan_for_prompt(tool_chain_plan),
         "diagnostics": {
             "source": "finance_task_compiler_pre_retrieval",
             "evidence_spec_count": len(compiled.evidence_specs),
             "transform_spec_count": len(compiled.transform_specs),
+            "tool_chain_plan_present": bool(tool_chain_plan),
         },
+    }
+
+
+def _compact_tool_chain_plan_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "schema": value.get("schema"),
+        "decision_owner": value.get("decision_owner"),
+        "host_role": value.get("host_role"),
+        "task_type": value.get("task_type"),
+        "formula_status": value.get("formula_status"),
+        "formula_name": value.get("formula_name"),
+        "missing_slots": _string_list(value.get("missing_slots"))[:16],
+        "available_tools": [
+            _compact_simple_dict(item, limit=6)
+            for item in list(value.get("available_tools") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "recommended_steps": [
+            _compact_simple_dict(item, limit=10)
+            for item in list(value.get("recommended_steps") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "next_action_candidates": [
+            _compact_simple_dict(item, limit=8)
+            for item in list(value.get("next_action_candidates") or [])[:6]
+            if isinstance(item, dict)
+        ],
     }
 
 

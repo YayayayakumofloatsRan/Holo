@@ -1372,6 +1372,18 @@ synthesis gates remain host-owned. This closes the common FinanceBench shape
 where retrieval has already found filing evidence but the loop stops before the
 final answer path uses it.
 
+The task compiler now also emits a model-facing `tool_chain_plan` inside each
+compiled program. This is the current bridge from static workflow records to
+LLM-led tool assembly: the plan lists missing slots, evidence specs, transform
+specs, available tools (`retrieval.run`, `calculator.compute`, and host
+verifier/synthesis gates), and candidate next moves while marking
+`decision_owner=model`. Runtime replan hints expose a compact
+`execution_program` to the planner before retrieval, and Retrieval Workbench
+packets preserve the same `tool_chain_plan` for semantic evidence judgment.
+The host does not treat the plan as evidence or a fixed script; it only
+verifies provenance, source authority, citations, numeric support, policy, and
+budgets after the model chooses the next move.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

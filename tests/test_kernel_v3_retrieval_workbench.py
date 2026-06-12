@@ -502,6 +502,25 @@ def test_retrieval_workbench_packet_exposes_compiled_task_hint_for_llm_judgment(
                     }
                 ],
                 "missing_slots": ["capital_expenditures", "revenue"],
+                "tool_chain_plan": {
+                    "schema": "holo.kernel_v3.tool_chain_plan.v1",
+                    "decision_owner": "model",
+                    "host_role": "verify_provenance_policy_budget_and_numeric_support",
+                    "task_type": "compute",
+                    "formula_status": "missing_facts",
+                    "formula_name": "capital_intensity",
+                    "missing_slots": ["capital_expenditures", "revenue"],
+                    "available_tools": [
+                        {"name": "retrieval.run", "use_for": "source acquisition"},
+                        {"name": "calculator.compute", "use_for": "deterministic transforms"},
+                    ],
+                    "recommended_steps": [
+                        {"step": "acquire_or_read_evidence", "tool": "retrieval.run", "decision_owner": "model"}
+                    ],
+                    "next_action_candidates": [
+                        {"tool": "retrieval.run", "reason": "fill_missing_evidence_slots"}
+                    ],
+                },
                 "diagnostics": {"source": "finance_task_compiler_pre_retrieval", "evidence_spec_count": 1},
             }
         },
@@ -524,6 +543,8 @@ def test_retrieval_workbench_packet_exposes_compiled_task_hint_for_llm_judgment(
     assert hint["evidence_specs"][0]["slot_name"] == "capital_expenditures"
     assert hint["evidence_specs"][0]["statement"] == "cash_flow_statement"
     assert hint["transform_specs"][0]["required_slots"] == ["capital_expenditures", "revenue"]
+    assert hint["tool_chain_plan"]["decision_owner"] == "model"
+    assert hint["tool_chain_plan"]["next_action_candidates"][0]["tool"] == "retrieval.run"
     assert "objective" not in hint["task_spec"]
 
 
