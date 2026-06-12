@@ -8168,7 +8168,7 @@ def _retrieval_payload(goal: str, recipe: TaskRecipe) -> JsonObject:
     return _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe)
 
 
-def _benchmark_doc_retrieval_payload(goal: str) -> JsonObject:
+def _benchmark_doc_retrieval_payload(goal: str, *, include_compiled_hint: bool = True) -> JsonObject:
     target = _benchmark_doc_retrieval_target(goal)
     if not target:
         return {}
@@ -8223,9 +8223,10 @@ def _benchmark_doc_retrieval_payload(goal: str) -> JsonObject:
             metadata["required_statement"] = binding["required_statement"]
         if binding.get("required_line_item"):
             metadata["required_line_item"] = binding["required_line_item"]
-        hint = _compiled_task_hint_for_retrieval(question=question or goal, binding=binding)
-        if hint:
-            metadata["compiled_task_hint"] = hint
+        if include_compiled_hint:
+            hint = _compiled_task_hint_for_retrieval(question=question or goal, binding=binding)
+            if hint:
+                metadata["compiled_task_hint"] = hint
     return {
         "query": " ".join(query_parts) or goal,
         "metadata": metadata,
@@ -8251,7 +8252,7 @@ def _enforce_benchmark_doc_retrieval_binding(
     cannot silently drift into secondary/current market pages.
     """
 
-    benchmark_payload = _benchmark_doc_retrieval_payload(goal)
+    benchmark_payload = _benchmark_doc_retrieval_payload(goal, include_compiled_hint=recipe is None)
     if not benchmark_payload and recipe is not None:
         benchmark_payload = _benchmark_doc_retrieval_payload_from_recipe(recipe)
     if not benchmark_payload and recipe is not None:

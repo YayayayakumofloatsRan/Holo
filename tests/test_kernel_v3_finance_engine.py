@@ -21,6 +21,7 @@ from kernel_v3.agent.runtime import (
     _finance_formula_preflight_plans,
     _planner_directive,
     _candidate_fact_evidence_text,
+    _retrieval_payload,
     _toolchain_candidate_facts,
     _workspace_grounding,
     task_recipe,
@@ -181,6 +182,64 @@ def test_retrieval_compiled_hint_prefers_model_execution_program_over_fallback()
     assert hint["evidence_specs"][0]["slot_name"] == "segment_discussion"
     assert hint["transform_specs"] == []
     assert hint["missing_slots"] == ["segment_discussion"]
+
+
+def test_benchmark_retrieval_payload_uses_recipe_execution_program_hint() -> None:
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself.\n"
+        "Company: 3M\n"
+        "Document: 3M_2022_10K\n"
+        "Document type: 10-K\n"
+        "Document period: 2022\n"
+        "Source URL: https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/mmm-20221231.htm\n\n"
+        "If we exclude the impact of M&A, which segment dragged down 3M's overall growth in 2022?"
+    )
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": goal,
+            "execution_program": {
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "program_id": "program-model-disclosure-payload",
+                "domain": "finance",
+                "source": "task_compile_model",
+                "task_spec": {
+                    "task_type": "disclosure_analysis",
+                    "objective": "Use the target filing to identify the segment driver.",
+                    "target_entities": ["3M"],
+                    "target_periods": ["FY2022"],
+                    "success_criteria": ["cite the target filing segment discussion"],
+                },
+                "evidence_specs": [
+                    {
+                        "slot_name": "segment_discussion",
+                        "accepted_attributes": ["business segment discussion"],
+                        "source_role": "primary_filing",
+                        "required_source_families": ["regulatory_filing"],
+                        "target_period": "FY2022",
+                        "statement": "business segment discussion",
+                        "line_item": "net sales by business segment",
+                        "required": True,
+                    }
+                ],
+                "transform_specs": [],
+                "slot_frame": {
+                    "task_type": "disclosure_analysis",
+                    "required_slots": [{"name": "segment_discussion"}],
+                    "missing_slots": ["segment_discussion"],
+                },
+                "diagnostics": {"source": "task_compile_model"},
+            },
+        },
+    )
+
+    payload = _retrieval_payload(goal, recipe)
+    hint = payload["metadata"]["compiled_task_hint"]
+
+    assert hint["program_id"] == "program-model-disclosure-payload"
+    assert hint["diagnostics"]["source"] == "recipe_execution_program"
+    assert hint["task_spec"]["task_type"] == "disclosure_analysis"
+    assert hint["transform_specs"] == []
 
 
 def test_finance_fact_ledger_extracts_sec_companyfacts_spans() -> None:
