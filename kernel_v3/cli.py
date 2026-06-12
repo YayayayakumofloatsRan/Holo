@@ -50,7 +50,7 @@ from kernel_v3.chat.console import (
 )
 from kernel_v3.chat.thread_store import ThreadTranscriptStore
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler, merge_context_budget
-from kernel_v3.contracts import JsonObject, ProcessorRequest
+from kernel_v3.contracts import JsonObject, LedgerRecord, ProcessorRequest
 from kernel_v3.interaction import DEFAULT_RESPONSE_LANGUAGE, normalize_response_language
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -687,6 +687,21 @@ def main(argv: list[str] | None = None) -> int:
     finance_report.add_argument("--format", choices=["markdown", "html", "json"], default="markdown")
     finance_report.add_argument("--output", default=None)
     finance_report.add_argument("--max-weak-items", type=int, default=20)
+    finance_progress = bench_sub.add_parser("finance-progress")
+    finance_progress.add_argument("--task-id", default=None, help="Inspect a specific task id.")
+    finance_progress.add_argument("--thread-id", default=None, help="Inspect the latest task for a specific thread id.")
+    finance_progress.add_argument(
+        "--thread-prefix",
+        default=None,
+        help="Inspect the latest task whose thread id starts with this prefix.",
+    )
+    finance_progress.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Render a human workflow snapshot or raw JSON.",
+    )
+    finance_progress.add_argument("--limit-events", type=int, default=24)
     finance_bench = bench_sub.add_parser("finance")
     finance_bench.add_argument("--dataset", required=True)
     finance_bench.add_argument("--predictions", default=None)
@@ -829,7 +844,16 @@ def main(argv: list[str] | None = None) -> int:
     journal_sub.add_parser("tail")
 
     args = parser.parse_args(argv)
-    journal = JournalStore(Path(args.journal), index_path=Path(args.index))
+    if args.command == "bench" and getattr(args, "bench_command", None) == "finance-progress":
+        payload = _finance_progress_command_from_path(args)
+        raw_output = _render_finance_progress(payload) if getattr(args, "format", "text") == "text" else None
+        if isinstance(raw_output, str):
+            print(raw_output)
+        else:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0 if payload.get("status") not in {"failed", "blocked", "error"} else 1
+    journal_index_path = None if args.command == "bench" and getattr(args, "bench_command", None) == "finance-progress" else Path(args.index)
+    journal = JournalStore(Path(args.journal), index_path=journal_index_path)
 
     if args.command == "run":
         result = _loop(journal, answer=f"respond: {args.text}", planner_mode=args.planner).run(args.text)
@@ -2212,6 +2236,11 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             "output": output,
             "_stdout": stdout,
         }
+    if command == "finance-progress":
+        payload = _finance_progress_command(args, journal)
+        if getattr(args, "format", "text") == "text":
+            return {**payload, "_stdout": _render_finance_progress(payload)}
+        return payload
     if command != "finance":
         return {"status": "failed", "reason": "unknown_benchmark", "benchmark": command}
     output_path = Path(args.output) if args.output else None
@@ -2331,6 +2360,489 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         "execution_profile": execution.profile_id if execution is not None else None,
         "mission_enabled": mission_enabled,
     }
+
+
+def _finance_progress_command(args, journal: JournalStore) -> dict[str, object]:
+    task_id = str(getattr(args, "task_id", "") or "").strip() or _finance_progress_latest_task_id(
+        journal,
+        thread_id=str(getattr(args, "thread_id", "") or "").strip() or None,
+        thread_prefix=str(getattr(args, "thread_prefix", "") or "").strip() or None,
+    )
+    if not task_id:
+        return {
+            "status": "missing",
+            "mode": "finance_progress",
+            "reason": "no_matching_task",
+            "thread_id": getattr(args, "thread_id", None),
+            "thread_prefix": getattr(args, "thread_prefix", None),
+        }
+    records = journal.records(task_id=task_id)
+    if not records:
+        return {"status": "missing", "mode": "finance_progress", "reason": "unknown_task", "task_id": task_id}
+    latest = records[-1]
+    stages = _finance_progress_stages(records)
+    open_processor = _finance_progress_open_processor(records)
+    latest_error = _finance_progress_latest_error(records)
+    return {
+        "status": "ok",
+        "mode": "finance_progress",
+        "task_id": task_id,
+        "run_id": latest.run_id,
+        "record_count": len(records),
+        "latest_record": _finance_progress_record_summary(latest),
+        "thread_ids": sorted(_finance_progress_thread_ids(records)),
+        "current_stage": _finance_progress_current_stage(stages),
+        "open_processor": open_processor,
+        "latest_error": latest_error,
+        "stages": stages,
+        "counters": _finance_progress_counters(records),
+        "recent_events": [
+            _finance_progress_record_summary(record)
+            for record in records[-max(1, int(getattr(args, "limit_events", 24) or 24)) :]
+        ],
+    }
+
+
+def _finance_progress_command_from_path(args) -> dict[str, object]:
+    path = Path(getattr(args, "journal", default_journal_path()))
+    if not path.exists():
+        return {"status": "missing", "mode": "finance_progress", "reason": "journal_not_found", "journal": str(path)}
+    task_id = str(getattr(args, "task_id", "") or "").strip()
+    if not task_id:
+        task_id = _finance_progress_latest_task_id_from_path(
+            path,
+            thread_id=str(getattr(args, "thread_id", "") or "").strip() or None,
+            thread_prefix=str(getattr(args, "thread_prefix", "") or "").strip() or None,
+        )
+    if not task_id:
+        return {
+            "status": "missing",
+            "mode": "finance_progress",
+            "reason": "no_matching_task",
+            "journal": str(path),
+            "thread_id": getattr(args, "thread_id", None),
+            "thread_prefix": getattr(args, "thread_prefix", None),
+        }
+    records = _finance_progress_records_from_path(path, task_id=task_id)
+    return _finance_progress_payload_from_records(args, task_id=task_id, records=records)
+
+
+def _finance_progress_latest_task_id_from_path(
+    path: Path,
+    *,
+    thread_id: str | None,
+    thread_prefix: str | None,
+) -> str | None:
+    latest: str | None = None
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if thread_id and thread_id not in line:
+                continue
+            if thread_prefix and thread_prefix not in line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            task_id = payload.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                continue
+            if thread_id or thread_prefix:
+                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                thread_ids: set[str] = set()
+                _collect_thread_ids(data, thread_ids, depth=0)
+                if thread_id and thread_id not in thread_ids:
+                    continue
+                if thread_prefix and not any(item.startswith(thread_prefix) for item in thread_ids):
+                    continue
+            latest = task_id
+    return latest
+
+
+def _finance_progress_records_from_path(path: Path, *, task_id: str) -> list[LedgerRecord]:
+    records: list[LedgerRecord] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if task_id not in line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("task_id") != task_id:
+                continue
+            records.append(LedgerRecord.from_dict(payload))
+    return records
+
+
+def _finance_progress_payload_from_records(args, *, task_id: str, records: list[LedgerRecord]) -> dict[str, object]:
+    if not records:
+        return {"status": "missing", "mode": "finance_progress", "reason": "unknown_task", "task_id": task_id}
+    latest = records[-1]
+    stages = _finance_progress_stages(records)
+    open_processor = _finance_progress_open_processor(records)
+    latest_error = _finance_progress_latest_error(records)
+    return {
+        "status": "ok",
+        "mode": "finance_progress",
+        "task_id": task_id,
+        "run_id": latest.run_id,
+        "record_count": len(records),
+        "latest_record": _finance_progress_record_summary(latest),
+        "thread_ids": sorted(_finance_progress_thread_ids(records)),
+        "current_stage": _finance_progress_current_stage(stages),
+        "open_processor": open_processor,
+        "latest_error": latest_error,
+        "stages": stages,
+        "counters": _finance_progress_counters(records),
+        "recent_events": [
+            _finance_progress_record_summary(record)
+            for record in records[-max(1, int(getattr(args, "limit_events", 24) or 24)) :]
+        ],
+    }
+
+
+def _finance_progress_latest_task_id(
+    journal: JournalStore,
+    *,
+    thread_id: str | None,
+    thread_prefix: str | None,
+) -> str | None:
+    for record in reversed(journal.records()):
+        task_id = record.task_id
+        if not task_id:
+            continue
+        if thread_id or thread_prefix:
+            thread_ids = _finance_progress_thread_ids([record])
+            if thread_id and thread_id not in thread_ids:
+                continue
+            if thread_prefix and not any(item.startswith(thread_prefix) for item in thread_ids):
+                continue
+        return task_id
+    return None
+
+
+def _finance_progress_thread_ids(records: list[object]) -> set[str]:
+    values: set[str] = set()
+    for record in records:
+        data = getattr(record, "data", {})
+        _collect_thread_ids(data, values, depth=0)
+    return values
+
+
+def _collect_thread_ids(value: object, values: set[str], *, depth: int) -> None:
+    if depth > 4:
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "thread_id" and isinstance(item, str) and item:
+                values.add(item)
+            elif isinstance(item, (dict, list)):
+                _collect_thread_ids(item, values, depth=depth + 1)
+    elif isinstance(value, list):
+        for item in value[:32]:
+            if isinstance(item, (dict, list)):
+                _collect_thread_ids(item, values, depth=depth + 1)
+
+
+def _finance_progress_stages(records: list[object]) -> list[JsonObject]:
+    definitions = [
+        ("task", "Task intake", {"task", "chat_turn", "chat_route"}, (), ()),
+        (
+            "semantic_recipe",
+            "Semantic / recipe",
+            {"semantic_intake", "semantic_goal", "semantic_task_graph", "semantic_task_plan", "agent_recipe"},
+            (),
+            ("semantic.intake", "chat.route"),
+        ),
+        ("task_compile", "Task compiler", {"compiled_task_program"}, (), ("task.compile",)),
+        ("planner", "Planner", {"action", "policy_decision"}, (), ("planner.propose",)),
+        ("retrieval", "Retrieval acquisition", set(), ("retrieval_",), ()),
+        ("workbench", "LLM evidence workbench", {"retrieval_workbench_decision"}, (), ("retrieval.workbench",)),
+        (
+            "toolchain",
+            "Composable toolchain",
+            {
+                "toolchain_plan",
+                "toolchain_step_proposed",
+                "toolchain_step_executed",
+                "toolchain_artifact",
+                "toolchain_grounding_candidate",
+                "toolchain_failure",
+            },
+            ("toolchain_",),
+            (),
+        ),
+        ("claims", "Facts / claims / slots", {"finance_fact_ledger", "claim_ledger", "slot_frame"}, (), ()),
+        ("transforms", "Transforms / calculator", {"transform_plan", "calculator_result"}, (), ()),
+        (
+            "verification",
+            "Verifier / synthesis gate",
+            {"finance_numeric_verification", "verifier_gate_result", "synthesis_gate_result"},
+            (),
+            (),
+        ),
+        ("final", "Final result", {"agent_final_answer", "agent_failure_report", "chat_agent_result"}, (), ("synthesizer.answer",)),
+    ]
+    stages: list[JsonObject] = []
+    for stage_id, label, kinds, prefixes, processors in definitions:
+        matched = [record for record in records if _finance_progress_record_matches(record, kinds, prefixes, processors)]
+        latest = matched[-1] if matched else None
+        stages.append(
+            {
+                "stage": stage_id,
+                "label": label,
+                "present": bool(matched),
+                "count": len(matched),
+                "latest": _finance_progress_record_summary(latest) if latest is not None else None,
+            }
+        )
+    current = _finance_progress_current_stage(stages)
+    seen_current = False
+    for stage in stages:
+        if stage["stage"] == current:
+            seen_current = True
+            stage["status"] = "current" if current != "final" else "done"
+        elif stage.get("present"):
+            stage["status"] = "done"
+        elif not seen_current:
+            stage["status"] = "pending"
+        else:
+            stage["status"] = "pending"
+    return stages
+
+
+def _finance_progress_record_matches(
+    record: object,
+    kinds: set[str],
+    prefixes: tuple[str, ...],
+    processors: tuple[str, ...],
+) -> bool:
+    kind = str(getattr(record, "kind", "") or "")
+    if kind in kinds or any(kind.startswith(prefix) for prefix in prefixes):
+        return True
+    if kind in {"processor_request", "processor_result"}:
+        data = getattr(record, "data", {})
+        processor = str(data.get("processor") or data.get("task_type") or "")
+        if any(processor == item or processor.startswith(item) for item in processors):
+            return True
+    return False
+
+
+def _finance_progress_current_stage(stages: list[JsonObject]) -> str | None:
+    for stage in reversed(stages):
+        if stage.get("present"):
+            return str(stage.get("stage") or "")
+    return None
+
+
+def _finance_progress_open_processor(records: list[object]) -> JsonObject | None:
+    requests: dict[str, object] = {}
+    results: set[str] = set()
+    for record in records:
+        data = getattr(record, "data", {})
+        if getattr(record, "kind", "") == "processor_request":
+            request_id = str(data.get("request_id") or "")
+            if request_id:
+                requests[request_id] = record
+        elif getattr(record, "kind", "") == "processor_result":
+            request_id = str(data.get("request_id") or "")
+            if request_id:
+                results.add(request_id)
+    for request_id, record in reversed(list(requests.items())):
+        if request_id not in results:
+            summary = _finance_progress_record_summary(record)
+            summary["request_id"] = request_id
+            return summary
+    return None
+
+
+def _finance_progress_latest_error(records: list[object]) -> JsonObject | None:
+    for record in reversed(records):
+        data = getattr(record, "data", {})
+        kind = str(getattr(record, "kind", "") or "")
+        error = data.get("error") or data.get("reason") or data.get("failure_reason")
+        status = data.get("status")
+        if error or status in {"failed", "blocked", "error"} or kind in {"agent_failure_report", "toolchain_failure"}:
+            return _finance_progress_record_summary(record)
+    return None
+
+
+def _finance_progress_counters(records: list[object]) -> JsonObject:
+    kinds: dict[str, int] = {}
+    processor_errors = 0
+    for record in records:
+        kind = str(getattr(record, "kind", "") or "")
+        kinds[kind] = kinds.get(kind, 0) + 1
+        if kind == "processor_result":
+            data = getattr(record, "data", {})
+            if data.get("status") == "failed" or data.get("error"):
+                processor_errors += 1
+    return {
+        "processor_calls": kinds.get("processor_result", 0),
+        "processor_errors": processor_errors,
+        "retrieval_reports": kinds.get("retrieval_report", 0),
+        "fetch_attempts": kinds.get("retrieval_fetch_attempt", 0),
+        "extractions": kinds.get("retrieval_extraction", 0),
+        "workbench_decisions": kinds.get("retrieval_workbench_decision", 0),
+        "claim_ledgers": kinds.get("claim_ledger", 0),
+        "slot_frames": kinds.get("slot_frame", 0),
+        "transform_plans": kinds.get("transform_plan", 0),
+        "calculator_results": kinds.get("calculator_result", 0),
+        "verifier_gates": kinds.get("verifier_gate_result", 0),
+        "synthesis_gates": kinds.get("synthesis_gate_result", 0),
+        "toolchain_steps": kinds.get("toolchain_step_executed", 0),
+        "by_kind": dict(sorted(kinds.items())),
+    }
+
+
+def _finance_progress_record_summary(record: object | None) -> JsonObject | None:
+    if record is None:
+        return None
+    data = getattr(record, "data", {})
+    kind = str(getattr(record, "kind", "") or "")
+    summary: JsonObject = {
+        "record_id": getattr(record, "record_id", None),
+        "kind": kind,
+        "run_id": getattr(record, "run_id", None),
+        "step_id": getattr(record, "step_id", None),
+    }
+    if kind in {"processor_request", "processor_result"}:
+        prompt = data.get("prompt") if isinstance(data.get("prompt"), dict) else {}
+        summary.update(
+            {
+                "processor": data.get("processor") or data.get("task_type"),
+                "status": data.get("status"),
+                "error": data.get("error"),
+                "provider": data.get("provider"),
+                "model": data.get("model"),
+                "prompt_chars": prompt.get("chars") if isinstance(prompt, dict) else None,
+                "duration_ms": data.get("duration_ms"),
+            }
+        )
+    elif kind == "retrieval_fetch_attempt":
+        summary.update({"status": data.get("status"), "uri": data.get("uri"), "size_bytes": data.get("size_bytes")})
+    elif kind == "retrieval_extraction":
+        spans = data.get("spans")
+        summary.update({"document_id": _nested_value(data, "document", "document_id"), "spans": len(spans) if isinstance(spans, list) else None})
+    elif kind == "retrieval_report":
+        diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
+        summary.update(
+            {
+                "status": data.get("status"),
+                "evidence_count": diagnostics.get("evidence_count"),
+                "citation_count": diagnostics.get("citation_count"),
+            }
+        )
+    elif kind == "retrieval_workbench_decision":
+        summary.update(
+            {
+                "decision": data.get("decision"),
+                "rescued_count": data.get("rescued_count"),
+                "missing_slots": data.get("missing_slots"),
+                "next_queries": data.get("next_queries"),
+            }
+        )
+    elif kind in {"claim_ledger", "finance_fact_ledger"}:
+        claims = data.get("claims") or data.get("facts")
+        summary.update({"count": len(claims) if isinstance(claims, list) else data.get("count")})
+    elif kind == "slot_frame":
+        summary.update({"missing_slots": data.get("missing_slots"), "task_type": data.get("task_type")})
+    elif kind == "transform_plan":
+        plans = data.get("plans") or data.get("transform_plans")
+        summary.update({"count": len(plans) if isinstance(plans, list) else data.get("count")})
+    elif kind in {"calculator_result", "finance_numeric_verification", "verifier_gate_result", "synthesis_gate_result"}:
+        summary.update({"status": data.get("status"), "reason": data.get("reason") or data.get("failure_reason")})
+    elif kind in {"agent_final_answer", "agent_failure_report"}:
+        summary.update({"status": data.get("status"), "reason": data.get("reason") or data.get("failure_reason")})
+    else:
+        for key in ("status", "reason", "name", "source", "tool", "action_id", "observation_id"):
+            if data.get(key) is not None:
+                summary[key] = data.get(key)
+    return {key: value for key, value in summary.items() if value is not None}
+
+
+def _nested_value(data: JsonObject, *keys: str) -> object | None:
+    current: object = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _render_finance_progress(payload: JsonObject) -> str:
+    if payload.get("status") != "ok":
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+    lines = [
+        "Finance workflow progress",
+        f"task={payload.get('task_id')} run={payload.get('run_id')} records={payload.get('record_count')} current={payload.get('current_stage') or '-'}",
+    ]
+    thread_ids = payload.get("thread_ids")
+    if isinstance(thread_ids, list) and thread_ids:
+        lines.append("threads=" + ", ".join(str(item) for item in thread_ids[:4]))
+    open_processor = payload.get("open_processor")
+    if isinstance(open_processor, dict):
+        lines.append(
+            "open_processor="
+            + f"{open_processor.get('processor') or '-'} prompt_chars={open_processor.get('prompt_chars') or '-'} "
+            + f"record={open_processor.get('record_id') or '-'}"
+        )
+    latest_error = payload.get("latest_error")
+    if isinstance(latest_error, dict):
+        lines.append(
+            "latest_error="
+            + f"{latest_error.get('kind') or '-'} status={latest_error.get('status') or '-'} "
+            + f"error={latest_error.get('error') or latest_error.get('reason') or '-'} record={latest_error.get('record_id') or '-'}"
+        )
+    lines.append("stages:")
+    for stage in payload.get("stages", []):
+        if not isinstance(stage, dict):
+            continue
+        marker = {"done": "ok", "current": "now", "pending": ".."}.get(str(stage.get("status")), "..")
+        latest = stage.get("latest") if isinstance(stage.get("latest"), dict) else {}
+        latest_text = ""
+        if latest:
+            latest_text = f" latest={latest.get('kind')}#{latest.get('record_id')}"
+            if latest.get("status"):
+                latest_text += f" status={latest.get('status')}"
+            if latest.get("processor"):
+                latest_text += f" processor={latest.get('processor')}"
+            if latest.get("prompt_chars"):
+                latest_text += f" prompt_chars={latest.get('prompt_chars')}"
+        lines.append(f"  [{marker}] {stage.get('label')} count={stage.get('count')}{latest_text}")
+    counters = payload.get("counters") if isinstance(payload.get("counters"), dict) else {}
+    lines.append(
+        "counters: "
+        + " ".join(
+            f"{key}={counters.get(key)}"
+            for key in (
+                "processor_calls",
+                "processor_errors",
+                "retrieval_reports",
+                "fetch_attempts",
+                "extractions",
+                "workbench_decisions",
+                "claim_ledgers",
+                "slot_frames",
+                "transform_plans",
+                "calculator_results",
+                "verifier_gates",
+                "synthesis_gates",
+                "toolchain_steps",
+            )
+        )
+    )
+    lines.append("recent:")
+    for event in payload.get("recent_events", []):
+        if not isinstance(event, dict):
+            continue
+        details = []
+        for key in ("processor", "status", "error", "decision", "uri", "prompt_chars", "duration_ms", "count"):
+            if event.get(key) is not None:
+                details.append(f"{key}={event.get(key)}")
+        lines.append(f"  {event.get('record_id')} {event.get('kind')} " + " ".join(details))
+    return "\n".join(lines)
 
 
 def _finance_benchmark_progress_callback(

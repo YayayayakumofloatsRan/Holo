@@ -183,7 +183,9 @@ def _model_task_compile_prompt(
             "numeric values, formulas with unsupported inputs, or final answers. If the fallback inferred a formula from broad "
             "language, verify that the user is actually asking for that calculation; explanation, attribution, disclosure, or "
             "source-grounded lookup tasks should receive evidence slots and no calculator transform unless a deterministic "
-            "formula is truly required. Host will validate and execute tools."
+            "formula is truly required. If the fallback contains an explicit deterministic transform from the user's own formula "
+            "definition and it is not listed as risky, keep that transform or provide a semantically equivalent executable transform. "
+            "Host will validate and execute tools."
         ),
         "target_binding": target_binding or {},
         "fact_ledger": [_fact_summary(fact) for fact in facts[:96]],
@@ -261,8 +263,24 @@ def _compiled_program_from_model_output(
     fallback: CompiledTaskProgram,
 ) -> CompiledTaskProgram:
     task_spec = _model_task_spec(parsed.get("task_spec"), question=question, fallback=fallback.task_spec)
+    preserve_formula_contract = _fallback_formula_contract_required(fallback)
+    task_spec = _preserve_fallback_task_contract(
+        task_spec,
+        fallback=fallback,
+        preserve_formula_contract=preserve_formula_contract,
+    )
     evidence_specs = _model_evidence_specs(parsed.get("evidence_specs"), fallback=fallback.evidence_specs, task_type=task_spec.task_type)
+    evidence_specs = _preserve_fallback_evidence_contract(
+        evidence_specs,
+        fallback=fallback,
+        preserve_formula_contract=preserve_formula_contract,
+    )
     transform_specs = _model_transform_specs(parsed.get("transform_specs"), fallback=fallback.transform_specs)
+    transform_specs = _preserve_fallback_transform_contract(
+        transform_specs,
+        fallback=fallback,
+        preserve_formula_contract=preserve_formula_contract,
+    )
     slot_frame = _model_slot_frame(
         parsed.get("slot_frame"),
         parsed=parsed,
@@ -270,13 +288,22 @@ def _compiled_program_from_model_output(
         task_spec=task_spec,
         evidence_specs=evidence_specs,
     )
+    slot_frame = _preserve_fallback_slot_contract(
+        slot_frame,
+        fallback=fallback,
+        preserve_formula_contract=preserve_formula_contract,
+    )
     diagnostics = {
         **dict(fallback.diagnostics),
         "source": "task_compile_model",
         "fallback_program_id": fallback.program_id,
         "model_reason_summary": _string(parsed.get("reason_summary"))[:480],
         "model_diagnostics": _json_object(parsed.get("diagnostics")),
-        "tool_chain_plan": _model_tool_chain_plan(parsed.get("tool_chain_plan"), fallback=fallback),
+        "tool_chain_plan": _model_tool_chain_plan(
+            parsed.get("tool_chain_plan"),
+            fallback=fallback,
+            preserve_formula_contract=preserve_formula_contract,
+        ),
     }
     return CompiledTaskProgram(
         program_id="task-program-model-" + _short_hash(task_spec.spec_id, ",".join(spec.slot_name for spec in evidence_specs)),
@@ -287,6 +314,103 @@ def _compiled_program_from_model_output(
         slot_frame=slot_frame,
         transform_plan=fallback.transform_plan,
         diagnostics=diagnostics,
+    )
+
+
+def _fallback_formula_contract_required(fallback: CompiledTaskProgram) -> bool:
+    formula_name = _string(fallback.task_spec.diagnostics.get("formula_name"))
+    if not formula_name or formula_name == "yoy_growth":
+        return False
+    return bool(fallback.transform_specs)
+
+
+def _preserve_fallback_task_contract(
+    task_spec: TaskSpec,
+    *,
+    fallback: CompiledTaskProgram,
+    preserve_formula_contract: bool,
+) -> TaskSpec:
+    if not preserve_formula_contract:
+        return task_spec
+    if fallback.task_spec.task_type not in {"compute", "compare_compute", "model", "reconcile"}:
+        return task_spec
+    if task_spec.task_type in {"compute", "compare_compute", "model", "reconcile"}:
+        return task_spec
+    return replace(
+        task_spec,
+        task_type=fallback.task_spec.task_type,
+        success_criteria=_ordered_unique([*list(task_spec.success_criteria), *list(fallback.task_spec.success_criteria)]),
+        diagnostics={
+            **dict(task_spec.diagnostics),
+            "fallback_formula_contract_preserved": True,
+            "fallback_task_type": fallback.task_spec.task_type,
+        },
+    )
+
+
+def _preserve_fallback_evidence_contract(
+    evidence_specs: list[EvidenceSpec],
+    *,
+    fallback: CompiledTaskProgram,
+    preserve_formula_contract: bool,
+) -> list[EvidenceSpec]:
+    if not preserve_formula_contract:
+        return evidence_specs
+    seen = {spec.slot_name for spec in evidence_specs}
+    merged = list(evidence_specs)
+    for spec in fallback.evidence_specs:
+        if spec.slot_name in seen:
+            continue
+        merged.append(spec)
+        seen.add(spec.slot_name)
+    return merged
+
+
+def _preserve_fallback_transform_contract(
+    transform_specs: list[TransformSpec],
+    *,
+    fallback: CompiledTaskProgram,
+    preserve_formula_contract: bool,
+) -> list[TransformSpec]:
+    if not preserve_formula_contract:
+        return transform_specs
+    seen = {spec.name for spec in transform_specs}
+    merged = list(transform_specs)
+    for spec in fallback.transform_specs:
+        if spec.name in seen:
+            continue
+        merged.append(spec)
+        seen.add(spec.name)
+    return merged
+
+
+def _preserve_fallback_slot_contract(
+    slot_frame: SlotFrame,
+    *,
+    fallback: CompiledTaskProgram,
+    preserve_formula_contract: bool,
+) -> SlotFrame:
+    if not preserve_formula_contract or fallback.slot_frame is None:
+        return slot_frame
+    required = list(slot_frame.required_slots)
+    seen = {slot.name for slot in required}
+    for slot in fallback.slot_frame.required_slots:
+        if slot.name in seen:
+            continue
+        required.append(slot)
+        seen.add(slot.name)
+    task_type = slot_frame.task_type
+    if task_type not in {"compute", "compare_compute", "model", "reconcile"}:
+        task_type = fallback.slot_frame.task_type
+    return replace(
+        slot_frame,
+        task_type=task_type,
+        required_slots=required,
+        missing_slots=_ordered_unique([*list(slot_frame.missing_slots), *list(fallback.slot_frame.missing_slots)]),
+        diagnostics={
+            **dict(slot_frame.diagnostics),
+            "fallback_formula_contract_preserved": True,
+        },
     )
 
 
@@ -488,13 +612,34 @@ def _model_evidence_policy(value: object, *, fallback: EvidencePolicy | None) ->
     )
 
 
-def _model_tool_chain_plan(value: object, *, fallback: CompiledTaskProgram) -> JsonObject:
+def _model_tool_chain_plan(
+    value: object,
+    *,
+    fallback: CompiledTaskProgram,
+    preserve_formula_contract: bool = False,
+) -> JsonObject:
     data = _json_object(value)
     if not data:
-        return _json_object(fallback.diagnostics.get("tool_chain_plan"))
-    data.setdefault("schema", "holo.kernel_v3.tool_chain_plan.v1")
-    data.setdefault("decision_owner", "model")
-    data.setdefault("host_role", "verify_provenance_policy_budget_and_numeric_support")
+        data = _json_object(fallback.diagnostics.get("tool_chain_plan"))
+    else:
+        data.setdefault("schema", "holo.kernel_v3.tool_chain_plan.v1")
+        data.setdefault("decision_owner", "model")
+        data.setdefault("host_role", "verify_provenance_policy_budget_and_numeric_support")
+    if preserve_formula_contract:
+        fallback_plan = _json_object(fallback.diagnostics.get("tool_chain_plan"))
+        formula_name = _string(fallback.task_spec.diagnostics.get("formula_name"))
+        if formula_name:
+            data["formula_name"] = formula_name
+        if fallback_plan.get("formula_status") is not None:
+            data["formula_status"] = fallback_plan.get("formula_status")
+        data["missing_slots"] = _ordered_unique([
+            *_string_list(data.get("missing_slots")),
+            *_string_list(fallback_plan.get("missing_slots")),
+        ])
+        if not data.get("recommended_steps") and fallback_plan.get("recommended_steps"):
+            data["recommended_steps"] = fallback_plan.get("recommended_steps")
+        if not data.get("next_action_candidates") and fallback_plan.get("next_action_candidates"):
+            data["next_action_candidates"] = fallback_plan.get("next_action_candidates")
     return data
 
 

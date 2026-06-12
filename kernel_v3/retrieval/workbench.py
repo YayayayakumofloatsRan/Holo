@@ -26,17 +26,17 @@ SOURCE_ROLES = {
 }
 SLOT_STATUSES = {"filled", "partial", "missing", "assumption_required", "not_applicable"}
 
-WORKBENCH_SOURCE_LIMIT = 64
-WORKBENCH_DOCUMENT_LIMIT = 32
-WORKBENCH_SPAN_LIMIT = 128
-WORKBENCH_ACCEPTED_EVIDENCE_LIMIT = 64
-WORKBENCH_REJECTED_EVIDENCE_LIMIT = 96
-WORKBENCH_FETCH_SUMMARY_LIMIT = 48
-WORKBENCH_CITATION_LIMIT = 128
-WORKBENCH_TARGET_CANDIDATE_LIMIT = 64
-WORKBENCH_RETRY_DOCUMENT_LIMIT = 16
-WORKBENCH_RETRY_REJECTED_LIMIT = 64
-WORKBENCH_TABLE_SNIPPET_LIMIT = 8
+WORKBENCH_SOURCE_LIMIT = 16
+WORKBENCH_DOCUMENT_LIMIT = 4
+WORKBENCH_SPAN_LIMIT = 16
+WORKBENCH_ACCEPTED_EVIDENCE_LIMIT = 12
+WORKBENCH_REJECTED_EVIDENCE_LIMIT = 12
+WORKBENCH_FETCH_SUMMARY_LIMIT = 12
+WORKBENCH_CITATION_LIMIT = 32
+WORKBENCH_TARGET_CANDIDATE_LIMIT = 12
+WORKBENCH_RETRY_DOCUMENT_LIMIT = 6
+WORKBENCH_RETRY_REJECTED_LIMIT = 16
+WORKBENCH_TABLE_SNIPPET_LIMIT = 4
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -213,7 +213,7 @@ def retrieval_workbench_packet(
         "required_statement": _string_value(metadata.get("required_statement")),
         "required_line_item": _string_value(metadata.get("required_line_item")),
         "source_summaries": [_source_summary(item) for item in selected_sources],
-        "fetch_summaries": [_bounded_dict(item, text_limit=360) for item in fetch_summaries[-WORKBENCH_FETCH_SUMMARY_LIMIT:]],
+        "fetch_summaries": [_bounded_dict(item, text_limit=240) for item in fetch_summaries[-WORKBENCH_FETCH_SUMMARY_LIMIT:]],
         "document_summaries": [
             _document_summary(
                 document,
@@ -854,7 +854,7 @@ def _source_summary(source: SearchSource) -> JsonObject:
         "source_id": source.source_id,
         "uri": source.uri,
         "title": _truncate(source.title, 180),
-        "snippet": _truncate(source.snippet, 360),
+        "snippet": _truncate(source.snippet, 240),
         "source_kind": metadata.get("source_kind"),
         "source_family": metadata.get("source_family"),
         "authority_level": metadata.get("authority_level"),
@@ -898,7 +898,7 @@ def _document_summary(
         "artifact_id": document.artifact_id,
         "chars": len(body or ""),
         "readable_chars": len(readable_text or ""),
-        "preview": _truncate(" ".join(str(readable_text or body or "").split()), 360),
+        "preview": _truncate(" ".join(str(readable_text or body or "").split()), 240),
         "is_target_document": _target_document_uri_match(document.uri, target_contract or {}),
         "target_document_binding": _json_object(metadata.get("target_document_binding")),
     }
@@ -968,7 +968,7 @@ def _table_like_snippets(text: str, *, terms: list[str], limit: int = WORKBENCH_
                     "line_index": index,
                     "numeric_count": numeric_count,
                     "selection_score": round(score, 3),
-                    "text": _truncate(snippet, 760),
+                    "text": _truncate(snippet, 500),
                 },
             )
         )
@@ -992,7 +992,7 @@ def _span_summary(span: ExtractedSpan, *, target_contract: JsonObject | None = N
         "source_id": span.source_id,
         "document_id": span.document_id,
         "score": span.score,
-        "text": _truncate(span.text, 700),
+        "text": _truncate(span.text, 420),
         "matched_terms": _string_list(span.metadata.get("matched_terms")),
         "text_mode": span.metadata.get("text_mode"),
         "is_target_document": _target_document_uri_match(_string_value(span.metadata.get("source_uri") or span.metadata.get("uri")), target_contract or {}),
@@ -1013,7 +1013,7 @@ def _evidence_summary(evidence: EvidenceItem, *, target_contract: JsonObject | N
         "title": _truncate(evidence.title, 180),
         "is_target_document": _target_document_uri_match(evidence.uri, target_contract or {}),
         "source_role_hint": _source_role_hint(evidence.uri, evidence.title, target_contract=target_contract or {}),
-        "text": _truncate(evidence.text, 800),
+        "text": _truncate(evidence.text, 500),
         "qualification": _bounded_dict(qualification if isinstance(qualification, dict) else {}, text_limit=180),
         "span_metadata": _bounded_dict(evidence.diagnostics.get("span_metadata"), text_limit=180),
     }
@@ -1046,7 +1046,7 @@ def _rejected_summary(item: JsonObject, *, target_contract: JsonObject | None = 
         "review_hint": _target_review_hint(reason=reason, is_target_document=is_target),
         "missing_profile_facets": _string_list(item.get("missing_profile_facets")),
         "missing_finance_facets": _string_list(item.get("missing_finance_facets")),
-        "preview": _truncate(_string_value(item.get("preview")), 1100 if is_target else 600),
+        "preview": _truncate(_string_value(item.get("preview")), 700 if is_target else 360),
     }
 
 

@@ -1366,6 +1366,33 @@ single-row rerun was attempted, but the CLI/model path produced no output rows
 for more than four minutes and was terminated; no new live score should be
 claimed from that run.
 
+The follow-up trace narrowed that failure into two concrete harness issues.
+First, the model-first task compiler could downgrade an explicit user-defined
+ratio into a plain lookup, dropping the fallback transform and required PP&E
+slots before retrieval had a chance to acquire them. The compiler now preserves
+explicit deterministic formula contracts when the fallback program came from the
+question itself: model output can still refine the task, but it cannot silently
+remove required slots, transforms, or tool-chain missing-slot hints for a
+non-risky explicit formula. Second, the retrieval workbench packet for the same
+row reached roughly `148k` prompt characters and triggered an empty/invalid JSON
+model response. Workbench source/document/span/evidence/rejection limits are now
+smaller, while target-document and task-relevant candidates are still preserved;
+the large-candidate unit test keeps the serialized workbench packet below
+`55k` characters. These are capability fixes, not a new score claim. The next
+live validation is a fresh `finance-capability` item9 rerun after this compact
+packet path.
+
+To make long live runs inspectable before benchmark JSONL rows are written,
+`bench finance-progress` now renders a workflow snapshot directly from the
+journal. It can select by `--task-id`, `--thread-id`, or `--thread-prefix`, and
+shows task compile, retrieval, workbench, toolchain, claim/slot, transform,
+calculator, verifier, synthesis, latest error, open processor calls, and recent
+events. The command uses a light JSONL scan rather than rebuilding the journal
+SQLite index, so it is usable while a run is still in progress. On the old
+item9 v2 trace it exposes the real failure shape: four retrieval/workbench
+rounds, 48 fetch attempts, 44 extractions, a toolchain plan, but zero
+claim-ledger/slot-frame/transform/calculator records.
+
 A post-change no-network rescore of the existing stable4 live outputs
 (`run_stable4_event_resolver_v1_rescore_after_reader_packet`) confirms the
 regression contract for previously closed representative tasks: answer and

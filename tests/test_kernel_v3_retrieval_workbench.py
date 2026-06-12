@@ -626,10 +626,132 @@ def test_retrieval_workbench_packet_compacts_but_preserves_target_and_task_relev
     )
 
     assert packet["selection_diagnostics"]["raw_accepted_evidence_count"] == 71
-    assert packet["selection_diagnostics"]["selected_accepted_evidence_count"] == 64
+    assert packet["selection_diagnostics"]["selected_accepted_evidence_count"] == 12
     accepted_ids = {item["evidence_id"] for item in packet["accepted_evidence"]}
     assert "evidence-target-mdna" in accepted_ids
     assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-target-mdna"
+
+
+def test_retrieval_workbench_packet_stays_compact_on_large_candidate_sets() -> None:
+    source_url = "https://investor.activision.com/static-files/32abe798-add2-4770-9c7d-4cd3a840ede2"
+    goal = SearchGoal(
+        goal_id="goal-workbench-large",
+        query="Activision Blizzard FY2019 fixed asset turnover",
+        metadata={
+            "benchmark_doc_retrieval": True,
+            "source_url": source_url,
+            "target_document_binding": {"company": "Activision Blizzard", "doc_link": source_url, "doc_period": "2019"},
+            "compiled_task_hint": {
+                "schema": "holo.kernel_v3.compiled_task_hint.v1",
+                "domain": "finance",
+                "task_spec": {"task_type": "compute", "target_entities": ["Activision Blizzard"], "target_periods": ["2019", "2018"]},
+                "evidence_specs": [
+                    {"slot_name": "revenue", "accepted_attributes": ["revenue"], "source_role": "primary_filing", "target_period": "2019"},
+                    {
+                        "slot_name": "property_plant_and_equipment_net_current",
+                        "accepted_attributes": ["property plant and equipment net"],
+                        "source_role": "primary_filing",
+                        "target_period": "2019",
+                    },
+                    {
+                        "slot_name": "property_plant_and_equipment_net_prior",
+                        "accepted_attributes": ["property plant and equipment net"],
+                        "source_role": "primary_filing",
+                        "target_period": "2018",
+                    },
+                ],
+                "transform_specs": [
+                    {
+                        "name": "fixed_asset_turnover",
+                        "required_slots": [
+                            "revenue",
+                            "property_plant_and_equipment_net_current",
+                            "property_plant_and_equipment_net_prior",
+                        ],
+                        "expression": "revenue / ((property_plant_and_equipment_net_current + property_plant_and_equipment_net_prior) / 2)",
+                    }
+                ],
+            },
+        },
+    )
+    sources = [
+        SearchSource(
+            source_id=f"source-{index}",
+            provider="fake",
+            uri=source_url if index == 0 else f"https://example.com/noise-{index}",
+            title="Activision Blizzard 2019 10-K" if index == 0 else "Noise source",
+            snippet=("Revenue and property plant and equipment net " * 20) if index == 0 else ("market page " * 80),
+        )
+        for index in range(80)
+    ]
+    documents = [
+        (
+            FetchedDocument(
+                document_id=f"doc-{index}",
+                goal_id=goal.goal_id,
+                source_id=f"source-{index}",
+                uri=source_url if index == 0 else f"https://example.com/doc-{index}",
+                title="Activision Blizzard 2019 10-K" if index == 0 else "Noise document",
+                artifact_id=f"artifact-{index}",
+                payload_hash=f"hash-{index}",
+                preview="preview",
+                size_bytes=1000,
+            ),
+            ("Consolidated statements of operations revenue 6,489. Consolidated balance sheets property and equipment 272 263. " * 80)
+            if index == 0
+            else ("unrelated text " * 300),
+        )
+        for index in range(40)
+    ]
+    spans = [
+        ExtractedSpan(
+            span_id=f"span-{index}",
+            goal_id=goal.goal_id,
+            document_id="doc-0" if index == 0 else f"doc-{index % 40}",
+            source_id="source-0" if index == 0 else f"source-{index % 80}",
+            text=(
+                "Revenue 6,489. Property and equipment, net 272 263. "
+                if index == 0
+                else "unrelated numeric 1 2 3 " * 20
+            ),
+            start_offset=0,
+            end_offset=100,
+            score=0.1,
+            metadata={"source_uri": source_url if index == 0 else f"https://example.com/span-{index}"},
+        )
+        for index in range(160)
+    ]
+    rejected = [
+        {
+            "evidence_id": f"evidence-rejected-{index}",
+            "source_id": "source-0" if index == 0 else f"source-{index % 80}",
+            "document_id": "doc-0" if index == 0 else f"doc-{index % 40}",
+            "uri": source_url if index == 0 else f"https://example.com/rejected-{index}",
+            "title": "Activision target filing" if index == 0 else "Noise rejected",
+            "reason": "missing_finance_fact_in_span",
+            "preview": ("Revenue and PP&E row " * 100) if index == 0 else ("noise " * 200),
+        }
+        for index in range(140)
+    ]
+
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=sources,
+        fetch_summaries=[],
+        documents=documents,
+        spans=spans,
+        evidence=[],
+        citations=[],
+        rejected_evidence=rejected,
+    )
+
+    assert packet["selection_diagnostics"]["selected_source_count"] == 16
+    assert packet["selection_diagnostics"]["selected_document_count"] == 4
+    assert packet["selection_diagnostics"]["selected_span_count"] == 16
+    assert packet["selection_diagnostics"]["selected_rejected_evidence_count"] == 12
+    assert packet["document_summaries"][0]["is_target_document"] is True
+    assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-rejected-0"
+    assert len(json.dumps(packet, ensure_ascii=False, sort_keys=True)) < 55_000
 
 
 def test_retrieval_workbench_packet_exposes_target_document_candidates_for_llm_judgment() -> None:

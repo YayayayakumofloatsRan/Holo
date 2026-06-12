@@ -1260,7 +1260,7 @@ assumption-ledger display, and citation-preserving limitation answers.
   still owns semantic acquisition and evidence judgment through the workbench,
   while the host keeps source, citation, numeric, and synthesis verification.
 - Local validation passed:
-  `tests/test_kernel_v3_finance_engine.py` is `135 passed`; a benchmark-focused
+  `tests/test_kernel_v3_finance_engine.py` is `136 passed`; a benchmark-focused
   selection in `tests/test_kernel_v3_finance_benchmark.py` is `12 passed`.
   Direct compile inspection of FinanceBench row 9 now produces the expected
   slot frame and transform spec.
@@ -1270,6 +1270,44 @@ assumption-ledger display, and citation-preserving limitation answers.
   four minutes and was terminated. This run does not change the live10 score.
   The next step is to diagnose the CLI/provider wait path or run a lower-level
   trace that starts after task compilation and before final synthesis.
+
+2026-06-12 follow-up trace and guardrails:
+
+- The next item9 trace showed that the model-first task compiler could still
+  erase a correct explicit formula scaffold: it returned a lookup-style task
+  with only `revenue`, no `fixed_asset_turnover` transform, and no prior/current
+  PP&E slots. This was not a finance answer-table issue; it was a task-state
+  handoff issue. The compiler now preserves fallback formula contracts when the
+  fallback transform is explicit, deterministic, and not a broad risky
+  inference. Model output can override generic host scaffolding, but it cannot
+  silently delete required slots, transforms, or tool-chain missing-slot hints
+  for a user-defined formula.
+- The same trace then reached `retrieval.workbench`, where the model-visible
+  packet had about `148k` prompt characters and produced an empty/invalid JSON
+  response. Workbench compaction now uses smaller source/document/span/evidence
+  and rejected-evidence limits while keeping target-document and task-relevant
+  candidates. A large-candidate regression test simulates noisy FinanceBench
+  retrieval and asserts the serialized workbench packet stays below `55k`
+  characters with the target document still retained.
+- Regression checks after these guardrails:
+  `tests/test_kernel_v3_finance_engine.py` is `136 passed`,
+  `tests/test_kernel_v3_retrieval_workbench.py` is `20 passed`, and
+  `tests/test_kernel_v3_execution_profile.py` is `13 passed`.
+- Workflow visibility is now available through
+  `bench finance-progress --task-id <task>` or
+  `bench finance-progress --thread-prefix <prefix>`. The command reads the
+  journal with a light JSONL scan and reports task compiler, retrieval,
+  workbench, toolchain, claim/slot, transform/calculator, verifier/synthesis,
+  latest error, counters, and recent events. On the item9 v2 trace it shows the
+  run completed four retrieval/workbench rounds with 48 fetch attempts and 44
+  extractions, but never reached claim ledger, slot frame, transform plan, or
+  calculator records. This makes the old 0-byte benchmark output diagnosable as
+  a workflow-stage failure instead of an opaque hang.
+- No new live score is claimed yet. The next validation is
+  `run_financebench_doc_item9_fixed_asset_turnover_v3` under
+  `finance-capability`; success means either a scored pass or at least a trace
+  that reaches claim ledger / transform / calculator instead of dying at
+  task-compilation or workbench JSON.
 
 Additional follow-ups:
 

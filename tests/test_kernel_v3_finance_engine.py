@@ -1733,6 +1733,84 @@ def test_model_first_finance_task_compiler_overrides_host_scaffold() -> None:
     assert program.diagnostics["tool_chain_plan"]["decision_owner"] == "model"
 
 
+def test_model_first_finance_task_compiler_preserves_explicit_formula_contract() -> None:
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "task.compile": {
+                        "task_spec": {
+                            "task_type": "filing_metric_lookup",
+                            "objective": "Find Activision Blizzard FY2019 revenue from the target filing.",
+                            "target_entities": ["Activision Blizzard"],
+                            "target_periods": ["FY2019", "FY2018"],
+                            "success_criteria": ["cite the target filing"],
+                        },
+                        "evidence_specs": [
+                            {
+                                "slot_name": "revenue",
+                                "accepted_attributes": ["revenue"],
+                                "source_role": "primary_filing",
+                                "required_source_families": ["regulatory_filing"],
+                                "target_period": "FY2019",
+                                "statement": "income_statement",
+                                "line_item": "revenue",
+                                "required": True,
+                            }
+                        ],
+                        "transform_specs": [],
+                        "slot_frame": {
+                            "task_type": "filing_metric_lookup",
+                            "required_slots": [{"name": "revenue"}],
+                            "missing_slots": ["revenue"],
+                        },
+                        "tool_chain_plan": {
+                            "decision_owner": "model",
+                            "recommended_steps": [{"step": "read_target_filing", "tool": "retrieval.run"}],
+                        },
+                        "reason_summary": "The model incorrectly treated the explicit ratio formula as a lookup.",
+                    }
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=JournalStore.in_memory(),
+    )
+
+    program = compile_finance_task_program_model_first(
+        question=(
+            "What is the FY2019 fixed asset turnover ratio for Activision Blizzard? "
+            "Fixed asset turnover ratio is defined as: FY2019 revenue / "
+            "(average PP&E between FY2018 and FY2019)."
+        ),
+        facts=[],
+        target_binding={"company": "Activision Blizzard", "doc_period": "2019", "doc_type": "10-K"},
+        processor_fabric=fabric,
+    )
+
+    assert program.diagnostics["source"] == "task_compile_model"
+    assert program.task_spec.task_type == "compute"
+    assert [spec.slot_name for spec in program.evidence_specs] == [
+        "revenue",
+        "property_plant_and_equipment_net_current",
+        "property_plant_and_equipment_net_prior",
+    ]
+    assert [spec.name for spec in program.transform_specs] == ["fixed_asset_turnover"]
+    assert program.slot_frame is not None
+    assert program.slot_frame.task_type == "compute"
+    assert program.slot_frame.missing_slots == [
+        "revenue",
+        "property_plant_and_equipment_net_current",
+        "property_plant_and_equipment_net_prior",
+    ]
+    assert program.diagnostics["tool_chain_plan"]["formula_name"] == "fixed_asset_turnover"
+    assert program.diagnostics["tool_chain_plan"]["missing_slots"] == [
+        "revenue",
+        "property_plant_and_equipment_net_current",
+        "property_plant_and_equipment_net_prior",
+    ]
+
+
 def test_model_first_finance_task_compiler_falls_back_on_invalid_model_output() -> None:
     fabric = ProcessorFabric(
         providers={"fake_json": FakeJsonProvider({"task.compile": {"task_spec": {}, "evidence_specs": "bad", "transform_specs": []}})},
