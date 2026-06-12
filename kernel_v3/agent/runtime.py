@@ -7582,6 +7582,9 @@ def _benchmark_doc_retrieval_payload(goal: str) -> JsonObject:
             metadata["required_statement"] = binding["required_statement"]
         if binding.get("required_line_item"):
             metadata["required_line_item"] = binding["required_line_item"]
+        hint = _compiled_task_hint_for_retrieval(question=question or goal, binding=binding)
+        if hint:
+            metadata["compiled_task_hint"] = hint
     return {
         "query": " ".join(query_parts) or goal,
         "metadata": metadata,
@@ -7645,6 +7648,10 @@ def _enforce_benchmark_doc_retrieval_binding(
             metadata["required_statement"] = binding["required_statement"]
         if binding.get("required_line_item"):
             metadata["required_line_item"] = binding["required_line_item"]
+        hint_question = _root_goal_from_recipe(recipe) if recipe is not None else goal
+        hint = _compiled_task_hint_for_retrieval(question=hint_question, binding=binding)
+        if hint and not isinstance(metadata.get("compiled_task_hint"), dict):
+            metadata["compiled_task_hint"] = hint
     metadata["benchmark_binding_enforced"] = True
     metadata.setdefault("source_authority_requirement", "primary")
     metadata.setdefault("research_task_kind", "filing_document_qa")
@@ -7737,6 +7744,9 @@ def _benchmark_doc_retrieval_payload_from_binding(
         payload_metadata["source_urls"] = resolved_source_urls
         payload_metadata["preferred_source_urls"] = resolved_source_urls[:8]
         payload_metadata["queries"] = _ordered_unique([*resolved_source_urls, query])
+    hint = _compiled_task_hint_for_retrieval(question=question or goal, binding=binding)
+    if hint:
+        payload_metadata["compiled_task_hint"] = hint
     return {
         "query": query,
         "metadata": payload_metadata,
@@ -7745,6 +7755,62 @@ def _benchmark_doc_retrieval_payload_from_binding(
         "max_sources": 24,
         "max_fetches": 12,
         "max_spans_per_document": 8,
+    }
+
+
+def _compiled_task_hint_for_retrieval(*, question: str, binding: JsonObject) -> JsonObject:
+    if not question.strip() or not isinstance(binding, dict) or not binding:
+        return {}
+    try:
+        compiled = compile_finance_task_program(question=question, facts=[], target_binding=binding)
+    except Exception:
+        return {}
+    task_spec = compiled.task_spec
+    return {
+        "schema": "holo.kernel_v3.compiled_task_hint.v1",
+        "program_id": compiled.program_id,
+        "domain": compiled.domain,
+        "task_spec": {
+            "task_type": task_spec.task_type,
+            "objective": task_spec.objective,
+            "target_entities": list(task_spec.target_entities),
+            "target_periods": list(task_spec.target_periods),
+            "success_criteria": list(task_spec.success_criteria)[:8],
+            "diagnostics": {
+                key: value
+                for key, value in dict(task_spec.diagnostics).items()
+                if key in {"formula_name", "formula_status", "fact_count"}
+            },
+        },
+        "evidence_specs": [
+            {
+                "slot_name": spec.slot_name,
+                "accepted_attributes": list(spec.accepted_attributes)[:8],
+                "source_role": spec.source_role,
+                "required_source_families": list(spec.required_source_families)[:8],
+                "target_period": spec.target_period,
+                "statement": spec.statement,
+                "line_item": spec.line_item,
+                "required": spec.required,
+            }
+            for spec in compiled.evidence_specs[:16]
+        ],
+        "transform_specs": [
+            {
+                "name": spec.name,
+                "required_slots": list(spec.required_slots)[:12],
+                "expression": spec.expression,
+                "output_unit": spec.output_unit,
+                "output_attribute": spec.output_attribute,
+            }
+            for spec in compiled.transform_specs[:12]
+        ],
+        "missing_slots": list((compiled.slot_frame.missing_slots if compiled.slot_frame is not None else []))[:16],
+        "diagnostics": {
+            "source": "finance_task_compiler_pre_retrieval",
+            "evidence_spec_count": len(compiled.evidence_specs),
+            "transform_spec_count": len(compiled.transform_specs),
+        },
     }
 
 

@@ -464,6 +464,69 @@ def test_retrieval_workbench_packet_exposes_target_document_binding() -> None:
     assert packet["required_line_item"] == "capital expenditures"
 
 
+def test_retrieval_workbench_packet_exposes_compiled_task_hint_for_llm_judgment() -> None:
+    goal = SearchGoal(
+        goal_id="goal-workbench-compiled-hint",
+        query="3M FY2018 capital expenditures",
+        metadata={
+            "compiled_task_hint": {
+                "schema": "holo.kernel_v3.compiled_task_hint.v1",
+                "domain": "finance",
+                "task_spec": {
+                    "task_type": "compute",
+                    "target_entities": ["3M"],
+                    "target_periods": ["2018"],
+                    "success_criteria": ["final answer must pass verifier gate"],
+                    "objective": "drop this long raw objective from packet",
+                },
+                "evidence_specs": [
+                    {
+                        "slot_name": "capital_expenditures",
+                        "accepted_attributes": ["capital expenditures", "purchases of property plant and equipment"],
+                        "source_role": "primary_filing",
+                        "required_source_families": ["sec_filings", "company_filing"],
+                        "target_period": "2018",
+                        "statement": "cash_flow_statement",
+                        "line_item": "capital expenditures",
+                        "required": True,
+                        "diagnostics": {"large": "not needed"},
+                    }
+                ],
+                "transform_specs": [
+                    {
+                        "name": "capital_intensity_capex_revenue",
+                        "required_slots": ["capital_expenditures", "revenue"],
+                        "expression": "capital_expenditures / revenue",
+                        "output_unit": "percent",
+                        "output_attribute": "capex_to_revenue",
+                    }
+                ],
+                "missing_slots": ["capital_expenditures", "revenue"],
+                "diagnostics": {"source": "finance_task_compiler_pre_retrieval", "evidence_spec_count": 1},
+            }
+        },
+    )
+
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=[],
+        fetch_summaries=[],
+        documents=[],
+        spans=[],
+        evidence=[],
+        citations=[],
+        rejected_evidence=[],
+    )
+
+    hint = packet["compiled_task_hint"]
+    assert hint["task_spec"]["task_type"] == "compute"
+    assert hint["task_spec"]["target_entities"] == ["3M"]
+    assert hint["evidence_specs"][0]["slot_name"] == "capital_expenditures"
+    assert hint["evidence_specs"][0]["statement"] == "cash_flow_statement"
+    assert hint["transform_specs"][0]["required_slots"] == ["capital_expenditures", "revenue"]
+    assert "objective" not in hint["task_spec"]
+
+
 def test_retrieval_workbench_packet_exposes_target_document_candidates_for_llm_judgment() -> None:
     source_url = (
         "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"

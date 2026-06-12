@@ -264,3 +264,15 @@ FinanceBench rows, not the first-slice target binding bug.
   major unresolved engineering gap is cost: v21 used roughly `382k` model
   tokens and v22 roughly `523k`, so Workbench/planner context compression is the
   next necessary optimization.
+- `run_financebench_doc_item4_model_net_v22_rescore` is a no-model rescore of
+  the existing v22 output after annotation/source-equivalence cleanup. It now
+  gives the fourth row dev annotation overall score `1.0`, required source hit
+  `4/4`, required source URL hit `1/1`, numeric score `1.0`, and
+  workflow/substrate score `1.0`.
+- The latest retrieval payload now carries a compact `compiled_task_hint` into
+  Retrieval Workbench before acquisition. This is the current bridge from
+  TaskSpec/EvidenceSpec/TransformSpec to model-guided evidence judgment: the
+  LLM sees which slots, source roles, periods, statements, line items, and
+  transforms matter before deciding whether to rescue evidence or continue
+  acquisition. The hint is not evidence and cannot satisfy citations or numeric
+  support without host-validated source material.

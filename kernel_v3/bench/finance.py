@@ -892,8 +892,13 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
     required_source_families = _string_list(evidence_policy.get("required_source_families"))
     required_terms = _string_list(evidence_policy.get("required_terms"))
     forbidden_source_families = _string_list(evidence_policy.get("forbidden_source_families"))
-    source_hits = [name for name in required_sources if _source_requirement_met(name, result, haystack=haystack)]
     source_url_hits = [url for url in required_source_urls if _source_url_requirement_met(url, result, haystack=haystack)]
+    source_hits = [
+        name
+        for name in required_sources
+        if _source_requirement_met(name, result, haystack=haystack)
+        or _source_requirement_met_by_required_url(name, required_source_urls=required_source_urls, source_url_hits=source_url_hits)
+    ]
     source_family_hits = [name for name in required_source_families if _source_requirement_met(name, result, haystack=haystack)]
     required_term_hits = [term for term in required_terms if _evidence_term_met(term, result, haystack=haystack)]
     forbidden_source_hits = [name for name in forbidden_source_families if _source_requirement_met(name, result, haystack=haystack)]
@@ -1048,7 +1053,7 @@ def _annotation_required_source_urls(item: FinanceBenchmarkItem) -> list[str]:
         url = _coerce_text(ref.get("url"))
         if url:
             urls.append(url)
-    for key in ("doc_link", "source_url", "benchmark_dataset_url"):
+    for key in ("doc_link", "source_url"):
         value = _coerce_text(item.metadata.get(key)) if isinstance(item.metadata, dict) else None
         if value:
             urls.append(value)
@@ -1193,6 +1198,19 @@ def _source_url_requirement_met(url: str, result: FinanceBenchmarkResult, *, hay
     if not required_accession:
         return False
     return any(_sec_accession_key(item) == required_accession for item in observed)
+
+
+def _source_requirement_met_by_required_url(name: str, *, required_source_urls: list[str], source_url_hits: list[str]) -> bool:
+    normalized = name.strip().casefold()
+    if not _looks_like_host_requirement(normalized):
+        return False
+    hit_set = {url.casefold() for url in source_url_hits}
+    for url in required_source_urls:
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.hostname or "").casefold()
+        if host == normalized and url.casefold() in hit_set:
+            return True
+    return False
 
 
 def _source_host_requirement_met(host: str, result: FinanceBenchmarkResult, *, haystack: str) -> bool:

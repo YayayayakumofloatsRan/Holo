@@ -125,6 +125,13 @@ archive documents as equivalent target filings while still rejecting generic
 companyfacts. The remaining concern for this path is cost: v21/v22 consumed
 roughly `382k`/`523k` model tokens, so the next live doc-retrieval work should
 compress Workbench/planner context before broadening to more rows.
+`run_financebench_doc_item4_model_net_v22_rescore` is a no-model re-score of
+the same v22 output after the scorer/annotation source-equivalence cleanup. It
+reports dev annotation overall `1.0`, required source hit `4/4`, required source
+URL hit `1/1`, numeric score `1.0`, and workflow/substrate score `1.0`. The
+runtime path has also started sending a compact `compiled_task_hint` to the
+Retrieval Workbench so the LLM receives TaskSpec/EvidenceSpec/TransformSpec
+context before judging evidence and next acquisition moves.
 
 FinQA dev oracle100 confirms the FinQA oracle-context path scales beyond the
 earlier 20-row diagnostic, but the score drops from the small oracle20 sample:

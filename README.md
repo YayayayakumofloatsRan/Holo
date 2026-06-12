@@ -1307,6 +1307,19 @@ rejecting generic companyfacts. Cost remains the uncomfortable part: v21 used
 about `382k` model tokens and v22 about `523k`, so the next retrieval iteration
 must compress Workbench/planner context rather than broaden the loop.
 
+The next no-model scoring pass (`run_financebench_doc_item4_model_net_v22_rescore`)
+confirms that source-equivalence fix: the fourth-row dev annotation overall
+score is now `1.0`, with required source hit `4/4`, required source URL hit
+`1/1`, numeric score `1.0`, workflow/substrate score `1.0`, and pass rate
+`1.0`. To improve the next live runs rather than merely rescore old output,
+FinanceBench `doc_retrieval` retrieval payloads now carry a compact
+`compiled_task_hint` before acquisition. That hint is generated from
+`TaskSpec` / `EvidenceSpec` / `TransformSpec` using the question and target
+document binding, and the Retrieval Workbench packet exposes it to the LLM as
+work-program context. It is explicitly not treated as evidence; host citation,
+source, numeric, and synthesis gates still decide whether any final answer is
+allowed.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

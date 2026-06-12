@@ -259,6 +259,17 @@ not repeatedly download these sources during benchmark iteration.
   rejecting generic companyfacts. The open issue is cost, not this row's source
   grounding: v21/v22 consumed roughly `382k`/`523k` model tokens, so the next
   iteration must shrink Workbench/planner context.
+- A no-model rescore of v22 after this source-equivalence cleanup
+  (`run_financebench_doc_item4_model_net_v22_rescore`) reaches dev annotation
+  overall `1.0`, required source hit `4/4`, required source URL hit `1/1`,
+  numeric score `1.0`, workflow/substrate score `1.0`, and pass rate `1.0`.
+- Retrieval payloads now include a compact `compiled_task_hint` built from the
+  target question and document binding before acquisition. It exposes
+  TaskSpec/EvidenceSpec/TransformSpec to the LLM Workbench so the model can
+  judge missing slots and next document targets from an explicit work program
+  rather than from raw snippets alone. The hint is advisory work context, not
+  evidence, and still requires host-validated citations/facts/transforms before
+  synthesis.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,

@@ -176,6 +176,7 @@ def retrieval_workbench_packet(
         "required_slots": _string_list(metadata.get("required_slots")),
         "evidence_policy": _json_object(metadata.get("evidence_policy")),
         "required_transforms": _string_list(metadata.get("required_transforms")),
+        "compiled_task_hint": _compiled_task_hint(metadata.get("compiled_task_hint")),
         "target_document_contract": target_contract,
         "target_document_binding": _json_object(metadata.get("target_document_binding")),
         "required_statement": _string_value(metadata.get("required_statement")),
@@ -401,6 +402,66 @@ def _normalize_family_items(value: object) -> list[str]:
     return result
 
 
+def _compiled_task_hint(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    task_spec = _json_object(value.get("task_spec"))
+    evidence_specs = value.get("evidence_specs") if isinstance(value.get("evidence_specs"), list) else []
+    transform_specs = value.get("transform_specs") if isinstance(value.get("transform_specs"), list) else []
+    result: JsonObject = {
+        "schema": _string_value(value.get("schema")) or "holo.kernel_v3.compiled_task_hint.v1",
+        "domain": _string_value(value.get("domain")),
+        "task_spec": {
+            "task_type": _string_value(task_spec.get("task_type")),
+            "target_entities": _bounded_strings(task_spec.get("target_entities"), limit=8, item_limit=80),
+            "target_periods": _bounded_strings(task_spec.get("target_periods"), limit=8, item_limit=40),
+            "success_criteria": _bounded_strings(task_spec.get("success_criteria"), limit=8, item_limit=140),
+        },
+        "evidence_specs": [
+            _compiled_evidence_spec_summary(item)
+            for item in evidence_specs[:16]
+            if isinstance(item, dict)
+        ],
+        "transform_specs": [
+            _compiled_transform_spec_summary(item)
+            for item in transform_specs[:12]
+            if isinstance(item, dict)
+        ],
+        "missing_slots": _bounded_strings(value.get("missing_slots"), limit=16, item_limit=80),
+    }
+    diagnostics = _json_object(value.get("diagnostics"))
+    if diagnostics:
+        result["diagnostics"] = {
+            key: diagnostics.get(key)
+            for key in ("source", "evidence_spec_count", "transform_spec_count")
+            if diagnostics.get(key) not in (None, "", [], {})
+        }
+    return result
+
+
+def _compiled_evidence_spec_summary(item: JsonObject) -> JsonObject:
+    return {
+        "slot_name": _string_value(item.get("slot_name")),
+        "accepted_attributes": _bounded_strings(item.get("accepted_attributes"), limit=8, item_limit=80),
+        "source_role": _string_value(item.get("source_role")),
+        "required_source_families": _bounded_strings(item.get("required_source_families"), limit=8, item_limit=60),
+        "target_period": _string_value(item.get("target_period")),
+        "statement": _string_value(item.get("statement")),
+        "line_item": _string_value(item.get("line_item")),
+        "required": bool(item.get("required")) if "required" in item else True,
+    }
+
+
+def _compiled_transform_spec_summary(item: JsonObject) -> JsonObject:
+    return {
+        "name": _string_value(item.get("name")),
+        "required_slots": _bounded_strings(item.get("required_slots"), limit=12, item_limit=80),
+        "expression": _truncate(_string_value(item.get("expression")), 160),
+        "output_unit": _string_value(item.get("output_unit")),
+        "output_attribute": _string_value(item.get("output_attribute")),
+    }
+
+
 def _normalize_next_move_aliases(parsed: JsonObject) -> JsonObject:
     result: JsonObject = {"next_queries": [], "next_source_families": [], "next_document_targets": []}
     raw_moves = parsed.get("next_acquisition_moves") or parsed.get("next_moves") or parsed.get("recommended_next_actions")
@@ -452,6 +513,9 @@ def _workbench_prompt(packet: JsonObject) -> str:
         "You are Holo Kernel v3 retrieval.workbench. Judge evidence relevance and next acquisition moves semantically. "
         "Do not invent evidence, source IDs, citation IDs, facts, numeric values, formulas, or URLs. "
         "You may only reference IDs present in the packet. Host will validate provenance, authority, policy, and numeric support. "
+        "Use compiled_task_hint when present as the host-compiled work program: evidence_specs describe slots to fill, "
+        "source roles and target periods; transform_specs describe computations that should not be attempted until their "
+        "input slots are supported. The hint is not evidence and does not by itself fill any slot. "
         "Host rejection reasons are not final semantic judgments: if rejected_evidence or target_document_candidates contain useful "
         "target-document excerpts, rescue those existing evidence IDs and explain which slots they fill. "
         "Return exactly one JSON object with the requested schema. Decide whether evidence is sufficient for the task, "
@@ -464,6 +528,7 @@ def _workbench_retry_prompt(packet: JsonObject, *, error: str) -> str:
     return (
         "Your previous retrieval.workbench output was invalid JSON. Return only one valid JSON object matching the schema. "
         "Use semantic judgment over the provided evidence candidates. Do not invent IDs, sources, citations, values, or formulas. "
+        "If compiled_task_hint is present, use it to decide missing slots and next acquisition moves; do not treat it as evidence. "
         "If target_document_candidates include useful target filing excerpts, use their existing evidence_id values in "
         "accepted_evidence_ids or rescued_evidence_ids. "
         f"Previous parser error: {error}\n\n"
@@ -479,6 +544,7 @@ def _workbench_retry_packet(packet: JsonObject) -> JsonObject:
         "required_slots": packet.get("required_slots"),
         "evidence_policy": packet.get("evidence_policy"),
         "required_transforms": packet.get("required_transforms"),
+        "compiled_task_hint": packet.get("compiled_task_hint"),
         "target_document_contract": packet.get("target_document_contract"),
         "target_document_candidates": packet.get("target_document_candidates"),
         "accepted_evidence": packet.get("accepted_evidence"),
@@ -489,6 +555,7 @@ def _workbench_retry_packet(packet: JsonObject) -> JsonObject:
 
 
 def _packet_diagnostics(packet: JsonObject) -> JsonObject:
+    hint = packet.get("compiled_task_hint") if isinstance(packet.get("compiled_task_hint"), dict) else {}
     return {
         "source_count": len(packet.get("source_summaries") or []),
         "fetch_count": len(packet.get("fetch_summaries") or []),
@@ -497,6 +564,9 @@ def _packet_diagnostics(packet: JsonObject) -> JsonObject:
         "accepted_evidence_count": len(packet.get("accepted_evidence") or []),
         "rejected_evidence_count": len(packet.get("rejected_evidence") or []),
         "target_document_candidate_count": len(packet.get("target_document_candidates") or []),
+        "compiled_task_hint_present": bool(hint),
+        "compiled_evidence_spec_count": len(hint.get("evidence_specs") or []) if isinstance(hint, dict) else 0,
+        "compiled_transform_spec_count": len(hint.get("transform_specs") or []) if isinstance(hint, dict) else 0,
         "citation_count": len(packet.get("current_citations") or []),
     }
 

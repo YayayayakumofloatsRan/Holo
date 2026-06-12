@@ -484,6 +484,12 @@ def test_financebench_doc_retrieval_prompt_compiles_to_structured_payload(tmp_pa
     assert "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf" in source_urls
     assert "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470.txt" in source_urls
     assert "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470-index.html" in source_urls
+    hint = payload["metadata"]["compiled_task_hint"]
+    assert hint["schema"] == "holo.kernel_v3.compiled_task_hint.v1"
+    assert hint["task_spec"]["target_entities"] == ["3M"]
+    assert hint["task_spec"]["target_periods"] == ["2018"]
+    assert any(spec["slot_name"] == "capital_expenditures" for spec in hint["evidence_specs"])
+    assert any(spec["statement"] == "cash_flow_statement" for spec in hint["evidence_specs"])
     assert "scoring-only evidence" not in runtime.seen_prompts[0]
 
 
@@ -513,6 +519,7 @@ def test_financebench_doc_retrieval_payload_parses_inline_prompt_labels() -> Non
     assert binding["primary_source_required"] is True
     assert binding["required_statement"] == "cash_flow_statement"
     assert binding["required_line_item"] == "capital expenditures"
+    assert payload["metadata"]["compiled_task_hint"]["evidence_specs"][0]["line_item"] == "capital expenditures"
 
 
 def test_financebench_doc_retrieval_payload_stops_inline_period_before_assume_question() -> None:
