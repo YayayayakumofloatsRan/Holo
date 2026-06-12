@@ -276,3 +276,9 @@ FinanceBench rows, not the first-slice target binding bug.
   transforms matter before deciding whether to rescue evidence or continue
   acquisition. The hint is not evidence and cannot satisfy citations or numeric
   support without host-validated source material.
+- Workbench packet construction now uses task-aware compact selection rather
+  than fixed first-N truncation. Candidate sources, documents, spans, accepted
+  evidence, and rejected evidence are scored against the compiled evidence
+  specs, transform specs, target document contract, statement, line item, and
+  table-like signals. This preserves late-arriving target filing evidence while
+  reducing the packet size presented to the LLM.

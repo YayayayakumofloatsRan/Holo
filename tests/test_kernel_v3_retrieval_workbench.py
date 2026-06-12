@@ -6,7 +6,7 @@ from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.retrieval.extract import extract_spans
-from kernel_v3.retrieval.contracts import FetchedDocument
+from kernel_v3.retrieval.contracts import EvidenceItem, FetchedDocument
 from kernel_v3.retrieval.http_provider import HttpFetchProvider, HttpTransportResponse
 from kernel_v3.retrieval.workbench import retrieval_workbench_packet, validate_workbench_output
 
@@ -525,6 +525,90 @@ def test_retrieval_workbench_packet_exposes_compiled_task_hint_for_llm_judgment(
     assert hint["evidence_specs"][0]["statement"] == "cash_flow_statement"
     assert hint["transform_specs"][0]["required_slots"] == ["capital_expenditures", "revenue"]
     assert "objective" not in hint["task_spec"]
+
+
+def test_retrieval_workbench_packet_compacts_but_preserves_target_and_task_relevant_evidence() -> None:
+    source_url = (
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf"
+    )
+    sec_text_url = "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt"
+    goal = SearchGoal(
+        goal_id="goal-workbench-compact",
+        query="What drove operating margin change as of FY2022 for 3M?",
+        metadata={
+            "benchmark_doc_retrieval": True,
+            "workflow_type": "source_grounded_research",
+            "source_url": source_url,
+            "source_urls": [source_url, sec_text_url],
+            "target_document_binding": {"company": "3M", "doc_link": source_url, "doc_period": "2022"},
+            "compiled_task_hint": {
+                "schema": "holo.kernel_v3.compiled_task_hint.v1",
+                "domain": "finance",
+                "task_spec": {"task_type": "source_grounded_research", "target_entities": ["3M"], "target_periods": ["2022"]},
+                "evidence_specs": [
+                    {
+                        "slot_name": "operating_margin_driver",
+                        "accepted_attributes": ["operating income margin", "cost of sales", "results of operations"],
+                        "source_role": "primary_filing",
+                        "target_period": "2022",
+                    }
+                ],
+                "transform_specs": [],
+            },
+        },
+    )
+    evidence = [
+        EvidenceItem(
+            evidence_id=f"evidence-noise-{index}",
+            goal_id=goal.goal_id,
+            span_id=f"span-noise-{index}",
+            document_id=f"doc-noise-{index}",
+            source_id=f"source-noise-{index}",
+            artifact_id=f"artifact-noise-{index}",
+            uri=f"https://example.com/noise-{index}",
+            title="Unrelated market page",
+            text="This page discusses unrelated product news with no filing table.",
+            score=0.01,
+            payload_hash=f"hash-noise-{index}",
+        )
+        for index in range(70)
+    ]
+    evidence.append(
+        EvidenceItem(
+            evidence_id="evidence-target-mdna",
+            goal_id=goal.goal_id,
+            span_id="span-target-mdna",
+            document_id="doc-target",
+            source_id="source-target",
+            artifact_id="artifact-target",
+            uri=sec_text_url,
+            title="3M 2022 10-K complete submission text",
+            text=(
+                "RESULTS OF OPERATIONS. Operating income margin 19.1% 20.8% (1.7)%. "
+                "Cost of sales increased primarily due to litigation and raw materials."
+            ),
+            score=0.02,
+            payload_hash="hash-target-mdna",
+        )
+    )
+
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=[],
+        fetch_summaries=[],
+        documents=[],
+        spans=[],
+        evidence=evidence,
+        citations=[],
+        rejected_evidence=[],
+    )
+
+    assert packet["selection_diagnostics"]["raw_accepted_evidence_count"] == 71
+    assert packet["selection_diagnostics"]["selected_accepted_evidence_count"] == 32
+    accepted_ids = {item["evidence_id"] for item in packet["accepted_evidence"]}
+    assert "evidence-target-mdna" in accepted_ids
+    assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-target-mdna"
 
 
 def test_retrieval_workbench_packet_exposes_target_document_candidates_for_llm_judgment() -> None:

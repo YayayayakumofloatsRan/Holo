@@ -1318,7 +1318,13 @@ FinanceBench `doc_retrieval` retrieval payloads now carry a compact
 document binding, and the Retrieval Workbench packet exposes it to the LLM as
 work-program context. It is explicitly not treated as evidence; host citation,
 source, numeric, and synthesis gates still decide whether any final answer is
-allowed.
+allowed. Workbench packet construction is also now task-aware: instead of
+blindly sending the first large batch of sources, spans, accepted evidence, and
+rejected evidence, it scores candidates against the compiled evidence specs,
+transform specs, target document contract, statement, line item, and table-like
+signals, then preserves high-value target filing candidates inside a compact
+packet. This is the first cost-control step; full live-token reduction still
+needs another model-net rerun.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

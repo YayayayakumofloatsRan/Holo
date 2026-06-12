@@ -167,8 +167,15 @@ def retrieval_workbench_packet(
 ) -> JsonObject:
     metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
     target_contract = _target_document_contract(metadata)
-    accepted = [_evidence_summary(item, target_contract=target_contract) for item in evidence[:64]]
-    rejected = [_rejected_summary(item, target_contract=target_contract) for item in rejected_evidence[:128]]
+    compiled_hint = _compiled_task_hint(metadata.get("compiled_task_hint"))
+    selection_terms = _packet_selection_terms(goal=goal, metadata=metadata, compiled_hint=compiled_hint)
+    selected_sources = _select_sources(sources, target_contract=target_contract, terms=selection_terms, limit=32)
+    selected_documents = _select_documents(documents, target_contract=target_contract, terms=selection_terms, limit=16)
+    selected_spans = _select_spans(spans, target_contract=target_contract, terms=selection_terms, limit=64)
+    selected_evidence = _select_evidence(evidence, target_contract=target_contract, terms=selection_terms, limit=32)
+    selected_rejected = _select_rejected_evidence(rejected_evidence, target_contract=target_contract, terms=selection_terms, limit=48)
+    accepted = [_evidence_summary(item, target_contract=target_contract) for item in selected_evidence]
+    rejected = [_rejected_summary(item, target_contract=target_contract) for item in selected_rejected]
     return {
         "task_goal": _string_value(metadata.get("root_goal") or metadata.get("task_goal") or goal.query),
         "current_retrieval_goal": goal.query,
@@ -176,22 +183,40 @@ def retrieval_workbench_packet(
         "required_slots": _string_list(metadata.get("required_slots")),
         "evidence_policy": _json_object(metadata.get("evidence_policy")),
         "required_transforms": _string_list(metadata.get("required_transforms")),
-        "compiled_task_hint": _compiled_task_hint(metadata.get("compiled_task_hint")),
+        "compiled_task_hint": compiled_hint,
         "target_document_contract": target_contract,
         "target_document_binding": _json_object(metadata.get("target_document_binding")),
         "required_statement": _string_value(metadata.get("required_statement")),
         "required_line_item": _string_value(metadata.get("required_line_item")),
-        "source_summaries": [_source_summary(item) for item in sources[:48]],
-        "fetch_summaries": [_bounded_dict(item, text_limit=280) for item in fetch_summaries[-48:]],
-        "document_summaries": [_document_summary(document, body, target_contract=target_contract) for document, body in documents[-32:]],
-        "extracted_spans": [_span_summary(item, target_contract=target_contract) for item in spans[:128]],
+        "source_summaries": [_source_summary(item) for item in selected_sources],
+        "fetch_summaries": [_bounded_dict(item, text_limit=240) for item in fetch_summaries[-24:]],
+        "document_summaries": [_document_summary(document, body, target_contract=target_contract) for document, body in selected_documents],
+        "extracted_spans": [_span_summary(item, target_contract=target_contract) for item in selected_spans],
         "accepted_evidence": accepted,
         "rejected_evidence": rejected,
-        "target_document_candidates": _target_document_candidates(accepted=accepted, rejected=rejected, spans=spans, target_contract=target_contract),
+        "target_document_candidates": _target_document_candidates(
+            accepted=accepted,
+            rejected=rejected,
+            spans=selected_spans,
+            target_contract=target_contract,
+        ),
         "current_slot_state": _json_object(metadata.get("slot_state")),
         "current_claim_state": _json_object(metadata.get("claim_state")),
         "current_citations": [_citation_summary(item) for item in citations[:64]],
         "known_limitations": _string_list(metadata.get("known_limitations")),
+        "selection_diagnostics": {
+            "raw_source_count": len(sources),
+            "selected_source_count": len(selected_sources),
+            "raw_document_count": len(documents),
+            "selected_document_count": len(selected_documents),
+            "raw_span_count": len(spans),
+            "selected_span_count": len(selected_spans),
+            "raw_accepted_evidence_count": len(evidence),
+            "selected_accepted_evidence_count": len(selected_evidence),
+            "raw_rejected_evidence_count": len(rejected_evidence),
+            "selected_rejected_evidence_count": len(selected_rejected),
+            "selection_term_count": len(selection_terms),
+        },
     }
 
 
@@ -489,6 +514,189 @@ def _normalize_next_move_aliases(parsed: JsonObject) -> JsonObject:
         if family:
             result["next_source_families"].append(family)
     return result
+
+
+def _packet_selection_terms(*, goal: SearchGoal, metadata: JsonObject, compiled_hint: JsonObject) -> list[str]:
+    terms: list[str] = []
+    terms.extend(_string_list(metadata.get("required_slots")))
+    terms.extend(_string_list(metadata.get("required_transforms")))
+    terms.extend(_string_list(metadata.get("known_limitations")))
+    for key in ("required_statement", "required_line_item", "company", "issuer", "doc_type", "doc_period"):
+        terms.append(_string_value(metadata.get(key)))
+    terms.append(goal.query)
+    task_spec = _json_object(compiled_hint.get("task_spec"))
+    terms.extend(_string_list(task_spec.get("target_entities")))
+    terms.extend(_string_list(task_spec.get("target_periods")))
+    terms.extend(_string_list(task_spec.get("success_criteria")))
+    evidence_specs = compiled_hint.get("evidence_specs") if isinstance(compiled_hint.get("evidence_specs"), list) else []
+    for spec in evidence_specs:
+        if not isinstance(spec, dict):
+            continue
+        for key in ("slot_name", "source_role", "target_period", "statement", "line_item"):
+            terms.append(_string_value(spec.get(key)))
+        terms.extend(_string_list(spec.get("accepted_attributes")))
+        terms.extend(_string_list(spec.get("required_source_families")))
+    transform_specs = compiled_hint.get("transform_specs") if isinstance(compiled_hint.get("transform_specs"), list) else []
+    for spec in transform_specs:
+        if not isinstance(spec, dict):
+            continue
+        for key in ("name", "expression", "output_unit", "output_attribute"):
+            terms.append(_string_value(spec.get(key)))
+        terms.extend(_string_list(spec.get("required_slots")))
+    policy = _json_object(metadata.get("evidence_policy"))
+    terms.extend(_string_list(policy.get("required_terms")))
+    terms.extend(_string_list(policy.get("required_source_families")))
+    result: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        normalized = _normalize_selection_term(term)
+        if not normalized or normalized in seen or _low_value_selection_term(normalized):
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result[:96]
+
+
+def _select_sources(
+    sources: list[SearchSource],
+    *,
+    target_contract: JsonObject,
+    terms: list[str],
+    limit: int,
+) -> list[SearchSource]:
+    return _top_ranked(sources, limit=limit, score=lambda item: _source_selection_score(item, target_contract=target_contract, terms=terms))
+
+
+def _select_documents(
+    documents: list[tuple[FetchedDocument, str]],
+    *,
+    target_contract: JsonObject,
+    terms: list[str],
+    limit: int,
+) -> list[tuple[FetchedDocument, str]]:
+    return _top_ranked(documents, limit=limit, score=lambda item: _document_selection_score(item, target_contract=target_contract, terms=terms))
+
+
+def _select_spans(
+    spans: list[ExtractedSpan],
+    *,
+    target_contract: JsonObject,
+    terms: list[str],
+    limit: int,
+) -> list[ExtractedSpan]:
+    return _top_ranked(spans, limit=limit, score=lambda item: _span_selection_score(item, target_contract=target_contract, terms=terms))
+
+
+def _select_evidence(
+    evidence: list[EvidenceItem],
+    *,
+    target_contract: JsonObject,
+    terms: list[str],
+    limit: int,
+) -> list[EvidenceItem]:
+    return _top_ranked(evidence, limit=limit, score=lambda item: _evidence_selection_score(item, target_contract=target_contract, terms=terms))
+
+
+def _select_rejected_evidence(
+    rejected: list[JsonObject],
+    *,
+    target_contract: JsonObject,
+    terms: list[str],
+    limit: int,
+) -> list[JsonObject]:
+    return _top_ranked(rejected, limit=limit, score=lambda item: _rejected_selection_score(item, target_contract=target_contract, terms=terms))
+
+
+def _top_ranked(items: list, *, limit: int, score) -> list:
+    if len(items) <= limit:
+        return list(items)
+    ranked = sorted(enumerate(items), key=lambda pair: (-float(score(pair[1])), pair[0]))
+    selected_indices = sorted(index for index, _item in ranked[:limit])
+    return [items[index] for index in selected_indices]
+
+
+def _source_selection_score(source: SearchSource, *, target_contract: JsonObject, terms: list[str]) -> float:
+    text = " ".join([source.uri, source.title, source.snippet])
+    return _selection_score(text, terms=terms) + (120.0 if _target_document_uri_match(source.uri, target_contract) else 0.0)
+
+
+def _document_selection_score(item: tuple[FetchedDocument, str], *, target_contract: JsonObject, terms: list[str]) -> float:
+    document, body = item
+    text = " ".join([document.uri, document.title, str(body or "")[:4_000]])
+    return _selection_score(text, terms=terms) + (160.0 if _target_document_uri_match(document.uri, target_contract) else 0.0)
+
+
+def _span_selection_score(span: ExtractedSpan, *, target_contract: JsonObject, terms: list[str]) -> float:
+    uri = _string_value(span.metadata.get("source_uri") or span.metadata.get("uri"))
+    text = " ".join([uri, span.text, " ".join(_string_list(span.metadata.get("matched_terms")))])
+    return _selection_score(text, terms=terms) + float(span.score) + (180.0 if _target_document_uri_match(uri, target_contract) else 0.0)
+
+
+def _evidence_selection_score(evidence: EvidenceItem, *, target_contract: JsonObject, terms: list[str]) -> float:
+    text = " ".join([evidence.uri, evidence.title, evidence.text])
+    return _selection_score(text, terms=terms) + float(evidence.score) + (180.0 if _target_document_uri_match(evidence.uri, target_contract) else 0.0)
+
+
+def _rejected_selection_score(item: JsonObject, *, target_contract: JsonObject, terms: list[str]) -> float:
+    uri = _string_value(item.get("uri"))
+    text = " ".join([
+        uri,
+        _string_value(item.get("title")),
+        _string_value(item.get("reason")),
+        _string_value(item.get("preview")),
+    ])
+    return _selection_score(text, terms=terms) + (200.0 if _target_document_uri_match(uri, target_contract) else 0.0)
+
+
+def _selection_score(text: str, *, terms: list[str]) -> float:
+    normalized = str(text or "").casefold()
+    score = 0.0
+    for term in terms:
+        if term and term in normalized:
+            score += min(8.0, 1.0 + len(term) / 18.0)
+    if _table_or_statement_hint(normalized):
+        score += 4.0
+    if re.search(r"\b-?\d[\d,]*(?:\.\d+)?%?\b", normalized):
+        score += 1.5
+    return score
+
+
+def _normalize_selection_term(value: object) -> str:
+    text = _string_value(value).casefold().replace("_", " ").strip()
+    return re.sub(r"\s+", " ", text)
+
+
+def _low_value_selection_term(term: str) -> bool:
+    return term in {
+        "source",
+        "period",
+        "entity",
+        "finance",
+        "primary",
+        "required",
+        "company",
+        "filing",
+        "sec filings",
+        "company filing",
+        "final answer must pass verifier gate",
+    }
+
+
+def _table_or_statement_hint(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "table",
+            "statement of",
+            "balance sheet",
+            "cash flow",
+            "income statement",
+            "management's discussion",
+            "results of operations",
+            "reconciliation",
+            "operating income margin",
+        )
+    )
 
 
 def _source_role_alias(value: str) -> str:

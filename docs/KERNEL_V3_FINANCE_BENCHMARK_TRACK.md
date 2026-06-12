@@ -270,6 +270,11 @@ not repeatedly download these sources during benchmark iteration.
   rather than from raw snippets alone. The hint is advisory work context, not
   evidence, and still requires host-validated citations/facts/transforms before
   synthesis.
+- Retrieval Workbench packets now use task-aware compact selection. The
+  selection score combines the compiled evidence/transform specs, target
+  document contract, required statement/line item, and table-like signals, so
+  late target-filing candidates are preserved while low-value noise is dropped
+  before the LLM call.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,
