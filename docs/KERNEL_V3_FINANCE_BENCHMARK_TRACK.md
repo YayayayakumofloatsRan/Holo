@@ -301,6 +301,14 @@ not repeatedly download these sources during benchmark iteration.
   `workspace.search`, `file.read`, `shell.exec`, or `calculator.compute`
   proposal. This is the practical difference between an LLM-led workbench and a
   retrieval-only FSM with extra tool names.
+- The output side of that toolchain is now connected to grounding. Successful
+  `workspace.list`, `workspace.search`, `file.read`, and `shell.exec`
+  observations in `retrieval_answer` become bounded evidence/citation
+  candidates. If retrieval did not produce a normal report, the host creates a
+  synthetic toolchain grounding report and runs the same finance fact ledger,
+  claim ledger, numeric verifier, and synthesis gate. This lets temporary
+  model-selected parsers feed structured stdout into the verified answer path
+  without giving shell output unchecked authority.
 - Retrieval Workbench packets now use task-aware compact selection. The
   selection score combines the compiled evidence/transform specs, target
   document contract, required statement/line item, and table-like signals, so

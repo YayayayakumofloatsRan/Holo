@@ -797,6 +797,27 @@ class AgentRuntime:
         report = _latest_retrieval_report(self.journal, task_id, run_id)
         evidence = _retrieval_evidence(self.journal, task_id, run_id)
         citations = _retrieval_citations(self.journal, task_id, run_id)
+        if _toolchain_grounding_enabled(recipe):
+            context_budget = _context_budget_metadata(recipe)
+            toolchain_evidence, toolchain_citations, toolchain_report = _workspace_grounding(
+                self.journal,
+                task_id,
+                run_id,
+                artifact_store=self.artifact_store,
+                evidence_char_limit=int(context_budget["workspace_evidence_chars"]),
+                citation_char_limit=int(context_budget["workspace_citation_chars"]),
+                synthesis_evidence_preview_chars=int(context_budget["synthesis_evidence_preview_chars"]),
+                synthesis_citation_preview_chars=int(context_budget["synthesis_citation_preview_chars"]),
+            )
+            if toolchain_evidence:
+                evidence = _merge_evidence_items(evidence, toolchain_evidence)
+                citations = _merge_citation_items(citations, toolchain_citations)
+                report = _report_with_toolchain_grounding(
+                    report,
+                    toolchain_report=toolchain_report,
+                    evidence=evidence,
+                    citations=citations,
+                )
         terminal_reason = (
             _latest_guard_stop_reason(self.journal, task_id, run_id)
             or _latest_termination_failure_reason(self.journal, task_id, run_id)
@@ -6325,6 +6346,72 @@ def _finance_numeric_verifier_required(recipe: TaskRecipe) -> bool:
     return _metadata_requires_finance_numeric_verifier(recipe.metadata)
 
 
+def _toolchain_grounding_enabled(recipe: TaskRecipe) -> bool:
+    return recipe.mode == "retrieval_answer" and any(
+        name in set(recipe.allowed_tools)
+        for name in ("workspace.list", "workspace.search", "file.read", "shell.exec")
+    )
+
+
+def _merge_evidence_items(existing: list[EvidenceItem], extra: list[EvidenceItem]) -> list[EvidenceItem]:
+    result: list[EvidenceItem] = []
+    seen: set[str] = set()
+    for item in [*existing, *extra]:
+        if item.evidence_id in seen:
+            continue
+        seen.add(item.evidence_id)
+        result.append(item)
+    return result
+
+
+def _merge_citation_items(existing: list[CitationItem], extra: list[CitationItem]) -> list[CitationItem]:
+    result: list[CitationItem] = []
+    seen: set[str] = set()
+    for item in [*existing, *extra]:
+        if item.citation_id in seen:
+            continue
+        seen.add(item.citation_id)
+        result.append(item)
+    return result
+
+
+def _report_with_toolchain_grounding(
+    report: RetrievalReport | None,
+    *,
+    toolchain_report: RetrievalReport,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+) -> RetrievalReport:
+    artifact_refs = _ordered_unique([str(item.artifact_id) for item in evidence if item.artifact_id])
+    if report is None:
+        return replace(
+            toolchain_report,
+            evidence_ids=[item.evidence_id for item in evidence],
+            citation_ids=[item.citation_id for item in citations],
+            artifact_refs=artifact_refs,
+            status="sufficient" if evidence else toolchain_report.status,
+            diagnostics={
+                **dict(toolchain_report.diagnostics),
+                "source": "toolchain_grounding",
+                "synthetic_retrieval_report": True,
+            },
+        )
+    diagnostics = dict(report.diagnostics)
+    diagnostics["toolchain_grounding"] = {
+        "evidence_count": len(toolchain_report.evidence_ids),
+        "citation_count": len(toolchain_report.citation_ids),
+        "report_id": toolchain_report.report_id,
+    }
+    return replace(
+        report,
+        status="sufficient" if evidence and citations else report.status,
+        evidence_ids=_ordered_unique([*list(report.evidence_ids), *[item.evidence_id for item in evidence]]),
+        citation_ids=_ordered_unique([*list(report.citation_ids), *[item.citation_id for item in citations]]),
+        artifact_refs=_ordered_unique([*list(report.artifact_refs), *artifact_refs]),
+        diagnostics=diagnostics,
+    )
+
+
 def _agent_loop_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("agent_loop")
     return dict(value) if isinstance(value, dict) else {}
@@ -9556,7 +9643,7 @@ def _workspace_grounding(
     ]
     for index, record in enumerate(observations, start=1):
         data = record.data
-        if data.get("source") not in {"tool:workspace.list", "tool:workspace.search", "tool:file.read"} or data.get("status") != "ok":
+        if data.get("source") not in {"tool:workspace.list", "tool:workspace.search", "tool:file.read", "tool:shell.exec"} or data.get("status") != "ok":
             continue
         content = data.get("content", {})
         if not isinstance(content, dict):
@@ -9633,9 +9720,11 @@ def _workspace_evidence_priority(item: EvidenceItem) -> tuple[int, str]:
     source = str(item.diagnostics.get("source") or "")
     if source == "tool:file.read":
         return 0, item.evidence_id
-    if source == "tool:workspace.list":
+    if source == "tool:shell.exec":
         return 1, item.evidence_id
-    return 2, item.evidence_id
+    if source == "tool:workspace.list":
+        return 2, item.evidence_id
+    return 3, item.evidence_id
 
 
 def _workspace_write_observations(journal: JournalStore, task_id: str, run_id: str):
@@ -9669,6 +9758,8 @@ def _workspace_observation_text(
         return _workspace_listing_text(content)[:evidence_char_limit]
     if source == "tool:workspace.search":
         return _workspace_search_text(content)[:evidence_char_limit]
+    if source == "tool:shell.exec":
+        return _shell_exec_observation_text(content)[:evidence_char_limit]
     artifact_id = content.get("artifact_id")
     if isinstance(artifact_id, str) and artifact_store.has_blob(artifact_id):
         payload = artifact_store.read_blob(artifact_id)
@@ -9684,6 +9775,11 @@ def _workspace_observation_title(content: JsonObject, *, source: str) -> str:
     if source == "tool:workspace.search":
         query = content.get("query")
         return f"workspace search: {query}" if isinstance(query, str) and query else "workspace search"
+    if source == "tool:shell.exec":
+        argv = content.get("argv")
+        if isinstance(argv, list) and argv:
+            return "shell exec: " + " ".join(str(item) for item in argv[:4])
+        return "shell exec"
     path = content.get("path")
     return str(path) if isinstance(path, str) and path else "workspace"
 
@@ -9722,6 +9818,26 @@ def _workspace_search_text(content: JsonObject) -> str:
                 lines.append(f"- {path}: {preview}")
             else:
                 lines.append(f"- {path}")
+    return "\n".join(lines)
+
+
+def _shell_exec_observation_text(content: JsonObject) -> str:
+    argv = content.get("argv")
+    command = " ".join(str(item) for item in argv[:8]) if isinstance(argv, list) else ""
+    exit_code = content.get("exit_code")
+    stdout = str(content.get("stdout") or "").strip()
+    stderr = str(content.get("stderr") or "").strip()
+    lines = ["Shell execution output:"]
+    if command:
+        lines.append(f"command: {command}")
+    if isinstance(exit_code, int):
+        lines.append(f"exit_code: {exit_code}")
+    if stdout:
+        lines.append("stdout:")
+        lines.append(stdout)
+    if stderr:
+        lines.append("stderr:")
+        lines.append(stderr)
     return "\n".join(lines)
 
 

@@ -1735,6 +1735,58 @@ def test_finance_fast_planner_directive_shows_composable_toolchain() -> None:
     assert "shell.exec" not in directive["forbidden"]
 
 
+def test_retrieval_finalizer_uses_shell_exec_output_as_toolchain_evidence() -> None:
+    journal = JournalStore.in_memory()
+    runtime = AgentRuntime(journal=journal)
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "goal": "What was TestCo revenue in FY2024?",
+        },
+    )
+    journal.append(
+        task_id="task-shell-grounding",
+        run_id="run-shell-grounding",
+        step_id="step-shell",
+        kind="observation",
+        data={
+            "observation_id": "obs-shell-grounding",
+            "run_id": "run-shell-grounding",
+            "kind": "tool_result",
+            "status": "ok",
+            "source": "tool:shell.exec",
+            "content": {
+                "argv": ["python3", "parse_filing.py"],
+                "exit_code": 0,
+                "stdout": "entity: TestCo metric: revenue value: 123000000 unit: USD period: FY2024",
+                "stderr": "",
+            },
+            "observed_at_ms": 1,
+            "action_id": "act-shell-grounding",
+            "tool_call_id": None,
+        },
+        observation_ref="obs-shell-grounding",
+        state_delta={"observation_status": "ok"},
+    )
+
+    final, failure = runtime._finalize_retrieval(
+        "task-shell-grounding",
+        "run-shell-grounding",
+        recipe=recipe,
+        loop_stop_reason="completed",
+        synthesizer_mode="fake",
+    )
+
+    assert failure is None
+    assert final is not None
+    assert final.citation_refs == ["workspace-cite-1"]
+    ledgers = journal.records(task_id="task-shell-grounding", kind="finance_fact_ledger")
+    assert ledgers
+    facts = ledgers[-1].data["facts"]
+    assert any(fact["metric"] == "revenue" and fact["value"] == "123000000" for fact in facts)
+
+
 def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_formula() -> None:
     plan = plan_finance_formula(
         question=(

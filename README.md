@@ -1417,6 +1417,16 @@ tool action such as `workspace.search`, `file.read`, `shell.exec`, or
 finance fast lane from silently regressing into a retrieval-only loop after the
 model chooses a local parsing or analysis step.
 
+Composable tool outputs now enter the same grounding path used by retrieval
+evidence. In `retrieval_answer`, successful `workspace.list`,
+`workspace.search`, `file.read`, and `shell.exec` observations are converted
+into bounded evidence/citation candidates; if no normal retrieval report exists,
+the host creates a synthetic toolchain grounding report and runs the usual
+finance fact ledger, claim ledger, numeric verifier, and synthesis gate. This
+means a model-authored temporary parser can emit structured stdout such as
+`metric: revenue value: ...`, and the host can verify it as evidence instead of
+leaving it trapped as an unconsumed tool observation.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate
