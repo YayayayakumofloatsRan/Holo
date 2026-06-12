@@ -1,13 +1,97 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from dataclasses import replace
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.finance.contracts import FinanceFact
 from kernel_v3.finance.formula_planner import FinanceFormulaPlan, plan_finance_formula
 from kernel_v3.finance.substrate_adapter import finance_formula_plan_to_transform_plan, finance_slot_frame
-from kernel_v3.substrate import CompiledTaskProgram, EvidenceSpec, TaskSpec, TransformSpec
+from kernel_v3.processors.contracts import TASK_COMPILE_SCHEMA
+from kernel_v3.processors.fabric import ProcessorFabric
+from kernel_v3.substrate import CompiledTaskProgram, EvidencePolicy, EvidenceSpec, SlotFill, SlotFrame, SlotSpec, TaskSpec, TransformSpec
+
+
+TASK_COMPILE_TASK_TYPE = "task.compile"
+
+
+def compile_finance_task_program_model_first(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    target_binding: JsonObject | None = None,
+    plan: FinanceFormulaPlan | None = None,
+    processor_fabric: ProcessorFabric | None = None,
+    task_id: str | None = None,
+    run_id: str = "task-compile-preflight",
+    step_id: str | None = None,
+    context_id: str | None = None,
+    processor_budget: JsonObject | None = None,
+) -> CompiledTaskProgram:
+    """Compile a finance task with the LLM as the semantic owner.
+
+    The deterministic compiler remains the host fallback and boundary. When a
+    processor is available, the model receives the current question, target
+    document binding, compact fact ledger, and host fallback program, then
+    proposes TaskSpec/EvidenceSpec/TransformSpec. The host validates that output
+    into contracts and never lets the model create evidence, citations, facts,
+    or final numeric values.
+    """
+
+    fallback = compile_finance_task_program(
+        question=question,
+        facts=facts,
+        target_binding=target_binding,
+        plan=plan,
+    )
+    if processor_fabric is None:
+        return fallback
+    parameters: JsonObject = {
+        "temperature": 0.0,
+        "generation_mode": "auto",
+        "latency_target": "quality",
+    }
+    if processor_budget:
+        parameters["processor_budget"] = processor_budget
+    outcome = processor_fabric.run_json(
+        task_type=TASK_COMPILE_TASK_TYPE,
+        run_id=run_id,
+        context_id=context_id or "ctx-task-compile-" + _short_hash(question),
+        prompt=_model_task_compile_prompt(
+            question=question,
+            facts=facts,
+            target_binding=target_binding,
+            fallback=fallback,
+        ),
+        schema=TASK_COMPILE_SCHEMA,
+        task_id=task_id,
+        step_id=step_id,
+        timeout_seconds=120,
+        parameters=parameters,
+    )
+    if outcome.result.status != "ok" or not isinstance(outcome.parsed, dict):
+        return _fallback_program_with_model_diagnostic(
+            fallback,
+            reason=outcome.result.error or "task_compile_processor_failed",
+            provider=outcome.provider,
+            model=outcome.model,
+        )
+    try:
+        return _compiled_program_from_model_output(
+            outcome.parsed,
+            question=question,
+            fallback=fallback,
+        )
+    except Exception as exc:
+        return _fallback_program_with_model_diagnostic(
+            fallback,
+            reason="task_compile_output_rejected",
+            provider=outcome.provider,
+            model=outcome.model,
+            details={"error": type(exc).__name__, "message": str(exc)[:240]},
+        )
 
 
 def compile_finance_task_program(
@@ -78,6 +162,356 @@ def compile_finance_task_program(
             "tool_chain_plan": tool_chain_plan,
         },
     )
+
+
+def _model_task_compile_prompt(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    target_binding: JsonObject | None,
+    fallback: CompiledTaskProgram,
+) -> str:
+    packet = {
+        "schema": "holo.kernel_v3.task_compile_input.v1",
+        "objective": question,
+        "domain": "finance",
+        "instruction": (
+            "You are task.compile for Holo Kernel v3. Produce the work program a capable analyst would use: "
+            "TaskSpec, EvidenceSpec, TransformSpec, and SlotFrame. Decide semantically; do not follow fixed query templates. "
+            "The host fallback is a scaffold, not a constraint. Correct it when the question implies better slots, source roles, "
+            "line items, periods, transforms, or tool-chain moves. Do not invent facts, evidence ids, citations, source ids, "
+            "numeric values, formulas with unsupported inputs, or final answers. Host will validate and execute tools."
+        ),
+        "target_binding": target_binding or {},
+        "fact_ledger": [_fact_summary(fact) for fact in facts[:96]],
+        "host_fallback_program": _compact_program_for_model(fallback),
+        "output_contract": {
+            "task_spec": {
+                "task_type": "semantic work type such as filing_qa, compute, compare_compute, reconciliation, transaction_multiple, valuation_multiple, disclosure_analysis, modeling_lite",
+                "objective": "the task objective",
+                "target_entities": ["company/ticker/entities if known"],
+                "target_periods": ["periods if known"],
+                "success_criteria": ["what must be true before synthesis"],
+            },
+            "evidence_specs": [
+                {
+                    "slot_name": "required information slot",
+                    "accepted_attributes": ["metric aliases or line-item names"],
+                    "source_role": "primary_filing | annual_report | earnings_release | transaction_disclosure | market_data | benchmark_context | other",
+                    "required_source_families": ["source families if constrained"],
+                    "target_period": "period or null",
+                    "statement": "financial statement/table/section if applicable",
+                    "line_item": "line item if applicable",
+                    "required": True,
+                }
+            ],
+            "transform_specs": [
+                {
+                    "name": "transform name",
+                    "required_slots": ["slot names needed before calculator/synthesis"],
+                    "expression": "calculator expression if deterministic and supported, else null",
+                    "output_unit": "unit or null",
+                    "output_attribute": "output attribute name",
+                }
+            ],
+            "slot_frame": {
+                "task_type": "same work type",
+                "required_slots": [{"name": "slot", "accepted_attributes": ["aliases"], "source_requirements": ["source role/family"]}],
+                "missing_slots": ["slots not supported by current fact_ledger"],
+            },
+            "tool_chain_plan": {
+                "decision_owner": "model",
+                "recommended_steps": ["plain JSON objects describing the next tool-chain moves"],
+            },
+        },
+    }
+    return (
+        "Return exactly one JSON object matching task.compile. "
+        "Prefer the model's semantic judgment over the host fallback when they differ, but keep every required slot executable and auditable.\n\n"
+        f"Packet:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
+def _compiled_program_from_model_output(
+    parsed: JsonObject,
+    *,
+    question: str,
+    fallback: CompiledTaskProgram,
+) -> CompiledTaskProgram:
+    task_spec = _model_task_spec(parsed.get("task_spec"), question=question, fallback=fallback.task_spec)
+    evidence_specs = _model_evidence_specs(parsed.get("evidence_specs"), fallback=fallback.evidence_specs, task_type=task_spec.task_type)
+    transform_specs = _model_transform_specs(parsed.get("transform_specs"), fallback=fallback.transform_specs)
+    slot_frame = _model_slot_frame(
+        parsed.get("slot_frame"),
+        parsed=parsed,
+        fallback=fallback.slot_frame,
+        task_spec=task_spec,
+        evidence_specs=evidence_specs,
+    )
+    diagnostics = {
+        **dict(fallback.diagnostics),
+        "source": "task_compile_model",
+        "fallback_program_id": fallback.program_id,
+        "model_reason_summary": _string(parsed.get("reason_summary"))[:480],
+        "model_diagnostics": _json_object(parsed.get("diagnostics")),
+        "tool_chain_plan": _model_tool_chain_plan(parsed.get("tool_chain_plan"), fallback=fallback),
+    }
+    return CompiledTaskProgram(
+        program_id="task-program-model-" + _short_hash(task_spec.spec_id, ",".join(spec.slot_name for spec in evidence_specs)),
+        domain=task_spec.domain or "finance",
+        task_spec=task_spec,
+        evidence_specs=evidence_specs,
+        transform_specs=transform_specs,
+        slot_frame=slot_frame,
+        transform_plan=fallback.transform_plan,
+        diagnostics=diagnostics,
+    )
+
+
+def _fallback_program_with_model_diagnostic(
+    fallback: CompiledTaskProgram,
+    *,
+    reason: str,
+    provider: str | None = None,
+    model: str | None = None,
+    details: JsonObject | None = None,
+) -> CompiledTaskProgram:
+    return replace(
+        fallback,
+        diagnostics={
+            **dict(fallback.diagnostics),
+            "task_compile_model": {
+                "status": "fallback",
+                "reason": reason,
+                "provider": provider,
+                "model": model,
+                **(details or {}),
+            },
+        },
+    )
+
+
+def _model_task_spec(value: object, *, question: str, fallback: TaskSpec) -> TaskSpec:
+    data = _json_object(value)
+    task_type = _string(data.get("task_type")) or fallback.task_type
+    return TaskSpec(
+        spec_id=_string(data.get("spec_id")) or "task-spec-model-" + _short_hash(question, task_type),
+        domain=_string(data.get("domain")) or fallback.domain or "finance",
+        task_type=task_type,
+        objective=_string(data.get("objective")) or question or fallback.objective,
+        target_entities=_string_list(data.get("target_entities")) or list(fallback.target_entities),
+        target_periods=_string_list(data.get("target_periods")) or list(fallback.target_periods),
+        success_criteria=_string_list(data.get("success_criteria")) or list(fallback.success_criteria),
+        diagnostics={
+            **dict(fallback.diagnostics),
+            "source": "task_compile_model",
+            **_json_object(data.get("diagnostics")),
+        },
+    )
+
+
+def _model_evidence_specs(value: object, *, fallback: list[EvidenceSpec], task_type: str) -> list[EvidenceSpec]:
+    specs: list[EvidenceSpec] = []
+    for index, item in enumerate(_json_list(value)[:32]):
+        slot_name = _string(item.get("slot_name") or item.get("name"))
+        if not slot_name:
+            continue
+        specs.append(
+            EvidenceSpec(
+                spec_id=_string(item.get("spec_id")) or "evidence-spec-model-" + _short_hash(slot_name, index),
+                slot_name=slot_name,
+                domain=_string(item.get("domain")) or "finance",
+                accepted_attributes=_string_list(item.get("accepted_attributes") or item.get("aliases")),
+                source_role=_string(item.get("source_role")) or None,
+                required_source_families=_string_list(item.get("required_source_families")),
+                target_period=_string(item.get("target_period")) or None,
+                statement=_string(item.get("statement")) or None,
+                line_item=_string(item.get("line_item")) or None,
+                required=bool(item.get("required", True)),
+                diagnostics={
+                    "source": "task_compile_model",
+                    "task_type": task_type,
+                    **_json_object(item.get("diagnostics")),
+                },
+            )
+        )
+    return specs or list(fallback)
+
+
+def _model_transform_specs(value: object, *, fallback: list[TransformSpec]) -> list[TransformSpec]:
+    specs: list[TransformSpec] = []
+    for index, item in enumerate(_json_list(value)[:24]):
+        name = _string(item.get("name"))
+        if not name:
+            continue
+        specs.append(
+            TransformSpec(
+                spec_id=_string(item.get("spec_id")) or "transform-spec-model-" + _short_hash(name, index),
+                domain=_string(item.get("domain")) or "finance",
+                name=name,
+                required_slots=_string_list(item.get("required_slots")),
+                expression=_string(item.get("expression")) or None,
+                output_unit=_string(item.get("output_unit")) or None,
+                output_attribute=_string(item.get("output_attribute")) or name,
+                diagnostics={
+                    "source": "task_compile_model",
+                    **_json_object(item.get("diagnostics")),
+                },
+            )
+        )
+    return specs or list(fallback)
+
+
+def _model_slot_frame(
+    value: object,
+    *,
+    parsed: JsonObject,
+    fallback: SlotFrame | None,
+    task_spec: TaskSpec,
+    evidence_specs: list[EvidenceSpec],
+) -> SlotFrame:
+    data = _json_object(value)
+    required_slots = _model_slot_specs(data.get("required_slots"))
+    if not required_slots:
+        required_slots = [
+            SlotSpec(
+                name=spec.slot_name,
+                requirement="required" if spec.required else "optional",
+                accepted_attributes=list(spec.accepted_attributes),
+                source_requirements=_ordered_unique([*list(spec.required_source_families), _string(spec.source_role)]),
+                metadata={"source": "task_compile_model", "evidence_spec_id": spec.spec_id},
+            )
+            for spec in evidence_specs
+        ]
+    optional_slots = _model_slot_specs(data.get("optional_slots"))
+    filled_slots = _model_slot_fills(data.get("filled_slots"))
+    missing_slots = _string_list(data.get("missing_slots")) or _string_list(parsed.get("missing_slots"))
+    if not missing_slots and fallback is not None:
+        missing_slots = list(fallback.missing_slots)
+    return SlotFrame(
+        frame_id=_string(data.get("frame_id")) or "slot-frame-model-" + _short_hash(task_spec.spec_id),
+        task_type=_string(data.get("task_type")) or task_spec.task_type,
+        domain=_string(data.get("domain")) or task_spec.domain or "finance",
+        required_slots=required_slots,
+        optional_slots=optional_slots,
+        filled_slots=filled_slots,
+        missing_slots=missing_slots,
+        evidence_policy=_model_evidence_policy(data.get("evidence_policy"), fallback=fallback.evidence_policy if fallback else None),
+        diagnostics={
+            "source": "task_compile_model",
+            **_json_object(data.get("diagnostics")),
+        },
+    )
+
+
+def _model_slot_specs(value: object) -> list[SlotSpec]:
+    specs: list[SlotSpec] = []
+    for item in _json_list_or_strings(value)[:32]:
+        if isinstance(item, str):
+            name = _string(item)
+            if name:
+                specs.append(SlotSpec(name=name))
+            continue
+        name = _string(item.get("name") or item.get("slot_name"))
+        if not name:
+            continue
+        requirement = _string(item.get("requirement")) or "required"
+        if requirement not in {"required", "optional"}:
+            requirement = "required"
+        specs.append(
+            SlotSpec(
+                name=name,
+                requirement=requirement,
+                description=_string(item.get("description")) or None,
+                accepted_attributes=_string_list(item.get("accepted_attributes") or item.get("aliases")),
+                source_requirements=_string_list(item.get("source_requirements")),
+                metadata=_json_object(item.get("metadata")),
+            )
+        )
+    return specs
+
+
+def _model_slot_fills(value: object) -> list[SlotFill]:
+    fills: list[SlotFill] = []
+    for item in _json_list(value)[:64]:
+        slot_name = _string(item.get("slot_name") or item.get("name"))
+        if not slot_name:
+            continue
+        fills.append(
+            SlotFill(
+                slot_name=slot_name,
+                claim_id=_string(item.get("claim_id")) or None,
+                value=_string(item.get("value")) or None,
+                source_ref=_string(item.get("source_ref")) or None,
+                confidence=_float_or_none(item.get("confidence")),
+                metadata=_json_object(item.get("metadata")),
+            )
+        )
+    return fills
+
+
+def _model_evidence_policy(value: object, *, fallback: EvidencePolicy | None) -> EvidencePolicy | None:
+    data = _json_object(value)
+    if not data:
+        return fallback
+    return EvidencePolicy(
+        policy_id=_string(data.get("policy_id")) or "evidence-policy-model-" + _short_hash(data),
+        domain=_string(data.get("domain")) or "finance",
+        required_source_families=_string_list(data.get("required_source_families")),
+        forbidden_source_families=_string_list(data.get("forbidden_source_families")),
+        required_terms=_string_list(data.get("required_terms")),
+        authority=_string(data.get("authority")) or None,
+        freshness=_string(data.get("freshness")) or None,
+        diagnostics={"source": "task_compile_model", **_json_object(data.get("diagnostics"))},
+    )
+
+
+def _model_tool_chain_plan(value: object, *, fallback: CompiledTaskProgram) -> JsonObject:
+    data = _json_object(value)
+    if not data:
+        return _json_object(fallback.diagnostics.get("tool_chain_plan"))
+    data.setdefault("schema", "holo.kernel_v3.tool_chain_plan.v1")
+    data.setdefault("decision_owner", "model")
+    data.setdefault("host_role", "verify_provenance_policy_budget_and_numeric_support")
+    return data
+
+
+def _compact_program_for_model(program: CompiledTaskProgram) -> JsonObject:
+    return {
+        "program_id": program.program_id,
+        "domain": program.domain,
+        "task_spec": program.task_spec.to_dict(),
+        "evidence_specs": [spec.to_dict() for spec in program.evidence_specs[:16]],
+        "transform_specs": [spec.to_dict() for spec in program.transform_specs[:12]],
+        "slot_frame": program.slot_frame.to_dict() if program.slot_frame is not None else None,
+        "diagnostics": {
+            key: value
+            for key, value in dict(program.diagnostics).items()
+            if key in {"source", "evidence_spec_count", "transform_spec_count", "missing_slots", "tool_chain_plan"}
+        },
+    }
+
+
+def _fact_summary(fact: FinanceFact) -> JsonObject:
+    return {
+        "fact_id": fact.fact_id,
+        "entity": fact.entity,
+        "ticker": fact.ticker,
+        "period": fact.period,
+        "fiscal_year": fact.fiscal_year,
+        "metric": fact.metric,
+        "value": fact.value,
+        "unit": fact.unit,
+        "scale": fact.scale,
+        "source_ref": fact.source_ref,
+        "evidence_ref": fact.evidence_ref,
+        "citation_ref": fact.citation_ref,
+        "metadata": {
+            key: value
+            for key, value in dict(fact.metadata).items()
+            if key in {"form", "filed", "accession", "concept", "statement", "line_item"}
+        },
+    }
 
 
 def _evidence_specs(*, frame, binding: JsonObject, target_period: str | None) -> list[EvidenceSpec]:
@@ -412,6 +846,41 @@ def _ordered_unique(items: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _json_object(value: object) -> JsonObject:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _json_list(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _json_list_or_strings(value: object) -> list[JsonObject | str]:
+    if not isinstance(value, list):
+        return []
+    result: list[JsonObject | str] = []
+    for item in value:
+        if isinstance(item, dict):
+            result.append(dict(item))
+        elif isinstance(item, str):
+            result.append(item)
+    return result
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return _ordered_unique([str(item or "").strip() for item in value if str(item or "").strip()])
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _short_hash(*parts: object) -> str:

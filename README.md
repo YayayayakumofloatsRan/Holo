@@ -1396,6 +1396,19 @@ actual executable tools rather than capability-catalog promises. `shell.exec`
 is still host-owned: it requires `shell:exec`, an executable allowlist, PolicyGate
 validation, and journaled stdout/stderr observations.
 
+The execution program itself is now model-first in the finance fast lane.
+`task.compile` is a structured processor packet that asks the LLM to produce
+`TaskSpec`, `EvidenceSpec`, `TransformSpec`, `SlotFrame`, and a
+`tool_chain_plan` from the question, target binding, compact fact ledger, and
+host fallback scaffold. Runtime invokes this compiler before the first model
+planner step when `finance-fact-fast` exposes `model_task_compiler`; the compact
+program is placed in planner context as `execution_program` and journaled as a
+preflight `compiled_task_program`. The deterministic finance compiler remains a
+fallback and schema/provenance boundary, not the semantic owner. This shifts the
+core judgment of "what work program should solve this task" to the LLM while the
+host continues to validate tool permissions, citations, source authority,
+numeric support, synthesis gates, and budgets.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

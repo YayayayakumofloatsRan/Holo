@@ -90,6 +90,22 @@ RETRIEVAL_WORKBENCH_SCHEMA = JsonSchema(
     optional={},
 )
 
+TASK_COMPILE_SCHEMA = JsonSchema(
+    name="task.compile",
+    required={
+        "task_spec": "dict",
+        "evidence_specs": "list",
+        "transform_specs": "list",
+    },
+    optional={
+        "slot_frame": "dict",
+        "tool_chain_plan": "dict",
+        "missing_slots": "list",
+        "reason_summary": "str",
+        "diagnostics": "dict",
+    },
+)
+
 SYNTHESIZER_SCHEMA = JsonSchema(
     name="synthesizer.answer",
     required={

@@ -11,6 +11,7 @@ STRUCTURED_TASK_TYPES = {
     "chat.route",
     "semantic.intake",
     "planner.propose",
+    "task.compile",
     "retrieval.workbench",
     "evaluator.assess",
     "mission.assess",
@@ -132,6 +133,7 @@ def _thinking_for(*, task_type: str, assessment: GenerationAssessment) -> str:
             return "disabled"
         if assessment.task_difficulty in {"replan", "deep_research"} and task_type in {
             "planner.propose",
+            "task.compile",
             "retrieval.workbench",
             "evaluator.assess",
             "mission.assess",
@@ -153,6 +155,7 @@ def _model_for(*, task_type: str, assessment: GenerationAssessment, provider: st
     if assessment.latency_target == "balanced" and assessment.task_difficulty in {"replan", "deep_research"}:
         if task_type in {
             "planner.propose",
+            "task.compile",
             "retrieval.workbench",
             "mission.assess",
             "workmethod.frame",

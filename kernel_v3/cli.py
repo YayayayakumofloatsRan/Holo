@@ -805,6 +805,7 @@ def main(argv: list[str] | None = None) -> int:
             "chat.route",
             "semantic.intake",
             "planner.propose",
+            "task.compile",
             "evaluator.assess",
             "synthesizer.answer",
             "mission.assess",
@@ -3104,6 +3105,25 @@ def _packet_prompt(task_type: str, goal: str) -> str:
             },
             "evidence": [{"evidence_id": "ev-1", "text_preview": "Evidence preview goes here."}],
             "citations": [{"citation_id": "cite-1", "evidence_id": "ev-1", "quote_preview": "Evidence preview goes here."}],
+        }
+    elif task_type == "task.compile":
+        payload = {
+            "contract": "Return exactly one JSON object matching task.compile.",
+            "schema": "holo.kernel_v3.task_compile_input.preview",
+            "objective": goal,
+            "domain": "finance",
+            "instruction": (
+                "Produce TaskSpec, EvidenceSpec, TransformSpec, SlotFrame, and tool_chain_plan. "
+                "Use semantic judgment over the objective; host validates and executes tools."
+            ),
+            "target_binding": {},
+            "fact_ledger": [],
+            "host_fallback_program": {
+                "task_spec": {"task_type": "unknown", "objective": goal, "success_criteria": []},
+                "evidence_specs": [],
+                "transform_specs": [],
+                "slot_frame": {"required_slots": [], "missing_slots": []},
+            },
         }
     elif task_type == "mission.assess":
         payload = {

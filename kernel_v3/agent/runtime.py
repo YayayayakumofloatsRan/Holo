@@ -41,6 +41,7 @@ from kernel_v3.finance import (
     attach_target_binding_to_facts,
     build_finance_fact_ledger,
     compile_finance_task_program,
+    compile_finance_task_program_model_first,
     compute_formula,
     finance_facts_to_claims,
     finance_formula_plan_to_transform_plan,
@@ -402,6 +403,11 @@ class AgentRuntime:
         recipe = _with_active_memory_access(recipe, enabled=self.memory_store is not None)
         recipe = _with_planned_action_count(semantic_goal, recipe)
         recipe = _with_runtime_loop_budget(recipe, planner_mode=planner_mode)
+        recipe = self._with_model_compiled_execution_program(
+            recipe,
+            semantic_goal,
+            planner_mode=planner_mode,
+        )
         registry = self._registry(recipe, semantic_goal)
         planner = self._planner(semantic_goal, recipe, registry, planner_mode)
         evaluator = WorkloopEvaluator(
@@ -462,6 +468,7 @@ class AgentRuntime:
             source_record_ref=semantic_record.record_id,
         )
         self._append_recipe(recipe, task_id=result.task_id, run_id=result.run_id)
+        self._append_preflight_execution_program(recipe, task_id=result.task_id, run_id=result.run_id)
         self._append_benchmark_oracle_context_retrieval(
             result.task_id,
             result.run_id,
@@ -641,6 +648,47 @@ class AgentRuntime:
             shell_allowed_executables=shell_allowed,
             artifact_store=self.artifact_store,
         )
+
+    def _with_model_compiled_execution_program(
+        self,
+        recipe: TaskRecipe,
+        goal: str,
+        *,
+        planner_mode: str,
+    ) -> TaskRecipe:
+        if planner_mode != "model" or self.processor_fabric is None:
+            return recipe
+        if recipe.mode != "retrieval_answer" or not _model_task_compiler_enabled(recipe):
+            return recipe
+        question = _root_goal_from_recipe(recipe)
+        if not question or question == recipe.mode:
+            question = goal
+        binding = _target_document_binding_from_recipe(recipe)
+        if _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID and not binding:
+            return recipe
+        try:
+            compiled = compile_finance_task_program_model_first(
+                question=question,
+                facts=[],
+                target_binding=binding,
+                processor_fabric=self.processor_fabric,
+                task_id=None,
+                run_id="task-compile-preflight",
+                step_id="task-compile-preflight",
+                context_id="ctx-task-compile-" + _short_hash(question),
+                processor_budget=_processor_budget_metadata(recipe),
+            )
+        except Exception:
+            return recipe
+        metadata = dict(recipe.metadata)
+        metadata["execution_program"] = {
+            **compiled.to_dict(),
+            "schema": "holo.kernel_v3.compiled_task_program.v1",
+            "source": str(compiled.diagnostics.get("source") or "task_compile_model"),
+            "preflight": True,
+        }
+        metadata["execution_program_mode"] = "model_first"
+        return replace(recipe, metadata=metadata)
 
     def _with_memory_tools(self, registry: ToolRegistry) -> ToolRegistry:
         if self.memory_store is None:
@@ -1385,6 +1433,33 @@ class AgentRuntime:
             kind="agent_recipe",
             data=redact_journal_data(recipe.to_dict()),
             state_delta={"agent_recipe": recipe.recipe_id, "agent_mode": recipe.mode},
+        )
+
+    def _append_preflight_execution_program(self, recipe: TaskRecipe, *, task_id: str, run_id: str) -> None:
+        if not isinstance(recipe.metadata, dict):
+            return
+        program = recipe.metadata.get("execution_program")
+        if not isinstance(program, dict):
+            return
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="compiled_task_program",
+            data=redact_journal_data(
+                {
+                    **program,
+                    "schema": program.get("schema") or "holo.kernel_v3.compiled_task_program.v1",
+                    "source": program.get("source") or "recipe.execution_program",
+                    "preflight": True,
+                }
+            ),
+            state_delta={
+                "compiled_task_program": _string_value(
+                    _json_object(program.get("task_spec")).get("task_type")
+                ),
+                "compiled_task_program_source": _string_value(program.get("source") or "recipe.execution_program"),
+            },
         )
 
     def _append_workmethod_state(self, state: WorkMethodState, *, task_id: str, run_id: str) -> None:
@@ -3968,6 +4043,14 @@ def _composable_toolchain_enabled(recipe: TaskRecipe) -> bool:
     return bool(_composable_toolchain_config(recipe.metadata))
 
 
+def _model_task_compiler_enabled(recipe: TaskRecipe) -> bool:
+    config = _composable_toolchain_config(recipe.metadata)
+    if _truthy(config.get("model_task_compiler")):
+        return True
+    execution = _execution_metadata(recipe)
+    return _truthy(execution.get("model_task_compiler"))
+
+
 def _composable_shell_allowed_executables(recipe: TaskRecipe) -> set[str]:
     config = _composable_toolchain_config(recipe.metadata)
     values = _string_list(config.get("shell_allowed_executables"))
@@ -5090,6 +5173,12 @@ def _execution_program_hint_for_planner(
     run_id: str,
     recipe: TaskRecipe,
 ) -> JsonObject:
+    metadata_program = recipe.metadata.get("execution_program") if isinstance(recipe.metadata, dict) else None
+    if isinstance(metadata_program, dict):
+        compact = _compact_compiled_task_program_for_prompt(metadata_program)
+        if compact:
+            compact["source_record_ref"] = "recipe.execution_program"
+            return compact
     latest = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind="compiled_task_program")
     if latest is not None and isinstance(latest.data, dict):
         compact = _compact_compiled_task_program_for_prompt(latest.data)

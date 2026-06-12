@@ -10,7 +10,7 @@ from kernel_v3.finance.substrate_adapter import (
     finance_slot_frame,
     finance_verification_to_gate_result,
 )
-from kernel_v3.finance.task_compiler import compile_finance_task_program
+from kernel_v3.finance.task_compiler import compile_finance_task_program, compile_finance_task_program_model_first
 from kernel_v3.finance.target_binding import (
     attach_target_binding_to_facts,
     filter_facts_for_target_binding,
@@ -27,6 +27,7 @@ __all__ = [
     "build_finance_fact_ledger",
     "compute_formula",
     "compile_finance_task_program",
+    "compile_finance_task_program_model_first",
     "finance_evidence_policy_for_question",
     "finance_facts_to_claims",
     "finance_formula_plan_to_transform_plan",

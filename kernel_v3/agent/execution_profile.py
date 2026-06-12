@@ -260,6 +260,7 @@ def _composable_toolchain_defaults(profile_id: str) -> JsonObject:
         "enabled": True,
         "workspace_read": True,
         "shell_exec": True,
+        "model_task_compiler": True,
         "shell_allowed_executables": [
             "python",
             "python3",

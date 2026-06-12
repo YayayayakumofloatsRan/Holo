@@ -34,6 +34,7 @@ def test_finance_fact_fast_profile_is_short_lane() -> None:
     assert metadata["processor_budget"]["max_calls_per_task"] == 8
     assert metadata["composable_toolchain"]["enabled"] is True
     assert metadata["composable_toolchain"]["shell_exec"] is True
+    assert metadata["composable_toolchain"]["model_task_compiler"] is True
 
 
 def test_long_mission_profile_preserves_heavy_supervision() -> None:

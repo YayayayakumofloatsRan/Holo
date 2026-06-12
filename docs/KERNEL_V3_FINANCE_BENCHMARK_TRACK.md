@@ -286,6 +286,15 @@ not repeatedly download these sources during benchmark iteration.
   scoring. The registry composes these tools before adding retrieval/calculator,
   while PolicyGate and the shell executable allowlist remain the hard safety
   boundary.
+- The task program compiler has moved from deterministic-owner to model-first
+  owner for the finance fast lane. `task.compile` is now a processor packet:
+  the LLM receives the objective, target binding, compact facts, and host
+  fallback scaffold, then emits `TaskSpec`, `EvidenceSpec`, `TransformSpec`,
+  `SlotFrame`, and `tool_chain_plan`. Runtime injects that model-authored
+  program into the first planner context and journals it as preflight
+  `compiled_task_program`; if the processor fails or emits invalid schema, the
+  old host compiler is retained as fallback. This keeps host verification hard
+  while moving the core decomposition judgment out of threshold-style code.
 - Retrieval Workbench packets now use task-aware compact selection. The
   selection score combines the compiled evidence/transform specs, target
   document contract, required statement/line item, and table-like signals, so

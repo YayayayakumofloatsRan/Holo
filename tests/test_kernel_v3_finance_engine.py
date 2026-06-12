@@ -30,6 +30,7 @@ from kernel_v3.finance import (
     attach_target_binding_to_facts,
     build_finance_fact_ledger,
     compile_finance_task_program,
+    compile_finance_task_program_model_first,
     compute_formula,
     finance_facts_to_claims,
     finance_formula_plan_to_transform_plan,
@@ -1430,6 +1431,92 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
     assert tool_chain["recommended_steps"][-1]["tool"] == "host.verifier_gate"
 
 
+def test_model_first_finance_task_compiler_overrides_host_scaffold() -> None:
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "task.compile": {
+                        "task_spec": {
+                            "task_type": "filing_metric_lookup",
+                            "objective": "Find Adobe FY2018 capex from the target filing.",
+                            "target_entities": ["Adobe"],
+                            "target_periods": ["FY2018"],
+                            "success_criteria": ["primary filing row supports the metric"],
+                        },
+                        "evidence_specs": [
+                            {
+                                "slot_name": "capital_expenditures",
+                                "accepted_attributes": ["capital expenditures", "purchases of property and equipment"],
+                                "source_role": "primary_filing",
+                                "required_source_families": ["SEC 10-K"],
+                                "target_period": "FY2018",
+                                "statement": "cash_flow_statement",
+                                "line_item": "purchases of property and equipment",
+                                "required": True,
+                            }
+                        ],
+                        "transform_specs": [
+                            {
+                                "name": "metric_lookup",
+                                "required_slots": ["capital_expenditures"],
+                                "expression": None,
+                                "output_unit": "USD",
+                                "output_attribute": "capital_expenditures",
+                            }
+                        ],
+                        "slot_frame": {
+                            "task_type": "filing_metric_lookup",
+                            "required_slots": [{"name": "capital_expenditures"}],
+                            "missing_slots": ["capital_expenditures"],
+                        },
+                        "tool_chain_plan": {
+                            "decision_owner": "model",
+                            "recommended_steps": [{"step": "read_target_filing", "tool": "retrieval.run"}],
+                        },
+                        "reason_summary": "The question is a target filing metric lookup, not a broad capital intensity comparison.",
+                    }
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=JournalStore.in_memory(),
+    )
+
+    program = compile_finance_task_program_model_first(
+        question="What was Adobe's capital expenditures in FY2018?",
+        facts=[],
+        target_binding={"company": "Adobe", "doc_period": "FY2018", "doc_type": "10-K"},
+        processor_fabric=fabric,
+    )
+
+    assert program.diagnostics["source"] == "task_compile_model"
+    assert program.task_spec.task_type == "filing_metric_lookup"
+    assert program.evidence_specs[0].line_item == "purchases of property and equipment"
+    assert program.transform_specs[0].name == "metric_lookup"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["capital_expenditures"]
+    assert program.diagnostics["tool_chain_plan"]["decision_owner"] == "model"
+
+
+def test_model_first_finance_task_compiler_falls_back_on_invalid_model_output() -> None:
+    fabric = ProcessorFabric(
+        providers={"fake_json": FakeJsonProvider({"task.compile": {"task_spec": {}, "evidence_specs": "bad", "transform_specs": []}})},
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=JournalStore.in_memory(),
+    )
+
+    program = compile_finance_task_program_model_first(
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+        facts=[],
+        processor_fabric=fabric,
+    )
+
+    assert program.diagnostics["source"] == "finance_task_compiler"
+    assert program.diagnostics["task_compile_model"]["status"] == "fallback"
+    assert "capital_expenditures" in program.diagnostics["missing_slots"]
+
+
 def test_planner_replan_hints_include_execution_program_for_model_tool_assembly() -> None:
     recipe = task_recipe(
         "retrieval_answer",
@@ -1457,6 +1544,79 @@ def test_planner_replan_hints_include_execution_program_for_model_tool_assembly(
         item["tool"] == "retrieval.run"
         for item in program["tool_chain_plan"]["next_action_candidates"]
     )
+
+
+def test_runtime_preflight_task_compile_injects_model_execution_program() -> None:
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "task.compile": {
+                        "task_spec": {
+                            "task_type": "filing_metric_lookup",
+                            "objective": "Find the target filing metric.",
+                            "target_entities": ["Adobe"],
+                            "target_periods": ["FY2018"],
+                            "success_criteria": ["primary filing evidence supports the value"],
+                        },
+                        "evidence_specs": [
+                            {
+                                "slot_name": "capital_expenditures",
+                                "accepted_attributes": ["purchases of property and equipment"],
+                                "source_role": "primary_filing",
+                                "target_period": "FY2018",
+                                "statement": "cash_flow_statement",
+                                "line_item": "purchases of property and equipment",
+                            }
+                        ],
+                        "transform_specs": [],
+                        "slot_frame": {
+                            "task_type": "filing_metric_lookup",
+                            "required_slots": [{"name": "capital_expenditures"}],
+                            "missing_slots": ["capital_expenditures"],
+                        },
+                    },
+                    "planner.propose": {
+                        "action_id": "act-stop-after-preflight",
+                        "kind": "respond",
+                        "name": None,
+                        "description": "stop after preflight for test",
+                        "payload": {"text": "preflight observed"},
+                        "score": 0.1,
+                        "reasons": ["test_stop"],
+                        "side_effect_class": "none",
+                    },
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=JournalStore.in_memory(),
+    )
+    metadata = {
+        **execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+        "research_profile": "finance_fundamentals",
+        "target_document_binding": {"company": "Adobe", "doc_period": "FY2018", "doc_type": "10-K"},
+    }
+    runtime = AgentRuntime(journal=fabric.journal, processor_fabric=fabric)
+
+    result = runtime.run(
+        "What was Adobe's capital expenditures in FY2018?",
+        mode="retrieval_answer",
+        planner_mode="model",
+        evaluator_mode="fake",
+        synthesizer_mode="fake",
+        semantic_mode="fake",
+        execution_metadata=metadata,
+    )
+
+    records = fabric.journal.records(kind="compiled_task_program")
+    assert result.task_id
+    assert records
+    preflight = records[0].data
+    assert preflight["source"] == "task_compile_model"
+    assert preflight["preflight"] is True
+    assert preflight["task_spec"]["task_type"] == "filing_metric_lookup"
+    assert preflight["evidence_specs"][0]["line_item"] == "purchases of property and equipment"
 
 
 def test_finance_fast_recipe_exposes_composable_toolchain_tools(tmp_path) -> None:
