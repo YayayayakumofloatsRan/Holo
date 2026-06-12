@@ -3874,6 +3874,8 @@ def test_retrieval_finalization_repairs_unsupported_finance_numbers_without_calc
     assert "$999 billion" not in final.answer
     assert final.citation_refs == ["cite-1"]
     assert "保守可验证回答" in final.answer
+    assert "metric=revenue" in final.answer
+    assert "value=[number]" in final.answer
     assert journal.records(task_id="task-finance", kind="agent_final_answer")
     synthesis_gates = journal.records(task_id="task-finance", kind="synthesis_gate_result")
     assert synthesis_gates

@@ -9473,13 +9473,7 @@ def _finance_retrieval_fallback_final(
                 lines.extend(fact_lines)
     if evidence:
         lines.append("可审计证据摘要：")
-        citation_by_evidence = {item.evidence_id: item for item in citations if item.evidence_id}
-        for item in _source_grounded_ranked_evidence(evidence, recipe=recipe)[:4]:
-            citation = citation_by_evidence.get(item.evidence_id)
-            if citation is None:
-                continue
-            source_label = _safe_fallback_source_label(item.title or "", limit=120)
-            lines.append(f"- {source_label} [{citation.citation_id}]")
+        lines.extend(_finance_fallback_evidence_summary_lines(evidence=evidence, citations=citations, recipe=recipe, limit=4))
     lines.append(f"局限：原 synthesizer 失败原因为 `{synthesis_error}`；上面的结论只覆盖当前证据和 calculator trace 支持的部分。")
     return FinalAnswer(
         answer="\n".join(lines),
@@ -9491,6 +9485,45 @@ def _finance_retrieval_fallback_final(
         run_id=run_id,
         trace_refs=_trace_refs(journal, task_id),
     )
+
+
+def _finance_fallback_evidence_summary_lines(
+    *,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    recipe: TaskRecipe,
+    limit: int,
+) -> list[str]:
+    citation_by_evidence = {item.evidence_id: item for item in citations if item.evidence_id}
+    lines: list[str] = []
+    for item in _source_grounded_ranked_evidence(evidence, recipe=recipe)[: max(1, limit)]:
+        citation = citation_by_evidence.get(item.evidence_id)
+        if citation is None:
+            continue
+        source_label = _safe_fallback_source_label(item.title or item.uri or "", limit=120)
+        excerpt = _safe_fallback_evidence_excerpt(item.text, limit=220)
+        if excerpt:
+            lines.append(f"- {source_label}: {excerpt} [{citation.citation_id}]")
+        else:
+            lines.append(f"- {source_label} [{citation.citation_id}]")
+    return lines
+
+
+def _safe_fallback_evidence_excerpt(text: str, *, limit: int) -> str:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return ""
+    # Conservative fallback evidence previews are context, not the numeric
+    # output channel. Keep row/metric semantics visible while preventing quoted
+    # table values from becoming unsupported answer numbers.
+    normalized = re.sub(r"\bCIK\s*0*\d+\b", "CIK identifier", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bCIK0*\d+\b", "CIK identifier", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"(?<![A-Za-z])\(?-?\d[\d,]*(?:\.\d+)?\)?%?", "[number]", normalized)
+    normalized = normalized.replace("form=[number]-K", "form=10-K")
+    normalized = normalized.replace("Form [number]-K", "Form 10-K")
+    normalized = normalized.replace("[number]-K", "10-K")
+    normalized = re.sub(r"(?:\[number\][,\s]*){4,}", "[number series] ", normalized)
+    return _shorten_for_fallback_answer(normalized, limit=limit)
 
 
 def _source_grounded_fallback_evidence_lines(

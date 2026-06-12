@@ -1341,6 +1341,14 @@ numeric claim rate remains `0.0`. The four rows are still ungraded with respect
 to public pass/fail because this curated dev slice has annotation signals rather
 than official FAB gold.
 
+The finance synthesis gate also has a tighter conservative fallback path. When
+model synthesis fails schema validation or emits unsupported material numbers,
+the host fallback now preserves cited evidence context with bounded evidence
+excerpts while masking row/table numbers as `[number]`; exact financial outputs
+still have to come from the claim ledger or FormulaTrace. This makes fallback
+answers more useful than a bare source list without relaxing the unsupported
+numeric-claim policy.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

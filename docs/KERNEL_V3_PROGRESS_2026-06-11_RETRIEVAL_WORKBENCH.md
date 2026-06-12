@@ -297,3 +297,10 @@ FinanceBench rows, not the first-slice target binding bug.
   calculator/formula trace, verifier gate, and unsupported-numeric rates at
   `1.0`/`0.0` as applicable; the slice remains annotation-scored rather than
   official FAB pass/fail.
+- Synthesis fallback hardening now keeps cited evidence context visible without
+  weakening numeric support. If model synthesis fails or introduces unsupported
+  material numbers, the finance fallback answer includes bounded evidence
+  excerpts with row/table numbers masked as `[number]`; exact numeric claims
+  remain limited to claim-ledger facts and FormulaTrace outputs. Focused
+  synthesis/fallback tests passed, and the same 205-test workbench/finance
+  regression suite remained green after this answer-path change.
