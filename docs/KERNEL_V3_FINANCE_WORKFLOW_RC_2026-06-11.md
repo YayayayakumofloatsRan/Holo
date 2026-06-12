@@ -228,6 +228,15 @@ same ClaimLedger, VerifierGate, and SynthesisGate path as retrieval evidence.
 The model chooses and assembles the local toolchain; the host still validates
 tool permission, provenance, citations, formulas, and numeric support.
 
+2026-06-12 follow-up: toolchain grounding now records both successful and
+failed local tool steps. `toolchain_artifact` records preserve script/source and
+output artifact refs; `toolchain_failure` records preserve bounded stderr/stdout
+diagnostics for replanning. Temporary parsers can emit table/row payloads, not
+only flat JSON facts, and those rows are converted into CandidateFact evidence
+before ClaimLedger extraction. The finance fallback answer path is also
+ledger-first for numeric answers and sanitizes raw evidence previews so SEC
+accessions or filenames do not become material unsupported numbers.
+
 ## Current Gaps
 
 The next iteration should stay narrow:

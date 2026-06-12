@@ -19,10 +19,14 @@ from kernel_v3.agent.runtime import (
     _finance_missing_fact_retrieval_payload,
     _finance_formula_preflight_plans,
     _planner_directive,
+    _candidate_fact_evidence_text,
+    _toolchain_candidate_facts,
+    _workspace_grounding,
     task_recipe,
 )
 from kernel_v3.contracts import CandidateAction, ContextBundle, Observation
 from kernel_v3.bench import convert_public_finance_benchmark, load_finance_benchmark_items
+from kernel_v3.context import ArtifactStore
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
     FinanceFact,
@@ -2050,6 +2054,102 @@ def test_script_exec_json_facts_become_candidate_fact_evidence_and_calculator_in
     assert candidates[-1].data["candidate_fact_count"] == 2
     plans = journal.records(task_id="task-script-formula", kind="finance_formula_plan")
     assert plans[-1].data["fact_count"] == 2
+
+
+def test_script_exec_table_rows_become_scaled_candidate_facts() -> None:
+    candidates = _toolchain_candidate_facts(
+        {
+            "stdout": json.dumps(
+                {
+                    "entityName": "3M Company",
+                    "ticker": "MMM",
+                    "unit": "USD",
+                    "scale": "millions",
+                    "form": "10-K",
+                    "tables": [
+                        {
+                            "name": "cash flow statement",
+                            "rows": [
+                                {
+                                    "line_item": "Payments to Acquire Property, Plant, and Equipment",
+                                    "2018": "(1,577)",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+        },
+        source="tool:script.exec",
+    )
+
+    assert candidates
+    evidence = [
+        _finance_evidence(
+            evidence_id="toolchain-table-capex",
+            title="script exec candidate fact",
+            uri="workspace://parser.py",
+            text=_candidate_fact_evidence_text(candidates[0]),
+        )
+    ]
+    facts = build_finance_fact_ledger(evidence=evidence, citations=[_finance_citation(evidence[0], citation_id="cite-script")])
+
+    assert len(facts) == 1
+    assert facts[0].entity == "3M Company"
+    assert facts[0].metric == "capital expenditures"
+    assert facts[0].fiscal_year == 2018
+    assert facts[0].value == "-1577000000"
+    assert facts[0].scale == "millions"
+    assert facts[0].citation_ref == "cite-script"
+
+
+def test_toolchain_grounding_journals_failed_script_observation_for_replanning() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-script-fail",
+        run_id="run-script-fail",
+        step_id="step-script",
+        kind="observation",
+        data={
+            "observation_id": "obs-script-fail",
+            "run_id": "run-script-fail",
+            "kind": "tool_result",
+            "status": "failed",
+            "source": "tool:script.exec",
+            "content": {
+                "language": "python",
+                "script_path": ".holo_toolchain/scripts/failing_parser.py",
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "ValueError: table columns did not align",
+                "script_artifact_id": "artifact-script-source",
+                "output_artifact_id": "artifact-script-output",
+            },
+            "action_id": "act-script-fail",
+        },
+        observation_ref="obs-script-fail",
+        action_ref="act-script-fail",
+        artifact_refs=["artifact-script-source", "artifact-script-output"],
+    )
+
+    evidence, citations, report = _workspace_grounding(
+        journal,
+        "task-script-fail",
+        "run-script-fail",
+        artifact_store=ArtifactStore.in_memory(),
+    )
+
+    assert evidence == []
+    assert citations == []
+    assert report.status == "insufficient_evidence"
+    failures = journal.records(task_id="task-script-fail", kind="toolchain_failure")
+    artifacts = journal.records(task_id="task-script-fail", kind="toolchain_artifact")
+    executed = journal.records(task_id="task-script-fail", kind="toolchain_step_executed")
+    assert failures
+    assert failures[-1].data["stderr_preview"] == "ValueError: table columns did not align"
+    assert failures[-1].data["artifact_refs"] == ["artifact-script-source", "artifact-script-output"]
+    assert artifacts[-1].data["artifact_refs"] == ["artifact-script-source", "artifact-script-output"]
+    assert executed[-1].data["status"] == "failed"
 
 
 def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_formula() -> None:
@@ -4521,6 +4621,60 @@ def test_retrieval_finalization_repairs_unsupported_finance_numbers_without_calc
     assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
     assert synthesis_gates[-1].data["policy"] == "material_numeric_claims_require_claim_or_transform_support"
     assert synthesis_gates[-1].data["diagnostics"]["attempt"] == "fallback"
+
+
+def test_retrieval_fallback_prefers_fact_ledger_and_suppresses_accession_numbers() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(
+        journal,
+        answer=(
+            "The filing accession 0001558370-19-000470 shows capital expenditures were $9.1 billion, "
+            "supported by cite-mmm."
+        ),
+        citation_refs=["cite-mmm"],
+        used_evidence=["evidence-mmm-capex"],
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-mmm-capex",
+            title="3M 2018 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000155837019000470/mmm-20181231x10k.htm",
+            text=(
+                "entityName=3M Company ticker=MMM concept=PaymentsToAcquirePropertyPlantAndEquipment "
+                "metric=capital expenditures label=Payments to Acquire Property, Plant, and Equipment "
+                "unit=USD scale=millions fy=2018 form=10-K filed=2019-02-07 "
+                "accn=0001558370-19-000470 value=(1,577)"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-mmm")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "goal": "What was 3M's FY2018 capital expenditures in USD millions?",
+        },
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-mmm-capex",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    assert "$9.1 billion" not in final.answer
+    assert "000470" not in final.answer
+    assert "1577" in final.answer
+    assert "已由证据账本支持的关键数值" in final.answer
+    assert final.citation_refs == ["cite-mmm"]
+    synthesis_gates = journal.records(task_id="task-mmm-capex", kind="synthesis_gate_result")
+    assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
 
 
 def test_source_grounded_retrieval_finalization_journals_generic_workflow_trace() -> None:

@@ -324,6 +324,19 @@ not repeatedly download these sources during benchmark iteration.
   `toolchain_step_executed`; and JSON/key-value parser outputs emit
   `toolchain_grounding_candidate` records before candidate facts become
   ClaimLedger inputs.
+- 2026-06-12 hardening: the grounding layer now also journals
+  `toolchain_artifact` for script/source/output artifacts and
+  `toolchain_failure` for failed local tools, including stderr/stdout previews
+  and artifact refs. This prevents failed temporary parsers from disappearing as
+  non-evidence and gives the next model planning round a concrete repair
+  target. `script.exec` / `shell.exec` JSON can now expose table/row payloads
+  (`tables`, `candidate_tables`, `rows`, year columns, or value-scale columns);
+  the host converts those rows into CandidateFact evidence before the
+  ClaimLedger. Structured fact values now accept accounting parentheses and
+  explicit table scales such as millions/billions. Finance fallback synthesis
+  now prefers ClaimLedger/FormulaTrace-backed values before raw evidence
+  previews, and numeric fallbacks sanitize raw source previews so SEC accessions,
+  filenames, and table fragments do not become unsupported answer numbers.
 - Toolchain grounding now feeds formula preflight as well as final synthesis.
   The finance formula planner and fake evaluator use the same merged
   retrieval/toolchain evidence view, so facts produced by a model-selected

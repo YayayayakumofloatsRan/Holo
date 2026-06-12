@@ -338,13 +338,18 @@ def _fact_from_values(
 ) -> FinanceFact:
     fiscal_year = _int_or_none(values.get("period_fy")) or _int_or_none(values.get("fy"))
     unit = values.get("unit")
+    scale = values.get("scale") or "actual"
+    decimal_value = _decimal_amount_from_structured_value(value)
+    if decimal_value is None:
+        decimal_value = Decimal(str(value).replace(",", "").strip())
+    actual_value = _scaled_value_from_scale(decimal_value, scale)
     fact_id = "finfact-" + _short_hash(
         item.evidence_id,
         metric,
         str(fiscal_year or ""),
         str(values.get("period") or ""),
         str(values.get("concept") or ""),
-        str(value),
+        _decimal_string(actual_value),
     )
     citation_ref = citation.citation_id if citation is not None else None
     metadata: JsonObject = {
@@ -370,14 +375,39 @@ def _fact_from_values(
         period=values.get("period"),
         fiscal_year=fiscal_year,
         metric=metric,
-        value=_decimal_string(Decimal(str(value).replace(",", ""))),
+        value=_decimal_string(actual_value),
         unit=unit,
-        scale=values.get("scale") or "actual",
+        scale=scale,
         source_ref=citation_ref or item.evidence_id,
         evidence_ref=item.evidence_id,
         citation_ref=citation_ref,
         metadata=metadata,
     )
+
+
+def _scaled_value_from_scale(value: Decimal, scale: str) -> Decimal:
+    text = str(scale or "").strip().lower()
+    if text in {"thousand", "thousands", "in thousands"}:
+        return value * Decimal(1_000)
+    if text in {"million", "millions", "in millions", "mm"}:
+        return value * Decimal(1_000_000)
+    if text in {"billion", "billions", "in billions", "bn"}:
+        return value * Decimal(1_000_000_000)
+    if text in {"trillion", "trillions", "in trillions"}:
+        return value * Decimal(1_000_000_000_000)
+    return value
+
+
+def _decimal_amount_from_structured_value(value: str) -> Decimal | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    text = text.strip("()").replace(",", "").strip()
+    decimal = _decimal_or_none(text)
+    if decimal is None:
+        return None
+    return -decimal if negative else decimal
 
 
 def _normalize_key(value: str) -> str:
@@ -743,11 +773,7 @@ def _decimal_or_none(value: object) -> Decimal | None:
 
 
 def _is_decimal(value: str) -> bool:
-    try:
-        Decimal(str(value).replace(",", ""))
-    except InvalidOperation:
-        return False
-    return True
+    return _decimal_amount_from_structured_value(value) is not None
 
 
 def _int_or_none(value: str | None) -> int | None:

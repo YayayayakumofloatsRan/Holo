@@ -1433,7 +1433,7 @@ evidence. In `retrieval_answer`, successful `workspace.list`,
 candidates; if no normal retrieval report exists, the host creates a synthetic
 toolchain grounding report and runs the usual finance fact ledger, claim ledger,
 numeric verifier, and synthesis gate. Model-authored parsers can emit JSON
-`facts` or key-value lines such as
+`facts`, table/row payloads, or key-value lines such as
 `entityName=... concept=... metric=... value=...`; the host journals them as
 `toolchain_grounding_candidate` records and promotes each candidate fact into
 separate evidence/citation candidates before ClaimLedger extraction. The same
@@ -1442,6 +1442,14 @@ formula planner: if a model-selected `script.exec`, `shell.exec`, or `file.read`
 step fills enough source-backed facts, Holo will schedule `calculator.compute`
 before allowing a free-text final answer. This closes the loop from
 LLM-selected temporary tooling to host-validated deterministic calculation.
+The same path now journals `toolchain_artifact` for script/source/output
+artifacts and `toolchain_failure` for failed local tools, so the next model
+planning round can reason from the actual parser error or generated artifact
+rather than losing failed toolchain steps as silent non-evidence. Finance
+fallback answers prefer ClaimLedger/FormulaTrace-backed facts before raw
+evidence previews; raw source-grounded previews are sanitized for numeric
+fallbacks so accession numbers, filenames, and table fragments do not become
+unsupported answer numbers.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

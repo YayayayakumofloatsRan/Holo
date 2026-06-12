@@ -9835,12 +9835,13 @@ def _workspace_grounding(
     for index, record in enumerate(observations, start=1):
         data = record.data
         source = str(data.get("source") or "")
-        if source not in {"tool:workspace.list", "tool:workspace.search", "tool:file.read", "tool:workspace.write", "tool:shell.exec", "tool:script.exec"} or data.get("status") != "ok":
+        if source not in {"tool:workspace.list", "tool:workspace.search", "tool:file.read", "tool:workspace.write", "tool:shell.exec", "tool:script.exec"}:
             continue
         content = data.get("content", {})
         if not isinstance(content, dict):
             continue
-        candidate_facts = _toolchain_candidate_facts(content, source=source)
+        observation_status = str(data.get("status") or "")
+        candidate_facts = _toolchain_candidate_facts(content, source=source) if observation_status == "ok" else []
         _journal_toolchain_step_executed(
             journal,
             task_id=task_id,
@@ -9849,6 +9850,24 @@ def _workspace_grounding(
             source=source,
             candidate_fact_count=len(candidate_facts),
         )
+        _journal_toolchain_artifacts(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            observation_record=record,
+            source=source,
+            content=content,
+        )
+        if observation_status != "ok":
+            _journal_toolchain_failure(
+                journal,
+                task_id=task_id,
+                run_id=run_id,
+                observation_record=record,
+                source=source,
+                content=content,
+            )
+            continue
         text = _workspace_observation_text(
             content,
             artifact_store=artifact_store,
@@ -10014,15 +10033,17 @@ def _candidate_facts_from_json(value: object) -> list[JsonObject]:
         return [fact for item in value for fact in _candidate_facts_from_json(item)]
     if not isinstance(value, dict):
         return []
+    table_facts = _candidate_facts_from_table_payload(value)
     for key in ("facts", "candidate_facts", "candidateFacts", "finance_facts", "financeFacts"):
         nested = value.get(key)
         if isinstance(nested, list):
-            return [fact for item in nested for fact in _candidate_facts_from_json(item)]
+            nested_facts = [fact for item in nested for fact in _candidate_facts_from_json(item)]
+            return _dedupe_candidate_facts([*table_facts, *nested_facts])
     if "value" not in value and "val" not in value:
-        return []
+        return table_facts
     metric = value.get("metric") or value.get("label") or value.get("concept") or value.get("attribute")
     if not metric:
-        return []
+        return table_facts
     result: JsonObject = {}
     key_map = {
         "entity": "entityName",
@@ -10032,23 +10053,186 @@ def _candidate_facts_from_json(value: object) -> list[JsonObject]:
         "cik": "cik",
         "concept": "concept",
         "label": "label",
+        "line_item": "metric",
+        "lineItem": "metric",
         "metric": "metric",
         "attribute": "metric",
+        "name": "metric",
         "unit": "unit",
+        "scale": "scale",
         "fy": "fy",
         "fiscal_year": "fy",
+        "fiscalYear": "fy",
+        "year": "fy",
         "period": "period",
         "form": "form",
         "filed": "filed",
+        "accn": "accn",
         "value": "value",
         "val": "value",
+        "amount": "value",
     }
     for raw_key, normalized in key_map.items():
         raw_value = value.get(raw_key)
         if raw_value is None or raw_value == "":
             continue
         result[normalized] = str(raw_value)
-    return [result] if result.get("metric") and result.get("value") else []
+    return _dedupe_candidate_facts([*table_facts, result]) if result.get("metric") and result.get("value") else table_facts
+
+
+def _candidate_facts_from_table_payload(value: JsonObject) -> list[JsonObject]:
+    inherited = _candidate_fact_inherited_fields(value)
+    facts: list[JsonObject] = []
+    for key in ("tables", "candidate_tables", "candidateTables"):
+        nested = value.get(key)
+        if isinstance(nested, list):
+            for table in nested:
+                facts.extend(_candidate_facts_from_table(table, inherited=inherited))
+        elif isinstance(nested, dict):
+            facts.extend(_candidate_facts_from_table(nested, inherited=inherited))
+    for key in ("table", "candidate_table", "candidateTable"):
+        nested = value.get(key)
+        if isinstance(nested, (dict, list)):
+            facts.extend(_candidate_facts_from_table(nested, inherited=inherited))
+    facts.extend(_candidate_facts_from_table(value, inherited=inherited))
+    return _dedupe_candidate_facts(facts)
+
+
+def _candidate_facts_from_table(value: object, *, inherited: JsonObject) -> list[JsonObject]:
+    if isinstance(value, list):
+        return [fact for item in value for fact in _candidate_facts_from_table(item, inherited=inherited)]
+    if not isinstance(value, dict):
+        return []
+    fields = {**inherited, **_candidate_fact_inherited_fields(value)}
+    rows = None
+    for key in ("rows", "candidate_rows", "candidateRows", "data"):
+        nested = value.get(key)
+        if isinstance(nested, list):
+            rows = nested
+            break
+    if rows is None:
+        return []
+    columns = value.get("columns")
+    column_names = [str(item) for item in columns] if isinstance(columns, list) else []
+    facts: list[JsonObject] = []
+    for row in rows:
+        row_dict: JsonObject | None = None
+        if isinstance(row, dict):
+            row_dict = dict(row)
+        elif isinstance(row, list) and column_names and len(row) <= len(column_names):
+            row_dict = {column_names[index]: item for index, item in enumerate(row)}
+        if row_dict is None:
+            continue
+        facts.extend(_candidate_facts_from_table_row(row_dict, inherited=fields))
+    return _dedupe_candidate_facts(facts)
+
+
+def _candidate_facts_from_table_row(row: JsonObject, *, inherited: JsonObject) -> list[JsonObject]:
+    metric = _first_present(row, ("metric", "label", "line_item", "lineItem", "attribute", "name", "concept"))
+    if not metric:
+        return []
+    base = {**inherited}
+    for raw_key, normalized in (
+        ("entity", "entityName"),
+        ("entity_name", "entityName"),
+        ("entityName", "entityName"),
+        ("ticker", "ticker"),
+        ("cik", "cik"),
+        ("concept", "concept"),
+        ("label", "label"),
+        ("unit", "unit"),
+        ("scale", "scale"),
+        ("form", "form"),
+        ("filed", "filed"),
+        ("accn", "accn"),
+    ):
+        value = row.get(raw_key)
+        if value not in (None, ""):
+            base[normalized] = str(value)
+    base["metric"] = str(metric)
+    facts: list[JsonObject] = []
+    explicit_value = _first_present(row, ("value", "val", "amount", "value_usd", "amount_usd"))
+    if explicit_value not in (None, ""):
+        fact = {**base, "value": str(explicit_value)}
+        fy = _first_present(row, ("fy", "fiscal_year", "fiscalYear", "year"))
+        if fy not in (None, ""):
+            fact["fy"] = str(fy)
+        period = row.get("period")
+        if period not in (None, ""):
+            fact["period"] = str(period)
+        facts.append(fact)
+    for key, value in row.items():
+        if value in (None, ""):
+            continue
+        year = _candidate_year_from_column(str(key))
+        scale = _candidate_scale_from_column(str(key)) or str(base.get("scale") or "")
+        if year is not None:
+            facts.append({**base, "fy": str(year), "value": str(value), **({"scale": scale} if scale else {})})
+            continue
+        value_scale = _candidate_value_scale_key(str(key))
+        if value_scale:
+            fact = {**base, "value": str(value), "scale": value_scale}
+            fy = _first_present(row, ("fy", "fiscal_year", "fiscalYear", "year"))
+            if fy not in (None, ""):
+                fact["fy"] = str(fy)
+            facts.append(fact)
+    return _dedupe_candidate_facts(facts)
+
+
+def _candidate_fact_inherited_fields(value: JsonObject) -> JsonObject:
+    result: JsonObject = {}
+    for raw_key, normalized in (
+        ("entity", "entityName"),
+        ("entity_name", "entityName"),
+        ("entityName", "entityName"),
+        ("ticker", "ticker"),
+        ("cik", "cik"),
+        ("unit", "unit"),
+        ("scale", "scale"),
+        ("form", "form"),
+        ("filed", "filed"),
+        ("accn", "accn"),
+    ):
+        raw_value = value.get(raw_key)
+        if raw_value not in (None, ""):
+            result[normalized] = str(raw_value)
+    return result
+
+
+def _first_present(value: JsonObject, keys: tuple[str, ...]) -> object:
+    for key in keys:
+        item = value.get(key)
+        if item not in (None, ""):
+            return item
+    return None
+
+
+def _candidate_year_from_column(value: str) -> int | None:
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(?:FY|fiscal\s*year\s*)?((?:19|20)\d{2})", text, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _candidate_scale_from_column(value: str) -> str:
+    text = str(value or "").lower()
+    if "million" in text or text.endswith("_mm") or text.endswith(" mm"):
+        return "millions"
+    if "billion" in text or text.endswith("_bn") or text.endswith(" bn"):
+        return "billions"
+    if "thousand" in text:
+        return "thousands"
+    return ""
+
+
+def _candidate_value_scale_key(value: str) -> str:
+    text = str(value or "").lower()
+    if text in {"value_millions", "amount_millions", "value_in_millions", "amount_in_millions"}:
+        return "millions"
+    if text in {"value_billions", "amount_billions", "value_in_billions", "amount_in_billions"}:
+        return "billions"
+    if text in {"value_thousands", "amount_thousands", "value_in_thousands", "amount_in_thousands"}:
+        return "thousands"
+    return ""
 
 
 def _candidate_fact_from_key_value_line(line: str) -> JsonObject:
@@ -10073,7 +10257,22 @@ def _dedupe_candidate_facts(candidates: list[JsonObject]) -> list[JsonObject]:
 
 
 def _candidate_fact_evidence_text(fact: JsonObject) -> str:
-    order = ["entityName", "ticker", "cik", "concept", "label", "metric", "unit", "fy", "period", "form", "filed", "value"]
+    order = [
+        "entityName",
+        "ticker",
+        "cik",
+        "concept",
+        "label",
+        "metric",
+        "unit",
+        "scale",
+        "fy",
+        "period",
+        "form",
+        "filed",
+        "accn",
+        "value",
+    ]
     parts = []
     for key in order:
         value = fact.get(key)
@@ -10147,6 +10346,94 @@ def _journal_toolchain_grounding_candidate(
         observation_ref=observation_ref,
         action_ref=str(observation_record.action_ref or observation_record.data.get("action_id") or ""),
     )
+
+
+def _journal_toolchain_artifacts(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    observation_record,
+    source: str,
+    content: JsonObject,
+) -> None:
+    observation_ref = str(observation_record.observation_ref or observation_record.data.get("observation_id") or "")
+    artifact_refs = _toolchain_artifact_refs(observation_record, content)
+    if not observation_ref or not artifact_refs:
+        return
+    if _journal_has_observation_record(journal, task_id, run_id, kind="toolchain_artifact", observation_ref=observation_ref):
+        return
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=observation_record.step_id,
+        kind="toolchain_artifact",
+        data=redact_journal_data(
+            {
+                "schema": "holo.kernel_v3.toolchain_artifact.v1",
+                "source": source,
+                "observation_id": observation_ref,
+                "artifact_refs": artifact_refs,
+                "script_path": content.get("script_path"),
+                "output_artifact_id": content.get("output_artifact_id"),
+                "script_artifact_id": content.get("script_artifact_id"),
+            }
+        ),
+        observation_ref=observation_ref,
+        action_ref=str(observation_record.action_ref or observation_record.data.get("action_id") or ""),
+    )
+
+
+def _journal_toolchain_failure(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    observation_record,
+    source: str,
+    content: JsonObject,
+) -> None:
+    observation_ref = str(observation_record.observation_ref or observation_record.data.get("observation_id") or "")
+    if not observation_ref:
+        return
+    if _journal_has_observation_record(journal, task_id, run_id, kind="toolchain_failure", observation_ref=observation_ref):
+        return
+    stderr = str(content.get("stderr") or "")
+    stdout = str(content.get("stdout") or "")
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=observation_record.step_id,
+        kind="toolchain_failure",
+        data=redact_journal_data(
+            {
+                "schema": "holo.kernel_v3.toolchain_failure.v1",
+                "source": source,
+                "status": observation_record.data.get("status"),
+                "observation_id": observation_ref,
+                "exit_code": content.get("exit_code"),
+                "error": content.get("error"),
+                "stderr_preview": stderr[:1200],
+                "stdout_preview": stdout[:1200],
+                "artifact_refs": _toolchain_artifact_refs(observation_record, content),
+            }
+        ),
+        observation_ref=observation_ref,
+        action_ref=str(observation_record.action_ref or observation_record.data.get("action_id") or ""),
+        state_delta={"toolchain_failure": source},
+    )
+
+
+def _toolchain_artifact_refs(observation_record, content: JsonObject) -> list[str]:
+    refs: list[str] = []
+    for item in getattr(observation_record, "artifact_refs", []) or []:
+        if isinstance(item, str) and item:
+            refs.append(item)
+    for key in ("artifact_id", "script_artifact_id", "output_artifact_id"):
+        value = content.get(key)
+        if isinstance(value, str) and value:
+            refs.append(value)
+    return _ordered_unique(refs)
 
 
 def _journal_has_observation_record(
@@ -10375,7 +10662,30 @@ def _finance_retrieval_fallback_final(
         binding = _target_document_binding_from_recipe(recipe)
         facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
         formula_plan = plan_finance_formula(question=question, facts=facts, existing_traces=[])
-        if _source_grounded_trace_required(recipe) or (
+        fact_lines = _finance_fallback_fact_lines(
+            facts,
+            question=question,
+            target_binding=binding,
+            limit=4,
+        )
+        if _source_grounded_explanation_question(question):
+            evidence_lines = _source_grounded_fallback_evidence_lines(
+                evidence=evidence,
+                citations=citations,
+                recipe=recipe,
+                limit=4,
+                sanitize_numbers=False,
+            )
+            if evidence_lines:
+                lines.append("已由引用证据支持的要点：")
+                lines.extend(evidence_lines)
+            elif fact_lines:
+                lines.append("已由证据账本支持的关键数值：")
+                lines.extend(fact_lines)
+        elif fact_lines:
+            lines.append("已由证据账本支持的关键数值：")
+            lines.extend(fact_lines)
+        elif _source_grounded_trace_required(recipe) or (
             formula_plan.status == "not_applicable" and _required_retrieval_source_urls(recipe)
         ):
             evidence_lines = _source_grounded_fallback_evidence_lines(
@@ -10383,20 +10693,22 @@ def _finance_retrieval_fallback_final(
                 citations=citations,
                 recipe=recipe,
                 limit=4,
+                sanitize_numbers=True,
             )
             if evidence_lines:
                 lines.append("已由引用证据支持的要点：")
                 lines.extend(evidence_lines)
         else:
-            fact_lines = _finance_fallback_fact_lines(
-                facts,
-                question=question,
-                target_binding=binding,
+            evidence_lines = _source_grounded_fallback_evidence_lines(
+                evidence=evidence,
+                citations=citations,
+                recipe=recipe,
                 limit=4,
+                sanitize_numbers=True,
             )
-            if fact_lines:
-                lines.append("已由证据账本支持的关键数值：")
-                lines.extend(fact_lines)
+            if evidence_lines:
+                lines.append("已由引用证据支持的要点：")
+                lines.extend(evidence_lines)
     if evidence:
         lines.append("可审计证据摘要：")
         lines.extend(_finance_fallback_evidence_summary_lines(evidence=evidence, citations=citations, recipe=recipe, limit=4))
@@ -10458,6 +10770,7 @@ def _source_grounded_fallback_evidence_lines(
     citations: list[CitationItem],
     recipe: TaskRecipe,
     limit: int,
+    sanitize_numbers: bool = True,
 ) -> list[str]:
     citation_by_evidence = {item.evidence_id: item for item in citations if item.evidence_id}
     scored: list[tuple[float, int, EvidenceItem, CitationItem]] = []
@@ -10470,7 +10783,7 @@ def _source_grounded_fallback_evidence_lines(
     scored.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
     lines: list[str] = []
     for _, _, item, citation in scored[: max(1, limit)]:
-        preview = _text_preview(item.text, limit=360)
+        preview = _safe_fallback_evidence_excerpt(item.text, limit=360) if sanitize_numbers else _text_preview(item.text, limit=360)
         if not preview:
             preview = _safe_fallback_source_label(item.title or item.uri, limit=160)
         lines.append(f"- {preview} [{citation.citation_id}]")

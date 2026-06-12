@@ -945,9 +945,16 @@ def _embedded_identifier_or_citation(text: str, start: int, end: int, *, unit: s
         token_end += 1
     token = text[token_start:token_end].lower()
     before_token = before.strip().lower()
+    identifier_window = text[max(0, start - 48) : min(len(text), end + 48)].lower()
     if "cite-" in token or "citation-" in token or "evidence-span" in token:
         return True
     if re.search(r"(?:cite|citation|evidence|evidence-span)[-_]?$", before_token):
+        return True
+    if re.search(r"\b\d{6,}-\d{2}-\d{3,}\b", token) or re.search(r"\b\d{6,}-\d{2}-\d{3,}\b", identifier_window):
+        return True
+    if re.search(r"(?:accn|accession|cik|filename|file|document|submission)[=:\s_-]*$", before_token):
+        return True
+    if any(marker in token for marker in (".htm", ".html", ".json", ".txt", ".pdf")):
         return True
     prev = text[start - 1] if start > 0 else ""
     nxt = text[end] if end < len(text) else ""
