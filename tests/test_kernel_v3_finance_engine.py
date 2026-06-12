@@ -3926,6 +3926,49 @@ def test_source_grounded_retrieval_finalization_journals_generic_workflow_trace(
     assert transform_plans[-1].data["status"] == "ready"
 
 
+def test_partial_retrieval_finalizes_when_max_tool_calls_but_citations_exist() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(
+        journal,
+        answer="The cited filing says litigation and PFAS-related costs pressured margins. [cite-margin]",
+        citation_refs=["cite-margin"],
+        used_evidence=["evidence-margin"],
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-margin",
+            title="3M 2022 10-K MD&A",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/mmm-20221231.htm",
+            text="Management says operating margin declined due to litigation, PFAS exit costs, raw materials and logistics costs.",
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-margin")]
+    report = _retrieval_report(evidence=evidence, citations=citations, status="insufficient_evidence")
+    for item in evidence:
+        journal.append(task_id="task-partial", run_id="run-1", step_id=None, kind="retrieval_evidence", data=item.to_dict())
+    for item in citations:
+        journal.append(task_id="task-partial", run_id="run-1", step_id=None, kind="retrieval_citation", data=item.to_dict())
+    journal.append(task_id="task-partial", run_id="run-1", step_id=None, kind="retrieval_report", data=report.to_dict())
+    recipe = task_recipe("retrieval_answer", metadata={"goal": "What drove operating margin change as of FY2022 for 3M?"})
+
+    final, failure = runtime._finalize_retrieval(  # noqa: SLF001
+        "task-partial",
+        "run-1",
+        recipe=recipe,
+        loop_stop_reason="max_tool_calls",
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    assert "litigation" in final.answer
+    assert final.citation_refs == ["cite-margin"]
+    final_records = journal.records(task_id="task-partial", kind="agent_final_answer")
+    assert final_records
+    assert journal.records(task_id="task-partial", kind="claim_ledger")
+    assert final.trace_refs
+
+
 def test_finance_preflight_without_structured_facts_journals_source_grounded_trace() -> None:
     journal = JournalStore.in_memory()
     runtime = _runtime_with_synthesizer(journal, answer="fallback")
@@ -4472,11 +4515,16 @@ def _finance_fact(
     )
 
 
-def _retrieval_report(*, evidence: list[EvidenceItem], citations: list[CitationItem]) -> RetrievalReport:
+def _retrieval_report(
+    *,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    status: str = "sufficient",
+) -> RetrievalReport:
     return RetrievalReport(
         report_id="report-1",
         goal_id="goal-1",
-        status="sufficient",
+        status=status,
         query_plan_id="query-plan-1",
         search_attempt_ids=["search-1"],
         fetch_attempt_ids=["fetch-1"],

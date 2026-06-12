@@ -176,7 +176,10 @@ LOOP_GUARD_STOP_REASONS = {
     "max_duration_ms",
 }
 PARTIAL_RETRIEVAL_TERMINAL_REASONS = {
+    "max_tool_calls",
     "max_network_fetches",
+    "model_planner_processor_failed",
+    "planner_processor_failed",
     "repeated_missing_evidence",
     "repeated_no_progress",
     "network_budget_guard_with_partial_evidence",
@@ -790,7 +793,16 @@ class AgentRuntime:
                 recipe=recipe,
             )
         if report.status != "sufficient":
-            if _can_attempt_finance_numeric_finalization(recipe=recipe, evidence=evidence, citations=citations):
+            if _can_attempt_finance_numeric_finalization(
+                recipe=recipe,
+                evidence=evidence,
+                citations=citations,
+            ) or _can_synthesize_partial_retrieval(
+                terminal_reason=terminal_reason,
+                evidence=evidence,
+                citations=citations,
+                recipe=recipe,
+            ):
                 report = _report_with_partial_retrieval_limitations(
                     report,
                     planned_coverage=planned_coverage,

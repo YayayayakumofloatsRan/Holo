@@ -1159,6 +1159,13 @@ Additional follow-ups:
   retrieval results and synthesis feedback are handed to the model. Prompt
   shrinking is a later optimization after citable evidence, facts, formulas, and
   gates remain stable.
+- Finalization now uses citable partial retrieval at loop guard boundaries:
+  `max_tool_calls`, `model_planner_processor_failed`, and
+  `planner_processor_failed` no longer force an immediate generic failure when
+  evidence and citations exist. The runtime can synthesize a conservative
+  source-grounded answer and run the normal claim/slot/transform/verifier spine,
+  which is the right fallback for FinanceBench doc-retrieval rows that already
+  found a filing source before the loop stopped.
 - Add repeated-run stability batches for stable4/dev10: each selected item
   should run at least three times and report source-family, claim-count,
   slot-missing, calculator-trace, verifier-gate, synthesis-gate, and final

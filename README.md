@@ -1363,6 +1363,15 @@ filing. Companyfacts readable-text projection also receives those compiled
 terms through metadata intent text, improving multi-slot fact projection without
 hard-coding item answers.
 
+Retrieval finalization now also treats loop budget exhaustion as a partial-answer
+condition when citable evidence already exists. `max_tool_calls`,
+`model_planner_processor_failed`, and `planner_processor_failed` can enter
+source-grounded partial synthesis instead of immediately producing a generic
+failure report, while citations, claim-ledger traces, verifier gates, and
+synthesis gates remain host-owned. This closes the common FinanceBench shape
+where retrieval has already found filing evidence but the loop stops before the
+final answer path uses it.
+
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,
 workflow score `0.925`, substrate score `0.8816`, calculator/formula-trace rate

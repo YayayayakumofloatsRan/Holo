@@ -314,3 +314,11 @@ FinanceBench rows, not the first-slice target binding bug.
   slots can survive as separate citable candidates. The focused extraction
   tests passed and the workbench/finance/document expansion suite now reports
   `206 passed`.
+- Retrieval finalization now preserves useful work at loop guard boundaries.
+  `max_tool_calls`, `model_planner_processor_failed`, and
+  `planner_processor_failed` are partial-retrieval terminal reasons when
+  citable evidence is already available. If an insufficient report still has
+  evidence and citation refs, runtime can synthesize a conservative
+  source-grounded answer and journal generic claim/slot/transform traces instead
+  of returning a generic failure report. This targets FinanceBench rows where
+  the source was found but the agent previously failed before synthesis.
