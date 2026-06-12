@@ -245,19 +245,22 @@ FinanceBench rows, not the first-slice target binding bug.
   verifier and synthesis gates failed. The scorer now rejects bare compact
   company/name tokens as gold numerics and non-sentinel gold-backed rows cannot
   pass with only a `failure_report`; v7 re-scores as failed.
-- Follow-up runs `run_financebench_doc_item4_model_net_v15` through `v17` show
-  the Workbench control path is now working but the answer is still not solved.
-  Report-level Workbench `continue` decisions and semantic missing slots now
-  feed the next agent step, evidence sufficiency no longer overrides that
-  signal, and `finance-fact-fast` allows the fourth bounded retrieval needed by
-  the model-selected follow-up. Planner JSON failures after partial retrieval no
-  longer short-circuit finalization diagnostics. v17 reaches four retrieval
-  runs, finance facts / claims `22`, transform plans `5`, compiled task program
-  present, required trace `7/7`, and substrate score `1.0`.
-- The remaining item4 blocker is source-grounded document evidence selection.
-  The SEC archive URL resolver derives `.txt`, `-index.html`, `index.json`, and
-  directory targets from investor filing links, and v16 attempted those targets
-  with `8.4MB` downloaded. The selected facts and citations still collapse back
-  to `data.sec.gov` companyfacts, so the MD&A text explaining the FY2022
-  operating-margin driver is not preserved for synthesis. Numeric verifier and
-  SynthesisGate correctly fail rather than allowing unsupported values.
+- Follow-up runs `run_financebench_doc_item4_model_net_v15` through `v22` show
+  the Workbench control path is now working and the fourth FinanceBench
+  doc-retrieval row is no longer blocked by companyfacts false positives. v20 is
+  the honest negative control after source-contract tightening: generic
+  `data.sec.gov` companyfacts no longer satisfy the target filing URL, so the
+  row fails with `required_source_url_citation_missing`. v21/v22 then pass the
+  same row with target SEC archive evidence: citation preservation `1.0`,
+  claim-ledger / slot-frame / transform-plan presence `1.0`, verifier and
+  synthesis gates passed, source hosts include `www.sec.gov`, and the score
+  reason is `numeric_within_tolerance`.
+- The remaining item4 issue is now scoring/source identity rather than answer
+  capability. Old FinanceBench annotations kept only the required host
+  `investors.3m.com`; the run cited the official SEC archive text for the same
+  accession. The scorer now exports `required_source_urls`, journals
+  `target_document_source_urls`, and counts same-accession SEC archive documents
+  as equivalent target filings while still rejecting generic companyfacts. The
+  major unresolved engineering gap is cost: v21 used roughly `382k` model
+  tokens and v22 roughly `523k`, so Workbench/planner context compression is the
+  next necessary optimization.

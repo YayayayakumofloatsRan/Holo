@@ -78,6 +78,31 @@ def qualify_evidence_candidate(
             result["reason"] = "target_entity_mismatch"
     if _is_finance_profile(goal=goal, research_profile=research_profile):
         _add_finance_compatibility_fields(result)
+        if (
+            not bool(result.get("accepted", True))
+            and result.get("reason") == "missing_finance_fact_in_span"
+            and _finance_source_grounded_target_document_candidate(goal=goal, evidence=evidence)
+        ):
+            result["accepted"] = True
+            result["reason"] = "source_grounded_target_document_candidate"
+            result["covered_profile_facets"] = _ordered_unique([
+                *_string_list(result.get("covered_profile_facets")),
+                "official_financial_statement",
+                "source_grounded_text",
+            ])
+            result["covered_finance_facets"] = _ordered_unique([
+                *_string_list(result.get("covered_finance_facets")),
+                "official_financial_statement",
+                "source_grounded_text",
+            ])
+            result["missing_profile_facets"] = [
+                item for item in _string_list(result.get("missing_profile_facets")) if item != "numeric_profile_fact"
+            ]
+            result["missing_finance_facets"] = [
+                item for item in _string_list(result.get("missing_finance_facets")) if item != "numeric_financial_fact"
+            ]
+            result["profile_numeric_fact_required"] = False
+            result["finance_numeric_fact_required"] = False
         entity_mismatch = _finance_companyfacts_entity_mismatch(goal=goal, evidence=evidence)
         if entity_mismatch:
             result["accepted"] = False
@@ -764,6 +789,95 @@ def _finance_target_bound_structured_fact_source(*, goal: SearchGoal, evidence: 
         return False
     doc_period = str(target_binding.get("doc_period") or "").strip()
     return bool(doc_period and _evidence_covers_finance_period(evidence.text, doc_period))
+
+
+def _finance_source_grounded_target_document_candidate(*, goal: SearchGoal, evidence: EvidenceItem) -> bool:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    if not _source_grounded_research_goal(metadata):
+        return False
+    uri = str(evidence.uri or "").strip()
+    if not uri:
+        return False
+    target_urls = _source_grounded_target_document_urls(metadata)
+    if not target_urls:
+        return False
+    if not _uri_matches_any_target_document(uri, target_urls):
+        return False
+    text = f"{evidence.title} {evidence.text}".lower()
+    return any(
+        marker in text
+        for marker in (
+            "10-k",
+            "annual report",
+            "operating",
+            "margin",
+            "income",
+            "sales",
+            "cost of sales",
+            "s&a",
+            "sg&a",
+            "md&a",
+            "management's discussion",
+            "results of operations",
+        )
+    )
+
+
+def _source_grounded_research_goal(metadata: dict[str, object]) -> bool:
+    if metadata.get("benchmark_doc_retrieval") is True:
+        return True
+    return str(metadata.get("workflow_type") or metadata.get("research_task_kind") or "").strip().lower() in {
+        "source_grounded_research",
+        "filing_document_qa",
+    }
+
+
+def _source_grounded_target_document_urls(metadata: dict[str, object]) -> list[str]:
+    raw: list[object] = []
+    for key in ("source_url", "doc_link"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            raw.append(value)
+    for key in ("source_urls", "preferred_source_urls"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            raw.extend(value)
+    binding = metadata.get("target_document_binding")
+    if isinstance(binding, dict):
+        value = binding.get("doc_link")
+        if isinstance(value, str):
+            raw.append(value)
+    urls: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        url = str(item or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def _uri_matches_any_target_document(uri: str, target_urls: list[str]) -> bool:
+    for target_url in target_urls:
+        if _same_url_or_prefix(uri, target_url) or _same_url_or_prefix(target_url, uri):
+            return True
+        accession = _accession_number(uri)
+        target_accession = _accession_number(target_url)
+        if accession and target_accession and accession == target_accession:
+            return True
+    return False
+
+
+def _same_url_or_prefix(left: str, right: str) -> bool:
+    left_norm = str(left or "").strip().rstrip("/")
+    right_norm = str(right or "").strip().rstrip("/")
+    return bool(left_norm and right_norm and (left_norm == right_norm or left_norm.startswith(f"{right_norm}/")))
+
+
+def _accession_number(value: str) -> str:
+    match = re.search(r"\b\d{10}-\d{2}-\d{6}\b|\b\d{18}\b", str(value or ""))
+    return match.group(0).replace("-", "") if match else ""
 
 
 def _finance_addback_trend_required_terms(goal: SearchGoal) -> list[str]:

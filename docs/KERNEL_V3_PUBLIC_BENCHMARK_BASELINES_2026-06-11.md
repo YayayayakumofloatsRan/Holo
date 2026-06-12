@@ -111,18 +111,20 @@ The scorer now rejects that pattern and requires a real final answer for
 non-sentinel gold-backed rows; v7 re-scores as failed and should be reported
 only as a diagnostic showing why the internal gates matter.
 
-The follow-up item4 runs v15 through v17 show real loop progress but no score
-claim. The Workbench semantic follow-up is now honored for four retrieval runs,
-planner JSON repair failures no longer hide a partial retrieval finalization
-path, and the source-grounded workflow trace is complete. v17 records finance
-facts / claims `22`, transform plans `5`, compiled task program present `1.0`,
-required trace hit `7/7`, and substrate score `1.0`. It still fails because the
-material answer is unsupported: citation preservation is `0`, numeric verifier
-and synthesis gate fail, expected numeric `1.7` is not matched, and the selected
-evidence remains `data.sec.gov` companyfacts rather than target filing MD&A
-discussion. The SEC archive URL resolver is active, but document block selection
-and source-grounded synthesis are still the blocking FinanceBench doc-retrieval
-work.
+The follow-up item4 runs v15 through v22 show real loop progress and clarify
+the scorer boundary. v20 is the corrected negative control: after source
+contract tightening, generic `data.sec.gov` companyfacts no longer satisfy the
+FinanceBench target filing and the row fails with
+`required_source_url_citation_missing`. v21/v22 then pass the same fourth row
+(`financebench_id_01226`) using SEC archive filing evidence, with citation
+preservation `1.0`, claim-ledger / slot-frame / transform-plan presence `1.0`,
+verifier and synthesis gates passed, source hosts including `www.sec.gov`, and
+score reason `numeric_within_tolerance`. The scorer now preserves
+`required_source_urls` in FinanceBench annotations and treats same-accession SEC
+archive documents as equivalent target filings while still rejecting generic
+companyfacts. The remaining concern for this path is cost: v21/v22 consumed
+roughly `382k`/`523k` model tokens, so the next live doc-retrieval work should
+compress Workbench/planner context before broadening to more rows.
 
 FinQA dev oracle100 confirms the FinQA oracle-context path scales beyond the
 earlier 20-row diagnostic, but the score drops from the small oracle20 sample:

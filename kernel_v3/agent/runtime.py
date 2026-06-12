@@ -1946,8 +1946,9 @@ class AgentRuntime:
             for item in citations
             if item.evidence_id
         }
+        ranked_evidence = _source_grounded_ranked_evidence(evidence, recipe=recipe)
         claims: list[Claim] = []
-        for index, item in enumerate(evidence[:128], start=1):
+        for index, item in enumerate(ranked_evidence[:128], start=1):
             citation = citation_by_evidence.get(item.evidence_id)
             claims.append(
                 Claim(
@@ -8425,11 +8426,7 @@ def _benchmark_doc_retrieval_primary_citation_satisfies_required_source(
     if metadata.get("benchmark_doc_retrieval") is not True:
         return False
     source_url = _string_value(metadata.get("source_url"))
-    allowed_hosts = {"data.sec.gov", "sec.gov", "www.sec.gov"}
-    if source_url:
-        source_host = _url_host(source_url)
-        if source_host:
-            allowed_hosts.add(source_host)
+    allowed_urls = _benchmark_doc_source_urls(source_url) if source_url else []
     cited_ids = set(answer.citation_refs)
     if not cited_ids:
         return False
@@ -8439,8 +8436,7 @@ def _benchmark_doc_retrieval_primary_citation_satisfies_required_source(
         uri = citation.uri.strip()
         if source_url and _same_url_or_prefix(uri, source_url):
             return True
-        host = _url_host(uri)
-        if host in allowed_hosts:
+        if any(_same_url_or_prefix(uri, allowed_url) for allowed_url in allowed_urls):
             return True
     return False
 
@@ -8452,6 +8448,10 @@ def _finance_pdf_target_satisfied_by_primary_sec_citation(
     cited_urls: set[str],
 ) -> bool:
     if recipe.mode != "retrieval_answer":
+        return False
+    benchmark_payload = _benchmark_doc_retrieval_payload_from_recipe(recipe)
+    metadata = benchmark_payload.get("metadata") if isinstance(benchmark_payload.get("metadata"), dict) else {}
+    if metadata.get("benchmark_doc_retrieval") is True:
         return False
     profile = _research_profile_id(recipe)
     if profile not in {"", FINANCE_FUNDAMENTALS_PROFILE_ID}:
@@ -9383,7 +9383,9 @@ def _finance_retrieval_fallback_final(
         binding = _target_document_binding_from_recipe(recipe)
         facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
         formula_plan = plan_finance_formula(question=question, facts=facts, existing_traces=[])
-        if formula_plan.status == "not_applicable" and _required_retrieval_source_urls(recipe):
+        if _source_grounded_trace_required(recipe) or (
+            formula_plan.status == "not_applicable" and _required_retrieval_source_urls(recipe)
+        ):
             evidence_lines = _source_grounded_fallback_evidence_lines(
                 evidence=evidence,
                 citations=citations,
@@ -9405,7 +9407,11 @@ def _finance_retrieval_fallback_final(
                 lines.extend(fact_lines)
     if evidence:
         lines.append("可审计证据摘要：")
-        for item, citation in zip(evidence[:4], citations[:4]):
+        citation_by_evidence = {item.evidence_id: item for item in citations if item.evidence_id}
+        for item in _source_grounded_ranked_evidence(evidence, recipe=recipe)[:4]:
+            citation = citation_by_evidence.get(item.evidence_id)
+            if citation is None:
+                continue
             source_label = _safe_fallback_source_label(item.title or "", limit=120)
             lines.append(f"- {source_label} [{citation.citation_id}]")
     lines.append(f"局限：原 synthesizer 失败原因为 `{synthesis_error}`；上面的结论只覆盖当前证据和 calculator trace 支持的部分。")
@@ -9429,18 +9435,12 @@ def _source_grounded_fallback_evidence_lines(
     limit: int,
 ) -> list[str]:
     citation_by_evidence = {item.evidence_id: item for item in citations if item.evidence_id}
-    required_urls = _required_retrieval_source_urls(recipe)
-    scored: list[tuple[int, int, EvidenceItem, CitationItem]] = []
-    for index, item in enumerate(evidence):
+    scored: list[tuple[float, int, EvidenceItem, CitationItem]] = []
+    for index, item in enumerate(_source_grounded_ranked_evidence(evidence, recipe=recipe)):
         citation = citation_by_evidence.get(item.evidence_id)
         if citation is None or not citation.citation_id:
             continue
-        source_text = f"{item.uri} {item.title}".lower()
-        score = 0
-        if any(_same_url_or_prefix(str(item.uri or ""), url) for url in required_urls):
-            score += 100
-        if any(url.lower().split("/")[2] in source_text for url in required_urls if _looks_like_url(url)):
-            score += 80
+        score = _source_grounded_evidence_score(item, recipe=recipe)
         scored.append((score, -index, item, citation))
     scored.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
     lines: list[str] = []
@@ -9450,6 +9450,142 @@ def _source_grounded_fallback_evidence_lines(
             preview = _safe_fallback_source_label(item.title or item.uri, limit=160)
         lines.append(f"- {preview} [{citation.citation_id}]")
     return lines
+
+
+def _source_grounded_ranked_evidence(evidence: list[EvidenceItem], *, recipe: TaskRecipe) -> list[EvidenceItem]:
+    if not evidence:
+        return []
+    scored = [
+        (_source_grounded_evidence_score(item, recipe=recipe), -index, item)
+        for index, item in enumerate(evidence)
+    ]
+    return [item for _score, _index, item in sorted(scored, key=lambda entry: (entry[0], entry[1]), reverse=True)]
+
+
+def _source_grounded_evidence_score(item: EvidenceItem, *, recipe: TaskRecipe) -> float:
+    question = _benchmark_oracle_question_text(_root_goal_from_recipe(recipe))
+    text = f"{item.title} {item.uri} {item.text}".lower()
+    score = float(item.score) if isinstance(item.score, (int, float)) else 0.0
+    required_urls = _required_retrieval_source_urls(recipe)
+    if any(_same_url_or_prefix(str(item.uri or ""), url) for url in required_urls):
+        score += 120.0
+    required_hosts = [_url_host(url) for url in required_urls if _looks_like_url(url)]
+    if any(host and host in text for host in required_hosts):
+        score += 60.0
+    for term in _source_grounded_selection_terms(question):
+        if term in text:
+            score += 12.0
+    if _source_grounded_explanation_question(question):
+        for marker in _SOURCE_GROUNDED_EXPLANATORY_MARKERS:
+            if marker in text:
+                score += 8.0
+    if item.diagnostics.get("workbench_rescue"):
+        score += 40.0
+    return score
+
+
+_SOURCE_GROUNDED_EXPLANATORY_MARKERS = (
+    "due to",
+    "driven by",
+    "drove",
+    "driver",
+    "drivers",
+    "impacted",
+    "impacting",
+    "primarily due",
+    "resulted in",
+    "offset",
+    "benefit",
+    "headwind",
+    "tailwind",
+    "increased",
+    "decreased",
+)
+
+
+def _source_grounded_selection_terms(question: str) -> list[str]:
+    stopwords = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "has",
+        "have",
+        "if",
+        "in",
+        "is",
+        "it",
+        "its",
+        "like",
+        "not",
+        "of",
+        "on",
+        "or",
+        "please",
+        "state",
+        "than",
+        "that",
+        "the",
+        "then",
+        "this",
+        "to",
+        "was",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "with",
+    }
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in str(question or "").lower().replace("-", " ").replace("_", " ").split():
+        term = "".join(
+            char
+            for char in raw
+            if char.isalnum() or char in {"%", "$", "/", "&"} or "\u4e00" <= char <= "\u9fff"
+        )
+        if not term or term in seen or term in stopwords:
+            continue
+        if len(term) < 3 and not any(char.isdigit() for char in term):
+            continue
+        seen.add(term)
+        terms.append(term)
+    return terms
+
+
+def _source_grounded_explanation_question(question: str) -> bool:
+    text = str(question or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "what drove",
+            "what drives",
+            "why did",
+            "explain why",
+            "explain the",
+            "drivers of",
+            "driver of",
+            "main reasons",
+            "primary reasons",
+            "主要原因",
+            "驱动因素",
+            "为什么",
+        )
+    )
 
 
 def _finance_fallback_fact_lines(

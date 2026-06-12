@@ -1288,21 +1288,24 @@ now reject bare compact company/name tokens as gold numerics and do not allow a
 non-sentinel `failure_report` with no `final_answer` to pass; the same v7 row
 re-scores as failed with expected numeric `1.7`.
 
-The later item4 passes (`run_financebench_doc_item4_model_net_v15` through
-`v17`) move the failure boundary from loop control to evidence selection. The
-agent now honors the model Workbench's semantic `continue` signal across four
-retrieval runs, no longer lets model-planner JSON failures mask partial
-retrieval finalization, derives SEC archive targets from investor filing links,
-and journals the full source-grounded workflow spine: claim ledger, slot frame,
-transform plan, verifier gate, synthesis gate, citation trace, and compiled task
-program are all present. The item still fails scoring. v17 has retrieval runs
-`4`, finance facts / claims `22`, transform plans `5`, substrate score `1.0`,
-and required trace `7/7`, but citation preservation remains `0`, numeric
-verification and synthesis gate fail, and the selected evidence still comes from
-`data.sec.gov` companyfacts rather than the target filing MD&A discussion needed
-for the operating-margin driver answer. This is the next real FinanceBench
-doc-retrieval gap: document block selection and source-grounded synthesis, not a
-permission problem or a missing agent loop retry.
+The later item4 probes are run-version names for the fourth FinanceBench
+doc-retrieval row (`financebench_id_01226`), not question numbers. v20 is the
+important negative control: after tightening the source contract, the row no
+longer passed from generic `data.sec.gov` companyfacts and instead failed with
+`required_source_url_citation_missing`. v21/v22 then closed the row with target
+SEC filing evidence: status `passed`, score reason `numeric_within_tolerance`,
+citation preservation `1.0`, claim-ledger / slot-frame / transform-plan
+presence `1.0`, verifier and synthesis gates passed, and source hosts include
+`www.sec.gov` rather than only `data.sec.gov`. The remaining score artifact was
+not model capability but annotation source identity: old FinanceBench
+annotations compressed the target investor filing URL down to
+`investors.3m.com`, while the run cited the official SEC archive for the same
+accession. The benchmark scorer now preserves `required_source_urls` in new
+annotations, records `target_document_source_urls` in trace metrics, and treats
+same-accession SEC archive documents as equivalent target filings while still
+rejecting generic companyfacts. Cost remains the uncomfortable part: v21 used
+about `382k` model tokens and v22 about `523k`, so the next retrieval iteration
+must compress Workbench/planner context rather than broaden the loop.
 
 FinQA `dev` oracle-context `100` no-network/fake-processor baseline
 (`run_finqa_dev_oracle100_fake_v1`) scores pass rate / numeric accuracy `0.15`,

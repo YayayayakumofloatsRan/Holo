@@ -26,7 +26,7 @@ READABLE_TEXT_LIMIT = 200_000
 SEC_FILING_TEXT_LIMIT = 4_000_000
 SEC_COMPLETE_SUBMISSION_TEXT_LIMIT = SEC_FILING_TEXT_LIMIT
 SPAN_BEFORE_CHARS = 120
-SPAN_AFTER_CHARS = 520
+SPAN_AFTER_CHARS = 780
 HTML_MIME_MARKERS = ("html", "xhtml")
 PDF_MIME_MARKERS = ("pdf", "application/pdf")
 JSON_MIME_MARKERS = ("json", "application/json")
@@ -72,6 +72,55 @@ GENERIC_QUERY_TERMS = {
     "study",
     "survey",
     "thorough",
+}
+LOW_SIGNAL_QUERY_TERMS = GENERIC_QUERY_TERMS | {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "can",
+    "company",
+    "could",
+    "did",
+    "do",
+    "does",
+    "for",
+    "from",
+    "has",
+    "have",
+    "if",
+    "in",
+    "is",
+    "it",
+    "its",
+    "like",
+    "metric",
+    "not",
+    "of",
+    "on",
+    "or",
+    "please",
+    "state",
+    "than",
+    "that",
+    "the",
+    "then",
+    "this",
+    "to",
+    "useful",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
 }
 STRUCTURED_TEXT_MODES = {
     "sec_companyfacts_readable_text",
@@ -391,18 +440,14 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
     candidates: list[dict] = []
     seen_windows: set[tuple[int, int]] = set()
     for term in terms:
-        start = 0
-        while True:
-            index = lower.find(term, start)
-            if index < 0:
-                break
+        for index in _term_positions(lower, term):
             window_start = max(0, index - SPAN_BEFORE_CHARS)
             window_end = min(len(text), index + len(term) + SPAN_AFTER_CHARS)
             key = _coarse_window_key(window_start, window_end)
             if key not in seen_windows:
                 seen_windows.add(key)
                 snippet = _normalize_span(text[window_start:window_end])
-                matched = [candidate for candidate in terms if candidate in snippet.lower()]
+                matched = [candidate for candidate in terms if _term_in_text(snippet.lower(), candidate)]
                 if snippet and matched:
                     bonus = _transaction_amount_span_bonus(snippet, terms)
                     candidates.append(
@@ -414,7 +459,6 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
                             "score": min(1.0, len(matched) / max(1, len(terms)) + bonus),
                         }
                     )
-            start = index + max(1, len(term))
     return sorted(
         candidates,
         key=lambda item: (
@@ -423,6 +467,31 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
             int(item["start_offset"]),
         ),
     )
+
+
+def _term_positions(text: str, term: str) -> list[int]:
+    normalized = str(term or "").strip().lower()
+    if not normalized:
+        return []
+    if _term_requires_token_boundary(normalized):
+        return [match.start() for match in re.finditer(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", text)]
+    positions: list[int] = []
+    start = 0
+    while True:
+        index = text.find(normalized, start)
+        if index < 0:
+            break
+        positions.append(index)
+        start = index + max(1, len(normalized))
+    return positions
+
+
+def _term_in_text(text: str, term: str) -> bool:
+    return bool(_term_positions(text, term))
+
+
+def _term_requires_token_boundary(term: str) -> bool:
+    return bool(re.fullmatch(r"[a-z0-9]+", term))
 
 
 def _target_document_binding_candidates(text: str, *, goal: SearchGoal, terms: list[str]) -> list[dict]:
@@ -1355,8 +1424,26 @@ def _document_source_kind(document: FetchedDocument) -> str:
     for container in (source_metadata, metadata):
         value = container.get("source_kind")
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            source_kind = value.strip()
+            if source_kind == "direct_url" and _looks_like_sec_complete_submission_text_url(document.uri):
+                return "sec_complete_submission_text"
+            return source_kind
+    if _looks_like_sec_complete_submission_text_url(document.uri):
+        return "sec_complete_submission_text"
     return ""
+
+
+def _looks_like_sec_complete_submission_text_url(uri: object) -> bool:
+    text = str(uri or "").strip()
+    if not text:
+        return False
+    return bool(
+        re.search(
+            r"https?://(?:www\.)?sec\.gov/Archives/edgar/data/\d+/\d+/\d{10}-\d{2}-\d{6}\.txt(?:[?#].*)?$",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _xml_child_text(element: ET.Element, name: str) -> str:
@@ -2604,8 +2691,8 @@ def _terms(text: str, *, goal: SearchGoal | None = None) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     def add(term: str) -> None:
-        normalized = term.lower().replace("-", " ").strip()
-        if not normalized or normalized in seen:
+        normalized = _normalize_query_term(term)
+        if not normalized or normalized in seen or _low_signal_query_term(normalized):
             return
         seen.add(normalized)
         terms.append(normalized)
@@ -2630,6 +2717,33 @@ def _terms(text: str, *, goal: SearchGoal | None = None) -> list[str]:
             continue
         add(cleaned)
     return terms
+
+
+def _normalize_query_term(term: str) -> str:
+    raw = str(term or "").lower().replace("-", " ").replace("_", " ")
+    parts: list[str] = []
+    for piece in raw.split():
+        cleaned = "".join(
+            char
+            for char in piece.strip()
+            if char.isalnum() or char in {"%", "$", "/", "&"} or "\u4e00" <= char <= "\u9fff"
+        )
+        if cleaned:
+            parts.append(cleaned)
+    return " ".join(parts)
+
+
+def _low_signal_query_term(term: str) -> bool:
+    normalized = str(term or "").strip().lower()
+    if not normalized:
+        return True
+    if " " in normalized:
+        return False
+    if normalized in LOW_SIGNAL_QUERY_TERMS or normalized in QUERY_FACET_ALIASES:
+        return True
+    if len(normalized) < 3 and not any(char.isdigit() for char in normalized):
+        return True
+    return False
 
 
 def _finance_bridge_extraction_aliases(goal: SearchGoal) -> tuple[str, ...]:

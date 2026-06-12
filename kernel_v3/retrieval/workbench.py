@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.processors.contracts import RETRIEVAL_WORKBENCH_SCHEMA
@@ -113,6 +114,32 @@ def run_retrieval_workbench(
         parameters={"temperature": 0.0},
     )
     if outcome.result.status != "ok" or not isinstance(outcome.parsed, dict):
+        retry_packet = _workbench_retry_packet(packet)
+        retry = fabric.run_json(
+            task_type=RETRIEVAL_WORKBENCH_TASK,
+            run_id=run_id,
+            context_id=f"ctx-{step_id}-json-retry",
+            prompt=_workbench_retry_prompt(retry_packet, error=outcome.result.error or "invalid_workbench_output"),
+            schema=RETRIEVAL_WORKBENCH_SCHEMA,
+            task_id=task_id,
+            step_id=f"{step_id}-json-retry",
+            timeout_seconds=90,
+            parameters={"temperature": 0.0},
+        )
+        if retry.result.status == "ok" and isinstance(retry.parsed, dict):
+            validated = validate_workbench_output(retry.parsed, packet=packet)
+            return replace(
+                validated,
+                diagnostics={
+                    **validated.diagnostics,
+                    "json_retry": {
+                        "attempted": True,
+                        "first_error": outcome.result.error or "invalid_workbench_output",
+                        "packet": _packet_diagnostics(retry_packet),
+                    },
+                },
+            )
+    if outcome.result.status != "ok" or not isinstance(outcome.parsed, dict):
         return RetrievalWorkbenchResult(
             status="failed",
             decision="continue",
@@ -139,6 +166,9 @@ def retrieval_workbench_packet(
     rejected_evidence: list[JsonObject],
 ) -> JsonObject:
     metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    target_contract = _target_document_contract(metadata)
+    accepted = [_evidence_summary(item, target_contract=target_contract) for item in evidence[:64]]
+    rejected = [_rejected_summary(item, target_contract=target_contract) for item in rejected_evidence[:128]]
     return {
         "task_goal": _string_value(metadata.get("root_goal") or metadata.get("task_goal") or goal.query),
         "current_retrieval_goal": goal.query,
@@ -146,15 +176,17 @@ def retrieval_workbench_packet(
         "required_slots": _string_list(metadata.get("required_slots")),
         "evidence_policy": _json_object(metadata.get("evidence_policy")),
         "required_transforms": _string_list(metadata.get("required_transforms")),
+        "target_document_contract": target_contract,
         "target_document_binding": _json_object(metadata.get("target_document_binding")),
         "required_statement": _string_value(metadata.get("required_statement")),
         "required_line_item": _string_value(metadata.get("required_line_item")),
         "source_summaries": [_source_summary(item) for item in sources[:48]],
         "fetch_summaries": [_bounded_dict(item, text_limit=280) for item in fetch_summaries[-48:]],
-        "document_summaries": [_document_summary(document, body) for document, body in documents[-32:]],
-        "extracted_spans": [_span_summary(item) for item in spans[:96]],
-        "accepted_evidence": [_evidence_summary(item) for item in evidence[:64]],
-        "rejected_evidence": [_rejected_summary(item) for item in rejected_evidence[:96]],
+        "document_summaries": [_document_summary(document, body, target_contract=target_contract) for document, body in documents[-32:]],
+        "extracted_spans": [_span_summary(item, target_contract=target_contract) for item in spans[:128]],
+        "accepted_evidence": accepted,
+        "rejected_evidence": rejected,
+        "target_document_candidates": _target_document_candidates(accepted=accepted, rejected=rejected, spans=spans, target_contract=target_contract),
         "current_slot_state": _json_object(metadata.get("slot_state")),
         "current_claim_state": _json_object(metadata.get("claim_state")),
         "current_citations": [_citation_summary(item) for item in citations[:64]],
@@ -420,10 +452,40 @@ def _workbench_prompt(packet: JsonObject) -> str:
         "You are Holo Kernel v3 retrieval.workbench. Judge evidence relevance and next acquisition moves semantically. "
         "Do not invent evidence, source IDs, citation IDs, facts, numeric values, formulas, or URLs. "
         "You may only reference IDs present in the packet. Host will validate provenance, authority, policy, and numeric support. "
+        "Host rejection reasons are not final semantic judgments: if rejected_evidence or target_document_candidates contain useful "
+        "target-document excerpts, rescue those existing evidence IDs and explain which slots they fill. "
         "Return exactly one JSON object with the requested schema. Decide whether evidence is sufficient for the task, "
         "which slots are filled or missing, which source roles matter, and what the next queries/source families/document targets should be.\n\n"
         f"Packet:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
     )
+
+
+def _workbench_retry_prompt(packet: JsonObject, *, error: str) -> str:
+    return (
+        "Your previous retrieval.workbench output was invalid JSON. Return only one valid JSON object matching the schema. "
+        "Use semantic judgment over the provided evidence candidates. Do not invent IDs, sources, citations, values, or formulas. "
+        "If target_document_candidates include useful target filing excerpts, use their existing evidence_id values in "
+        "accepted_evidence_ids or rescued_evidence_ids. "
+        f"Previous parser error: {error}\n\n"
+        f"Compact packet:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
+def _workbench_retry_packet(packet: JsonObject) -> JsonObject:
+    return {
+        "task_goal": packet.get("task_goal"),
+        "current_retrieval_goal": packet.get("current_retrieval_goal"),
+        "workflow_type": packet.get("workflow_type"),
+        "required_slots": packet.get("required_slots"),
+        "evidence_policy": packet.get("evidence_policy"),
+        "required_transforms": packet.get("required_transforms"),
+        "target_document_contract": packet.get("target_document_contract"),
+        "target_document_candidates": packet.get("target_document_candidates"),
+        "accepted_evidence": packet.get("accepted_evidence"),
+        "rejected_evidence": (packet.get("rejected_evidence") or [])[:32],
+        "current_citations": packet.get("current_citations"),
+        "known_limitations": packet.get("known_limitations"),
+    }
 
 
 def _packet_diagnostics(packet: JsonObject) -> JsonObject:
@@ -434,6 +496,7 @@ def _packet_diagnostics(packet: JsonObject) -> JsonObject:
         "span_count": len(packet.get("extracted_spans") or []),
         "accepted_evidence_count": len(packet.get("accepted_evidence") or []),
         "rejected_evidence_count": len(packet.get("rejected_evidence") or []),
+        "target_document_candidate_count": len(packet.get("target_document_candidates") or []),
         "citation_count": len(packet.get("current_citations") or []),
     }
 
@@ -452,7 +515,7 @@ def _source_summary(source: SearchSource) -> JsonObject:
     }
 
 
-def _document_summary(document: FetchedDocument, body: str) -> JsonObject:
+def _document_summary(document: FetchedDocument, body: str, *, target_contract: JsonObject | None = None) -> JsonObject:
     metadata = document.metadata if isinstance(document.metadata, dict) else {}
     return {
         "document_id": document.document_id,
@@ -462,26 +525,29 @@ def _document_summary(document: FetchedDocument, body: str) -> JsonObject:
         "artifact_id": document.artifact_id,
         "chars": len(body or ""),
         "preview": _truncate(" ".join(str(body or "").split()), 360),
+        "is_target_document": _target_document_uri_match(document.uri, target_contract or {}),
         "target_document_binding": _json_object(metadata.get("target_document_binding")),
     }
 
 
-def _span_summary(span: ExtractedSpan) -> JsonObject:
+def _span_summary(span: ExtractedSpan, *, target_contract: JsonObject | None = None) -> JsonObject:
     return {
         "span_id": span.span_id,
+        "candidate_evidence_id": f"evidence-{span.span_id}",
         "source_id": span.source_id,
         "document_id": span.document_id,
         "score": span.score,
         "text": _truncate(span.text, 700),
         "matched_terms": _string_list(span.metadata.get("matched_terms")),
         "text_mode": span.metadata.get("text_mode"),
+        "is_target_document": _target_document_uri_match(_string_value(span.metadata.get("source_uri") or span.metadata.get("uri")), target_contract or {}),
         "target_document_binding": _json_object(span.metadata.get("target_document_binding")),
         "target_statement": span.metadata.get("target_statement"),
         "target_line_item": span.metadata.get("target_line_item"),
     }
 
 
-def _evidence_summary(evidence: EvidenceItem) -> JsonObject:
+def _evidence_summary(evidence: EvidenceItem, *, target_contract: JsonObject | None = None) -> JsonObject:
     qualification = evidence.diagnostics.get("qualification") if isinstance(evidence.diagnostics, dict) else {}
     return {
         "evidence_id": evidence.evidence_id,
@@ -490,6 +556,8 @@ def _evidence_summary(evidence: EvidenceItem) -> JsonObject:
         "span_id": evidence.span_id,
         "uri": evidence.uri,
         "title": _truncate(evidence.title, 180),
+        "is_target_document": _target_document_uri_match(evidence.uri, target_contract or {}),
+        "source_role_hint": _source_role_hint(evidence.uri, evidence.title, target_contract=target_contract or {}),
         "text": _truncate(evidence.text, 800),
         "qualification": _bounded_dict(qualification if isinstance(qualification, dict) else {}, text_limit=180),
         "span_metadata": _bounded_dict(evidence.diagnostics.get("span_metadata"), text_limit=180),
@@ -506,18 +574,167 @@ def _citation_summary(citation: CitationItem) -> JsonObject:
     }
 
 
-def _rejected_summary(item: JsonObject) -> JsonObject:
+def _rejected_summary(item: JsonObject, *, target_contract: JsonObject | None = None) -> JsonObject:
+    uri = _string_value(item.get("uri"))
+    title = _string_value(item.get("title"))
+    reason = _string_value(item.get("reason"))
+    is_target = _target_document_uri_match(uri, target_contract or {})
     return {
         "evidence_id": item.get("evidence_id"),
         "source_id": item.get("source_id"),
         "document_id": item.get("document_id"),
-        "uri": item.get("uri"),
-        "title": _truncate(_string_value(item.get("title")), 180),
-        "reason": item.get("reason"),
+        "uri": uri,
+        "title": _truncate(title, 180),
+        "reason": reason,
+        "is_target_document": is_target,
+        "source_role_hint": _source_role_hint(uri, title, target_contract=target_contract or {}),
+        "review_hint": _target_review_hint(reason=reason, is_target_document=is_target),
         "missing_profile_facets": _string_list(item.get("missing_profile_facets")),
         "missing_finance_facets": _string_list(item.get("missing_finance_facets")),
-        "preview": _truncate(_string_value(item.get("preview")), 600),
+        "preview": _truncate(_string_value(item.get("preview")), 1100 if is_target else 600),
     }
+
+
+def _target_document_contract(metadata: JsonObject) -> JsonObject:
+    binding = _json_object(metadata.get("target_document_binding"))
+    urls: list[str] = []
+    for key in ("source_url", "doc_link"):
+        text = _string_value(metadata.get(key))
+        if text:
+            urls.append(text)
+    for key in ("source_urls", "preferred_source_urls"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            urls.extend(_string_list(value))
+    doc_link = _string_value(binding.get("doc_link"))
+    if doc_link:
+        urls.append(doc_link)
+    urls = _ordered_unique([item for item in urls if item])
+    accessions = _ordered_unique([accession for accession in (_accession_number(url) for url in urls) if accession])
+    return {
+        "required_for_final_citation": bool(metadata.get("benchmark_doc_retrieval") is True or doc_link or urls),
+        "binding": binding,
+        "target_urls": urls[:16],
+        "target_accessions": accessions[:8],
+        "host_validation_rule": (
+            "Final answer citation must trace to one of target_urls or a document with the same SEC accession; "
+            "structured companyfacts may support facts but cannot replace target-document citation."
+        ),
+    }
+
+
+def _target_document_candidates(
+    *,
+    accepted: list[JsonObject],
+    rejected: list[JsonObject],
+    spans: list[ExtractedSpan],
+    target_contract: JsonObject,
+) -> list[JsonObject]:
+    candidates: list[JsonObject] = []
+    seen: set[str] = set()
+    for item in [*accepted, *rejected]:
+        if not item.get("is_target_document"):
+            continue
+        evidence_id = _string_value(item.get("evidence_id"))
+        if evidence_id and evidence_id in seen:
+            continue
+        if evidence_id:
+            seen.add(evidence_id)
+        candidates.append(
+            {
+                "evidence_id": evidence_id,
+                "source_id": item.get("source_id"),
+                "document_id": item.get("document_id"),
+                "uri": item.get("uri"),
+                "title": item.get("title"),
+                "reason": item.get("reason"),
+                "source_role_hint": item.get("source_role_hint"),
+                "rescuable": bool(evidence_id),
+                "text": item.get("text") or item.get("preview"),
+                "review_hint": item.get("review_hint") or "Use semantic judgment to decide if this target-document excerpt supports the task.",
+            }
+        )
+    for span in spans[:128]:
+        evidence_id = f"evidence-{span.span_id}"
+        if evidence_id in seen:
+            continue
+        if not _target_document_uri_match(_string_value(span.metadata.get("source_uri") or span.metadata.get("uri")), target_contract):
+            continue
+        seen.add(evidence_id)
+        candidates.append(
+            {
+                "evidence_id": evidence_id,
+                "source_id": span.source_id,
+                "document_id": span.document_id,
+                "span_id": span.span_id,
+                "uri": span.metadata.get("source_uri") or span.metadata.get("uri"),
+                "title": span.metadata.get("source_title"),
+                "source_role_hint": "target_document_span",
+                "rescuable": True,
+                "text": _truncate(span.text, 900),
+                "review_hint": "Extracted target-document span; if semantically useful, reference this evidence_id.",
+            }
+        )
+    return candidates[:32]
+
+
+def _target_review_hint(*, reason: str, is_target_document: bool) -> str:
+    if not is_target_document:
+        return ""
+    if reason:
+        return (
+            f"Host preliminary rejection was {reason}. Treat this as non-final; judge semantically whether the "
+            "target filing excerpt fills a required slot or supports a source-grounded explanation."
+        )
+    return "Target filing excerpt. Judge semantically whether it supports the task."
+
+
+def _source_role_hint(uri: str, title: str, *, target_contract: JsonObject) -> str:
+    text = f"{uri} {title}".lower()
+    if _target_document_uri_match(uri, target_contract):
+        return "target_document"
+    if "data.sec.gov/api/xbrl/companyfacts/" in text:
+        return "structured_companyfacts"
+    if "sec.gov/archives/edgar/data" in text:
+        return "sec_filing"
+    if "annual" in text or "10-k" in text or "10k" in text:
+        return "annual_report"
+    return ""
+
+
+def _target_document_uri_match(uri: str, target_contract: JsonObject) -> bool:
+    value = _string_value(uri)
+    if not value:
+        return False
+    if "data.sec.gov/api/xbrl/companyfacts/" in value.lower() or "data.sec.gov/submissions/" in value.lower():
+        return False
+    for target in _string_list(target_contract.get("target_urls")):
+        if _same_url_or_prefix(value, target) or _same_url_or_prefix(target, value):
+            return True
+    accession = _accession_number(value)
+    return bool(accession and accession in set(_string_list(target_contract.get("target_accessions"))))
+
+
+def _same_url_or_prefix(left: str, right: str) -> bool:
+    left_norm = _string_value(left).rstrip("/")
+    right_norm = _string_value(right).rstrip("/")
+    return bool(left_norm and right_norm and (left_norm == right_norm or left_norm.startswith(f"{right_norm}/")))
+
+
+def _accession_number(value: str) -> str:
+    match = re.search(r"\b\d{10}-\d{2}-\d{6}\b|\b\d{18}\b", _string_value(value))
+    return match.group(0).replace("-", "") if match else ""
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _valid_ids(value: object, allowed: set[str]) -> list[str]:

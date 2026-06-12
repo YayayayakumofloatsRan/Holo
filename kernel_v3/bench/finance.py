@@ -764,6 +764,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         *_claim_source_uris(claim_ledgers),
     ])
     source_hosts = _source_hosts(source_uris)
+    target_document_urls = _target_document_trace_urls(latest_ledger)
     claim_citation_count = _claim_citation_count(claim_ledgers)
     finance_source_forms = _ordered_unique([*_finance_source_forms(finance_ledgers), *_claim_source_forms(claim_ledgers)])
     transform_methods = _transform_methods(transform_plans)
@@ -848,6 +849,7 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "finance_numeric_failure_reasons": issue_codes,
         "source_hosts": source_hosts[:64],
         "source_uris": source_uris[:64],
+        "target_document_source_urls": target_document_urls[:16],
         "finance_source_forms": finance_source_forms[:64],
         "final_answer_chars": retrieval.get("final_answer_chars", 0),
         "latest_failure_mode": retrieval.get("latest_failure_mode"),
@@ -885,11 +887,13 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
     required_trace = _ordered_unique([*_string_list(annotation.get("required_trace")), *_string_list(annotation.get("expected_trace"))])
     trace_hits = [name for name in required_trace if _trace_requirement_met(name, result)]
     required_sources = _string_list(annotation.get("required_sources"))
+    required_source_urls = _string_list(annotation.get("required_source_urls"))
     evidence_policy = _json_object_value(annotation.get("evidence_policy"))
     required_source_families = _string_list(evidence_policy.get("required_source_families"))
     required_terms = _string_list(evidence_policy.get("required_terms"))
     forbidden_source_families = _string_list(evidence_policy.get("forbidden_source_families"))
     source_hits = [name for name in required_sources if _source_requirement_met(name, result, haystack=haystack)]
+    source_url_hits = [url for url in required_source_urls if _source_url_requirement_met(url, result, haystack=haystack)]
     source_family_hits = [name for name in required_source_families if _source_requirement_met(name, result, haystack=haystack)]
     required_term_hits = [term for term in required_terms if _evidence_term_met(term, result, haystack=haystack)]
     forbidden_source_hits = [name for name in forbidden_source_families if _source_requirement_met(name, result, haystack=haystack)]
@@ -900,8 +904,8 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
     dealbreakers = _string_list(annotation.get("dealbreakers"))
     dealbreaker_matches = [_score_dealbreaker(name, result, haystack=haystack) for name in dealbreakers]
     dealbreaker_hits = [item for item in dealbreaker_matches if item.get("passed") is True]
-    behavior_denominator = len(expected_contains) + len(required_sources)
-    behavior_numerator = len(contains_hits) + len(source_hits)
+    behavior_denominator = len(expected_contains) + len(required_sources) + len(required_source_urls)
+    behavior_numerator = len(contains_hits) + len(source_hits) + len(source_url_hits)
     numeric_denominator = len(numeric_matches)
     numeric_numerator = sum(1 for item in numeric_matches if item.get("passed") is True)
     substrate_denominator = len(required_trace)
@@ -925,6 +929,8 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
         failure_reasons.append("expected_answer_content_missing")
     if len(source_hits) < len(required_sources):
         failure_reasons.append("required_source_missing")
+    if len(source_url_hits) < len(required_source_urls):
+        failure_reasons.append("required_source_url_missing")
     if numeric_denominator and numeric_numerator < numeric_denominator:
         failure_reasons.append("expected_numeric_mismatch")
     if substrate_denominator and substrate_numerator < substrate_denominator:
@@ -956,6 +962,8 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
         "required_trace_hit_count": len(trace_hits),
         "required_source_count": len(required_sources),
         "required_source_hit_count": len(source_hits),
+        "required_source_url_count": len(required_source_urls),
+        "required_source_url_hit_count": len(source_url_hits),
         "required_slot_count": len(required_slots),
         "required_slot_hit_count": len(slot_hits),
         "required_transform_count": len(required_transforms),
@@ -970,6 +978,7 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
         "numeric_matches": numeric_matches,
         "missing_trace": [name for name in required_trace if name not in trace_hits],
         "missing_sources": [name for name in required_sources if name not in source_hits],
+        "missing_source_urls": [url for url in required_source_urls if url not in source_url_hits],
         "missing_slots": [name for name in required_slots if name not in slot_hits],
         "missing_transforms": [name for name in required_transforms if name not in transform_hits],
         "missing_source_families": [name for name in required_source_families if name not in source_family_hits],
@@ -997,6 +1006,9 @@ def _dev_annotation_from_item(item: FinanceBenchmarkItem) -> JsonObject:
     required_sources = _annotation_required_sources(item)
     if required_sources:
         annotation["required_sources"] = required_sources
+    required_source_urls = _annotation_required_source_urls(item)
+    if required_source_urls:
+        annotation["required_source_urls"] = required_source_urls
     expected_numeric = _numeric_expectations_from_gold(item.gold_answer)
     if expected_numeric:
         annotation["expected_numeric"] = expected_numeric
@@ -1025,6 +1037,22 @@ def _annotation_required_sources(item: FinanceBenchmarkItem) -> list[str]:
         if family:
             sources.append(family)
     return _ordered_unique(sources)
+
+
+def _annotation_required_source_urls(item: FinanceBenchmarkItem) -> list[str]:
+    urls: list[str] = []
+    refs = item.metadata.get("source_refs") if isinstance(item.metadata.get("source_refs"), list) else []
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        url = _coerce_text(ref.get("url"))
+        if url:
+            urls.append(url)
+    for key in ("doc_link", "source_url", "benchmark_dataset_url"):
+        value = _coerce_text(item.metadata.get(key)) if isinstance(item.metadata, dict) else None
+        if value:
+            urls.append(value)
+    return _ordered_unique(urls)
 
 
 def _annotation_expected_contains(item: FinanceBenchmarkItem) -> list[str]:
@@ -1106,6 +1134,8 @@ def _source_requirement_met(name: str, result: FinanceBenchmarkResult, *, haysta
     normalized = name.strip().casefold()
     if not normalized:
         return False
+    if _looks_like_url_requirement(normalized):
+        return _source_url_requirement_met(name, result, haystack=haystack)
     metrics = result.trace_metrics
     if normalized in {"provided_evidence_or_company_filing", "benchmark_evidence_or_primary_filing"}:
         return (
@@ -1117,6 +1147,10 @@ def _source_requirement_met(name: str, result: FinanceBenchmarkResult, *, haysta
     hosts = [str(item).casefold() for item in metrics.get("source_hosts", [])] if isinstance(metrics.get("source_hosts"), list) else []
     forms = [str(item).casefold() for item in metrics.get("finance_source_forms", [])] if isinstance(metrics.get("finance_source_forms"), list) else []
     source_text = " ".join([haystack.casefold(), *hosts, *forms])
+    if normalized in hosts or any(host.endswith(f".{normalized}") for host in hosts):
+        return True
+    if _looks_like_host_requirement(normalized):
+        return _source_host_requirement_met(normalized, result, haystack=haystack)
     aliases = {
         "sec": ("sec.gov", "www.sec.gov", "sec filing", "regulatory_filing"),
         "sec.gov": ("sec.gov", "www.sec.gov"),
@@ -1146,6 +1180,67 @@ def _source_requirement_met(name: str, result: FinanceBenchmarkResult, *, haysta
     }
     candidates = aliases.get(normalized, (normalized,))
     return any(candidate in source_text for candidate in candidates)
+
+
+def _source_url_requirement_met(url: str, result: FinanceBenchmarkResult, *, haystack: str) -> bool:
+    normalized_url = url.strip().casefold()
+    if not normalized_url:
+        return False
+    observed = _result_source_urls(result)
+    if any(normalized_url == item.casefold().rstrip("/") for item in observed):
+        return True
+    required_accession = _sec_accession_key(normalized_url)
+    if not required_accession:
+        return False
+    return any(_sec_accession_key(item) == required_accession for item in observed)
+
+
+def _source_host_requirement_met(host: str, result: FinanceBenchmarkResult, *, haystack: str) -> bool:
+    target_urls = _result_target_document_urls(result)
+    if not any((urllib.parse.urlparse(url).hostname or "").casefold() == host for url in target_urls):
+        return False
+    target_accessions = {_sec_accession_key(url) for url in target_urls}
+    target_accessions.discard("")
+    if not target_accessions:
+        return False
+    observed = _result_source_urls(result)
+    return any(_sec_accession_key(url) in target_accessions for url in observed)
+
+
+def _looks_like_url_requirement(value: str) -> bool:
+    parsed = urllib.parse.urlparse(value)
+    return bool(parsed.scheme and parsed.netloc)
+
+
+def _looks_like_host_requirement(value: str) -> bool:
+    if "/" in value or " " in value:
+        return False
+    return "." in value
+
+
+def _result_source_urls(result: FinanceBenchmarkResult) -> list[str]:
+    metrics = result.trace_metrics if isinstance(result.trace_metrics, dict) else {}
+    values = metrics.get("source_uris") if isinstance(metrics.get("source_uris"), list) else []
+    urls = [str(value).rstrip("/") for value in values if isinstance(value, str) and _looks_like_url_requirement(value.casefold())]
+    return _ordered_unique(urls)
+
+
+def _result_target_document_urls(result: FinanceBenchmarkResult) -> list[str]:
+    metrics = result.trace_metrics if isinstance(result.trace_metrics, dict) else {}
+    values = metrics.get("target_document_source_urls") if isinstance(metrics.get("target_document_source_urls"), list) else []
+    urls = [str(value).rstrip("/") for value in values if isinstance(value, str) and _looks_like_url_requirement(value.casefold())]
+    return _ordered_unique(urls)
+
+
+def _sec_accession_key(value: str) -> str:
+    text = str(value or "")
+    match = re.search(r"\b(\d{10})-?(\d{2})-?(\d{6})\b", text)
+    if match:
+        return "".join(match.groups())
+    match = re.search(r"/Archives/edgar/data/\d+/(\d{18})(?:/|$)", text, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return ""
 
 
 def _evidence_term_met(term: str, result: FinanceBenchmarkResult, *, haystack: str) -> bool:
@@ -1315,6 +1410,25 @@ def _claim_source_uris(claim_ledgers: list[JsonObject]) -> list[str]:
             if isinstance(source_ref, str) and source_ref:
                 uris.append(source_ref)
     return _ordered_unique(uris)
+
+
+def _target_document_trace_urls(latest_ledger: JsonObject) -> list[str]:
+    if not isinstance(latest_ledger, dict):
+        return []
+    binding = latest_ledger.get("target_document_binding")
+    if not isinstance(binding, dict):
+        return []
+    urls: list[str] = []
+    for key in ("doc_link", "source_url"):
+        value = binding.get(key)
+        if isinstance(value, str) and value:
+            urls.append(value)
+    source_urls = binding.get("source_urls")
+    if isinstance(source_urls, list):
+        for value in source_urls:
+            if isinstance(value, str) and value:
+                urls.append(value)
+    return _ordered_unique(urls)
 
 
 def _claim_source_forms(claim_ledgers: list[JsonObject]) -> list[str]:

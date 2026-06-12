@@ -247,18 +247,18 @@ not repeatedly download these sources during benchmark iteration.
   export now reject that pattern, and v7 re-scores as failed; treat it as a
   diagnostic, not as a quality pass.
 - 2026-06-12 later item4 follow-ups moved the boundary from retry mechanics to
-  document evidence selection. `run_financebench_doc_item4_model_net_v15`
-  reaches four retrieval runs, finance facts / claims `28`, compiled task
-  program present, required trace `7/7`, and substrate score `1.0`, but fails
-  because the answer contains unsupported numbers. `v16` adds SEC archive URL
-  derivation from the investor filing link and attempts the `.txt`, index, JSON,
-  and directory targets (`8.4MB` downloaded), but selected evidence still comes
-  from `data.sec.gov`. `v17` keeps the full trace spine with facts / claims
-  `22`, transform plans `5`, workflow score `0.7143`, and substrate score `1.0`,
-  while numeric verifier and SynthesisGate correctly fail because the required
-  FY2022 operating-margin driver is not grounded in target MD&A text. This is a
-  real document block selection and source-grounded synthesis gap, not a solved
-  score.
+  target-document source identity. `v20` is the corrected negative control:
+  after host source-contract tightening, generic `data.sec.gov` companyfacts no
+  longer satisfy FinanceBench `doc_retrieval`, so the row fails instead of
+  falsely passing. `v21` and `v22` then pass the same fourth row
+  (`financebench_id_01226`) with target SEC archive filing evidence, citation
+  preservation `1.0`, claim-ledger / slot-frame / transform-plan presence `1.0`,
+  verifier and synthesis gates passed, and source hosts including `www.sec.gov`.
+  The benchmark annotation scorer now preserves required source URLs and treats
+  same-accession SEC archive documents as equivalent target filings while still
+  rejecting generic companyfacts. The open issue is cost, not this row's source
+  grounding: v21/v22 consumed roughly `382k`/`523k` model tokens, so the next
+  iteration must shrink Workbench/planner context.
 - FinQA `dev` oracle-context `100` no-network/fake-processor baseline
   (`run_finqa_dev_oracle100_fake_v1`) produced pass rate / numeric accuracy
   `0.15`, workflow score `0.925`, substrate score `0.8816`,

@@ -5,11 +5,13 @@ from decimal import Decimal
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
+from kernel_v3.agent.contracts import FinalAnswer
 from kernel_v3.agent.execution_profile import execution_profile, execution_profile_runtime_metadata
 from kernel_v3.agent.runtime import (
     _RecipeBoundPlanner,
     _RecipeEvaluator,
     _apply_recipe_profile_defaults,
+    _benchmark_doc_retrieval_primary_citation_satisfies_required_source,
     _augment_finance_modeling_retrieval_payload,
     _finance_fallback_fact_lines,
     _finance_missing_fact_retrieval_action,
@@ -2800,6 +2802,62 @@ def test_numeric_verifier_still_blocks_unsupported_material_number_near_referenc
     assert verification.missing_values[0]["raw"] == "999亿"
 
 
+def test_numeric_verifier_accepts_cited_evidence_numbers_for_explanatory_source_grounded_question() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-3m-margin-drivers",
+            title="3M 2022 10-K MD&A",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+            text=(
+                "Operating income margin 19.1% 20.8% (1.7)%. "
+                "Cost of sales increased primarily due to litigation, raw materials and logistics costs. "
+                "SG&A increased due to Combat Arms Earplugs litigation, PFAS exit costs, Russia exit costs, "
+                "and divestiture-related restructuring charges."
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-3m-margin")]
+
+    verification = verify_finance_answer(
+        answer=(
+            "3M FY2022 operating margin decreased by 1.7%, mainly because cost of sales and SG&A rose; "
+            "the cited filing links those increases to litigation, PFAS exit costs, Russia exit costs, and restructuring."
+        ),
+        facts=[],
+        formula_traces=[],
+        citations=citations,
+        evidence=evidence,
+        question="What drove operating margin change as of FY2022 for 3M?",
+    )
+
+    assert verification.status == "passed"
+    assert verification.diagnostics["cited_evidence_numeric_support_count"] > 0
+
+
+def test_numeric_verifier_still_requires_formula_or_fact_support_for_calculation_question() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-3m-margin-values",
+            title="3M 2022 10-K MD&A",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+            text="Operating income margin 19.1% 20.8% (1.7)%.",
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-3m-margin")]
+
+    verification = verify_finance_answer(
+        answer="The calculated operating-margin change is 1.7%.",
+        facts=[],
+        formula_traces=[],
+        citations=citations,
+        evidence=evidence,
+        question="Calculate the operating margin change for 3M in FY2022.",
+    )
+
+    assert verification.status == "failed"
+    assert any(issue["code"] == "missing_formula_trace" for issue in verification.issues)
+
+
 def test_finance_fact_ledger_ignores_sec_filing_item_codes() -> None:
     evidence = [
         EvidenceItem(
@@ -3537,6 +3595,94 @@ def test_finance_missing_fact_retrieval_action_preserves_target_document_binding
     ]
 
 
+def test_benchmark_doc_retrieval_required_source_rejects_generic_companyfacts_citation() -> None:
+    source_url = (
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf"
+    )
+    metadata = {
+        "benchmark_doc_retrieval": True,
+        "source_url": source_url,
+    }
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "task_execution_plan": {
+                "steps": [
+                    {
+                        "required_capabilities": ["retrieval.run"],
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": {
+                                    "query": "3M FY2022 operating margin drivers",
+                                    "metadata": metadata,
+                                }
+                            }
+                        },
+                    }
+                ]
+            }
+        },
+    )
+    companyfacts_answer = FinalAnswer(
+        answer="3M operating margin changed by 1.7%.",
+        citation_refs=["cite-companyfacts"],
+        used_evidence=["evidence-companyfacts"],
+        limitations=[],
+        confidence=0.9,
+        task_id="task-doc-source",
+        run_id="run-1",
+        trace_refs=[],
+    )
+    companyfacts_citations = [
+        CitationItem(
+            citation_id="cite-companyfacts",
+            goal_id="goal-1",
+            evidence_id="evidence-companyfacts",
+            artifact_id="artifact-companyfacts",
+            uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+            title="SEC companyfacts JSON for CIK 0000066740",
+            quote="entityName=3M COMPANY metric=operating income margin value=1.7",
+            span_start=0,
+            span_end=20,
+        )
+    ]
+    filing_answer = FinalAnswer(
+        answer="3M operating margin changed by 1.7%.",
+        citation_refs=["cite-filing"],
+        used_evidence=["evidence-filing"],
+        limitations=[],
+        confidence=0.9,
+        task_id="task-doc-source",
+        run_id="run-1",
+        trace_refs=[],
+    )
+    filing_citations = [
+        CitationItem(
+            citation_id="cite-filing",
+            goal_id="goal-1",
+            evidence_id="evidence-filing",
+            artifact_id="artifact-filing",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+            title="3M 2022 10-K complete submission text",
+            quote="Operating income margin 19.1% 20.8% (1.7)%.",
+            span_start=0,
+            span_end=20,
+        )
+    ]
+
+    assert not _benchmark_doc_retrieval_primary_citation_satisfies_required_source(
+        recipe=recipe,
+        answer=companyfacts_answer,
+        citations=companyfacts_citations,
+    )
+    assert _benchmark_doc_retrieval_primary_citation_satisfies_required_source(
+        recipe=recipe,
+        answer=filing_answer,
+        citations=filing_citations,
+    )
+
+
 def test_finance_missing_fact_payload_for_modeling_uses_slot_frame_and_evidence_policy() -> None:
     dcf_payload = _finance_missing_fact_retrieval_payload(
         formula_name="dcf",
@@ -3814,6 +3960,57 @@ def test_finance_preflight_without_structured_facts_journals_source_grounded_tra
     assert claim_ledgers[-1].data["claim_count"] == 1
     assert slot_frames[-1].data["task_type"] == "source_grounded_research"
     assert any(record.data.get("method") == "source_grounded_synthesis" for record in transform_plans)
+
+
+def test_source_grounded_finance_fallback_uses_cited_evidence_when_synthesizer_adds_unsupported_number() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(
+        journal,
+        answer="3M FY2022 operating margin changed by 999%, supported by cite-margin.",
+        citation_refs=["cite-margin"],
+        used_evidence=["evidence-margin"],
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-margin",
+            title="3M 2022 10-K MD&A",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+            text=(
+                "Operating Expenses: 2022 2021 Change. Cost of sales 56.2% 53.2% 3.0%. "
+                "SG&A 26.5% 20.4% 6.1%. Operating income margin 19.1% 20.8% (1.7)%. "
+                "Cost of sales increased primarily due to litigation, raw materials and logistics costs. "
+                "SG&A increased due to Combat Arms Earplugs litigation, PFAS exit costs, Russia exit costs, "
+                "and divestiture-related restructuring charges."
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-margin")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "What drove operating margin change as of FY2022 for 3M?",
+            "workflow_type": "source_grounded_research",
+            "require_numeric_verifier": True,
+        },
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-source-grounded-repair",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    assert "999" not in final.answer
+    assert "1.7" in final.answer
+    assert final.citation_refs == ["cite-margin"]
+    synthesis_gates = journal.records(task_id="task-source-grounded-repair", kind="synthesis_gate_result")
+    assert synthesis_gates[-1].data["status"] == "passed"
 
 
 def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calculator_trace() -> None:

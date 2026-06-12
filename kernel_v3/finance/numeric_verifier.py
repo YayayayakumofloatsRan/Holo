@@ -92,6 +92,12 @@ def verify_finance_answer(
     binding_resolution = primary_source_numeric_binding_resolution(facts, target_binding, question=question) if target_binding else {}
     supported_facts = filter_facts_for_target_binding(facts, target_binding, question=question) if target_binding else facts
     support_values = _support_values(supported_facts, traces)
+    evidence_support_values = (
+        _cited_evidence_support_values(evidence or [], citations or [])
+        if _source_grounded_evidence_numeric_support_allowed(question)
+        else []
+    )
+    support_values.extend(evidence_support_values)
     matched: list[JsonObject] = []
     missing: list[JsonObject] = []
     for candidate in candidates:
@@ -161,6 +167,7 @@ def verify_finance_answer(
             "fact_count": len(facts),
             "target_bound_fact_count": len(supported_facts),
             "formula_trace_count": len(traces),
+            "cited_evidence_numeric_support_count": len(evidence_support_values),
             "citation_count": len(citations or []),
             "evidence_count": len(evidence or []),
             "target_document_binding": target_binding or {},
@@ -298,6 +305,57 @@ def _support_values(facts: list[FinanceFact], traces: list[FormulaTrace]) -> lis
                 _extend_support_values(values, item["value"], item["base"])
     values.extend(_formula_comparison_support_values(traces))
     return values
+
+
+def _cited_evidence_support_values(evidence: list[EvidenceItem], citations: list[CitationItem]) -> list[JsonObject]:
+    citation_by_evidence = {item.evidence_id: item for item in citations if item.evidence_id}
+    values: list[JsonObject] = []
+    for item in evidence:
+        citation = citation_by_evidence.get(item.evidence_id)
+        if citation is None:
+            continue
+        for numeric in _numeric_values_from_cited_text(item.text):
+            _extend_support_values(
+                values,
+                numeric["value"],
+                {
+                    "kind": "cited_evidence",
+                    "ref": item.evidence_id,
+                    "citation_ref": citation.citation_id,
+                    "unit": numeric["unit"],
+                },
+            )
+    return values
+
+
+def _numeric_values_from_cited_text(text: str) -> list[JsonObject]:
+    result: list[JsonObject] = []
+    source = str(text or "")
+    for match in NUMERIC_PATTERN.finditer(source):
+        number_start = match.start("number")
+        number_end = match.end("number")
+        raw = match.group("number")
+        unit = match.group("unit") or ""
+        prefix = match.group("prefix") or ""
+        if _ambiguous_compact_scale_unit(source, match, raw=raw, prefix=prefix, unit=unit):
+            continue
+        if _embedded_identifier_or_citation(source, number_start, number_end, unit=unit):
+            continue
+        value = _scaled_decimal(raw, unit)
+        if value is None or _looks_like_year(value):
+            continue
+        if _looks_like_date_component(source, number_start, number_end, value=value):
+            continue
+        if _looks_like_sec_item_number(source, number_start, number_end, value=value):
+            continue
+        if _looks_like_sec_form_code(source, number_start, number_end, value=value):
+            continue
+        if _looks_like_sec_exhibit_number(source, number_start, number_end, value=value):
+            continue
+        if _looks_like_reference_or_list_marker(source, number_start, number_end, value=value, unit=unit, prefix=prefix):
+            continue
+        result.append({"value": value, "unit": _normalize_unit(unit or prefix)})
+    return result
 
 
 def _formula_assumption_support_values(assumptions: JsonObject, *, trace: FormulaTrace) -> list[JsonObject]:
@@ -592,6 +650,8 @@ def _period_mismatches(*, answer: str, question: str, facts: list[FinanceFact]) 
 
 def _formula_trace_required(*, answer: str, question: str) -> bool:
     text = f"{question}\n{answer}".lower()
+    if _source_grounded_evidence_numeric_support_allowed(question):
+        return False
     return any(
         marker in text
         for marker in (
@@ -614,6 +674,56 @@ def _formula_trace_required(*, answer: str, question: str) -> bool:
             "增长率",
             "利润率",
             "倍数",
+        )
+    )
+
+
+def _source_grounded_evidence_numeric_support_allowed(question: str) -> bool:
+    text = str(question or "").lower()
+    if not _source_grounded_explanation_intent(text):
+        return False
+    return not _explicit_calculation_intent(text)
+
+
+def _source_grounded_explanation_intent(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "what drove",
+            "what drives",
+            "why did",
+            "explain why",
+            "explain the",
+            "drivers of",
+            "driver of",
+            "main reasons",
+            "primary reasons",
+            "主要原因",
+            "驱动因素",
+            "为什么",
+        )
+    )
+
+
+def _explicit_calculation_intent(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "calculate",
+            "compute",
+            "quantify",
+            "what is the amount",
+            "how much",
+            "ratio",
+            "multiple",
+            "cagr",
+            "dio",
+            "ev/",
+            "basis point",
+            "bps",
+            "计算",
+            "量化",
+            "是多少",
         )
     )
 

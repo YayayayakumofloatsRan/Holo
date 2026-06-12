@@ -1224,6 +1224,107 @@ def test_finance_benchmark_cli_imports_financebench_mode(tmp_path: Path) -> None
     assert annotation_payload["expected_numeric"][0]["value"] == 10_000_000
 
 
+def test_financebench_annotation_export_preserves_required_source_urls(tmp_path: Path) -> None:
+    dataset = tmp_path / "financebench.normalized.jsonl"
+    annotation = tmp_path / "financebench.gold.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "item_id": "financebench_id_source_url",
+                "question": "What changed in operating margin?",
+                "gold_answer": "1.7%",
+                "metadata": {
+                    "source_refs": [
+                        {
+                            "doc_type": "10-K",
+                            "url": (
+                                "https://investors.3m.com/financials/sec-filings/content/"
+                                "0000066740-23-000014/0000066740-23-000014.pdf"
+                            ),
+                        }
+                    ]
+                },
+                "evidence_policy": {"required_source_families": ["sec_filings"]},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    write_finance_dev_annotations_from_dataset(dataset_path=dataset, annotation_path=annotation)
+
+    payload = json.loads(annotation.read_text(encoding="utf-8").strip())
+    assert payload["required_sources"] == ["10-k", "investors.3m.com", "sec_filings"]
+    assert payload["required_source_urls"] == [
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/0000066740-23-000014.pdf"
+    ]
+
+
+def test_financebench_source_url_scoring_accepts_same_sec_accession_not_companyfacts(tmp_path: Path) -> None:
+    annotation = tmp_path / "financebench.gold.jsonl"
+    required_url = (
+        "https://investors.3m.com/financials/sec-filings/content/"
+        "0000066740-23-000014/0000066740-23-000014.pdf"
+    )
+    annotation.write_text(
+        json.dumps(
+            {
+                "item_id": "financebench_id_01226",
+                "required_sources": ["investors.3m.com"],
+                "required_source_urls": [required_url],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    base_kwargs = {
+        "item_id": "financebench_id_01226",
+        "status": "passed",
+        "question": "What drove the operating margin change?",
+        "answer": "Operating income margin changed by 1.7 percentage points.",
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "thread_id": "thread-1",
+        "scorecard": {"citation_present": True},
+        "trace_refs": [],
+        "final_answer": {"citation_refs": ["cite-filing"]},
+        "failure_report": None,
+        "metadata": {},
+    }
+    filing_result = FinanceBenchmarkResult(
+        **base_kwargs,
+        trace_metrics={
+            "source_hosts": ["www.sec.gov"],
+            "source_uris": [
+                "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt"
+            ],
+            "target_document_source_urls": [required_url],
+        },
+    )
+    filing_score = score_finance_dev_annotations([filing_result], annotation_path=annotation)
+
+    assert filing_score["failure_reason_counts"] == {}
+    assert filing_score["items"][0]["required_source_hit_count"] == 1
+    assert filing_score["items"][0]["required_source_url_hit_count"] == 1
+
+    companyfacts_result = FinanceBenchmarkResult(
+        **base_kwargs,
+        trace_metrics={
+            "source_hosts": ["data.sec.gov"],
+            "source_uris": ["https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json"],
+            "target_document_source_urls": [required_url],
+        },
+    )
+    companyfacts_score = score_finance_dev_annotations([companyfacts_result], annotation_path=annotation)
+
+    assert companyfacts_score["failure_reason_counts"] == {
+        "required_source_missing": 1,
+        "required_source_url_missing": 1,
+    }
+
+
 def test_finance_benchmark_fetch_downloads_and_imports_with_annotation(tmp_path: Path) -> None:
     remote = tmp_path / "remote-financebench.jsonl"
     raw = tmp_path / "downloaded-financebench.jsonl"

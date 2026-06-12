@@ -257,6 +257,109 @@ def test_finance_valuation_compaction_keeps_each_target_ticker():
     assert diagnostics["selected_count"] == 2
 
 
+def test_source_grounded_target_document_candidate_is_accepted_without_structured_fact():
+    source_url = (
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf"
+    )
+    sec_text_url = "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt"
+    goal = SearchGoal(
+        goal_id="goal-3m-source-grounded",
+        query="What drove operating margin change as of FY2022 for 3M?",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "benchmark_doc_retrieval": True,
+            "workflow_type": "source_grounded_research",
+            "source_url": source_url,
+            "source_urls": [sec_text_url, source_url],
+            "target_document_binding": {
+                "company": "3M",
+                "doc_link": source_url,
+                "doc_period": "2022",
+                "doc_type": "10k",
+            },
+        },
+    )
+    evidence = EvidenceItem(
+        evidence_id="evidence-3m-mdna",
+        goal_id=goal.goal_id,
+        span_id="span-3m-mdna",
+        document_id="doc-3m-mdna",
+        source_id="source-3m-mdna",
+        artifact_id="artifact-3m-mdna",
+        uri=sec_text_url,
+        title="3M 2022 10-K complete submission text",
+        text=(
+            "RESULTS OF OPERATIONS. Operating Expenses: 2022 2021 Change. "
+            "Operating income margin decreased. "
+            "Cost of sales increased primarily due to litigation, raw materials and logistics costs."
+        ),
+        score=0.92,
+        payload_hash="hash-3m-mdna",
+        diagnostics={
+            "source_assessment": {
+                "source_family": "regulatory_filing",
+                "authority_level": "primary",
+                "authority_score": 0.98,
+            }
+        },
+    )
+
+    qualification = qualify_evidence_candidate(goal=goal, evidence=evidence, research_profile=finance_fundamentals_profile())
+
+    assert qualification["accepted"] is True
+    assert qualification["reason"] == "source_grounded_target_document_candidate"
+
+
+def test_source_grounded_compaction_preserves_target_document_candidate_before_companyfacts():
+    source_url = (
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf"
+    )
+    sec_text_url = "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt"
+    target_doc = _evidence_candidate(
+        evidence_id="target-3m-mdna",
+        uri=sec_text_url,
+        title="3M 2022 10-K complete submission text",
+        text=(
+            "RESULTS OF OPERATIONS. Operating Expenses: 2022 2021 Change. "
+            "Operating income margin 19.1% 20.8% (1.7)%. "
+            "Cost of sales increased primarily due to litigation and raw materials."
+        ),
+        source_family="regulatory_filing",
+        authority_score=0.98,
+        facets=["official_financial_statement", "source_grounded_text"],
+    )
+    companyfacts = _evidence_candidate(
+        evidence_id="companyfacts-3m",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+        title="SEC companyfacts JSON for CIK 0000066740",
+        text="entityName=3M COMPANY metric=revenue value=34229000000 unit=USD fy=2022 form=10-K",
+        source_family="structured_regulatory_data",
+        authority_score=0.98,
+        facets=["official_financial_statement", "financial_metric"],
+    )
+
+    selected, _rejected, diagnostics = compact_evidence_candidates(
+        [companyfacts, target_doc],
+        goal=SearchGoal(
+            goal_id="goal-3m-source-grounded-compaction",
+            query="What drove operating margin change as of FY2022 for 3M?",
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "benchmark_doc_retrieval": True,
+                "source_url": source_url,
+                "target_document_binding": {"doc_link": source_url, "doc_period": "2022", "doc_type": "10k"},
+            },
+        ),
+        research_profile=finance_fundamentals_profile(),
+        limit=1,
+    )
+
+    assert [candidate.evidence.evidence_id for candidate in selected] == ["target-3m-mdna"]
+    assert diagnostics["selected_target_documents"] == [sec_text_url]
+
+
 def test_stockanalysis_visible_market_metrics_are_extracted_for_ev_ebitda():
     body = """
     <html><body>
@@ -1002,6 +1105,87 @@ def test_sec_complete_submission_extracts_transaction_value_after_default_prefix
 
     assert any("$43 billion" in span.text for span in spans)
     assert any("enterprise value" in span.text.lower() or "transaction value" in span.text.lower() for span in spans)
+
+
+def test_sec_archive_direct_url_complete_submission_reads_after_default_prefix_limit():
+    prefix = "<SEC-DOCUMENT><HTML><BODY>" + ("irrelevant filing boilerplate " * 9000)
+    body = (
+        prefix
+        + "In 2022, organic growth and productivity impacted operating margin. "
+        + "Disposable respirator demand negatively impacted operating margins by 0.3 percent, "
+        + "while remaining organic growth and productivity benefited operating margins by 1.3 percentage points."
+    )
+    assert len(prefix) > 200_000
+    document = FetchedDocument(
+        document_id="doc-sec-direct-complete-submission",
+        goal_id="goal-sec-direct-operating-margin",
+        source_id="source-sec-direct-complete-submission",
+        uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+        title="SEC complete submission text for 3M 2022 10-K",
+        artifact_id="artifact-sec-direct-complete-submission",
+        payload_hash="hash",
+        preview=body[:200],
+        size_bytes=len(body.encode("utf-8")),
+        metadata={
+            "mime_type": "text/plain",
+            "source_metadata": {"source_kind": "direct_url"},
+        },
+    )
+
+    spans = extract_spans(
+        goal=SearchGoal(
+            goal_id="goal-sec-direct-operating-margin",
+            query="3M 2022 operating margin organic growth productivity",
+            max_sources=1,
+            max_fetches=1,
+            max_spans_per_document=4,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        document=document,
+        body=body,
+    )
+
+    assert any("operating margin" in span.text.lower() for span in spans)
+    assert any("1.3 percentage points" in span.text.lower() for span in spans)
+
+
+def test_source_grounded_extraction_ignores_stopword_dominated_windows_for_sec_text():
+    query = (
+        "What drove operating margin change as of FY2022 for 3M? "
+        "If operating margin is not a useful metric for a company like this, then please state that and explain why."
+    )
+    early_noise = (
+        "The Company believes this information is useful to investors and management in understanding "
+        "ongoing operations and changes. "
+    ) * 80
+    target = (
+        "RESULTS OF OPERATIONS. Operating Expenses: 2022 2021 Change. "
+        "Cost of sales 56.2% 53.2% 3.0%. SG&A 26.5% 20.4% 6.1%. "
+        "Operating income margin 19.1% 20.8% (1.7)%. "
+        "Cost of sales increased primarily due to litigation, raw materials and logistics costs; "
+        "SG&A increased due to Combat Arms Earplugs litigation, PFAS exit costs, Russia exit costs, "
+        "and divestiture-related restructuring charges."
+    )
+    body = early_noise + "\n" + target
+    goal = SearchGoal(goal_id="goal-3m-margin", query=query, max_spans_per_document=1)
+    document = FetchedDocument(
+        document_id="doc-3m-10k",
+        goal_id=goal.goal_id,
+        source_id="source-3m-10k",
+        uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+        title="3M 2022 10-K",
+        artifact_id="artifact-3m-10k",
+        payload_hash="hash-3m-10k",
+        preview=body[:120],
+        size_bytes=len(body),
+        metadata={"source_metadata": {"source_kind": "direct_url"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=body)
+
+    assert spans
+    assert "operating income margin" in spans[0].text.lower()
+    assert "1.7" in spans[0].text
 
 
 def test_sec_complete_submission_expands_exhibit_child_documents_for_transaction_value():

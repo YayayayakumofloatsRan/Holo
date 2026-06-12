@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 
 from kernel_v3.contracts import JsonObject
@@ -43,6 +44,20 @@ def compact_evidence_candidates(
     selected: list[EvidenceCandidate] = []
     selected_ids: set[str] = set()
     source_counts: dict[str, int] = {}
+    selected_target_documents: list[str] = []
+    target_document_urls = _target_document_urls(goal)
+    if target_document_urls:
+        candidate = _best_candidate_for_target_document(
+            ordered,
+            goal=goal,
+            target_urls=target_document_urls,
+            selected_ids=selected_ids,
+            source_counts=source_counts,
+            per_source_limit=per_source_limit,
+        )
+        if candidate is not None:
+            _select_candidate(candidate, selected, selected_ids, source_counts)
+            selected_target_documents.append(str(candidate.evidence.uri or ""))
     target_entities = _target_entity_markers(goal)
     if target_entities:
         for target in target_entities:
@@ -118,6 +133,7 @@ def compact_evidence_candidates(
         "required_facets": required_facets,
         "selected_facets": _selected_facets(selected),
         "selected_target_line_items": selected_target_line_items,
+        "selected_target_documents": selected_target_documents,
     }
     return selected, rejected, diagnostics
 
@@ -175,6 +191,28 @@ def _best_candidate_for_target(
         if _candidate_matches_target(candidate, target):
             return candidate
     return None
+
+
+def _best_candidate_for_target_document(
+    candidates: list[EvidenceCandidate],
+    *,
+    goal: SearchGoal,
+    target_urls: list[str],
+    selected_ids: set[str],
+    source_counts: dict[str, int],
+    per_source_limit: int,
+) -> EvidenceCandidate | None:
+    matches: list[EvidenceCandidate] = []
+    for candidate in candidates:
+        if candidate.evidence.evidence_id in selected_ids:
+            continue
+        if source_counts.get(candidate.evidence.source_id, 0) >= per_source_limit:
+            continue
+        if _candidate_matches_target_document(candidate, target_urls):
+            matches.append(candidate)
+    if not matches:
+        return None
+    return min(matches, key=lambda candidate: _target_document_sort_key(candidate, goal=goal))
 
 
 def _best_candidate_for_target_line_item(
@@ -248,6 +286,94 @@ def _target_line_item_sort_key(candidate: EvidenceCandidate) -> tuple[int, int, 
     if start_offset < 0:
         start_offset = 1_000_000_000
     return (start_offset, len(candidate.evidence.text), -float(candidate.evidence.score), candidate.evidence.evidence_id)
+
+
+def _target_document_sort_key(candidate: EvidenceCandidate, *, goal: SearchGoal) -> tuple[int, float, float, float, int, str]:
+    text = f"{candidate.evidence.title} {candidate.evidence.text}".lower()
+    explanation_hits = sum(
+        1
+        for marker in (
+            "operating income margin",
+            "operating margin",
+            "cost of sales",
+            "gross margin",
+            "sg&a",
+            "primarily due",
+            "drove",
+            "driven by",
+            "results of operations",
+            "management's discussion",
+        )
+        if marker in text
+    )
+    start_offset = candidate.span.start_offset
+    if start_offset < 0:
+        start_offset = 1_000_000_000
+    return (
+        -explanation_hits,
+        -finance_metric_intent_score(candidate.evidence.text, query=goal.query),
+        -float(candidate.evidence.score),
+        -_authority_score(candidate.evidence),
+        start_offset,
+        candidate.evidence.evidence_id,
+    )
+
+
+def _target_document_urls(goal: SearchGoal) -> list[str]:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    binding = metadata.get("target_document_binding")
+    if not isinstance(binding, dict) and metadata.get("benchmark_doc_retrieval") is not True:
+        return []
+    raw: list[object] = []
+    if isinstance(binding, dict):
+        raw.append(binding.get("doc_link"))
+    for key in ("source_url", "doc_link"):
+        raw.append(metadata.get(key))
+    for key in ("preferred_source_urls", "source_urls"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            raw.extend(value)
+    urls: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        url = str(item or "").strip()
+        if not url or url in seen or _structured_data_url(url):
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def _candidate_matches_target_document(candidate: EvidenceCandidate, target_urls: list[str]) -> bool:
+    uri = str(candidate.evidence.uri or "").strip()
+    if not uri:
+        return False
+    if _structured_data_url(uri):
+        return False
+    for target_url in target_urls:
+        if _same_url_or_prefix(uri, target_url) or _same_url_or_prefix(target_url, uri):
+            return True
+        accession = _accession_number(uri)
+        target_accession = _accession_number(target_url)
+        if accession and target_accession and accession == target_accession:
+            return True
+    return False
+
+
+def _structured_data_url(url: str) -> bool:
+    lowered = str(url or "").lower()
+    return "data.sec.gov/api/xbrl/companyfacts/" in lowered or "data.sec.gov/submissions/" in lowered
+
+
+def _same_url_or_prefix(left: str, right: str) -> bool:
+    left_norm = str(left or "").strip().rstrip("/")
+    right_norm = str(right or "").strip().rstrip("/")
+    return bool(left_norm and right_norm and (left_norm == right_norm or left_norm.startswith(f"{right_norm}/")))
+
+
+def _accession_number(value: str) -> str:
+    match = re.search(r"\b\d{10}-\d{2}-\d{6}\b|\b\d{18}\b", str(value or ""))
+    return match.group(0).replace("-", "") if match else ""
 
 
 def _market_valuation_bonus(candidate: EvidenceCandidate, *, goal: SearchGoal) -> float:

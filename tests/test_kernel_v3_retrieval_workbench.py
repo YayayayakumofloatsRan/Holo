@@ -464,6 +464,70 @@ def test_retrieval_workbench_packet_exposes_target_document_binding() -> None:
     assert packet["required_line_item"] == "capital expenditures"
 
 
+def test_retrieval_workbench_packet_exposes_target_document_candidates_for_llm_judgment() -> None:
+    source_url = (
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf"
+    )
+    sec_text_url = "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt"
+    goal = SearchGoal(
+        goal_id="goal-workbench-target-candidate",
+        query="What drove operating margin change as of FY2022 for 3M?",
+        metadata={
+            "benchmark_doc_retrieval": True,
+            "workflow_type": "source_grounded_research",
+            "source_url": source_url,
+            "source_urls": [sec_text_url, source_url],
+            "target_document_binding": {"company": "3M", "doc_link": source_url, "doc_period": "2022"},
+        },
+    )
+    rejected = [
+        {
+            "evidence_id": "evidence-span-target-mdna",
+            "source_id": "source-target",
+            "document_id": "doc-target",
+            "uri": sec_text_url,
+            "title": "3M 2022 10-K complete submission text",
+            "reason": "missing_finance_fact_in_span",
+            "preview": "Operating income margin 19.1% 20.8% (1.7)%. Cost of sales increased primarily due to litigation.",
+        }
+    ]
+
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=[],
+        fetch_summaries=[],
+        documents=[
+            (
+                FetchedDocument(
+                    document_id="doc-target",
+                    goal_id=goal.goal_id,
+                    source_id="source-target",
+                    uri=sec_text_url,
+                    title="3M 2022 10-K complete submission text",
+                    artifact_id="artifact-target",
+                    payload_hash="hash-target",
+                    preview="Operating income margin...",
+                    size_bytes=1000,
+                ),
+                "Operating income margin 19.1% 20.8% (1.7)%.",
+            )
+        ],
+        spans=[],
+        evidence=[],
+        citations=[],
+        rejected_evidence=rejected,
+    )
+
+    assert packet["target_document_contract"]["required_for_final_citation"] is True
+    assert sec_text_url in packet["target_document_contract"]["target_urls"]
+    assert packet["document_summaries"][0]["is_target_document"] is True
+    assert packet["rejected_evidence"][0]["is_target_document"] is True
+    assert packet["rejected_evidence"][0]["review_hint"]
+    assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-span-target-mdna"
+    assert packet["target_document_candidates"][0]["rescuable"] is True
+
+
 def test_retrieval_workbench_normalizes_object_query_items() -> None:
     goal = SearchGoal(goal_id="goal-workbench-object-query", query="3M FY2018 capital expenditure")
     packet = retrieval_workbench_packet(
