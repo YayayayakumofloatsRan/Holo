@@ -79,6 +79,11 @@ normal thread-history surface.
 
 ## Current Capability Snapshot
 
+For a presentation-oriented Chinese system review of Kernel v3, including the
+architecture, finance capability surface, benchmark/task coverage, demo plan,
+current local changes, gaps, and next priorities, see
+`docs/KERNEL_V3_SYSTEM_REVIEW_2026-06-13_ZH.md`.
+
 Recent kernel-v3 hardening is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-03_RETRIEVAL_LOOP_HARDENING.md` and
 `docs/KERNEL_V3_PROGRESS_2026-06-04_ACADEMIC_RESEARCH_PROFILE.md`, with the

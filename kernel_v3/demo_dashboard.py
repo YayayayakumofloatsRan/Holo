@@ -14,8 +14,24 @@ from urllib.parse import parse_qs, urlparse
 
 Json = dict[str, Any]
 
-DEFAULT_RUN_PREFIX = "run_global_finagent_limit10_live_20260613"
+DEFAULT_RUN_PREFIX = "run_metric_disambiguation_live14_20260613"
 DEMO_RUNS = (
+    {
+        "label": "Live14 metric disambiguation",
+        "run_prefix": "run_metric_disambiguation_live14_20260613",
+        "thread_prefix": "metric-disambiguation-live14-20260613",
+        "item_id": "",
+        "difficulty": "Medium-Hard",
+        "question": "Live shard covering net revenues, operating revenues, sales-to-customers, and total-revenue line-item ambiguity.",
+    },
+    {
+        "label": "Goldman net revenues verifier pass",
+        "run_prefix": "run_metric_disambiguation_live14_20260613",
+        "thread_prefix": "metric-disambiguation-live14-20260613",
+        "item_id": "FE_009",
+        "difficulty": "Medium-Hard",
+        "question": "Goldman Sachs FY2024 net revenues, a historical failure now used to show exact metric phrase disambiguation.",
+    },
     {
         "label": "FinanceBench Activision fixed asset turnover",
         "run_prefix": "run_demo_financebench_activision_fat_live_20260613",
@@ -882,7 +898,7 @@ HTML = r"""<!doctype html>
       overflow: hidden;
     }
     .left, .right { min-height: 0; display: grid; gap: 14px; }
-    .left { grid-template-rows: 206px 1fr 178px; }
+    .left { grid-template-rows: 278px 1fr 178px; }
     .right { grid-template-rows: 220px 1fr 150px; }
     .panel {
       min-height: 0;
@@ -960,6 +976,40 @@ HTML = r"""<!doctype html>
     }
     .evidence-chip strong { display: block; font-size: 14px; line-height: 1; }
     .evidence-chip span { display: block; margin-top: 4px; font-size: 10px; color: var(--muted); }
+    .spotlight {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: #f8fafc;
+      min-height: 62px;
+      overflow: hidden;
+    }
+    .spotlight-kicker {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 750;
+    }
+    .spotlight-title {
+      margin-top: 5px;
+      font-size: 14px;
+      font-weight: 760;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .spotlight-text {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      height: 32px;
+      overflow: hidden;
+    }
     .tool-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
     .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 10px; height: calc(100% - 28px); }
     .stage { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
@@ -1035,6 +1085,11 @@ HTML = r"""<!doctype html>
           <div class="evidence-chip"><strong id="heroFacts">0</strong><span>finance facts</span></div>
           <div class="evidence-chip"><strong id="heroCitations">0</strong><span>citations</span></div>
         </div>
+        <div class="spotlight">
+          <div class="spotlight-kicker"><span>Auto demo reel</span><span id="spotlightStep">1/1</span></div>
+          <div class="spotlight-title" id="spotlightTitle">Loading spotlight</div>
+          <div class="spotlight-text" id="spotlightText">The dashboard will rotate through live capability evidence automatically.</div>
+        </div>
       </div>
       <div class="panel">
         <div class="panel-title"><span>Demo case selector</span><span id="selectedRunLabel">live</span></div>
@@ -1092,6 +1147,8 @@ HTML = r"""<!doctype html>
       threadPrefix: params.has("thread_prefix") ? params.get("thread_prefix") : null,
       itemId: params.get("item_id") || ""
     };
+    let latestSpotlights = [];
+    let spotlightIndex = 0;
     function setTab(name) {
       document.querySelectorAll("button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
       document.querySelectorAll(".tabs").forEach(p => p.classList.toggle("active", p.id === name));
@@ -1154,6 +1211,51 @@ HTML = r"""<!doctype html>
       renderPipeline(data.pipeline || []);
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
+      latestSpotlights = buildSpotlights(data);
+      if (spotlightIndex >= latestSpotlights.length) spotlightIndex = 0;
+      renderSpotlight();
+    }
+    function buildSpotlights(data) {
+      const cur = data.current || {};
+      const metrics = cur.latest_metrics || {};
+      const demoRuns = data.demo_runs || [];
+      const stability = data.stability || {};
+      const passedRuns = demoRuns.filter(row => Number(row.pass_rate || 0) > 0 || Number(row.passed || 0) > 0);
+      const best = passedRuns[0] || demoRuns[0] || {};
+      const fe009 = demoRuns.find(row => row.item_id === "FE_009") || {};
+      return [
+        {
+          title: `Live scoring: ${cur.passed || 0}/${cur.done || 0} passed`,
+          text: `${cur.name || "current run"} is scoring live questions with DeepSeek and live retrieval; strict pass rate is ${fmtPct(cur.pass_rate)}.`
+        },
+        {
+          title: `Financial evidence: ${fmtNum(metrics.finance_fact_count || metrics.claim_count || metrics.evidence_count)} facts`,
+          text: `The visible loop is LLM plan, retrieval.run, ClaimLedger, SlotFrame, calculator when needed, verifier gate, and synthesis.`
+        },
+        {
+          title: fe009.status ? `Goldman FE_009: ${fe009.status}` : "Goldman FE_009 metric disambiguation",
+          text: fe009.done ? `Net revenues trace: pass ${fmtPct(fe009.pass_rate)}, fetch ${fmtNum(fe009.fetches)}, facts ${fmtNum(fe009.facts)}, calculator ${fmtNum(fe009.calculator_calls)}.` : "The demo tracks exact metric phrase matching for net revenues instead of component revenue lines."
+        },
+        {
+          title: best.label || "Promoted finance demo",
+          text: `${best.question || "A selected finance task shows the full tool-backed reasoning path."} Pass ${fmtPct(best.pass_rate)}; facts ${fmtNum(best.facts)}; fetch ${fmtNum(best.fetches)}.`
+        },
+        {
+          title: `Stability traces: ${stability.pass_traces ?? 0}/${stability.total_traces ?? 0}`,
+          text: `Same-item pass traces and verifier-heavy records are surfaced for recording, not hidden behind a final answer only.`
+        },
+        {
+          title: "Core architecture",
+          text: "The model owns semantic decisions; the host validates schemas, executes tools, journals evidence, and verifies numeric support."
+        }
+      ];
+    }
+    function renderSpotlight() {
+      if (!latestSpotlights.length) return;
+      const row = latestSpotlights[spotlightIndex % latestSpotlights.length] || {};
+      text("spotlightStep", `${(spotlightIndex % latestSpotlights.length) + 1}/${latestSpotlights.length}`);
+      text("spotlightTitle", row.title || "");
+      text("spotlightText", row.text || "");
     }
     function renderDemoRuns(rows, activeRunPrefix, activeItemId) {
       document.getElementById("demoRuns").innerHTML = rows.map(row => {
@@ -1209,6 +1311,11 @@ HTML = r"""<!doctype html>
       return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
     }
     refresh();
+    setInterval(() => {
+      if (!latestSpotlights.length) return;
+      spotlightIndex = (spotlightIndex + 1) % latestSpotlights.length;
+      renderSpotlight();
+    }, 4500);
     setInterval(refresh, 2000);
   </script>
 </body>

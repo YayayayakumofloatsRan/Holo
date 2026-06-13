@@ -41,6 +41,7 @@ SECRET_QUERY_KEYS = {
     "x_goog_signature",
 }
 SECRET_TEXT_PLACEHOLDER = "[omitted_secret_like_content]"
+SEC_COMPANYFACTS_MAX_BYTES = 32_000_000
 
 HttpTransport = Callable[[str, dict[str, str], int, int], "HttpTransportResponse"]
 
@@ -181,8 +182,15 @@ class HttpFetchProvider:
     def _max_bytes_for_source(self, source: SearchSource) -> int:
         source_kind = str(source.metadata.get("source_kind") or "").lower()
         uri = str(source.uri or "").lower()
-        if source_kind == "sec_companyfacts_json" or "data.sec.gov/api/xbrl/companyfacts/" in uri:
-            return max(self.max_bytes, 12_000_000)
+        title = str(source.title or "").lower()
+        snippet = str(source.snippet or "").lower()
+        if (
+            source_kind == "sec_companyfacts_json"
+            or "data.sec.gov/api/xbrl/companyfacts/" in uri
+            or "sec companyfacts" in title
+            or "companyfacts" in snippet
+        ):
+            return max(self.max_bytes, SEC_COMPANYFACTS_MAX_BYTES)
         return self.max_bytes
 
     def _allows_discovered_search_host(self, source: SearchSource) -> bool:

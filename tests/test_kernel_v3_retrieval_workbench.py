@@ -1309,6 +1309,16 @@ def test_http_fetch_provider_raises_companyfacts_byte_cap_without_expanding_gene
             metadata={"source_kind": "sec_companyfacts_json"},
         )
     )
+    provider.fetch(
+        SearchSource(
+            source_id="source-companyfacts-title",
+            provider="sec",
+            uri="https://example.com/large-structured.json",
+            title="SEC companyfacts JSON for CIK 0000078003",
+            snippet="Official SEC XBRL companyfacts JSON",
+        )
+    )
 
     assert observed[0][1] == 4_000_000
-    assert observed[1][1] == 12_000_000
+    assert observed[1][1] == 32_000_000
+    assert observed[2][1] == 32_000_000

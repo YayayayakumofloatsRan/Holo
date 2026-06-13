@@ -85,7 +85,7 @@ class BudgetedHttpTransport:
         timeout_seconds: int,
         max_bytes: int,
     ) -> HttpTransportResponse:
-        cached = _read_cached_response(self.budget.cache_dir, url)
+        cached = _read_cached_response(self.budget.cache_dir, url, max_bytes=max_bytes)
         if cached is not None:
             diagnostics = self.budget.record_cache_hit(len(cached.body))
             return _with_budget_headers(cached, diagnostics)
@@ -102,7 +102,7 @@ class BudgetedHttpTransport:
         response = self.transport(url, headers, timeout_seconds, max_bytes)
         diagnostics = self.budget.record_network_bytes(len(response.body))
         if 200 <= response.status_code < 300:
-            _write_cached_response(self.budget.cache_dir, url, response)
+            _write_cached_response(self.budget.cache_dir, url, response, max_bytes=max_bytes)
         return _with_budget_headers(response, diagnostics)
 
 
@@ -135,22 +135,23 @@ def wrap_transport_with_budget(
     )
 
 
-def _cache_key(url: str) -> str:
+def _cache_key(url: str, *, max_bytes: int) -> str:
     import hashlib
 
-    return hashlib.sha256(url.encode("utf-8", errors="surrogatepass")).hexdigest()
+    seed = f"{max(1, int(max_bytes))}\n{url}"
+    return hashlib.sha256(seed.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
-def _cache_paths(cache_dir: Path | None, url: str) -> tuple[Path, Path] | None:
+def _cache_paths(cache_dir: Path | None, url: str, *, max_bytes: int) -> tuple[Path, Path] | None:
     if cache_dir is None:
         return None
-    key = _cache_key(url)
+    key = _cache_key(url, max_bytes=max_bytes)
     bucket = cache_dir / key[:2]
     return bucket / f"{key}.body", bucket / f"{key}.json"
 
 
-def _read_cached_response(cache_dir: Path | None, url: str) -> HttpTransportResponse | None:
-    paths = _cache_paths(cache_dir, url)
+def _read_cached_response(cache_dir: Path | None, url: str, *, max_bytes: int) -> HttpTransportResponse | None:
+    paths = _cache_paths(cache_dir, url, max_bytes=max_bytes)
     if paths is None:
         return None
     body_path, meta_path = paths
@@ -169,8 +170,8 @@ def _read_cached_response(cache_dir: Path | None, url: str) -> HttpTransportResp
     )
 
 
-def _write_cached_response(cache_dir: Path | None, url: str, response: HttpTransportResponse) -> None:
-    paths = _cache_paths(cache_dir, url)
+def _write_cached_response(cache_dir: Path | None, url: str, response: HttpTransportResponse, *, max_bytes: int) -> None:
+    paths = _cache_paths(cache_dir, url, max_bytes=max_bytes)
     if paths is None:
         return
     body_path, meta_path = paths
@@ -186,6 +187,7 @@ def _write_cached_response(cache_dir: Path | None, url: str, response: HttpTrans
                     "status_code": response.status_code,
                     "mime_type": response.mime_type,
                     "headers": _cacheable_headers(response.headers),
+                    "max_bytes": max(1, int(max_bytes)),
                     "stored_at_ms": int(time.time() * 1000),
                     "body_bytes": len(response.body),
                 },

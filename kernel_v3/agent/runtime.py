@@ -95,6 +95,7 @@ from kernel_v3.retrieval import (
     supervise_retrieval_payload,
 )
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
+from kernel_v3.retrieval.finance_metrics import finance_metric_intent_diagnostics
 from kernel_v3.retrieval.source_directory_rank import rank_source_directory_entries
 from kernel_v3.session import TaskState
 from kernel_v3.substrate import Claim, EvidencePolicy, SlotFill, SlotFrame, SlotSpec, TransformPlan
@@ -2257,6 +2258,7 @@ class AgentRuntime:
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
         binding = target_document_binding_from_metadata(_target_document_binding_from_recipe(recipe), question=question)
         facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+        facts = _rank_finance_facts_for_model(facts, question=question)
         formula_traces = _calculator_formula_traces(self.journal, task_id=answer.task_id, run_id=answer.run_id)
         outcome = self.processor_fabric.run_json(
             task_type="finance.numeric_judge",
@@ -2592,6 +2594,7 @@ class AgentRuntime:
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
         binding = target_document_binding_from_metadata(target_binding, question=question)
         facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+        facts = _rank_finance_facts_for_model(facts, question=question)
         binding_resolution = primary_source_numeric_binding_resolution(facts, binding, question=question) if binding else {}
         ledger_record = self.journal.append(
             task_id=task_id,
@@ -12916,13 +12919,16 @@ def _report_with_finance_fact_context(
     facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
     binding = _target_document_binding_from_recipe(recipe)
     facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+    facts = _rank_finance_facts_for_model(facts, question=question)
     diagnostics = dict(report.diagnostics)
     diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:160]]
     diagnostics["finance_fact_ledger_count"] = len(facts)
     diagnostics["claim_ledger_present"] = bool(facts)
+    diagnostics["finance_metric_competing_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:12]]
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
-        "host_role": "expose candidate facts, concepts, labels, provenance, and verification only",
+        "host_role": "rank and expose candidate facts, concepts, labels, provenance, metric-intent diagnostics, and verification only",
+        "candidate_ordering": "facts are ordered for model review by target binding, metric intent score, source authority, and provenance completeness",
         "instruction": (
             "When several source-backed facts share a broad metric such as revenue, compare the question's requested slot "
             "against each fact's metric, SEC concept, label, fiscal period, and source. Do not answer a consolidated metric "
@@ -12965,6 +12971,7 @@ def _compact_finance_synthesis_rescue_packet(
     facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
     binding = _target_document_binding_from_recipe(recipe)
     facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+    facts = _rank_finance_facts_for_model(facts, question=question)
     traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
     cited_evidence_ids = {item.evidence_id for item in citations if item.evidence_id}
     ranked = [item for item in _source_grounded_ranked_evidence(evidence, recipe=recipe) if item.evidence_id in cited_evidence_ids]
@@ -12985,6 +12992,7 @@ def _compact_finance_synthesis_rescue_packet(
     }
     diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:96]]
     diagnostics["finance_fact_ledger_count"] = len(facts)
+    diagnostics["finance_metric_competing_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:12]]
     diagnostics["claim_ledger_present"] = bool(facts)
     diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in traces[:24]]
     diagnostics["finance_formula_trace_count"] = len(traces)
@@ -14028,6 +14036,79 @@ def _finance_numeric_judge_prompt(
     )
 
 
+def _rank_finance_facts_for_model(facts: list[FinanceFact], *, question: str = "") -> list[FinanceFact]:
+    if not facts:
+        return facts
+    enriched = [_finance_fact_with_metric_intent(fact, question=question) for fact in facts]
+    return sorted(enriched, key=_finance_fact_model_sort_key)
+
+
+def _finance_fact_with_metric_intent(fact: FinanceFact, *, question: str = "") -> FinanceFact:
+    if not question:
+        return fact
+    diagnostics = finance_metric_intent_diagnostics(_finance_fact_intent_text(fact), query=question)
+    if not diagnostics.get("active"):
+        return fact
+    return replace(
+        fact,
+        metadata={
+            **dict(fact.metadata),
+            "finance_metric_intent": diagnostics,
+        },
+    )
+
+
+def _finance_fact_intent_text(fact: FinanceFact) -> str:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    parts = [
+        f"metric={fact.metric}",
+        f"value={fact.value}",
+        f"unit={fact.unit or ''}",
+        f"period={fact.period or ''}",
+        f"fy={fact.fiscal_year or ''}",
+        f"concept={metadata.get('concept') or ''}",
+        f"label={metadata.get('label') or ''}",
+        f"line_item={metadata.get('line_item') or ''}",
+        f"statement={metadata.get('statement') or ''}",
+        f"form={metadata.get('form') or ''}",
+        f"source_title={metadata.get('source_title') or ''}",
+    ]
+    return " ".join(part for part in parts if part and not part.endswith("="))
+
+
+def _finance_fact_model_sort_key(fact: FinanceFact) -> tuple[int, float, float, int, int, int, str]:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    intent = metadata.get("finance_metric_intent")
+    intent_score = _numeric_sort_value(intent.get("score") if isinstance(intent, dict) else None)
+    binding_score = _numeric_sort_value(metadata.get("target_document_binding_score"))
+    accepted = 1 if metadata.get("target_document_binding_accepted") is True else 0
+    source_rank = _finance_fact_source_rank(fact)
+    citation_present = 1 if fact.citation_ref else 0
+    year = int(fact.fiscal_year or 0)
+    return (-accepted, -intent_score, -binding_score, -source_rank, -citation_present, -year, fact.fact_id)
+
+
+def _finance_fact_source_rank(fact: FinanceFact) -> int:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    source_uri = str(metadata.get("source_uri") or "").lower()
+    source_family = str(metadata.get("source_family") or "").lower()
+    source_title = str(metadata.get("source_title") or "").lower()
+    if "sec.gov/archives" in source_uri or "10-k" in source_title or "10-k" in source_uri:
+        return 4
+    if "data.sec.gov/api/xbrl/companyfacts" in source_uri or "structured_regulatory_data" in source_family:
+        return 3
+    if "sec.gov" in source_uri:
+        return 2
+    return 1
+
+
+def _numeric_sort_value(value: object) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _finance_fact_judge_summary(fact: FinanceFact) -> JsonObject:
     return {
         "fact_id": fact.fact_id,
@@ -14049,6 +14130,7 @@ def _finance_fact_judge_summary(fact: FinanceFact) -> JsonObject:
                 "accn",
                 "concept",
                 "filed",
+                "finance_metric_intent",
                 "form",
                 "label",
                 "line_item",

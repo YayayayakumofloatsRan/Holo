@@ -212,6 +212,45 @@ def test_phase90_http_fetch_provider_uses_budgeted_transport_cache(tmp_path) -> 
     assert len(transport.calls) == 1
 
 
+def test_phase90_budgeted_transport_cache_separates_different_byte_caps(tmp_path) -> None:
+    class CapAwareTransport:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def __call__(self, _url: str, _headers: dict[str, str], _timeout: int, max_bytes: int) -> HttpTransportResponse:
+            self.calls.append(max_bytes)
+            return HttpTransportResponse(status_code=200, body=f"body-cap-{max_bytes}".encode("utf-8"))
+
+    transport = CapAwareTransport()
+    budgeted = wrap_transport_with_budget(
+        transport,
+        cache_dir=tmp_path / "cache",
+        max_download_bytes=10_000,
+    )
+    small = HttpFetchProvider(
+        enabled=True,
+        allowed_hosts=["example.com"],
+        max_bytes=4,
+        transport=budgeted,
+    )
+    large = HttpFetchProvider(
+        enabled=True,
+        allowed_hosts=["example.com"],
+        max_bytes=32_000_000,
+        transport=budgeted,
+    )
+
+    first = small.fetch(_source("https://example.com/companyfacts.json"))
+    second = large.fetch(_source("https://example.com/companyfacts.json"))
+    third = large.fetch(_source("https://example.com/companyfacts.json"))
+
+    assert first.diagnostics["cache_hit"] is False
+    assert second.diagnostics["cache_hit"] is False
+    assert third.diagnostics["cache_hit"] is True
+    assert transport.calls == [4, 32_000_000]
+    assert second.body == "body-cap-32000000"
+
+
 def test_phase90_http_fetch_provider_blocks_after_download_byte_budget() -> None:
     transport = _Transport(response=HttpTransportResponse(status_code=200, body=b"0123456789"))
     budget = LiveFetchBudget(max_download_bytes=5)

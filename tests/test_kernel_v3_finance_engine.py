@@ -20,6 +20,8 @@ from kernel_v3.agent.runtime import (
     _finance_missing_fact_retrieval_payload,
     _finance_formula_preflight_plans,
     _can_synthesize_partial_retrieval,
+    _finance_fact_judge_summary,
+    _rank_finance_facts_for_model,
     _finance_capability_execute_clarification_as_retrieval,
     _finance_numeric_judge_accepts_answer,
     _planner_directive,
@@ -327,6 +329,67 @@ def test_finance_fact_ledger_preserves_specific_revenue_concepts() -> None:
     assert by_metric[("net revenues", 2024)].value == "53512000000"
     assert by_metric[("total revenues and other income", 2024)].value == "349585000000"
     assert by_metric[("sales and other operating revenues", 2024)].value == "193414000000"
+
+
+def test_finance_fact_context_ranks_metric_intent_competitors_for_model() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="generic-revenues",
+            entity="Chevron Corp",
+            ticker=None,
+            period="annual",
+            fiscal_year=2024,
+            metric="revenue",
+            value="202792000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-companyfacts",
+            evidence_ref="evidence-generic",
+            citation_ref="cite-generic",
+            metadata={
+                "concept": "Revenues",
+                "label": "Revenues",
+                "form": "10-K",
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000093410.json",
+                "target_document_binding_accepted": True,
+                "target_document_binding_score": 105,
+            },
+        ),
+        FinanceFact(
+            fact_id="sales-other-operating",
+            entity="Chevron Corp",
+            ticker=None,
+            period="annual",
+            fiscal_year=2024,
+            metric="sales and other operating revenues",
+            value="193414000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-companyfacts",
+            evidence_ref="evidence-specific",
+            citation_ref="cite-specific",
+            metadata={
+                "concept": "SalesAndOtherOperatingRevenue",
+                "label": "Sales and Other Operating Revenues",
+                "form": "10-K",
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000093410.json",
+                "target_document_binding_accepted": True,
+                "target_document_binding_score": 105,
+            },
+        ),
+    ]
+
+    ranked = _rank_finance_facts_for_model(
+        facts,
+        question="What was Chevron's total revenues for fiscal year 2024?",
+    )
+
+    assert [fact.fact_id for fact in ranked] == ["sales-other-operating", "generic-revenues"]
+    summary = _finance_fact_judge_summary(ranked[0])
+    intent = summary["metadata"]["finance_metric_intent"]
+    assert intent["active"] is True
+    assert intent["score"] > ranked[1].metadata["finance_metric_intent"]["score"]
+    assert "metric=sales and other operating revenues" in intent["matched_preferred"]
 
 
 def test_companyfacts_readable_text_prioritizes_target_year_missing_slots() -> None:
