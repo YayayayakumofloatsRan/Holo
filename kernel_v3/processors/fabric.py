@@ -308,9 +308,14 @@ class ProcessorFabric:
         text = _result_text(provider_result)
         raw_text = _bounded_processor_raw_text(text)
         parsed = parse_json_object(text, max_repair_attempts=self.max_repair_attempts)
-        schema_error = None if parsed.value is None else validate_json_schema(parsed.value, schema)
-        status = "ok" if parsed.value is not None and schema_error is None else "failed"
-        error = parsed.error if parsed.value is None else schema_error
+        parsed_value = (
+            _normalize_processor_json_for_schema(parsed.value, schema)
+            if isinstance(parsed.value, dict)
+            else parsed.value
+        )
+        schema_error = None if parsed_value is None else validate_json_schema(parsed_value, schema)
+        status = "ok" if parsed_value is not None and schema_error is None else "failed"
+        error = parsed.error if parsed_value is None else schema_error
         output: JsonObject = {
             "provider": route.provider,
             "model": provider_model,
@@ -320,8 +325,8 @@ class ProcessorFabric:
             "repaired": parsed.repaired,
             "repair_attempts": parsed.attempts,
         }
-        if parsed.value is not None and schema_error is None:
-            output["parsed"] = parsed.value
+        if parsed_value is not None and schema_error is None:
+            output["parsed"] = parsed_value
         result = ProcessorResult(
             result_id=provider_result.result_id,
             request_id=request.request_id,
@@ -345,7 +350,7 @@ class ProcessorFabric:
         return ProcessorOutcome(
             request=request,
             result=result,
-            parsed=parsed.value if status == "ok" else None,
+            parsed=parsed_value if status == "ok" else None,
             provider=route.provider,
             model=provider_model,
             task_type=task_type,
@@ -501,6 +506,52 @@ def validate_json_schema(value: JsonObject, schema: JsonSchema) -> str | None:
         if key in value and not _matches_type(value[key], expected):
             return f"invalid_field_type:{key}:{expected}"
     return None
+
+
+def _normalize_processor_json_for_schema(value: JsonObject, schema: JsonSchema) -> JsonObject:
+    if schema.name == "finance.numeric_judge":
+        normalized = dict(value)
+        if "reason_summary" not in normalized:
+            for alias in ("reason", "rationale", "explanation", "summary"):
+                alias_value = normalized.get(alias)
+                if isinstance(alias_value, str) and alias_value.strip():
+                    normalized["reason_summary"] = alias_value.strip()
+                    break
+            else:
+                normalized["reason_summary"] = "The model returned a numeric judgment without a dedicated reason_summary field."
+        decision = str(normalized.get("decision") or "").strip()
+        if "answer_addresses_question" not in normalized:
+            normalized["answer_addresses_question"] = decision not in {"continue_work", "fail_with_limitations"}
+        for key in (
+            "core_numeric_claims",
+            "non_core_numeric_claims",
+            "unsupported_core_values",
+            "missing_slots",
+            "candidate_supported_values",
+            "limitations",
+        ):
+            if key not in normalized or normalized.get(key) is None:
+                normalized[key] = []
+        if "repair_instruction" not in normalized or normalized.get("repair_instruction") is None:
+            normalized["repair_instruction"] = ""
+        if "requires_more_work" not in normalized:
+            normalized["requires_more_work"] = decision == "continue_work"
+        if "confidence" in normalized and not isinstance(normalized.get("confidence"), (int, float)):
+            try:
+                normalized["confidence"] = float(str(normalized.get("confidence")).strip())
+            except ValueError:
+                normalized.pop("confidence", None)
+        return normalized
+    if schema.name == "task.compile":
+        normalized = dict(value)
+        if "reason_summary" not in normalized:
+            for alias in ("reason", "rationale", "explanation", "summary"):
+                alias_value = normalized.get(alias)
+                if isinstance(alias_value, str) and alias_value.strip():
+                    normalized["reason_summary"] = alias_value.strip()
+                    break
+        return normalized
+    return value
 
 
 def _matches_type(value: object, expected: str) -> bool:

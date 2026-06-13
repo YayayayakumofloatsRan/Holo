@@ -618,6 +618,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
     research_mission = _json_object(diagnostics.get("research_mission"))
     host_situation = _json_object(diagnostics.get("host_situation"))
     finance_formula_traces = diagnostics.get("finance_formula_traces")
+    finance_fact_ledger = diagnostics.get("finance_fact_ledger")
     return {
         "report_id": report.report_id,
         "goal_id": report.goal_id,
@@ -665,6 +666,9 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             "finance_synthesis_directive": diagnostics.get("finance_synthesis_directive"),
             "finance_numeric_claim_policy": _json_object(diagnostics.get("finance_numeric_claim_policy")),
             "finance_formula_traces": _compact_list_for_provider(finance_formula_traces, limit=16),
+            "finance_fact_ledger": _compact_list_for_provider(finance_fact_ledger, limit=96),
+            "finance_fact_ledger_count": diagnostics.get("finance_fact_ledger_count"),
+            "claim_ledger_present": diagnostics.get("claim_ledger_present"),
         },
     }
 

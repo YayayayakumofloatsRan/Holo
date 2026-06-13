@@ -415,6 +415,8 @@ def test_financebench_import_modes_keep_gold_out_of_prompt(tmp_path: Path) -> No
     run_finance_benchmark(items=doc_items, runtime=doc_runtime)
     assert "Source URL: https://example.com/exampleco-10k.pdf" in doc_runtime.seen_prompts[0]
     assert "https://example.com/exampleco-10k.pdf" in doc_runtime.seen_prompts[0]
+    assert "This is an answerable public benchmark item" in doc_runtime.seen_prompts[0]
+    assert "continue by changing method" in doc_runtime.seen_prompts[0]
     assert "FinanceBench target document metadata follows" not in doc_runtime.seen_prompts[0]
     assert "The filing evidence says revenue" not in doc_runtime.seen_prompts[0]
     assert "Reference calculation" not in doc_runtime.seen_prompts[0]

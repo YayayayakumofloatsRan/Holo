@@ -715,7 +715,15 @@ def _financebench_prompt_context(
         return None
     lines: list[str] = []
     if mode == "doc_retrieval":
-        lines.append("FinanceBench target document metadata follows. Use it to acquire evidence; it is not answer evidence by itself.")
+        lines.append(
+            "FinanceBench target document metadata follows. Use it to acquire evidence; it is not answer evidence by itself."
+        )
+        lines.append(
+            "This benchmark item is designed to be answerable from the target document or its primary filing data. "
+            "If a first extraction, verifier, or synthesis attempt fails, continue with a different method rather than "
+            "returning a final failure report: fetch/read the filing, parse tables, extract structured facts, calculate "
+            "when needed, and answer only from supported facts or formula traces."
+        )
     elif mode == "oracle_evidence":
         lines.append("FinanceBench provided evidence follows. Use it as source evidence; do not treat the reference answer or justification as prompt context.")
     for label, value in (

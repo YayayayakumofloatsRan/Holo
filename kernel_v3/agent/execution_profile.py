@@ -55,8 +55,16 @@ def execution_profile(profile_id: str | None) -> ExecutionProfile:
 
 def execution_profile_runtime_metadata(profile: ExecutionProfile) -> JsonObject:
     composable_toolchain = _composable_toolchain_defaults(profile.profile_id)
+    llm_judgment_required = profile.profile_id == "finance-capability"
     return {
         "execution_profile": profile.to_dict(),
+        "llm_judgment": {
+            "semantic_decision_owner": "model",
+            "required": llm_judgment_required,
+            "host_role": "tool_interface_provenance_policy_budget_and_schema_validation",
+            "host_semantic_fallback": "blocked" if llm_judgment_required else "scaffold_only",
+            "principle": "LLM judges task decomposition, source relevance, slot coverage, transforms, and answer semantics; tools expose interfaces and host validates hard boundaries.",
+        },
         "agent_loop": {
             "max_steps": profile.max_agent_steps,
             "max_tool_calls": profile.max_agent_tool_calls,

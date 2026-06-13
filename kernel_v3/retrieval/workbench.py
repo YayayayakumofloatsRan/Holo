@@ -156,9 +156,15 @@ def run_retrieval_workbench(
         return RetrievalWorkbenchResult(
             status="failed",
             decision="continue",
-            reason_summary="retrieval workbench processor failed; host continues with deterministic verifier state",
+            reason_summary=(
+                "retrieval workbench LLM judge failed; host may continue acquisition, "
+                "but deterministic filters are not the semantic evidence judge"
+            ),
             diagnostics={
                 "reason": outcome.result.error or "invalid_workbench_output",
+                "semantic_decision_owner": "model",
+                "host_role": "tool_execution_provenance_policy_and_budget_validation",
+                "failure_code": "llm_retrieval_workbench_unavailable",
                 "provider": outcome.provider,
                 "model": outcome.model,
                 "packet": _packet_diagnostics(packet),

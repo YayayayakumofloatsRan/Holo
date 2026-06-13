@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import inspect
 import json
 import os
@@ -621,6 +622,14 @@ def main(argv: list[str] | None = None) -> int:
     behavior_graph_parser.add_argument("--output", default=None)
     behavior_graph_parser.add_argument("--max-nodes", type=int, default=800)
 
+    workflow_view = sub.add_parser("workflow-view")
+    workflow_view.add_argument("--task-id", default=None, help="Render a specific task id.")
+    workflow_view.add_argument("--thread-id", default=None, help="Render the latest task for a specific thread id.")
+    workflow_view.add_argument("--thread-prefix", default=None, help="Render the latest task whose thread id starts with this prefix.")
+    workflow_view.add_argument("--format", choices=["html", "json"], default="html")
+    workflow_view.add_argument("--output", default=None, help="Output file path. HTML is written to stdout when omitted.")
+    workflow_view.add_argument("--limit-events", type=int, default=240)
+
     bench_parser = sub.add_parser("bench")
     bench_sub = bench_parser.add_subparsers(dest="bench_command", required=True)
     finance_fetch = bench_sub.add_parser("finance-fetch")
@@ -821,6 +830,8 @@ def main(argv: list[str] | None = None) -> int:
             "semantic.intake",
             "planner.propose",
             "task.compile",
+            "retrieval.workbench",
+            "finance.numeric_judge",
             "evaluator.assess",
             "synthesizer.answer",
             "mission.assess",
@@ -844,6 +855,17 @@ def main(argv: list[str] | None = None) -> int:
     journal_sub.add_parser("tail")
 
     args = parser.parse_args(argv)
+    if args.command == "workflow-view":
+        payload = _workflow_view_command_from_path(args)
+        rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) if args.format == "json" else _render_workflow_view_html(payload)
+        if args.output:
+            path = Path(args.output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(rendered, encoding="utf-8")
+            print(str(path))
+        else:
+            print(rendered)
+        return 0 if payload.get("status") not in {"failed", "blocked", "error"} else 1
     if args.command == "bench" and getattr(args, "bench_command", None) == "finance-progress":
         payload = _finance_progress_command_from_path(args)
         raw_output = _render_finance_progress(payload) if getattr(args, "format", "text") == "text" else None
@@ -2428,6 +2450,332 @@ def _finance_progress_command_from_path(args) -> dict[str, object]:
     return _finance_progress_payload_from_records(args, task_id=task_id, records=records)
 
 
+def _workflow_view_command_from_path(args) -> dict[str, object]:
+    path = Path(getattr(args, "journal", default_journal_path()))
+    if not path.exists():
+        return {"status": "missing", "mode": "workflow_view", "reason": "journal_not_found", "journal": str(path)}
+    task_id = str(getattr(args, "task_id", "") or "").strip()
+    if not task_id:
+        task_id = _finance_progress_latest_task_id_from_path(
+            path,
+            thread_id=str(getattr(args, "thread_id", "") or "").strip() or None,
+            thread_prefix=str(getattr(args, "thread_prefix", "") or "").strip() or None,
+        )
+    if not task_id:
+        return {
+            "status": "missing",
+            "mode": "workflow_view",
+            "reason": "no_matching_task",
+            "journal": str(path),
+            "thread_id": getattr(args, "thread_id", None),
+            "thread_prefix": getattr(args, "thread_prefix", None),
+        }
+    records = _finance_progress_records_from_path(path, task_id=task_id)
+    if not records:
+        return {"status": "missing", "mode": "workflow_view", "reason": "unknown_task", "task_id": task_id, "journal": str(path)}
+    progress = _finance_progress_payload_from_records(args, task_id=task_id, records=records)
+    limit = max(1, int(getattr(args, "limit_events", 240) or 240))
+    packets = [_workflow_view_record_packet(record) for record in records[-limit:]]
+    groups: dict[str, int] = {}
+    for packet in packets:
+        group = str(packet.get("group") or "other")
+        groups[group] = groups.get(group, 0) + 1
+    return {
+        "status": "ok",
+        "mode": "workflow_view",
+        "schema": "holo.kernel_v3.workflow_view.v1",
+        "journal": str(path),
+        "task_id": task_id,
+        "run_id": progress.get("run_id"),
+        "thread_ids": progress.get("thread_ids"),
+        "record_count": len(records),
+        "shown_record_count": len(packets),
+        "current_stage": progress.get("current_stage"),
+        "stages": progress.get("stages"),
+        "counters": progress.get("counters"),
+        "diagnostics": progress.get("diagnostics"),
+        "open_processor": progress.get("open_processor"),
+        "latest_error": progress.get("latest_error"),
+        "packet_groups": dict(sorted(groups.items())),
+        "packets": packets,
+    }
+
+
+def _workflow_view_record_packet(record: LedgerRecord) -> JsonObject:
+    data = record.data if isinstance(record.data, dict) else {}
+    group = _workflow_view_group(record.kind, data)
+    packet: JsonObject = {
+        "record_id": record.record_id,
+        "recorded_at_ms": record.recorded_at_ms,
+        "kind": record.kind,
+        "group": group,
+        "run_id": record.run_id,
+        "step_id": record.step_id,
+        "schema": data.get("schema") if isinstance(data.get("schema"), str) else None,
+        "status": data.get("status") or data.get("decision") or data.get("route") or data.get("reason"),
+        "processor": data.get("task_type") or data.get("processor"),
+        "tool": data.get("name") or data.get("tool") or data.get("source"),
+        "summary": _workflow_view_summary(record.kind, data),
+        "state_delta": record.state_delta,
+        "artifact_refs": list(record.artifact_refs or []),
+        "data": _workflow_view_compact_data(record.kind, data),
+    }
+    return {key: value for key, value in packet.items() if value not in (None, [], {})}
+
+
+def _workflow_view_group(kind: str, data: JsonObject) -> str:
+    processor = str(data.get("task_type") or data.get("processor") or "")
+    if kind in {"processor_request", "processor_result"}:
+        return "llm"
+    if kind in {"compiled_task_program", "retrieval_workbench_decision", "finance_numeric_judge"} or processor in {
+        "task.compile",
+        "retrieval.workbench",
+        "finance.numeric_judge",
+    }:
+        return "llm_judgment"
+    if kind in {"action", "observation"} or kind.startswith("retrieval_") or kind.startswith("toolchain_"):
+        return "tool"
+    if kind in {"finance_fact_ledger", "claim_ledger", "slot_frame", "transform_plan"}:
+        return "substrate"
+    if kind in {"finance_numeric_verification", "verifier_gate_result", "synthesis_gate_result"}:
+        return "gate"
+    if kind in {"agent_final_answer", "agent_failure_report", "chat_agent_result", "finance_benchmark_item_result"}:
+        return "final"
+    return "state"
+
+
+def _workflow_view_summary(kind: str, data: JsonObject) -> str:
+    if kind in {"processor_request", "processor_result"}:
+        return " ".join(
+            item
+            for item in [
+                str(data.get("task_type") or data.get("processor") or "processor"),
+                str(data.get("status") or ""),
+                str(data.get("error") or ""),
+            ]
+            if item
+        )
+    if kind == "retrieval_workbench_decision":
+        return f"decision={data.get('decision') or '-'} missing={_compact_progress_list(data.get('missing_slots'))}"
+    if kind == "finance_numeric_judge":
+        return f"decision={data.get('decision') or data.get('status') or '-'} error={data.get('processor_error') or '-'}"
+    if kind == "slot_frame":
+        return f"task_type={data.get('task_type') or '-'} missing={_compact_progress_list(data.get('missing_slots'))}"
+    if kind == "transform_plan":
+        return f"method={data.get('method') or data.get('formula_name') or '-'} status={data.get('status') or '-'}"
+    if kind in {"finance_numeric_verification", "verifier_gate_result", "synthesis_gate_result"}:
+        diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
+        return f"status={data.get('status') or '-'} gate={data.get('gate_id') or diagnostics.get('gate_id') or '-'}"
+    if kind in {"agent_failure_report", "finance_benchmark_item_result"}:
+        return f"status={data.get('status') or '-'} reason={data.get('reason') or data.get('failure_reason') or '-'}"
+    if kind == "agent_final_answer":
+        return _workflow_preview(str(data.get("answer") or ""), 160)
+    return _workflow_preview(json.dumps(_workflow_view_compact_data(kind, data), ensure_ascii=False, sort_keys=True), 180)
+
+
+def _workflow_view_compact_data(kind: str, data: JsonObject) -> JsonObject:
+    keep = {
+        "schema",
+        "task_type",
+        "processor",
+        "provider",
+        "model",
+        "status",
+        "error",
+        "decision",
+        "reason",
+        "reason_summary",
+        "route",
+        "action_id",
+        "name",
+        "source",
+        "tool",
+        "query",
+        "queries",
+        "uri",
+        "title",
+        "citation_refs",
+        "used_evidence",
+        "missing_evidence",
+        "missing_slots",
+        "next_queries",
+        "next_source_families",
+        "next_document_targets",
+        "required_slots",
+        "filled_slots",
+        "method",
+        "status",
+        "issues",
+        "diagnostics",
+        "processor_status",
+        "processor_error",
+        "repair_instruction",
+        "requires_more_work",
+        "answer_addresses_question",
+        "core_numeric_claims",
+        "unsupported_core_values",
+        "non_core_numeric_claims",
+        "candidate_supported_values",
+    }
+    compact = {key: value for key, value in data.items() if key in keep and value not in (None, [], {})}
+    for key in ("answer", "text", "preview", "prompt"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            compact[key] = _workflow_preview(value, 1200)
+        elif isinstance(value, dict):
+            compact[key] = value
+    if kind in {"claim_ledger", "finance_fact_ledger"}:
+        items = data.get("claims") if isinstance(data.get("claims"), list) else data.get("facts")
+        if isinstance(items, list):
+            compact["item_count"] = len(items)
+            compact["items_preview"] = items[:12]
+    return compact
+
+
+def _render_workflow_view_html(payload: JsonObject) -> str:
+    title = f"Holo Workflow View - {payload.get('task_id') or payload.get('status')}"
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if payload.get("status") != "ok":
+        body = f"<pre>{html.escape(json.dumps(payload, ensure_ascii=False, indent=2))}</pre>"
+        return _workflow_view_html_shell(title, body, data)
+    stages = payload.get("stages") if isinstance(payload.get("stages"), list) else []
+    packets = payload.get("packets") if isinstance(payload.get("packets"), list) else []
+    counters = payload.get("counters") if isinstance(payload.get("counters"), dict) else {}
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    stage_html = "\n".join(_workflow_stage_card(stage) for stage in stages if isinstance(stage, dict))
+    packet_html = "\n".join(_workflow_packet_card(packet) for packet in packets if isinstance(packet, dict))
+    body = f"""
+<header>
+  <div>
+    <h1>Holo Workflow View</h1>
+    <p class="muted">task={html.escape(str(payload.get('task_id') or '-'))} run={html.escape(str(payload.get('run_id') or '-'))} records={payload.get('record_count')} shown={payload.get('shown_record_count')}</p>
+  </div>
+  <div class="status">{html.escape(str(payload.get('current_stage') or 'unknown'))}</div>
+</header>
+<section class="panel">
+  <h2>Topology</h2>
+  <div class="stages">{stage_html}</div>
+</section>
+<section class="grid">
+  <div class="panel"><h2>Counters</h2><pre>{html.escape(json.dumps(counters, ensure_ascii=False, indent=2))}</pre></div>
+  <div class="panel"><h2>Diagnostics</h2><pre>{html.escape(json.dumps(diagnostics, ensure_ascii=False, indent=2))}</pre></div>
+</section>
+<section class="panel">
+  <h2>Packet Timeline</h2>
+  <div class="toolbar">
+    <input id="filter" placeholder="filter packets by kind/group/status/text" />
+    <button data-filter="">All</button>
+    <button data-filter="llm">LLM</button>
+    <button data-filter="tool">Tools</button>
+    <button data-filter="substrate">Substrate</button>
+    <button data-filter="gate">Gates</button>
+    <button data-filter="final">Final</button>
+  </div>
+  <div id="packets">{packet_html}</div>
+</section>
+<script id="workflow-data" type="application/json">{html.escape(data)}</script>
+<script>
+const filter = document.getElementById('filter');
+const cards = Array.from(document.querySelectorAll('.packet'));
+function applyFilter(value) {{
+  const q = String(value || '').toLowerCase();
+  for (const card of cards) {{
+    card.style.display = card.dataset.search.includes(q) ? '' : 'none';
+  }}
+}}
+filter.addEventListener('input', () => applyFilter(filter.value));
+for (const btn of document.querySelectorAll('button[data-filter]')) {{
+  btn.addEventListener('click', () => {{ filter.value = btn.dataset.filter; applyFilter(filter.value); }});
+}}
+</script>
+"""
+    return _workflow_view_html_shell(title, body, data)
+
+
+def _workflow_view_html_shell(title: str, body: str, data: str) -> str:
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{html.escape(title)}</title>
+<style>
+:root {{ color-scheme: light; --bg:#f7f8fa; --fg:#1d2430; --muted:#667085; --line:#d9dee8; --panel:#ffffff; --llm:#3657d9; --tool:#0f766e; --sub:#7c3aed; --gate:#b45309; --final:#166534; --bad:#b42318; }}
+body {{ margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Arial, sans-serif; background:var(--bg); color:var(--fg); }}
+header {{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:22px 28px; border-bottom:1px solid var(--line); background:#fff; position:sticky; top:0; z-index:2; }}
+h1 {{ margin:0; font-size:24px; }} h2 {{ margin:0 0 12px; font-size:16px; }} .muted {{ color:var(--muted); margin:4px 0 0; }}
+.status {{ padding:8px 12px; border:1px solid var(--line); background:#f2f4f7; border-radius:6px; font-weight:600; }}
+.panel {{ margin:18px 28px; padding:16px; background:var(--panel); border:1px solid var(--line); border-radius:8px; }}
+.grid {{ display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:0; }}
+.stages {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:10px; }}
+.stage {{ border:1px solid var(--line); border-left:5px solid #98a2b3; padding:10px; border-radius:8px; min-height:78px; background:#fcfcfd; }}
+.stage.done {{ border-left-color:var(--final); }} .stage.current {{ border-left-color:var(--llm); background:#eef4ff; }} .stage.pending {{ opacity:.72; }}
+.stage .label {{ font-weight:700; }} .stage .small {{ font-size:12px; color:var(--muted); margin-top:5px; overflow-wrap:anywhere; }}
+.toolbar {{ display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }} input {{ min-width:320px; flex:1; padding:10px; border:1px solid var(--line); border-radius:6px; }} button {{ padding:9px 12px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; }}
+.packet {{ border:1px solid var(--line); border-left:5px solid #98a2b3; border-radius:8px; padding:12px; margin:10px 0; background:#fff; }}
+.packet.llm,.packet.llm_judgment {{ border-left-color:var(--llm); }} .packet.tool {{ border-left-color:var(--tool); }} .packet.substrate {{ border-left-color:var(--sub); }} .packet.gate {{ border-left-color:var(--gate); }} .packet.final {{ border-left-color:var(--final); }}
+.packet.failed {{ background:#fff7f6; border-left-color:var(--bad); }}
+.packet-head {{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; }} .packet-title {{ font-weight:700; overflow-wrap:anywhere; }} .badge {{ font-size:12px; color:#fff; background:#475467; border-radius:999px; padding:3px 8px; }}
+.summary {{ margin:8px 0; color:#344054; overflow-wrap:anywhere; }} details {{ margin-top:8px; }} pre {{ white-space:pre-wrap; overflow-wrap:anywhere; background:#f8fafc; border:1px solid #eaecf0; padding:10px; border-radius:6px; max-height:420px; overflow:auto; }}
+@media (max-width: 760px) {{ .grid {{ grid-template-columns:1fr; }} header {{ position:static; flex-direction:column; align-items:flex-start; }} input {{ min-width:0; }} }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>
+"""
+
+
+def _workflow_stage_card(stage: JsonObject) -> str:
+    status = html.escape(str(stage.get("status") or "pending"))
+    latest = stage.get("latest") if isinstance(stage.get("latest"), dict) else {}
+    latest_text = " ".join(
+        str(item)
+        for item in [
+            latest.get("kind"),
+            latest.get("status"),
+            latest.get("processor"),
+            latest.get("error"),
+        ]
+        if item
+    )
+    return (
+        f'<div class="stage {status}">'
+        f'<div class="label">{html.escape(str(stage.get("label") or stage.get("stage") or "-"))}</div>'
+        f'<div class="small">status={status} count={html.escape(str(stage.get("count") or 0))}</div>'
+        f'<div class="small">{html.escape(_workflow_preview(latest_text, 180))}</div>'
+        "</div>"
+    )
+
+
+def _workflow_preview(value: object, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
+def _workflow_packet_card(packet: JsonObject) -> str:
+    group = str(packet.get("group") or "state")
+    status = str(packet.get("status") or "")
+    failed = " failed" if status.lower() in {"failed", "error", "blocked"} or packet.get("data", {}).get("error") else ""
+    search = html.escape(json.dumps(packet, ensure_ascii=False, sort_keys=True).lower())
+    title = f"{packet.get('record_id')} | {packet.get('kind')}"
+    details = json.dumps(packet.get("data") or {}, ensure_ascii=False, sort_keys=True, indent=2)
+    return f"""
+<article class="packet {html.escape(group)}{failed}" data-search="{search}">
+  <div class="packet-head">
+    <div class="packet-title">{html.escape(title)}</div>
+    <span class="badge">{html.escape(group)}</span>
+  </div>
+  <div class="summary">{html.escape(str(packet.get('summary') or ''))}</div>
+  <div class="muted">schema={html.escape(str(packet.get('schema') or '-'))} status={html.escape(status or '-')} processor={html.escape(str(packet.get('processor') or '-'))} tool={html.escape(str(packet.get('tool') or '-'))}</div>
+  <details><summary>packet JSON</summary><pre>{html.escape(details)}</pre></details>
+</article>
+"""
+
+
 def _finance_progress_latest_task_id_from_path(
     path: Path,
     *,
@@ -2472,8 +2820,34 @@ def _finance_progress_records_from_path(path: Path, *, task_id: str) -> list[Led
                 continue
             if payload.get("task_id") != task_id:
                 continue
-            records.append(LedgerRecord.from_dict(payload))
+            record = _ledger_record_from_loose_payload(payload)
+            if record is not None:
+                records.append(record)
     return records
+
+
+def _ledger_record_from_loose_payload(payload: JsonObject) -> LedgerRecord | None:
+    required = {
+        "schema_version",
+        "record_id",
+        "task_id",
+        "run_id",
+        "step_id",
+        "kind",
+        "data",
+        "recorded_at_ms",
+        "event_ref",
+        "action_ref",
+        "observation_ref",
+        "feedback_ref",
+        "state_delta",
+        "artifact_refs",
+        "payload_hash",
+    }
+    if not required.issubset(payload):
+        return None
+    filtered = {key: payload.get(key) for key in required}
+    return LedgerRecord.from_dict(filtered)
 
 
 def _finance_progress_payload_from_records(args, *, task_id: str, records: list[LedgerRecord]) -> dict[str, object]:

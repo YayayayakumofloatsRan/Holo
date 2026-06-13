@@ -107,6 +107,26 @@ TASK_COMPILE_SCHEMA = JsonSchema(
     },
 )
 
+FINANCE_NUMERIC_JUDGE_SCHEMA = JsonSchema(
+    name="finance.numeric_judge",
+    required={
+        "decision": "str",
+        "reason_summary": "str",
+        "answer_addresses_question": "bool",
+        "core_numeric_claims": "list",
+        "non_core_numeric_claims": "list",
+        "unsupported_core_values": "list",
+        "repair_instruction": "str",
+        "requires_more_work": "bool",
+    },
+    optional={
+        "missing_slots": "list",
+        "candidate_supported_values": "list",
+        "limitations": "list",
+        "confidence": "number",
+    },
+)
+
 SYNTHESIZER_SCHEMA = JsonSchema(
     name="synthesizer.answer",
     required={

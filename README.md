@@ -165,6 +165,28 @@ diversification. Retrieval reports and finance benchmark metrics expose
 workbench decisions, semantic missing slots, requested rescues, actual rescues,
 blocked rescues, and next moves so live runs can distinguish "search failed"
 from "document/evidence judgment found a semantic gap."
+Workbench and judge packets are strict interfaces, not free-form advice. Each
+LLM-owned judgment must fit a schema, gets journaled as a packet, and is then
+validated by host provenance / policy / citation checks. The same ownership
+split now applies to finance answer validation. When deterministic numeric
+support checks flag unsupported numbers, semantic judgment moves to
+`finance.numeric_judge`: the model classifies core numeric claims, non-core
+numeric noise, missing slots, supported candidate values, whether more tool work
+is required, and the exact synthesis repair instruction. The host numeric
+verifier remains a hard citation/calculator/provenance check, but its diagnostics
+are advisory for semantic judgment rather than the final answer arbiter. If the
+judge packet cannot run because the provider is unavailable or returns invalid
+JSON, Holo journals a `synthesis_gate_result` with
+`gate_id=llm_semantic_numeric_judge_unavailable_v1`; traces therefore show
+"LLM semantic verifier unavailable" instead of hiding that state behind a generic
+`unsupported_answer_number` failure.
+`finance-capability` treats that state as blocking: if `task.compile`,
+`finance.numeric_judge`, or model synthesis cannot provide the required
+semantic judgment, the host records the missing model-owned packet and returns a
+failure/next-action instead of authoring a semantic final answer from rules.
+`finance-fact-fast` still keeps conservative host fallback answers for cheap
+regression and smoke runs, but those fallbacks are explicitly not the capability
+lane.
 The current
 retrieval loop counts actual tool observations rather than payload-declared
 fetch budgets, model-visible context compacts large mission/retrieval/runtime
@@ -1513,6 +1535,10 @@ preferred Codex-style temporary parser path: the model supplies a Python script
 and expected output shape, the host writes it under `.holo_toolchain/scripts`,
 runs it with bounded timeout, artifacts the script/output, and journals the
 step. This keeps the workflow flexible without making shell output sovereign.
+In this profile, semantic fallback is blocked: host scaffolds may expose tool
+interfaces, provenance, budgets, and schema constraints, but cannot replace the
+LLM's task decomposition, source/evidence relevance judgment, slot/transform
+selection, numeric semantic repair, or final synthesis decision.
 
 The execution program itself is now model-first in the finance fast lane.
 `task.compile` is a structured processor packet that asks the LLM to produce
@@ -1526,6 +1552,11 @@ fallback and schema/provenance boundary, not the semantic owner. This shifts the
 core judgment of "what work program should solve this task" to the LLM while the
 host continues to validate tool permissions, citations, source authority,
 numeric support, synthesis gates, and budgets.
+For `finance-capability`, the same compiler is strict: if the LLM compiler is
+unavailable or returns invalid JSON, runtime journals a
+`task_compile_model_unavailable` program with the missing slot
+`llm_task_compile_judgment` instead of letting deterministic formulas or source
+rules stand in as semantic judgment.
 
 The planner binding path also preserves model-selected composable tools. A
 Retrieval Workbench `continue` decision still pulls premature `respond` actions
@@ -1838,6 +1869,14 @@ regression set, workflow-rescore is the stricter trace-oriented score, and
 public27 is an ungraded external generalization health check. The tracked
 GitHub-facing summary is
 [`docs/KERNEL_V3_FINANCE_WORKFLOW_RC_2026-06-11.md`](docs/KERNEL_V3_FINANCE_WORKFLOW_RC_2026-06-11.md).
+The 2026-06-13 capability-first live iteration is tracked in
+[`docs/KERNEL_V3_LIVE_ITERATION_2026-06-13.md`](docs/KERNEL_V3_LIVE_ITERATION_2026-06-13.md).
+That note records the current LLM-owned judgment pivot, compact LLM synthesis
+rescue, high-parallel FAB dev10 and FinanceBench doc-retrieval live results,
+and the remaining document/table grounding and numeric-selection gaps. The
+FinanceBench doc-retrieval live10 slice is still not solved, but it now exposes
+claim/slot/transform and synthesis-gate traces instead of failing as an opaque
+retrieval loop.
 
 The next public27 work is now deliberately narrow. Generic source-grounded
 retrieval finalization writes a domain-neutral `ClaimLedger`, `SlotFrame`, and
@@ -1911,6 +1950,7 @@ holo-v3 behavior-graph <task_id> --format json
 holo-v3 behavior-graph <task_id> --format dot --output graph.dot
 holo-v3 bench finance-graph --results artifacts/finance_bench_results.jsonl --format dot --output finance_bench.dot
 holo-v3 bench finance-report --results artifacts/finance_bench_results.jsonl --output finance_bench_report.md
+holo-v3 workflow-view --thread-prefix financebench-doc-item3 --output .state/kernel_v3/visuals/item3.html
 ```
 
 The task graph is journal-derived and links model requests/results, actions,
@@ -1921,6 +1961,14 @@ coverage, token use, retrieval runs, fetches, repetition, and answer length. Bot
 views store previews, refs, hashes, and diagnostics rather than raw fetched
 bodies. The benchmark report renders the same result file into Markdown, HTML,
 or JSON for project reports and review meetings.
+`workflow-view` is the presentation/debugging view for a single run. It scans the
+journal JSONL directly, so it works on WSL thread-local journals while a run is
+in progress, and renders a standalone HTML page that Windows can open in a
+browser. The page shows stage topology, packet timeline, LLM processor packets,
+model-owned workbench/judge decisions, tool and retrieval events, claim/slot/
+transform substrate records, verifier/synthesis gates, final/failure state, and
+the compact JSON behind each packet. This is the intended demo surface for
+explaining the internal workflow without exposing hidden chain-of-thought.
 
 See `docs/KERNEL_V3_FINANCE_BENCHMARK_TRACK.md` for the scoring schema and
 planned Finance Agent Benchmark / FinAgent / SECQUE / FinanceQA path.

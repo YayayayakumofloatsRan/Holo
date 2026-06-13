@@ -61,7 +61,15 @@ from kernel_v3.memory import MEMORY_RECALL_TOOL_NAME, MemoryPipeline, MemoryStor
 from kernel_v3.mission.thread_rag import ThreadWorkingMemoryProvider
 from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
-from kernel_v3.processors import FakeJsonProvider, ModelEvaluator, ModelPlanner, ProcessorFabric, ProcessorRouter, Synthesizer
+from kernel_v3.processors import (
+    FINANCE_NUMERIC_JUDGE_SCHEMA,
+    FakeJsonProvider,
+    ModelEvaluator,
+    ModelPlanner,
+    ProcessorFabric,
+    ProcessorRouter,
+    Synthesizer,
+)
 from kernel_v3.research import (
     ACADEMIC_RESEARCH_PROFILE_ID,
     FINANCE_FUNDAMENTALS_PROFILE_ID,
@@ -683,6 +691,7 @@ class AgentRuntime:
                 step_id="task-compile-preflight",
                 context_id="ctx-task-compile-" + _short_hash(question),
                 processor_budget=_processor_budget_metadata(recipe),
+                llm_judgment_required=_llm_semantic_judgment_required(recipe),
             )
         except Exception:
             return recipe
@@ -972,9 +981,35 @@ class AgentRuntime:
             synthesizer_mode=synthesizer_mode,
             recipe=recipe,
         )
+        strict_llm_judgment = _llm_semantic_judgment_required(recipe)
         if synthesized.status != "ok" or synthesized.answer is None:
+            if strict_llm_judgment:
+                rescued_final = self._attempt_compact_llm_finance_synthesis_rescue(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    report=report,
+                    evidence=evidence,
+                    citations=citations,
+                    synthesizer_mode=synthesizer_mode,
+                    synthesis_error=synthesized.error or "synthesis_failed",
+                    attempt="initial_synthesis_failed_compact_rescue",
+                )
+                if rescued_final is not None:
+                    return rescued_final, None
+                return None, self._failure(
+                    task_id,
+                    run_id,
+                    synthesized.error or "llm_synthesis_failed",
+                    missing_evidence=[
+                        "llm_synthesizer_answer",
+                        "model_owned_final_semantic_judgment",
+                    ],
+                    next_action="retry_model_synthesis_or_change_model_provider",
+                    recipe=recipe,
+                )
             fallback_final = None
-            if _finance_numeric_verifier_required(recipe) and evidence and citations:
+            if not strict_llm_judgment and _finance_numeric_verifier_required(recipe) and evidence and citations:
                 fallback_final = _finance_retrieval_fallback_final(
                     journal=self.journal,
                     task_id=task_id,
@@ -1026,7 +1061,19 @@ class AgentRuntime:
                             final = self._append_final(formula_only_final)
                             self._maybe_propose_research_memory(final, recipe=recipe)
                             return final, None
-                    missing = _finance_numeric_missing_evidence(verification)
+                    llm_repaired_final = self._attempt_llm_finance_numeric_repair(
+                        fallback_final,
+                        verification,
+                        recipe=recipe,
+                        report=report,
+                        evidence=evidence,
+                        citations=citations,
+                        synthesizer_mode=synthesizer_mode,
+                        attempt="synthesis_failed_fallback_verifier_failed",
+                    )
+                    if llm_repaired_final is not None:
+                        return llm_repaired_final, None
+                    missing = _finance_numeric_failure_missing_evidence(self.journal, task_id, run_id, verification)
                     return None, self._failure(
                         task_id,
                         run_id,
@@ -1122,7 +1169,19 @@ class AgentRuntime:
                         },
                     )
                     if verification.status == "failed":
-                        missing = _finance_numeric_missing_evidence(verification)
+                        llm_repaired_final = self._attempt_llm_finance_numeric_repair(
+                            final,
+                            verification,
+                            recipe=recipe,
+                            report=report,
+                            evidence=evidence,
+                            citations=citations,
+                            synthesizer_mode=synthesizer_mode,
+                            attempt="limited_answer_verifier_failed",
+                        )
+                        if llm_repaired_final is not None:
+                            return llm_repaired_final, None
+                        missing = _finance_numeric_failure_missing_evidence(self.journal, task_id, run_id, verification)
                         return None, self._failure(
                             task_id,
                             run_id,
@@ -1135,7 +1194,7 @@ class AgentRuntime:
                 self._maybe_propose_research_memory(final, recipe=recipe)
                 return final, None
             fallback_final = None
-            if _finance_numeric_verifier_required(recipe) and evidence and citations:
+            if not strict_llm_judgment and _finance_numeric_verifier_required(recipe) and evidence and citations:
                 fallback_final = _finance_retrieval_fallback_final(
                     journal=self.journal,
                     task_id=task_id,
@@ -1171,6 +1230,20 @@ class AgentRuntime:
                     final = self._append_final(fallback_final)
                     self._maybe_propose_research_memory(final, recipe=recipe)
                     return final, None
+            if strict_llm_judgment:
+                rescued_final = self._attempt_compact_llm_finance_synthesis_rescue(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    report=report,
+                    evidence=evidence,
+                    citations=citations,
+                    synthesizer_mode=synthesizer_mode,
+                    synthesis_error="final_answer_quality_insufficient:" + ",".join(quality_gaps[:8]),
+                    attempt="quality_gap_compact_rescue",
+                )
+                if rescued_final is not None:
+                    return rescued_final, None
             return None, self._failure(
                 task_id,
                 run_id,
@@ -1200,16 +1273,30 @@ class AgentRuntime:
                 },
             )
             if verification.status == "failed":
-                fallback_final = _finance_retrieval_fallback_final(
-                    journal=self.journal,
-                    task_id=task_id,
-                    run_id=run_id,
+                llm_repaired_final = self._attempt_llm_finance_numeric_repair(
+                    final,
+                    verification,
                     recipe=recipe,
+                    report=report,
                     evidence=evidence,
                     citations=citations,
-                    synthesis_error="finance_numeric_verification_failed",
-                    require_formula_trace=False,
+                    synthesizer_mode=synthesizer_mode,
+                    attempt="initial_final_answer_verifier_failed",
                 )
+                if llm_repaired_final is not None:
+                    return llm_repaired_final, None
+                fallback_final = None
+                if not strict_llm_judgment:
+                    fallback_final = _finance_retrieval_fallback_final(
+                        journal=self.journal,
+                        task_id=task_id,
+                        run_id=run_id,
+                        recipe=recipe,
+                        evidence=evidence,
+                        citations=citations,
+                        synthesis_error="finance_numeric_verification_failed",
+                        require_formula_trace=False,
+                    )
                 if fallback_final is not None:
                     fallback_verification = self._append_finance_numeric_verification(
                         fallback_final,
@@ -1269,7 +1356,19 @@ class AgentRuntime:
                             final = self._append_final(formula_only_final)
                             self._maybe_propose_research_memory(final, recipe=recipe)
                             return final, None
-                missing = _finance_numeric_missing_evidence(verification)
+                llm_repaired_final = self._attempt_llm_finance_numeric_repair(
+                    final,
+                    verification,
+                    recipe=recipe,
+                    report=report,
+                    evidence=evidence,
+                    citations=citations,
+                    synthesizer_mode=synthesizer_mode,
+                    attempt="final_answer_verifier_failed",
+                )
+                if llm_repaired_final is not None:
+                    return llm_repaired_final, None
+                missing = _finance_numeric_failure_missing_evidence(self.journal, task_id, run_id, verification)
                 return None, self._failure(
                     task_id,
                     run_id,
@@ -1549,6 +1648,108 @@ class AgentRuntime:
             processor_budget=_processor_budget_metadata(recipe),
         )
 
+    def _attempt_compact_llm_finance_synthesis_rescue(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe,
+        report: RetrievalReport,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+        synthesizer_mode: str,
+        synthesis_error: str,
+        attempt: str,
+    ) -> FinalAnswer | None:
+        if synthesizer_mode != "model" or not _finance_numeric_verifier_required(recipe):
+            return None
+        if not evidence or not citations:
+            return None
+        rescue_report, rescue_evidence, rescue_citations = _compact_finance_synthesis_rescue_packet(
+            self.journal,
+            task_id=task_id,
+            run_id=run_id,
+            recipe=recipe,
+            report=report,
+            evidence=evidence,
+            citations=citations,
+            synthesis_error=synthesis_error,
+        )
+        rescued = self._synthesize(
+            task_id,
+            run_id,
+            report=rescue_report,
+            evidence=rescue_evidence,
+            citations=rescue_citations,
+            synthesizer_mode=synthesizer_mode,
+            recipe=recipe,
+            retry_instruction=(
+                "Compact LLM rescue synthesis. The previous synthesis failed or produced invalid JSON. "
+                "Answer the actual task directly from the provided compact ClaimLedger, FormulaTrace, evidence, and citations. "
+                "Do not output a failure report when the provided facts support a partial or complete answer. "
+                "If a required value is missing, state the supported answer and label the missing value as a limitation. "
+                "Keep every material numeric claim backed by provided facts/formula traces or label it as an explicit assumption."
+            ),
+        )
+        if rescued.status != "ok" or rescued.answer is None:
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="compact_llm_synthesis_rescue",
+                data=redact_journal_data(
+                    {
+                        "schema": "holo.kernel_v3.compact_llm_synthesis_rescue.v1",
+                        "status": "failed",
+                        "attempt": attempt,
+                        "synthesis_error": synthesis_error,
+                        "rescue_error": rescued.error,
+                        "evidence_count": len(rescue_evidence),
+                        "citation_count": len(rescue_citations),
+                    }
+                ),
+                state_delta={"compact_llm_synthesis_rescue": "failed"},
+            )
+            return None
+        final = _agent_final_from_processor(rescued, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))
+        verification = self._append_finance_numeric_verification(
+            final,
+            recipe=recipe,
+            evidence=evidence,
+            citations=citations,
+        )
+        self._append_synthesis_gate_result(
+            final,
+            recipe=recipe,
+            status="passed" if verification.status != "failed" else "failed",
+            issues=list(verification.issues),
+            diagnostics={
+                "gate_id": "compact_llm_synthesis_rescue_v1",
+                "source": "model_compact_rescue_synthesis",
+                "attempt": attempt,
+                "initial_synthesis_error": synthesis_error,
+                "verifier_status": verification.status,
+                "answer_numeric_support_rate": _finance_answer_numeric_support_rate(verification),
+                "policy": "llm_writes_answer_from_compact_claims_formula_traces_and_citations",
+            },
+        )
+        if verification.status == "failed":
+            repaired = self._attempt_llm_finance_numeric_repair(
+                final,
+                verification,
+                recipe=recipe,
+                report=rescue_report,
+                evidence=evidence,
+                citations=citations,
+                synthesizer_mode=synthesizer_mode,
+                attempt=f"{attempt}_numeric_judge_repair",
+            )
+            if repaired is not None:
+                return repaired
+        final = self._append_final(final)
+        self._maybe_propose_research_memory(final, recipe=recipe)
+        return final
+
     def _semantic_intake(
         self,
         goal: str,
@@ -1800,6 +2001,7 @@ class AgentRuntime:
             purpose="verification",
             question=_root_goal_from_recipe(recipe),
             target_binding=_target_document_binding_from_recipe(recipe),
+            recipe=recipe,
         )
         trace_refs = _trace_refs(self.journal, answer.task_id)
         formula_traces = _calculator_formula_traces(self.journal, task_id=answer.task_id, run_id=answer.run_id)
@@ -1853,6 +2055,213 @@ class AgentRuntime:
         )
         return verification
 
+    def _attempt_llm_finance_numeric_repair(
+        self,
+        answer: FinalAnswer,
+        verification,
+        *,
+        recipe: TaskRecipe,
+        report: RetrievalReport,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+        synthesizer_mode: str,
+        attempt: str,
+    ) -> FinalAnswer | None:
+        if synthesizer_mode != "model" or self.processor_fabric is None:
+            return None
+        judge = self._run_finance_numeric_judge(
+            answer,
+            verification,
+            recipe=recipe,
+            report=report,
+            evidence=evidence,
+            citations=citations,
+            attempt=attempt,
+        )
+        if not judge:
+            latest_judge = _latest_finance_numeric_judge_data(self.journal, answer.task_id, answer.run_id)
+            self._append_synthesis_gate_result(
+                answer,
+                recipe=recipe,
+                status="failed",
+                issues=[
+                    *list(getattr(verification, "issues", []) or [])[:16],
+                    {
+                        "code": "llm_numeric_judge_unavailable",
+                        "message": str(latest_judge.get("processor_error") or "finance.numeric_judge did not return a valid semantic decision"),
+                    },
+                ],
+                diagnostics={
+                    "gate_id": "llm_semantic_numeric_judge_unavailable_v1",
+                    "source": "finance_numeric_judge",
+                    "attempt": attempt,
+                    "judge_status": latest_judge.get("status") or "missing",
+                    "processor_status": latest_judge.get("processor_status"),
+                    "processor_error": latest_judge.get("processor_error"),
+                    "verifier_status": getattr(verification, "status", None),
+                    "answer_numeric_support_rate": _finance_answer_numeric_support_rate(verification),
+                    "policy": "semantic numeric judgment is model-owned; host verifier diagnostics are not final semantic judgment",
+                },
+            )
+            return None
+        repair_instruction = _finance_numeric_judge_repair_instruction(judge, verification=verification, recipe=recipe)
+        if not repair_instruction:
+            self._append_synthesis_gate_result(
+                answer,
+                recipe=recipe,
+                status="failed",
+                issues=[
+                    *list(getattr(verification, "issues", []) or [])[:16],
+                    {
+                        "code": "llm_numeric_judge_no_repair_instruction",
+                        "message": "finance.numeric_judge returned a semantic decision but no actionable repair instruction",
+                    },
+                ],
+                diagnostics={
+                    "gate_id": "llm_semantic_numeric_judge_no_repair_v1",
+                    "source": "finance_numeric_judge",
+                    "attempt": attempt,
+                    "judge_decision": judge.get("decision"),
+                    "judge_requires_more_work": judge.get("requires_more_work"),
+                    "verifier_status": getattr(verification, "status", None),
+                    "answer_numeric_support_rate": _finance_answer_numeric_support_rate(verification),
+                    "policy": "semantic numeric judgment is model-owned; host requires actionable repair or continued-work instruction",
+                },
+            )
+            return None
+        repaired = self._synthesize(
+            answer.task_id,
+            answer.run_id,
+            report=report,
+            evidence=evidence,
+            citations=citations,
+            synthesizer_mode=synthesizer_mode,
+            recipe=recipe,
+            retry_instruction=repair_instruction,
+        )
+        if repaired.status != "ok" or repaired.answer is None:
+            self.journal.append(
+                task_id=answer.task_id,
+                run_id=answer.run_id,
+                step_id=None,
+                kind="finance_numeric_judge_repair",
+                data=redact_journal_data(
+                    {
+                        "schema": "holo.kernel_v3.finance_numeric_judge_repair.v1",
+                        "status": "failed",
+                        "attempt": attempt,
+                        "reason": repaired.error or "synthesis_failed",
+                        "judge": judge,
+                    }
+                ),
+                state_delta={"finance_numeric_judge_repair": "failed"},
+            )
+            return None
+        repaired_final = _agent_final_from_processor(
+            repaired,
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            trace_refs=_trace_refs(self.journal, answer.task_id),
+        )
+        repaired_verification = self._append_finance_numeric_verification(
+            repaired_final,
+            recipe=recipe,
+            evidence=evidence,
+            citations=citations,
+        )
+        self._append_synthesis_gate_result(
+            repaired_final,
+            recipe=recipe,
+            status="passed" if repaired_verification.status != "failed" else "failed",
+            issues=list(repaired_verification.issues),
+            diagnostics={
+                "gate_id": "llm_semantic_numeric_judge_v1",
+                "source": "finance_numeric_judge",
+                "attempt": attempt,
+                "judge_decision": judge.get("decision"),
+                "judge_requires_more_work": judge.get("requires_more_work"),
+                "verifier_status": repaired_verification.status,
+                "answer_numeric_support_rate": _finance_answer_numeric_support_rate(repaired_verification),
+                "policy": "llm_judges_semantic_answer_and_core_numbers_host_verifies_provenance",
+            },
+        )
+        if repaired_verification.status == "failed":
+            return None
+        final = self._append_final(repaired_final)
+        self._maybe_propose_research_memory(final, recipe=recipe)
+        return final
+
+    def _run_finance_numeric_judge(
+        self,
+        answer: FinalAnswer,
+        verification,
+        *,
+        recipe: TaskRecipe,
+        report: RetrievalReport,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+        attempt: str,
+    ) -> JsonObject | None:
+        if self.processor_fabric is None:
+            return None
+        question = _root_goal_from_recipe(recipe)
+        facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+        binding = target_document_binding_from_metadata(_target_document_binding_from_recipe(recipe), question=question)
+        facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+        formula_traces = _calculator_formula_traces(self.journal, task_id=answer.task_id, run_id=answer.run_id)
+        outcome = self.processor_fabric.run_json(
+            task_type="finance.numeric_judge",
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            context_id=f"ctx-{answer.task_id}-{answer.run_id}-finance-numeric-judge-{attempt}",
+            prompt=_finance_numeric_judge_prompt(
+                question=question,
+                answer=answer,
+                verification=verification,
+                report=report,
+                facts=facts,
+                formula_traces=formula_traces,
+                evidence=evidence,
+                citations=citations,
+                attempt=attempt,
+            ),
+            schema=FINANCE_NUMERIC_JUDGE_SCHEMA,
+            timeout_seconds=120,
+            parameters={
+                "adapter": "FinanceNumericJudge",
+                "processor_budget": _processor_budget_metadata(recipe),
+                "semantic_decision_owner": "model",
+                "host_role": "provenance_and_safety_validation_only",
+            },
+        )
+        parsed = outcome.parsed if isinstance(outcome.parsed, dict) else None
+        self.journal.append(
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            step_id=None,
+            kind="finance_numeric_judge",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.finance_numeric_judge.v1",
+                    "status": "ok" if parsed else "failed",
+                    "attempt": attempt,
+                    "processor_status": outcome.result.status,
+                    "processor_error": outcome.result.error,
+                    "decision": parsed.get("decision") if parsed else None,
+                    "reason_summary": parsed.get("reason_summary") if parsed else None,
+                    "answer_addresses_question": parsed.get("answer_addresses_question") if parsed else None,
+                    "requires_more_work": parsed.get("requires_more_work") if parsed else None,
+                    "core_numeric_claims": parsed.get("core_numeric_claims") if parsed else [],
+                    "non_core_numeric_claims": parsed.get("non_core_numeric_claims") if parsed else [],
+                    "unsupported_core_values": parsed.get("unsupported_core_values") if parsed else [],
+                    "missing_slots": parsed.get("missing_slots") if parsed else [],
+                    "repair_instruction": parsed.get("repair_instruction") if parsed else "",
+                }
+            ),
+            state_delta={"finance_numeric_judge": parsed.get("decision") if parsed else "failed"},
+        )
+        return parsed
+
     def _run_finance_numeric_preflight(
         self,
         task_id: str,
@@ -1870,6 +2279,7 @@ class AgentRuntime:
             purpose="preflight",
             question=_root_goal_from_recipe(recipe),
             target_binding=_target_document_binding_from_recipe(recipe),
+            recipe=recipe,
         )
         if evidence and citations and _source_grounded_trace_required(recipe):
             self._append_source_grounded_workflow_trace(
@@ -2107,6 +2517,7 @@ class AgentRuntime:
         purpose: str,
         question: str = "",
         target_binding: JsonObject | None = None,
+        recipe: TaskRecipe | None = None,
     ):
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
         binding = target_document_binding_from_metadata(target_binding, question=question)
@@ -2151,7 +2562,19 @@ class AgentRuntime:
         )
         if question:
             plan = plan_finance_formula(question=question, facts=facts, existing_traces=[])
-            compiled = compile_finance_task_program(question=question, facts=facts, target_binding=binding, plan=plan)
+            compiled = compile_finance_task_program_model_first(
+                question=question,
+                facts=facts,
+                target_binding=binding,
+                plan=plan,
+                processor_fabric=self.processor_fabric,
+                task_id=task_id,
+                run_id=run_id,
+                step_id="finance-fact-ledger-task-compile",
+                context_id=f"ctx-{task_id}-{run_id}-finance-fact-ledger-task-compile",
+                processor_budget=_processor_budget_metadata(recipe) if recipe is not None else None,
+                llm_judgment_required=_llm_semantic_judgment_required(recipe) if recipe is not None else False,
+            )
             self.journal.append(
                 task_id=task_id,
                 run_id=run_id,
@@ -2161,7 +2584,9 @@ class AgentRuntime:
                     {
                         **compiled.to_dict(),
                         "schema": "holo.kernel_v3.compiled_task_program.v1",
-                        "source": "finance_task_compiler",
+                        "source": str(compiled.diagnostics.get("source") or "task_compile_model"),
+                        "semantic_decision_owner": "model",
+                        "host_role": "contract_validation_and_journaling",
                         "claim_ledger_ref": claim_record.record_id,
                         "finance_fact_ledger_ref": ledger_record.record_id,
                     }
@@ -2178,7 +2603,7 @@ class AgentRuntime:
                 run_id=run_id,
                 step_id=None,
                 program=compiled.to_dict(),
-                source="finance_task_compiler",
+                source=str(compiled.diagnostics.get("source") or "task_compile_model"),
             )
             frame = compiled.slot_frame or finance_slot_frame(question=question, facts=facts, plan=plan)
             self.journal.append(
@@ -5489,6 +5914,21 @@ def _execution_program_hint_for_planner(
     binding = _target_document_binding_from_recipe(recipe)
     if _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID and not binding:
         return {}
+    if _llm_semantic_judgment_required(recipe):
+        compiled = compile_finance_task_program_model_first(
+            question=question,
+            facts=[],
+            target_binding=binding,
+            processor_fabric=None,
+            llm_judgment_required=True,
+        )
+        return _compact_compiled_task_program_for_prompt(
+            {
+                **compiled.to_dict(),
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "source": "planner_preflight_task_compile_model_required",
+            }
+        )
     try:
         compiled = compile_finance_task_program(question=question, facts=[], target_binding=binding)
     except Exception:
@@ -5607,51 +6047,61 @@ def _retrieval_replan_hints(
         or mission_directive.get("next_subgoal")
         or mission_directive.get("root_goal")
     )
-    strategy_hints = _suggested_retrieval_strategies(
-        missing=missing,
-        report_reason=report_reason,
-        requirement=requirement,
-        attempts=attempts,
-    )
-    if mission_strategy:
-        strategy_hints = _ordered_unique([mission_strategy, *strategy_hints])
-    query_hints = _suggested_query_hints(
-        base_query=base_query,
-        missing=missing,
-        requirement=requirement,
-    )
-    source_targets = _suggested_source_targets(
-        recipe=recipe,
-        query=base_query,
-        missing=missing,
-        requirement=requirement,
-        strategy_hints=strategy_hints,
-    )
-    suggested_filing_documents = _suggested_sec_filing_documents(
-        journal,
-        task_id=task_id,
-        run_id=run_id,
-        recipe=recipe,
-    )
-    suggested_sec_structured_sources = _suggested_sec_structured_sources(
-        journal,
-        task_id=task_id,
-        run_id=run_id,
-        recipe=recipe,
-        report_data=report_data,
-    )
-    suggested_macro_series = _suggested_fred_series(
-        journal,
-        task_id=task_id,
-        run_id=run_id,
-        recipe=recipe,
-    )
-    suggested_fiscaldata_endpoints = _suggested_fiscaldata_endpoints(
-        journal,
-        task_id=task_id,
-        run_id=run_id,
-        recipe=recipe,
-    )
+    strict_llm_judgment = _llm_semantic_judgment_required(recipe)
+    if strict_llm_judgment:
+        strategy_hints = []
+        query_hints = []
+        source_targets = []
+        suggested_filing_documents = []
+        suggested_sec_structured_sources = []
+        suggested_macro_series = []
+        suggested_fiscaldata_endpoints = []
+    else:
+        strategy_hints = _suggested_retrieval_strategies(
+            missing=missing,
+            report_reason=report_reason,
+            requirement=requirement,
+            attempts=attempts,
+        )
+        if mission_strategy:
+            strategy_hints = _ordered_unique([mission_strategy, *strategy_hints])
+        query_hints = _suggested_query_hints(
+            base_query=base_query,
+            missing=missing,
+            requirement=requirement,
+        )
+        source_targets = _suggested_source_targets(
+            recipe=recipe,
+            query=base_query,
+            missing=missing,
+            requirement=requirement,
+            strategy_hints=strategy_hints,
+        )
+        suggested_filing_documents = _suggested_sec_filing_documents(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            recipe=recipe,
+        )
+        suggested_sec_structured_sources = _suggested_sec_structured_sources(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            recipe=recipe,
+            report_data=report_data,
+        )
+        suggested_macro_series = _suggested_fred_series(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            recipe=recipe,
+        )
+        suggested_fiscaldata_endpoints = _suggested_fiscaldata_endpoints(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            recipe=recipe,
+        )
     needs_replan = bool(
         (report_record is not None and (report_status != "sufficient" or incomplete_planned_goal_ids))
         or mission_avoid_queries
@@ -5694,6 +6144,12 @@ def _retrieval_replan_hints(
         "suggested_sec_structured_sources": suggested_sec_structured_sources,
         "suggested_macro_series": suggested_macro_series,
         "suggested_fiscaldata_endpoints": suggested_fiscaldata_endpoints,
+        "llm_judgment": {
+            "required": strict_llm_judgment,
+            "semantic_decision_owner": "model",
+            "host_role": "diagnostics_only_no_query_or_source_selection" if strict_llm_judgment else "diagnostic_hints_and_scaffold",
+            "next_move_contract": "model must choose next queries, source families, document targets, or toolchain actions" if strict_llm_judgment else "",
+        },
         "attempted_queries": attempted_queries,
         "attempted_search_strategies": _ordered_unique(
             [item["search_strategy"] for item in attempts if isinstance(item.get("search_strategy"), str)]
@@ -6598,7 +7054,22 @@ def _execution_metadata(recipe: TaskRecipe) -> JsonObject:
 
 def _execution_profile_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("execution_profile")
+    if isinstance(value, dict):
+        return dict(value)
+    value = recipe.metadata.get("execution_profile")
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _llm_semantic_judgment_required(recipe: TaskRecipe | None) -> bool:
+    if recipe is None:
+        return False
+    containers = [_execution_metadata(recipe), recipe.metadata]
+    for container in containers:
+        llm_judgment = container.get("llm_judgment") if isinstance(container, dict) else None
+        if isinstance(llm_judgment, dict) and llm_judgment.get("required") is True:
+            return True
+    profile = _execution_profile_metadata(recipe)
+    return str(profile.get("profile_id") or "") == "finance-capability"
 
 
 def _metadata_requires_finance_numeric_verifier(metadata: JsonObject) -> bool:
@@ -6694,6 +7165,9 @@ def _agent_loop_metadata(recipe: TaskRecipe) -> JsonObject:
 
 def _processor_budget_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("processor_budget")
+    if isinstance(value, dict):
+        return dict(value)
+    value = recipe.metadata.get("processor_budget")
     return dict(value) if isinstance(value, dict) else {}
 
 
@@ -11541,6 +12015,68 @@ def _report_with_finance_formula_traces(
     return replace(report, diagnostics=diagnostics)
 
 
+def _compact_finance_synthesis_rescue_packet(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe,
+    report: RetrievalReport,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    synthesis_error: str,
+) -> tuple[RetrievalReport, list[EvidenceItem], list[CitationItem]]:
+    question = _benchmark_oracle_question_text(_root_goal_from_recipe(recipe))
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    binding = _target_document_binding_from_recipe(recipe)
+    facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+    traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    cited_evidence_ids = {item.evidence_id for item in citations if item.evidence_id}
+    ranked = [item for item in _source_grounded_ranked_evidence(evidence, recipe=recipe) if item.evidence_id in cited_evidence_ids]
+    if not ranked:
+        ranked = [item for item in evidence if item.evidence_id in cited_evidence_ids]
+    rescue_evidence = ranked[:24] if ranked else evidence[:24]
+    rescue_evidence_ids = {item.evidence_id for item in rescue_evidence}
+    rescue_citations = [item for item in citations if item.evidence_id in rescue_evidence_ids][:24]
+    if not rescue_citations:
+        rescue_citations = citations[:24]
+    diagnostics = dict(report.diagnostics)
+    diagnostics["compact_llm_synthesis_rescue"] = {
+        "enabled": True,
+        "previous_synthesis_error": synthesis_error,
+        "semantic_decision_owner": "model",
+        "host_role": "compact_context_builder_and_provenance_validator",
+        "instruction": "write the best supported answer rather than a failure report when compact facts/traces/citations are enough",
+    }
+    diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:96]]
+    diagnostics["finance_fact_ledger_count"] = len(facts)
+    diagnostics["claim_ledger_present"] = bool(facts)
+    diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in traces[:24]]
+    diagnostics["finance_formula_trace_count"] = len(traces)
+    diagnostics.setdefault(
+        "finance_synthesis_directive",
+        (
+            "The model is responsible for final semantic judgment. Use compact ClaimLedger and FormulaTrace values when they support the task. "
+            "Do not write a failure report if a partial supported answer can be given. Label missing slots as limitations."
+        ),
+    )
+    preview_parts = []
+    if facts:
+        preview_parts.append(f"Finance fact ledger contains {len(facts)} facts.")
+    if traces:
+        preview_parts.append(f"FormulaTrace contains {len(traces)} calculator outputs.")
+    preview_parts.append(_text_preview(report.preview, limit=720))
+    rescue_report = replace(
+        report,
+        report_id=f"{report.report_id}-compact-synthesis-rescue",
+        evidence_ids=[item.evidence_id for item in rescue_evidence],
+        citation_ids=[item.citation_id for item in rescue_citations],
+        preview=" ".join(part for part in preview_parts if part),
+        diagnostics=diagnostics,
+    )
+    return rescue_report, rescue_evidence, rescue_citations
+
+
 def _can_synthesize_partial_retrieval(
     *,
     terminal_reason: str | None,
@@ -12422,6 +12958,38 @@ def _finance_numeric_missing_evidence(verification) -> list[str]:
     return _ordered_unique(missing)
 
 
+def _latest_finance_numeric_judge_data(journal: JournalStore, task_id: str, run_id: str) -> JsonObject:
+    for record in reversed(journal.records(task_id=task_id, kind="finance_numeric_judge")):
+        if record.run_id == run_id and isinstance(record.data, dict):
+            return dict(record.data)
+    return {}
+
+
+def _finance_numeric_failure_missing_evidence(
+    journal: JournalStore,
+    task_id: str,
+    run_id: str,
+    verification,
+) -> list[str]:
+    missing = list(_finance_numeric_missing_evidence(verification))
+    judge = _latest_finance_numeric_judge_data(journal, task_id, run_id)
+    if judge:
+        if str(judge.get("status") or "") == "failed":
+            error = str(judge.get("processor_error") or judge.get("processor_status") or "finance.numeric_judge_failed").strip()
+            missing.insert(0, f"llm_numeric_judge_unavailable:{error}")
+        elif judge.get("decision"):
+            decision = str(judge.get("decision") or "").strip()
+            if decision:
+                missing.insert(0, f"llm_numeric_judge_decision:{decision}")
+        for slot in _string_list(judge.get("missing_slots")):
+            missing.append(f"llm_missing_slot:{slot}")
+        if judge.get("requires_more_work") is True:
+            missing.append("llm_numeric_judge_requires_more_work")
+    else:
+        missing.insert(0, "llm_numeric_judge_not_run")
+    return _ordered_unique([item for item in missing if item])
+
+
 def _finance_answer_numeric_support_rate(verification) -> float | None:
     diagnostics = getattr(verification, "diagnostics", {}) or {}
     answer_numeric_count = diagnostics.get("answer_numeric_count") if isinstance(diagnostics, dict) else None
@@ -12429,6 +12997,155 @@ def _finance_answer_numeric_support_rate(verification) -> float | None:
         return None
     matched = list(getattr(verification, "matched_values", []) or [])
     return min(1.0, max(0.0, len(matched) / float(answer_numeric_count)))
+
+
+def _finance_numeric_judge_prompt(
+    *,
+    question: str,
+    answer: FinalAnswer,
+    verification,
+    report: RetrievalReport,
+    facts: list[FinanceFact],
+    formula_traces: list[FormulaTrace],
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    attempt: str,
+) -> str:
+    packet = {
+        "schema": "holo.kernel_v3.finance_numeric_judge_input.v1",
+        "instruction": (
+            "You are finance.numeric_judge for Holo Kernel v3. You are the semantic verifier. "
+            "Judge whether the answer actually answers the benchmark question, which numeric claims are core to the answer, "
+            "which numeric claims are incidental formatting/noise, and how the answer should be repaired. "
+            "The host deterministic verifier diagnostics are advisory, not the semantic decision owner. "
+            "Do not invent evidence, facts, citations, formulas, or values. Use only provided facts, formula traces, evidence, and citations. "
+            "If the answer contains unsupported non-core numbers, instruct synthesis to remove them. "
+            "If supported facts or formula traces are enough to answer, provide a concrete repair_instruction that uses only those supported values. "
+            "If more work is required, name the exact missing slots and the next tool action needed. "
+            "Host will still validate citation ids, evidence ids, formula traces, and provenance after your repair."
+        ),
+        "attempt": attempt,
+        "question": question,
+        "answer": {
+            "text": answer.answer,
+            "citation_refs": list(answer.citation_refs),
+            "used_evidence": list(answer.used_evidence),
+            "limitations": list(answer.limitations),
+        },
+        "host_verifier_diagnostics": {
+            "status": getattr(verification, "status", None),
+            "issues": list(getattr(verification, "issues", []) or [])[:24],
+            "matched_values": list(getattr(verification, "matched_values", []) or [])[:48],
+            "missing_values": list(getattr(verification, "missing_values", []) or [])[:48],
+            "diagnostics": getattr(verification, "diagnostics", {}) or {},
+        },
+        "retrieval_report": {
+            "status": report.status,
+            "preview": _text_preview(report.preview, limit=720),
+            "diagnostics": {
+                "goal_query": _json_object(report.diagnostics).get("goal_query"),
+                "task_goal": _json_object(report.diagnostics).get("task_goal"),
+                "finance_formula_trace_count": _json_object(report.diagnostics).get("finance_formula_trace_count"),
+            },
+        },
+        "finance_facts": [_finance_fact_judge_summary(fact) for fact in facts[:160]],
+        "formula_traces": [trace.to_dict() for trace in formula_traces[:32]],
+        "evidence": [_evidence_judge_summary(item) for item in evidence[:48]],
+        "citations": [_citation_judge_summary(item) for item in citations[:48]],
+        "output_contract": {
+            "decision": "passed_semantically | repair_answer | continue_work | fail_with_limitations",
+            "answer_addresses_question": "true if the answer answers the actual benchmark question, not merely any finance fact",
+            "core_numeric_claims": ["numbers essential to answer scoring or reasoning"],
+            "non_core_numeric_claims": ["incidental dates, list markers, citation artifacts, or irrelevant numbers that synthesis should remove"],
+            "unsupported_core_values": ["core numbers not supported by facts/formula traces/evidence"],
+            "candidate_supported_values": ["supported values that should be used in the repaired answer"],
+            "missing_slots": ["specific missing slots if work must continue"],
+            "repair_instruction": "specific instruction for synthesizer; tell it exactly which supported values to use and which unsupported numbers to remove",
+            "requires_more_work": "true only when provided facts/formula traces/evidence cannot answer the question",
+        },
+    }
+    return (
+        "Return exactly one JSON object matching finance.numeric_judge. "
+        "Make the semantic judgment yourself; do not defer to regex, threshold, or host numeric matching when they misclassify non-core text.\n\n"
+        f"Packet:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
+def _finance_fact_judge_summary(fact: FinanceFact) -> JsonObject:
+    return {
+        "fact_id": fact.fact_id,
+        "entity": fact.entity,
+        "ticker": fact.ticker,
+        "period": fact.period,
+        "fiscal_year": fact.fiscal_year,
+        "metric": fact.metric,
+        "value": fact.value,
+        "unit": fact.unit,
+        "scale": fact.scale,
+        "source_ref": fact.source_ref,
+        "evidence_ref": fact.evidence_ref,
+        "citation_ref": fact.citation_ref,
+        "metadata": {
+            key: value
+            for key, value in fact.metadata.items()
+            if key in {"form", "source_uri", "line_item", "statement", "source_kind", "source_family", "target_document_match"}
+        },
+    }
+
+
+def _evidence_judge_summary(item: EvidenceItem) -> JsonObject:
+    metadata = item.diagnostics if isinstance(item.diagnostics, dict) else {}
+    return {
+        "evidence_id": item.evidence_id,
+        "source_id": item.source_id,
+        "title": item.title,
+        "uri": item.uri,
+        "score": item.score,
+        "text": _text_preview(item.text, limit=900),
+        "metadata": {
+            key: value
+            for key, value in metadata.items()
+            if key in {"source_kind", "source_family", "form", "period", "fiscal_year", "target_document_match", "line_item"}
+        },
+    }
+
+
+def _citation_judge_summary(item: CitationItem) -> JsonObject:
+    return {
+        "citation_id": item.citation_id,
+        "evidence_id": item.evidence_id,
+        "artifact_id": item.artifact_id,
+        "uri": item.uri,
+        "title": item.title,
+    }
+
+
+def _finance_numeric_judge_repair_instruction(judge: JsonObject, *, verification, recipe: TaskRecipe) -> str:
+    decision = str(judge.get("decision") or "").strip()
+    repair = str(judge.get("repair_instruction") or "").strip()
+    missing_slots = _string_list(judge.get("missing_slots"))
+    supported_values = _string_list(judge.get("candidate_supported_values"))
+    unsupported_core = _string_list(judge.get("unsupported_core_values"))
+    non_core = _string_list(judge.get("non_core_numeric_claims"))
+    if not repair and decision == "continue_work":
+        repair = "The current answer needs more work before finalization; name the missing slots in limitations instead of inventing numbers."
+    if not repair:
+        return ""
+    deterministic_missing = _finance_numeric_missing_evidence(verification)
+    return (
+        "LLM semantic numeric verifier repair directive:\n"
+        f"- The semantic decision owner is the model. Host numeric matching diagnostics are advisory: {decision or 'unknown'}.\n"
+        f"- Repair instruction: {repair}\n"
+        f"- Supported values the answer should prefer: {supported_values}\n"
+        f"- Unsupported core values to avoid unless new evidence supports them: {unsupported_core}\n"
+        f"- Non-core numeric noise to remove or move to limitations: {non_core}\n"
+        f"- Missing slots if further work is required: {missing_slots}\n"
+        f"- Host deterministic verifier missing diagnostics: {deterministic_missing}\n"
+        "Return a corrected synthesizer.answer JSON. Answer the actual task_goal directly when supported. "
+        "Use only provided citation_refs, evidence ids, finance facts, and formula traces. "
+        "Delete unsupported incidental numbers rather than keeping them in prose. "
+        "Do not output a failure report unless no supported answer can be written from the provided facts/formula traces/evidence."
+    )
 
 
 def _agent_final_from_processor(processor_answer, *, task_id: str, run_id: str, trace_refs: list[str]) -> FinalAnswer:

@@ -1760,7 +1760,12 @@ def _benchmark_prompt(item: FinanceBenchmarkItem, *, question_prefix: str) -> st
         elif import_mode == "doc_retrieval":
             instruction = (
                 "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
-                "Prefer direct URL fetch before broad search."
+                "Prefer direct URL fetch before broad search. This is an answerable public benchmark item: the target "
+                "document or its primary filing data should contain enough information to solve it. Do not treat an "
+                "initial missing slot, unsupported-number verifier result, or synthesis-gate failure as a final answer. "
+                "If the first path fails, continue by changing method: read the target filing, parse tables, use "
+                "script.exec/shell.exec when available, extract structured facts, run calculator.compute when needed, "
+                "and then answer from ClaimLedger or FormulaTrace-backed numbers."
             )
             context = _doc_retrieval_context_for_prompt(item) or context
         else:

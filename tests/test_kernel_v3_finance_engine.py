@@ -1911,7 +1911,7 @@ def test_model_first_finance_task_compiler_overrides_host_scaffold() -> None:
     assert program.diagnostics["tool_chain_plan"]["decision_owner"] == "model"
 
 
-def test_model_first_finance_task_compiler_preserves_explicit_formula_contract() -> None:
+def test_model_first_finance_task_compiler_does_not_let_fallback_override_model_judgment() -> None:
     fabric = ProcessorFabric(
         providers={
             "fake_json": FakeJsonProvider(
@@ -1967,26 +1967,15 @@ def test_model_first_finance_task_compiler_preserves_explicit_formula_contract()
     )
 
     assert program.diagnostics["source"] == "task_compile_model"
-    assert program.task_spec.task_type == "compute"
-    assert [spec.slot_name for spec in program.evidence_specs] == [
-        "revenue",
-        "property_plant_and_equipment_net_current",
-        "property_plant_and_equipment_net_prior",
-    ]
-    assert [spec.name for spec in program.transform_specs] == ["fixed_asset_turnover"]
+    assert program.task_spec.task_type == "filing_metric_lookup"
+    assert [spec.slot_name for spec in program.evidence_specs] == ["revenue"]
+    assert program.transform_specs == []
     assert program.slot_frame is not None
-    assert program.slot_frame.task_type == "compute"
-    assert program.slot_frame.missing_slots == [
-        "revenue",
-        "property_plant_and_equipment_net_current",
-        "property_plant_and_equipment_net_prior",
-    ]
-    assert program.diagnostics["tool_chain_plan"]["formula_name"] == "fixed_asset_turnover"
-    assert program.diagnostics["tool_chain_plan"]["missing_slots"] == [
-        "revenue",
-        "property_plant_and_equipment_net_current",
-        "property_plant_and_equipment_net_prior",
-    ]
+    assert program.slot_frame.task_type == "filing_metric_lookup"
+    assert program.slot_frame.missing_slots == ["revenue"]
+    assert program.diagnostics["semantic_decision_owner"] == "model"
+    assert program.diagnostics["host_fallback_role"] == "scaffold_only_no_semantic_override"
+    assert program.diagnostics["tool_chain_plan"]["decision_owner"] == "model"
 
 
 def test_model_first_finance_task_compiler_falls_back_on_invalid_model_output() -> None:
@@ -2005,6 +1994,25 @@ def test_model_first_finance_task_compiler_falls_back_on_invalid_model_output() 
     assert program.diagnostics["source"] == "finance_task_compiler"
     assert program.diagnostics["task_compile_model"]["status"] == "fallback"
     assert "capital_expenditures" in program.diagnostics["missing_slots"]
+
+
+def test_finance_capability_task_compiler_blocks_host_semantic_fallback_without_llm() -> None:
+    program = compile_finance_task_program_model_first(
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+        facts=[],
+        processor_fabric=None,
+        llm_judgment_required=True,
+    )
+
+    assert program.diagnostics["source"] == "task_compile_model_unavailable"
+    assert program.diagnostics["status"] == "llm_judgment_unavailable"
+    assert program.diagnostics["semantic_decision_owner"] == "model"
+    assert program.diagnostics["host_fallback_role"] == "blocked_no_semantic_override"
+    assert program.task_spec.task_type == "model_judgment_unavailable"
+    assert program.evidence_specs == []
+    assert program.transform_specs == []
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["llm_task_compile_judgment"]
 
 
 def test_planner_replan_hints_include_execution_program_for_model_tool_assembly() -> None:
@@ -2034,6 +2042,32 @@ def test_planner_replan_hints_include_execution_program_for_model_tool_assembly(
         item["tool"] == "retrieval.run"
         for item in program["tool_chain_plan"]["next_action_candidates"]
     )
+
+
+def test_finance_capability_replan_hints_require_llm_task_compile_not_host_formula_fallback() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "research_profile": "finance_fundamentals",
+            "goal": "Is 3M a capital-intensive business based on FY2022 data?",
+        },
+    )
+
+    hints = _agent_replan_hints(
+        JournalStore.in_memory(),
+        task_id="task-capability-execution-program",
+        run_id="run-capability-execution-program",
+        recipe=recipe,
+    )
+
+    program = hints["execution_program"]
+    assert program["schema"] == "holo.kernel_v3.execution_program_prompt.v1"
+    assert program["task_spec"]["task_type"] == "model_judgment_unavailable"
+    assert program["missing_slots"] == ["llm_task_compile_judgment"]
+    assert program["tool_chain_plan"]["decision_owner"] == "model"
+    assert program["tool_chain_plan"]["host_role"] == "tool_interface_only_until_model_judgment_returns"
+    assert "capital_expenditures" not in program["missing_slots"]
 
 
 def test_runtime_preflight_task_compile_injects_model_execution_program() -> None:
@@ -5383,9 +5417,131 @@ def test_retrieval_finalization_repairs_unsupported_finance_numbers_without_calc
     assert journal.records(task_id="task-finance", kind="agent_final_answer")
     synthesis_gates = journal.records(task_id="task-finance", kind="synthesis_gate_result")
     assert synthesis_gates
-    assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
+    assert synthesis_gates[0].data["status"] == "failed"
+    assert synthesis_gates[-1].data["status"] == "passed"
+    assert any(
+        record.data["diagnostics"].get("gate_id") == "llm_semantic_numeric_judge_unavailable_v1"
+        for record in synthesis_gates
+    )
     assert synthesis_gates[-1].data["policy"] == "material_numeric_claims_require_claim_or_transform_support"
     assert synthesis_gates[-1].data["diagnostics"]["attempt"] == "fallback"
+
+
+def test_finance_capability_blocks_host_fallback_when_llm_numeric_judge_unavailable() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(
+        journal,
+        answer="Apple 2024 revenue was $999 billion, supported by cite-1.",
+    )
+    evidence, citations = _sec_revenue_evidence(value="391035000000")
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-capability"))},
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-finance-capability-strict",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert final is None
+    assert failure is not None
+    assert failure.reason == "finance_numeric_verification_failed"
+    assert "llm_numeric_judge_unavailable" in " ".join(failure.missing_evidence)
+    assert not journal.records(task_id="task-finance-capability-strict", kind="agent_final_answer")
+    synthesis_gates = journal.records(task_id="task-finance-capability-strict", kind="synthesis_gate_result")
+    assert synthesis_gates
+    assert all(record.data["status"] == "failed" for record in synthesis_gates)
+    assert any(
+        record.data["diagnostics"].get("gate_id") == "llm_semantic_numeric_judge_unavailable_v1"
+        for record in synthesis_gates
+    )
+
+
+def test_finance_numeric_verifier_failure_uses_llm_judge_before_failure() -> None:
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "task.compile": {
+                        "task_spec": {"task_type": "lookup", "objective": "Apple revenue"},
+                        "evidence_specs": [
+                            {
+                                "slot_name": "revenue",
+                                "accepted_attributes": ["revenue"],
+                                "source_role": "primary_filing",
+                                "required": True,
+                            }
+                        ],
+                        "transform_specs": [],
+                        "slot_frame": {"task_type": "lookup", "required_slots": [{"name": "revenue"}], "missing_slots": []},
+                    },
+                    "synthesizer.answer": [
+                        {
+                            "answer": "Apple 2024 revenue was $999 billion, supported by cite-1.",
+                            "citation_refs": ["cite-1"],
+                            "confidence": 0.7,
+                            "limitations": [],
+                            "used_evidence": ["evidence-1"],
+                        },
+                        {
+                            "answer": "Apple 2024 revenue was $391.035 billion, supported by cite-1.",
+                            "citation_refs": ["cite-1"],
+                            "confidence": 0.9,
+                            "limitations": [],
+                            "used_evidence": ["evidence-1"],
+                        },
+                    ],
+                    "finance.numeric_judge": {
+                        "decision": "repair_answer",
+                        "reason_summary": "The answer addresses the question but the core revenue number should be repaired from the ledger.",
+                        "answer_addresses_question": True,
+                        "core_numeric_claims": ["$999 billion revenue"],
+                        "non_core_numeric_claims": [],
+                        "unsupported_core_values": ["$999 billion"],
+                        "candidate_supported_values": ["$391.035 billion"],
+                        "missing_slots": [],
+                        "repair_instruction": "Replace $999 billion with the supported revenue value $391.035 billion and keep cite-1.",
+                        "requires_more_work": False,
+                        "confidence": 0.95,
+                    },
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    runtime = AgentRuntime(journal=journal, processor_fabric=fabric)
+    evidence, citations = _sec_revenue_evidence(value="391035000000")
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))},
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-finance-llm-judge",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    assert "$999 billion" not in final.answer
+    assert "$391.035 billion" in final.answer
+    assert journal.records(task_id="task-finance-llm-judge", kind="finance_numeric_judge")
+    synthesis_gates = journal.records(task_id="task-finance-llm-judge", kind="synthesis_gate_result")
+    assert synthesis_gates[-1].data["status"] == "passed"
+    assert synthesis_gates[-1].data["diagnostics"]["source"] == "finance_numeric_judge"
 
 
 def test_retrieval_fallback_prefers_fact_ledger_and_suppresses_accession_numbers() -> None:
@@ -5439,7 +5595,12 @@ def test_retrieval_fallback_prefers_fact_ledger_and_suppresses_accession_numbers
     assert "已由证据账本支持的关键数值" in final.answer
     assert final.citation_refs == ["cite-mmm"]
     synthesis_gates = journal.records(task_id="task-mmm-capex", kind="synthesis_gate_result")
-    assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
+    assert synthesis_gates[0].data["status"] == "failed"
+    assert synthesis_gates[-1].data["status"] == "passed"
+    assert any(
+        record.data["diagnostics"].get("gate_id") == "llm_semantic_numeric_judge_unavailable_v1"
+        for record in synthesis_gates
+    )
 
 
 def test_source_grounded_retrieval_finalization_journals_generic_workflow_trace() -> None:
@@ -5671,7 +5832,12 @@ def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calcula
     verifications = journal.records(task_id="task-finance-repair", kind="finance_numeric_verification")
     assert verifications[-1].data["status"] == "passed"
     synthesis_gates = journal.records(task_id="task-finance-repair", kind="synthesis_gate_result")
-    assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
+    assert synthesis_gates[0].data["status"] == "failed"
+    assert synthesis_gates[-1].data["status"] == "passed"
+    assert any(
+        record.data["diagnostics"].get("gate_id") == "llm_semantic_numeric_judge_unavailable_v1"
+        for record in synthesis_gates
+    )
     assert synthesis_gates[-1].data["diagnostics"]["attempt"] == "fallback"
 
 
@@ -5744,7 +5910,12 @@ def test_retrieval_finalization_fallback_preserves_dcf_model_outputs_and_assumpt
     verifications = journal.records(task_id="task-dcf-repair", kind="finance_numeric_verification")
     assert verifications[-1].data["status"] == "passed"
     synthesis_gates = journal.records(task_id="task-dcf-repair", kind="synthesis_gate_result")
-    assert [record.data["status"] for record in synthesis_gates] == ["failed", "passed"]
+    assert synthesis_gates[0].data["status"] == "failed"
+    assert synthesis_gates[-1].data["status"] == "passed"
+    assert any(
+        record.data["diagnostics"].get("gate_id") == "llm_semantic_numeric_judge_unavailable_v1"
+        for record in synthesis_gates
+    )
 
 
 def test_finance_formula_planner_generates_dio_payload_from_ledger() -> None:

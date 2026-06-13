@@ -877,6 +877,24 @@ class RetrievalOperator:
             citations=citations,
             research_profile=research_profile,
         )
+        if workbench_decision.status == "failed":
+            decision = EvidenceEvaluationDecision(
+                decision_id=decision.decision_id,
+                goal_id=decision.goal_id,
+                status="insufficient_evidence",
+                sufficient=False,
+                reason="llm_retrieval_workbench_unavailable",
+                evidence_count=decision.evidence_count,
+                citation_count=decision.citation_count,
+                diagnostics={
+                    **decision.diagnostics,
+                    "original_reason": decision.reason,
+                    "retrieval_workbench": _workbench_diagnostics(workbench_decision),
+                    "semantic_decision_owner": "model",
+                    "host_role": "tool_execution_provenance_policy_and_budget_validation",
+                    "llm_retrieval_workbench_unavailable": True,
+                },
+            )
         if _workbench_semantic_sufficient(
             workbench_decision=workbench_decision,
             decision=decision,

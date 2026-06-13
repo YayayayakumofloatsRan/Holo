@@ -29,6 +29,7 @@ def compile_finance_task_program_model_first(
     step_id: str | None = None,
     context_id: str | None = None,
     processor_budget: JsonObject | None = None,
+    llm_judgment_required: bool = False,
 ) -> CompiledTaskProgram:
     """Compile a finance task with the LLM as the semantic owner.
 
@@ -47,6 +48,12 @@ def compile_finance_task_program_model_first(
         plan=plan,
     )
     if processor_fabric is None:
+        if llm_judgment_required:
+            return _model_unavailable_program(
+                question=question,
+                fallback=fallback,
+                reason="task_compile_processor_fabric_not_configured",
+            )
         return fallback
     parameters: JsonObject = {
         "temperature": 0.0,
@@ -72,6 +79,14 @@ def compile_finance_task_program_model_first(
         parameters=parameters,
     )
     if outcome.result.status != "ok" or not isinstance(outcome.parsed, dict):
+        if llm_judgment_required:
+            return _model_unavailable_program(
+                question=question,
+                fallback=fallback,
+                reason=outcome.result.error or "task_compile_processor_failed",
+                provider=outcome.provider,
+                model=outcome.model,
+            )
         return _fallback_program_with_model_diagnostic(
             fallback,
             reason=outcome.result.error or "task_compile_processor_failed",
@@ -85,6 +100,15 @@ def compile_finance_task_program_model_first(
             fallback=fallback,
         )
     except Exception as exc:
+        if llm_judgment_required:
+            return _model_unavailable_program(
+                question=question,
+                fallback=fallback,
+                reason="task_compile_output_rejected",
+                provider=outcome.provider,
+                model=outcome.model,
+                details={"error": type(exc).__name__, "message": str(exc)[:240]},
+            )
         return _fallback_program_with_model_diagnostic(
             fallback,
             reason="task_compile_output_rejected",
@@ -263,24 +287,9 @@ def _compiled_program_from_model_output(
     fallback: CompiledTaskProgram,
 ) -> CompiledTaskProgram:
     task_spec = _model_task_spec(parsed.get("task_spec"), question=question, fallback=fallback.task_spec)
-    preserve_formula_contract = _fallback_formula_contract_required(fallback)
-    task_spec = _preserve_fallback_task_contract(
-        task_spec,
-        fallback=fallback,
-        preserve_formula_contract=preserve_formula_contract,
-    )
+    preserve_formula_contract = False
     evidence_specs = _model_evidence_specs(parsed.get("evidence_specs"), fallback=fallback.evidence_specs, task_type=task_spec.task_type)
-    evidence_specs = _preserve_fallback_evidence_contract(
-        evidence_specs,
-        fallback=fallback,
-        preserve_formula_contract=preserve_formula_contract,
-    )
     transform_specs = _model_transform_specs(parsed.get("transform_specs"), fallback=fallback.transform_specs)
-    transform_specs = _preserve_fallback_transform_contract(
-        transform_specs,
-        fallback=fallback,
-        preserve_formula_contract=preserve_formula_contract,
-    )
     slot_frame = _model_slot_frame(
         parsed.get("slot_frame"),
         parsed=parsed,
@@ -288,14 +297,11 @@ def _compiled_program_from_model_output(
         task_spec=task_spec,
         evidence_specs=evidence_specs,
     )
-    slot_frame = _preserve_fallback_slot_contract(
-        slot_frame,
-        fallback=fallback,
-        preserve_formula_contract=preserve_formula_contract,
-    )
     diagnostics = {
         **dict(fallback.diagnostics),
         "source": "task_compile_model",
+        "semantic_decision_owner": "model",
+        "host_fallback_role": "scaffold_only_no_semantic_override",
         "fallback_program_id": fallback.program_id,
         "model_reason_summary": _string(parsed.get("reason_summary"))[:480],
         "model_diagnostics": _json_object(parsed.get("diagnostics")),
@@ -437,6 +443,113 @@ def _fallback_program_with_model_diagnostic(
     )
 
 
+def _model_unavailable_program(
+    *,
+    question: str,
+    fallback: CompiledTaskProgram,
+    reason: str,
+    provider: str | None = None,
+    model: str | None = None,
+    details: JsonObject | None = None,
+) -> CompiledTaskProgram:
+    task_spec = TaskSpec(
+        spec_id="task-spec-llm-unavailable-" + _short_hash(question, reason),
+        domain="finance",
+        task_type="model_judgment_unavailable",
+        objective=question or fallback.task_spec.objective,
+        target_entities=list(fallback.task_spec.target_entities),
+        target_periods=list(fallback.task_spec.target_periods),
+        success_criteria=[
+            "Run task.compile with a model before deciding evidence slots or transforms.",
+            "Do not let deterministic fallback become the semantic task compiler.",
+        ],
+        diagnostics={
+            "source": "task_compile_model_unavailable",
+            "semantic_decision_owner": "model",
+            "host_fallback_role": "blocked_no_semantic_override",
+            "reason": reason,
+            "provider": provider,
+            "model": model,
+            **({"details": details} if details else {}),
+        },
+    )
+    policy = EvidencePolicy(
+        policy_id="policy-llm-task-compile-required-" + _short_hash(question, reason),
+        domain="finance",
+        required_source_families=[],
+        forbidden_source_families=[],
+        required_terms=[],
+        authority=None,
+        diagnostics={
+            "source": "task_compile_model_unavailable",
+            "semantic_decision_owner": "model",
+            "host_role": "schema_state_only",
+        },
+    )
+    slot_frame = SlotFrame(
+        frame_id="slot-frame-llm-unavailable-" + _short_hash(question, reason),
+        task_type="model_judgment_unavailable",
+        domain="finance",
+        required_slots=[
+            SlotSpec(
+                name="llm_task_compile_judgment",
+                requirement="required",
+                description="A model-owned task.compile packet is required before semantic slot, source, or transform decisions.",
+                accepted_attributes=["task_spec", "evidence_specs", "transform_specs", "slot_frame"],
+                source_requirements=["model:task.compile"],
+                metadata={"semantic_decision_owner": "model"},
+            )
+        ],
+        missing_slots=["llm_task_compile_judgment"],
+        evidence_policy=policy,
+        diagnostics={
+            "source": "task_compile_model_unavailable",
+            "reason": reason,
+            "semantic_decision_owner": "model",
+            "host_fallback_role": "blocked_no_semantic_override",
+        },
+    )
+    return CompiledTaskProgram(
+        program_id="task-program-llm-unavailable-" + _short_hash(task_spec.spec_id, reason),
+        domain="finance",
+        task_spec=task_spec,
+        evidence_specs=[],
+        transform_specs=[],
+        slot_frame=slot_frame,
+        transform_plan=None,
+        diagnostics={
+            "source": "task_compile_model_unavailable",
+            "status": "llm_judgment_unavailable",
+            "semantic_decision_owner": "model",
+            "host_fallback_role": "blocked_no_semantic_override",
+            "fallback_program_id": fallback.program_id,
+            "reason": reason,
+            "provider": provider,
+            "model": model,
+            "tool_chain_plan": {
+                "schema": "holo.kernel_v3.tool_chain_plan.v1",
+                "decision_owner": "model",
+                "host_role": "tool_interface_only_until_model_judgment_returns",
+                "task_type": "model_judgment_unavailable",
+                "missing_slots": ["llm_task_compile_judgment"],
+                "recommended_steps": [
+                    {
+                        "tool": "model:task.compile",
+                        "purpose": "obtain model-owned task, evidence, slot, and transform judgment",
+                    }
+                ],
+                "next_action_candidates": [
+                    {
+                        "action": "retry_task_compile_or_change_model_provider",
+                        "reason": reason,
+                    }
+                ],
+            },
+            **({"details": details} if details else {}),
+        },
+    )
+
+
 def _model_task_spec(value: object, *, question: str, fallback: TaskSpec) -> TaskSpec:
     data = _json_object(value)
     task_type = _string(data.get("task_type")) or fallback.task_type
@@ -486,7 +599,8 @@ def _model_evidence_specs(value: object, *, fallback: list[EvidenceSpec], task_t
 
 def _model_transform_specs(value: object, *, fallback: list[TransformSpec]) -> list[TransformSpec]:
     specs: list[TransformSpec] = []
-    for index, item in enumerate(_json_list(value)[:24]):
+    raw_items = _json_list(value)
+    for index, item in enumerate(raw_items[:24]):
         name = _string(item.get("name"))
         if not name:
             continue
@@ -505,7 +619,11 @@ def _model_transform_specs(value: object, *, fallback: list[TransformSpec]) -> l
                 },
             )
         )
-    return specs or list(fallback)
+    if specs:
+        return specs
+    if isinstance(value, list):
+        return []
+    return list(fallback)
 
 
 def _model_slot_frame(
