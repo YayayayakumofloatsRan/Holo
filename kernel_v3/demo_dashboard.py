@@ -386,12 +386,23 @@ def current_run_state(
         "selected_item_id": selected_item_id,
         "latest_question": latest.get("question") or "",
         "latest_reason": latest.get("scorecard", {}).get("reason") or latest.get("failure_report", {}).get("reason") or "",
-        "latest_answer": latest.get("final_answer") or latest.get("answer") or "",
+        "latest_answer": _answer_text(latest.get("final_answer") or latest.get("answer") or ""),
         "latest_metrics": selected_metrics(latest_metrics),
         "result_exists": result_path.exists(),
         "summary_exists": summary_path.exists(),
         "stale_seconds": stale_seconds,
     }
+
+
+def _answer_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("answer", "final_answer", "result", "text"):
+            if value.get(key):
+                return clip(value.get(key), 900)
+        return clip(json.dumps(value, ensure_ascii=True, sort_keys=True), 900)
+    if isinstance(value, list):
+        return clip(json.dumps(value, ensure_ascii=True), 900)
+    return clip(value, 900)
 
 
 def _run_status(bench_dir: Path, run_prefix: str, *, summary: Json, latest: Json) -> str:
@@ -820,7 +831,7 @@ HTML = r"""<!doctype html>
       overflow: hidden;
     }
     .left, .right { min-height: 0; display: grid; gap: 14px; }
-    .left { grid-template-rows: 174px 1fr 210px; }
+    .left { grid-template-rows: 206px 1fr 178px; }
     .right { grid-template-rows: 182px 1fr 168px; }
     .panel {
       min-height: 0;
@@ -852,24 +863,25 @@ HTML = r"""<!doctype html>
     .dot.failed { background: var(--red); }
     .progress { height: 8px; background: #e7ebf0; border-radius: 8px; overflow: hidden; margin-top: 12px; }
     .bar { height: 100%; width: 0%; background: var(--blue); }
-    .cards, .run-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .run-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     .baseline { border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0; }
     .baseline strong { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .baseline .score { font-size: 26px; font-weight: 780; margin: 8px 0 4px; color: var(--teal); }
     .run-card {
       display: grid;
-      gap: 5px;
+      gap: 4px;
       text-align: left;
       min-width: 0;
-      padding: 10px;
+      padding: 8px;
       border-radius: 8px;
       border: 1px solid var(--line);
       background: #fff;
       color: var(--ink);
     }
     .run-card.active { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
-    .run-card strong { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .run-card .question-line { color: var(--muted); font-size: 11px; line-height: 1.35; height: 30px; overflow: hidden; }
+    .run-card strong { display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-card .question-line { color: var(--muted); font-size: 10px; line-height: 1.25; height: 25px; overflow: hidden; }
     .run-status-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
     .pill {
       display: inline-flex;
@@ -877,10 +889,27 @@ HTML = r"""<!doctype html>
       gap: 6px;
       min-width: 0;
       color: var(--muted);
-      font-size: 11px;
+      font-size: 10px;
       white-space: nowrap;
     }
     .tiny { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-card .tiny { font-size: 10px; }
+    .evidence-ribbon {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .evidence-chip {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 9px;
+      min-width: 0;
+      background: #fbfcfd;
+    }
+    .evidence-chip strong { display: block; font-size: 14px; line-height: 1; }
+    .evidence-chip span { display: block; margin-top: 4px; font-size: 10px; color: var(--muted); }
+    .tool-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
     .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; height: calc(100% - 28px); }
     .stage { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
     .stage .name { font-weight: 720; font-size: 14px; }
@@ -946,10 +975,15 @@ HTML = r"""<!doctype html>
         <div class="panel-title"><span>Current live run</span><span class="status"><span id="runDot" class="dot"></span><span id="runStatus">loading</span></span></div>
         <div class="hero-metric">
           <div class="metric"><div class="value" id="passRate">-</div><div class="label">strict pass rate</div></div>
-          <div class="metric"><div class="value" id="reasonableRate">-</div><div class="label">reasonable judge</div></div>
+          <div class="metric"><div class="value" id="verifierState">-</div><div class="label">numeric verifier</div></div>
           <div class="metric"><div class="value" id="progressText">0/0</div><div class="label">items scored</div></div>
         </div>
         <div class="progress"><div class="bar" id="progressBar"></div></div>
+        <div class="evidence-ribbon">
+          <div class="evidence-chip"><strong id="heroCalc">0</strong><span>calculator</span></div>
+          <div class="evidence-chip"><strong id="heroFacts">0</strong><span>finance facts</span></div>
+          <div class="evidence-chip"><strong id="heroCitations">0</strong><span>citations</span></div>
+        </div>
       </div>
       <div class="panel">
         <div class="panel-title"><span>Demo case selector</span><span id="selectedRunLabel">live</span></div>
@@ -957,10 +991,11 @@ HTML = r"""<!doctype html>
       </div>
       <div class="panel">
         <div class="panel-title"><span>LLM and tools</span><span id="provider"></span></div>
-        <div class="footer-grid">
+        <div class="tool-grid">
           <div class="metric"><div class="value" id="llmCalls">0</div><div class="label">processor calls</div></div>
           <div class="metric"><div class="value" id="retrievalFetches">0</div><div class="label">fetches</div></div>
-          <div class="metric"><div class="value" id="tokens">0</div><div class="label">tokens</div></div>
+          <div class="metric"><div class="value" id="calcCalls">0</div><div class="label">calculator</div></div>
+          <div class="metric"><div class="value" id="factCount">0</div><div class="label">facts</div></div>
         </div>
       </div>
     </section>
@@ -1035,22 +1070,27 @@ HTML = r"""<!doctype html>
       const cur = data.current || {};
       if (!selected.runPrefix && data.filters && data.filters.run_prefix) selected.runPrefix = data.filters.run_prefix;
       if (data.filters && data.filters.item_id !== undefined) selected.itemId = data.filters.item_id || "";
+      const metrics = cur.latest_metrics || {};
       text("subtitle", `${data.generated_at} | branch ${data.repo.branch || "-"} @ ${data.repo.head || "-"}`);
       text("runStatus", cur.status || "unknown");
       cls("runDot", `dot ${cur.status === "complete" && cur.failed ? "failed" : cur.status === "complete" ? "ok" : cur.status || ""}`);
       text("passRate", fmtPct(cur.pass_rate));
-      text("reasonableRate", fmtPct(cur.reasonable_pass_rate));
+      text("verifierState", metrics.numeric_verifier_status || (metrics.synthesis_gate_passed ? "passed" : "-"));
       text("progressText", `${cur.done || 0}/${cur.total || 0}`);
       document.getElementById("progressBar").style.width = `${Math.min(100, ((cur.done || 0) / Math.max(1, cur.total || 1)) * 100)}%`;
+      text("heroCalc", fmtNum(metrics.calculator_call_count));
+      text("heroFacts", fmtNum(metrics.finance_fact_count || metrics.claim_count || metrics.evidence_count));
+      text("heroCitations", fmtNum(metrics.citation_count || metrics.retrieval_citation_count));
       text("latestItem", cur.latest_item_id || "waiting");
       text("question", cur.latest_question || "Waiting for the next scored item.");
       text("answerState", cur.latest_answer || cur.latest_reason || "No final answer yet.");
       const d = data.diagnosis || {};
       text("diagnosis", [d.headline, d.reason, d.failure_mode, d.next_hint, d.engineering_takeaway].filter(Boolean).join(" | "));
       text("provider", `${data.llm.provider || "-"} ${data.llm.model || ""}`.trim());
-      text("llmCalls", fmtNum((cur.latest_metrics || {}).processor_call_count || data.llm.requests));
-      text("retrievalFetches", fmtNum((cur.latest_metrics || {}).fetch_attempt_count));
-      text("tokens", fmtNum((cur.latest_metrics || {}).total_tokens));
+      text("llmCalls", fmtNum(metrics.processor_call_count || data.llm.requests));
+      text("retrievalFetches", fmtNum(metrics.fetch_attempt_count));
+      text("calcCalls", fmtNum(metrics.calculator_call_count));
+      text("factCount", fmtNum(metrics.finance_fact_count || metrics.claim_count || metrics.evidence_count));
       text("repo", `${data.repo.dirty ? "dirty" : "clean"} | remote ${data.repo.remote || "-"}`);
       text("resultPath", data.links.result_jsonl || "-");
       text("summaryPath", data.links.summary_json || "-");
@@ -1065,7 +1105,7 @@ HTML = r"""<!doctype html>
       document.getElementById("demoRuns").innerHTML = rows.map(row => {
         const statusClass = row.status === "complete" && row.failed ? "failed" : row.status === "complete" ? "ok" : row.status || "";
         const active = row.run_prefix === activeRunPrefix && String(row.item_id || "") === String(activeItemId || "") ? " active" : "";
-        return `<button class="run-card${active}" data-run="${escapeHtml(row.run_prefix)}">
+        return `<button class="run-card${active}" data-run="${escapeHtml(row.run_prefix)}" title="${escapeHtml(row.question)}">
           <div class="run-status-line">
             <strong>${escapeHtml(row.label)}</strong>
             <span class="pill"><span class="dot ${escapeHtml(statusClass)}"></span>${escapeHtml(row.status || "waiting")}</span>
