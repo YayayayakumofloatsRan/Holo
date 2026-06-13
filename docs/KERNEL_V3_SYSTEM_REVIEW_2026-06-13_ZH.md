@@ -301,6 +301,14 @@ SEC companyfacts payload 可能明显大于普通网页。此前 4MB 截断会�
 
 默认 demo run 切到 `run_metric_disambiguation_live14_20260613`，并加入 Goldman net revenues 等 item-level case。界面增加 auto demo reel，用于不拖动界面的录制场景。
 
+2026-06-13 后续 UI pass：
+
+- Windows 浏览器 demo 保持 `http://localhost:8787/`。
+- 界面改为英文为主，统一使用 Times New Roman。
+- 首屏按 presentation focus、demo case selector、LLM/tool surface、agent pipeline、current problem、answer state、engineering diagnosis 组织。
+- Agent workflow 以线性 pipeline 展示 LLM plan、Retrieve、Evidence、Compute、Verify、Synthesize、Score、Provider，使观众能直接看到 Holo 的问题解决闭环。
+- Answer panel 默认展示英文状态摘要、证据数量和 verifier gate，而不是把历史 run 的长篇原始答案直接塞进首屏。
+
 ### 4. 回归测试
 
 已经通过的关键测试：

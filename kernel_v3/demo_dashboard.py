@@ -845,67 +845,69 @@ HTML = r"""<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f5f7f9;
+      --bg: #f3f4f2;
       --panel: #ffffff;
-      --ink: #162029;
-      --muted: #637083;
-      --line: #d7dde5;
-      --blue: #2563eb;
+      --ink: #161a1d;
+      --muted: #667085;
+      --line: #d9dee5;
+      --blue: #1d4ed8;
       --teal: #0f766e;
       --green: #15803d;
       --amber: #b45309;
       --red: #b91c1c;
-      --slate: #334155;
+      --slate: #344054;
+      --soft: #f8fafc;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       height: 100vh;
       overflow: hidden;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: "Times New Roman", Times, serif;
       background: var(--bg);
       color: var(--ink);
     }
     header {
-      height: 64px;
+      height: 72px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 22px;
+      padding: 0 24px;
       border-bottom: 1px solid var(--line);
       background: #fff;
     }
-    h1 { margin: 0; font-size: 20px; font-weight: 720; letter-spacing: 0; }
-    .sub { color: var(--muted); font-size: 13px; margin-top: 3px; }
+    h1 { margin: 0; font-size: 25px; font-weight: 700; letter-spacing: 0; }
+    .sub { color: var(--muted); font-size: 14px; margin-top: 3px; }
     .top-actions { display: flex; gap: 8px; align-items: center; }
     button, a.button {
       border: 1px solid var(--line);
       background: #fff;
       color: var(--ink);
-      padding: 8px 10px;
-      border-radius: 8px;
-      font-size: 13px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: "Times New Roman", Times, serif;
       text-decoration: none;
       cursor: pointer;
     }
-    button.active { border-color: var(--blue); color: var(--blue); }
+    button.active { border-color: var(--blue); color: var(--blue); background: #f8fbff; }
     .grid {
-      height: calc(100vh - 64px);
+      height: calc(100vh - 72px);
       display: grid;
-      grid-template-columns: minmax(420px, 34%) 1fr;
-      gap: 14px;
-      padding: 14px;
+      grid-template-columns: minmax(390px, 31%) minmax(0, 1fr);
+      gap: 16px;
+      padding: 16px;
       overflow: hidden;
     }
-    .left, .right { min-height: 0; display: grid; gap: 14px; }
-    .left { grid-template-rows: 278px 1fr 178px; }
-    .right { grid-template-rows: 220px 1fr 150px; }
+    .left, .right { min-height: 0; display: grid; gap: 16px; }
+    .left { grid-template-rows: 356px 1fr 164px; }
+    .right { grid-template-rows: 262px 1fr 142px; }
     .panel {
       min-height: 0;
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
+      border-radius: 6px;
+      padding: 16px;
       overflow: hidden;
     }
     .panel-title {
@@ -917,12 +919,30 @@ HTML = r"""<!doctype html>
       color: var(--muted);
       font-weight: 700;
       text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .hero-title {
+      margin: 2px 0 8px;
+      font-size: 22px;
+      line-height: 1.1;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .hero-copy {
+      height: 42px;
+      margin-bottom: 12px;
+      color: var(--slate);
+      font-size: 15px;
+      line-height: 1.38;
+      overflow: hidden;
     }
     .hero-metric { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-    .metric { border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
-    .metric .value { font-size: 30px; line-height: 1; font-weight: 780; }
-    .metric .label { margin-top: 7px; color: var(--muted); font-size: 12px; }
-    .status { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+    .metric { border: 1px solid var(--line); border-radius: 6px; padding: 12px; min-width: 0; background: var(--soft); }
+    .metric .value { font-size: 31px; line-height: 1; font-weight: 700; }
+    .metric .label { margin-top: 7px; color: var(--muted); font-size: 13px; }
+    .status { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; color: var(--muted); }
     .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
     .dot.ok { background: var(--green); }
     .dot.running, .dot.active { background: var(--blue); }
@@ -932,16 +952,16 @@ HTML = r"""<!doctype html>
     .bar { height: 100%; width: 0%; background: var(--blue); }
     .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .run-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-    .baseline { border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0; }
+    .baseline { border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
     .baseline strong { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .baseline .score { font-size: 26px; font-weight: 780; margin: 8px 0 4px; color: var(--teal); }
+    .baseline .score { font-size: 26px; font-weight: 700; margin: 8px 0 4px; color: var(--teal); }
     .run-card {
       display: grid;
       gap: 4px;
       text-align: left;
       min-width: 0;
       padding: 8px;
-      border-radius: 8px;
+      border-radius: 6px;
       border: 1px solid var(--line);
       background: #fff;
       color: var(--ink);
@@ -969,7 +989,7 @@ HTML = r"""<!doctype html>
     }
     .evidence-chip {
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 6px;
       padding: 7px 9px;
       min-width: 0;
       background: #fbfcfd;
@@ -979,9 +999,9 @@ HTML = r"""<!doctype html>
     .spotlight {
       margin-top: 10px;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 6px;
       padding: 9px 10px;
-      background: #f8fafc;
+      background: var(--soft);
       min-height: 62px;
       overflow: hidden;
     }
@@ -996,8 +1016,8 @@ HTML = r"""<!doctype html>
     }
     .spotlight-title {
       margin-top: 5px;
-      font-size: 14px;
-      font-weight: 760;
+      font-size: 15px;
+      font-weight: 700;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1011,49 +1031,97 @@ HTML = r"""<!doctype html>
       overflow: hidden;
     }
     .tool-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-    .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 10px; height: calc(100% - 28px); }
-    .stage { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
-    .stage .name { font-weight: 720; font-size: 14px; }
-    .stage .num { font-size: 24px; font-weight: 780; line-height: 1; }
+    .workflow-statement {
+      height: 42px;
+      margin-bottom: 12px;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+      color: var(--slate);
+      font-size: 15px;
+      line-height: 1.35;
+      overflow: hidden;
+    }
+    .pipeline { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 10px; height: calc(100% - 70px); }
+    .stage {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-width: 0;
+      background: #fff;
+    }
+    .stage:not(:last-child)::after {
+      content: ">";
+      position: absolute;
+      right: -9px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #98a2b3;
+      font-size: 14px;
+      font-weight: 700;
+      z-index: 2;
+    }
+    .stage-index { color: var(--muted); font-size: 12px; }
+    .stage .name { font-weight: 700; font-size: 15px; }
+    .stage .num { font-size: 25px; font-weight: 700; line-height: 1; }
     .stage.ok { border-color: #9fd4b1; }
     .stage.warn { border-color: #e5c07b; }
     .stage.active { border-color: #93b4f8; }
     .stage.idle { opacity: 0.72; }
     .tabs { display: none; height: 100%; min-height: 0; }
     .tabs.active { display: grid; }
-    .finance-view { grid-template-rows: 52px 1fr; gap: 10px; }
+    .finance-view { grid-template-rows: 104px 1fr; gap: 12px; }
     .question {
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px;
-      font-size: 13px;
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 16px;
       line-height: 1.45;
       overflow: hidden;
       color: var(--slate);
       background: #fbfcfd;
     }
+    .question-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .question-text {
+      font-size: 17px;
+      line-height: 1.38;
+      height: 50px;
+      overflow: hidden;
+    }
     .diag { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 0; }
-    .diag-block { border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: hidden; }
-    .diag-block h3 { margin: 0 0 8px; font-size: 15px; }
-    .diag-block p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); }
+    .diag-block { border: 1px solid var(--line); border-radius: 6px; padding: 12px; overflow: hidden; background: #fff; }
+    .diag-block h3 { margin: 0 0 8px; font-size: 17px; font-weight: 700; }
+    .diag-block p { margin: 0; font-size: 15px; line-height: 1.45; color: var(--muted); }
     .intel-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; height: 100%; }
-    .intel { border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: hidden; }
-    .intel .label { font-weight: 720; font-size: 14px; }
-    .intel .state { margin-top: 6px; color: var(--teal); font-weight: 700; font-size: 13px; }
-    .intel .detail { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .intel { border: 1px solid var(--line); border-radius: 6px; padding: 12px; overflow: hidden; background: #fff; }
+    .intel .label { font-weight: 700; font-size: 16px; }
+    .intel .state { margin-top: 6px; color: var(--teal); font-weight: 700; font-size: 14px; }
+    .intel .detail { margin-top: 8px; color: var(--muted); font-size: 14px; line-height: 1.45; }
     .timeline { display: grid; gap: 7px; height: 100%; grid-auto-rows: minmax(30px, auto); overflow: hidden; }
     .event { display: grid; grid-template-columns: 150px 84px 1fr; gap: 10px; align-items: center; border-bottom: 1px solid #edf0f4; padding-bottom: 7px; min-width: 0; }
-    .event div { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
-    .event .kind { font-weight: 720; color: var(--slate); }
+    .event div { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+    .event .kind { font-weight: 700; color: var(--slate); }
     .event .state { color: var(--muted); }
     .event .desc { color: var(--muted); }
     .footer-grid { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 10px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .mono { font-family: "Times New Roman", Times, serif; }
     @media (max-width: 980px) {
       body { overflow: auto; height: auto; }
       .grid { height: auto; grid-template-columns: 1fr; }
       .left, .right { grid-template-rows: auto; }
       .pipeline, .cards, .run-cards, .diag, .intel-list, .footer-grid { grid-template-columns: 1fr; }
+      .stage:not(:last-child)::after { display: none; }
     }
   </style>
 </head>
@@ -1073,11 +1141,13 @@ HTML = r"""<!doctype html>
   <main class="grid">
     <section class="left">
       <div class="panel">
-        <div class="panel-title"><span>Current live run</span><span class="status"><span id="runDot" class="dot"></span><span id="runStatus">loading</span></span></div>
+        <div class="panel-title"><span>Presentation focus</span><span class="status"><span id="runDot" class="dot"></span><span id="runStatus">loading</span></span></div>
+        <div class="hero-title" id="heroTitle">Financial reasoning demo</div>
+        <div class="hero-copy" id="heroCopy">LLM chooses the research move; tools retrieve and compute; the host verifies, journals, and presents evidence.</div>
         <div class="hero-metric">
-          <div class="metric"><div class="value" id="passRate">-</div><div class="label">strict pass rate</div></div>
-          <div class="metric"><div class="value" id="verifierState">-</div><div class="label">numeric verifier</div></div>
-          <div class="metric"><div class="value" id="progressText">0/0</div><div class="label">items scored</div></div>
+          <div class="metric"><div class="value" id="passRate">-</div><div class="label">live pass rate</div></div>
+          <div class="metric"><div class="value" id="verifierState">-</div><div class="label">verifier gate</div></div>
+          <div class="metric"><div class="value" id="progressText">0/0</div><div class="label">scored items</div></div>
         </div>
         <div class="progress"><div class="bar" id="progressBar"></div></div>
         <div class="evidence-ribbon">
@@ -1096,7 +1166,7 @@ HTML = r"""<!doctype html>
         <div class="run-cards" id="demoRuns"></div>
       </div>
       <div class="panel">
-        <div class="panel-title"><span>LLM and tools</span><span id="provider"></span></div>
+        <div class="panel-title"><span>LLM and tool surface</span><span id="provider"></span></div>
         <div class="tool-grid">
           <div class="metric"><div class="value" id="llmCalls">0</div><div class="label">processor calls</div></div>
           <div class="metric"><div class="value" id="retrievalFetches">0</div><div class="label">fetches</div></div>
@@ -1109,11 +1179,15 @@ HTML = r"""<!doctype html>
     <section class="right">
       <div class="panel">
         <div class="panel-title"><span>Agent pipeline</span><span id="latestItem"></span></div>
+        <div class="workflow-statement" id="workflowStatement">Model planning, live retrieval, evidence ledger, calculator trace, verifier gate, and final synthesis are visible as one workflow.</div>
         <div class="pipeline" id="pipeline"></div>
       </div>
       <div class="panel">
         <section id="finance" class="tabs finance-view active">
-          <div class="question" id="question"></div>
+          <div class="question">
+            <div class="question-label">Current problem</div>
+            <div class="question-text" id="questionText"></div>
+          </div>
           <div class="diag">
             <div class="diag-block"><h3>Answer state</h3><p id="answerState"></p></div>
             <div class="diag-block"><h3>Engineering diagnosis</h3><p id="diagnosis"></p></div>
@@ -1182,6 +1256,9 @@ HTML = r"""<!doctype html>
       const metrics = cur.latest_metrics || {};
       const stability = data.stability || {};
       text("subtitle", `${data.generated_at} | branch ${data.repo.branch || "-"} @ ${data.repo.head || "-"}`);
+      text("heroTitle", cur.selected_item_id || cur.latest_item_id ? `Case ${cur.selected_item_id || cur.latest_item_id}` : "Financial reasoning demo");
+      text("heroCopy", cur.latest_question || "LLM chooses the research move; tools retrieve and compute; the host verifies, journals, and presents evidence.");
+      text("workflowStatement", `${cur.name || "Kernel v3"}: LLM semantic decisions, tool execution, evidence ledger, verification, and final answer are visible in one flow.`);
       text("runStatus", cur.status || "unknown");
       cls("runDot", `dot ${cur.status === "complete" && cur.failed ? "failed" : cur.status === "complete" ? "ok" : cur.status || ""}`);
       text("passRate", fmtPct(cur.pass_rate));
@@ -1192,8 +1269,8 @@ HTML = r"""<!doctype html>
       text("heroFacts", fmtNum(metrics.finance_fact_count || metrics.claim_count || metrics.evidence_count));
       text("heroCitations", fmtNum(metrics.citation_count || metrics.retrieval_citation_count));
       text("latestItem", cur.latest_item_id || "waiting");
-      text("question", cur.latest_question || "Waiting for the next scored item.");
-      text("answerState", cur.latest_answer || cur.latest_reason || "No final answer yet.");
+      text("questionText", cur.latest_question || "Waiting for the next scored item.");
+      text("answerState", answerStateText(cur));
       const d = data.diagnosis || {};
       text("diagnosis", [d.headline, d.reason, d.failure_mode, d.next_hint, d.engineering_takeaway].filter(Boolean).join(" | "));
       text("provider", `${data.llm.provider || "-"} ${data.llm.model || ""}`.trim());
@@ -1250,6 +1327,16 @@ HTML = r"""<!doctype html>
         }
       ];
     }
+    function answerStateText(cur) {
+      const metrics = cur.latest_metrics || {};
+      const item = cur.selected_item_id || cur.latest_item_id || "Current item";
+      const status = cur.status === "complete" ? `${cur.passed || 0}/${cur.done || 0} items passed` : (cur.status || "waiting");
+      const verifier = metrics.numeric_verifier_status || (metrics.synthesis_gate_passed ? "synthesis gate passed" : "verifier pending");
+      const facts = fmtNum(metrics.finance_fact_count || metrics.claim_count || metrics.evidence_count);
+      const citations = fmtNum(metrics.citation_count || metrics.retrieval_citation_count);
+      const reason = cur.latest_reason ? `Reason: ${cur.latest_reason}.` : "Trace available in the audit log.";
+      return `${item}: ${status}. ${reason} Evidence ledger: ${facts} facts and ${citations} citations. Gate: ${verifier}.`;
+    }
     function renderSpotlight() {
       if (!latestSpotlights.length) return;
       const row = latestSpotlights[spotlightIndex % latestSpotlights.length] || {};
@@ -1286,9 +1373,9 @@ HTML = r"""<!doctype html>
         </div>`).join("");
     }
     function renderPipeline(rows) {
-      document.getElementById("pipeline").innerHTML = rows.map(row => `
+      document.getElementById("pipeline").innerHTML = rows.map((row, index) => `
         <div class="stage ${escapeHtml(row.state)}">
-          <div><div class="name">${escapeHtml(row.label)}</div><div class="tiny">${escapeHtml(row.detail)}</div></div>
+          <div><div class="stage-index">${index + 1}</div><div class="name">${escapeHtml(row.label)}</div><div class="tiny">${escapeHtml(row.detail)}</div></div>
           <div class="num">${fmtNum(row.value)}</div>
         </div>`).join("");
     }
