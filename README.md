@@ -841,7 +841,7 @@ also leave a blank line before the next prompt. Final answers highlight
 model packets, public route/action reasons, policy checks, tool calls,
 observations, retrieval search/fetch/extract events, evaluator feedback,
 workloop decisions, and final/failure records while the turn is running. This is
-journal-event streaming, not hidden chain-of-thought or token streaming. Console
+journal-event streaming over host-visible runtime packets and audit records. Console
 colors live in `kernel_v3/chat/theme.py`, separate from command routing and chat
 runtime logic.
 
@@ -2039,7 +2039,8 @@ browser. The page shows stage topology, packet timeline, LLM processor packets,
 model-owned workbench/judge decisions, tool and retrieval events, claim/slot/
 transform substrate records, verifier/synthesis gates, final/failure state, and
 the compact JSON behind each packet. This is the intended demo surface for
-explaining the internal workflow without exposing hidden chain-of-thought.
+explaining the internal workflow through host-visible packets, tool observations,
+evidence records, and verifier state.
 
 See `docs/KERNEL_V3_FINANCE_BENCHMARK_TRACK.md` for the scoring schema and
 planned Finance Agent Benchmark / FinAgent / SECQUE / FinanceQA path.

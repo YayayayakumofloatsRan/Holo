@@ -726,7 +726,7 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
         "model_io": model_io_stream_state(visible_turn),
         "activity": public_activity_state(visible_turn, active),
         "stats": _console_trace_stats(visible_turn, thread_records=len(scoped)),
-        "notice": "Current turn only. Public trace; hidden chain-of-thought is not exposed.",
+        "notice": "Current turn runtime context: model packets, prompt/contract previews, structured outputs, tools, evidence, verifier gates, and answers.",
     }
 
 
@@ -1139,7 +1139,7 @@ def model_io_stream_state(records: list[Json]) -> list[Json]:
                     "kind": "input",
                     "label": "Input contract",
                     "meta": f"{prompt.get('chars', 0)} chars | hash {str(prompt.get('hash') or '')[:10]}",
-                    "body": clip(prompt.get("preview") or data.get("prompt") or "", 620),
+                    "body": clip(prompt.get("preview") or data.get("prompt") or "", 1500),
                     "status": "request",
                 }
             )
@@ -1227,11 +1227,11 @@ def _processor_output_body(output: Json, error: object) -> str:
             lines.append(f"{key}: {clip(value, 360)}")
         if lines:
             return clip("\n".join(lines), 1100)
-        return clip(json.dumps(parsed, ensure_ascii=True, sort_keys=True), 1100)
+        return clip(json.dumps(parsed, ensure_ascii=True, sort_keys=True), 1800)
     body = output.get("raw_output_preview") if isinstance(output, dict) else ""
     if not isinstance(body, str):
         body = json.dumps(body, ensure_ascii=True, sort_keys=True)
-    return clip(body, 900)
+    return clip(body, 1600)
 
 
 def _processor_call_summary(call: Json) -> str:
@@ -2497,13 +2497,38 @@ HTML = r"""<!doctype html>
       min-height: 0;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background:
-        linear-gradient(#eef2f7 1px, transparent 1px),
-        linear-gradient(90deg, #eef2f7 1px, transparent 1px),
-        #fff;
-      background-size: 28px 28px;
+      background: #fff;
       overflow: hidden;
     }
+    .topology-canvas::before {
+      content: "";
+      position: absolute;
+      inset: 26px 54px;
+      border: 1px solid #dbe3ee;
+      border-radius: 999px;
+      background: #fbfcfd;
+      pointer-events: none;
+    }
+    .topology-loop-label {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      display: grid;
+      gap: 4px;
+      place-items: center;
+      width: 138px;
+      height: 74px;
+      border: 1px solid #dbe3ee;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .92);
+      color: var(--slate);
+      text-align: center;
+      pointer-events: none;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, .06);
+    }
+    .topology-loop-label strong { font-size: 16px; line-height: 1; }
+    .topology-loop-label span { color: var(--muted); font-size: 11px; line-height: 1.15; max-width: 118px; }
     .topology-svg {
       position: absolute;
       inset: 0;
@@ -2517,13 +2542,18 @@ HTML = r"""<!doctype html>
       fill: none;
       opacity: .64;
     }
+    .topology-edge.feedback {
+      stroke-dasharray: 5 5;
+      opacity: .48;
+    }
+    .topology-edge.loopback { stroke: var(--teal); opacity: .72; }
     .topology-edge.active { stroke: var(--blue); stroke-width: 3; opacity: .9; }
     .topology-edge.hot { stroke: var(--teal); stroke-width: 4; opacity: 1; }
     .topology-edge.warn { stroke: var(--amber); stroke-width: 3; opacity: .95; }
     .topology-node {
       position: absolute;
-      width: 76px;
-      min-height: 58px;
+      width: 84px;
+      min-height: 60px;
       transform: translate(-50%, -50%);
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -2643,19 +2673,19 @@ HTML = r"""<!doctype html>
           <div class="graph-inspector" id="graphInspector">
             <div class="inspect-kicker">Inspector</div>
             <div class="inspect-title">Select a node</div>
-            <div class="inspect-body">The graph shows model decisions, host validation, tools, search, evidence, verification, and answer flow as connected runtime nodes.</div>
+            <div class="inspect-body">The graph shows the live agent loop: model decisions, host validation, tool execution, search, evidence, verification, answer, and continuation.</div>
           </div>
         </div>
       </div>
       <div class="panel">
-        <div class="panel-title"><span>Execution signals</span><span id="publicTraceNotice">public trace only</span></div>
+        <div class="panel-title"><span>Execution signals</span><span id="publicTraceNotice">runtime context live</span></div>
         <div class="live-grid">
           <div class="live-pane">
             <div class="column-title">Events</div>
             <div class="activity-list" id="activityStream"></div>
           </div>
           <div class="live-pane">
-            <div class="column-title">Processors</div>
+            <div class="column-title">Model context</div>
             <div class="llm-list" id="modelIoStream"></div>
           </div>
           <div class="live-pane wide-pane">
@@ -2713,26 +2743,27 @@ HTML = r"""<!doctype html>
     let liveConnectedThread = "";
     let lastLiveAt = 0;
     let manualInspector = false;
+    let frozenTrace = null;
     const topologyLabels = ["Intake", "Plan", "Policy", "Tools", "Search", "Evidence", "Verify", "Answer"];
     const topologyLayout = {
-      Intake: [10, 50],
-      Plan: [28, 28],
-      Policy: [46, 28],
-      Tools: [64, 28],
-      Search: [46, 72],
-      Evidence: [64, 72],
-      Verify: [80, 72],
-      Answer: [92, 50]
+      Intake: [50, 12],
+      Plan: [72, 22],
+      Policy: [86, 50],
+      Tools: [72, 78],
+      Search: [50, 88],
+      Evidence: [28, 78],
+      Verify: [14, 50],
+      Answer: [28, 22]
     };
     const topologyEdges = [
       ["Intake", "Plan"],
       ["Plan", "Policy"],
       ["Policy", "Tools"],
-      ["Policy", "Search"],
-      ["Tools", "Evidence"],
+      ["Tools", "Search"],
       ["Search", "Evidence"],
       ["Evidence", "Verify"],
-      ["Verify", "Answer"]
+      ["Verify", "Answer"],
+      ["Answer", "Plan", "loopback"]
     ];
     let latestSpotlights = [];
     let spotlightIndex = 0;
@@ -2807,6 +2838,7 @@ HTML = r"""<!doctype html>
     });
     document.getElementById("clearScreen").addEventListener("click", () => {
       setScreenCleared(true);
+      frozenTrace = null;
       renderTranscript([]);
       renderPipeline([]);
       renderModelIO([]);
@@ -2840,6 +2872,7 @@ HTML = r"""<!doctype html>
     function resetLiveView() {
       manualInspector = false;
       lastLiveAt = 0;
+      frozenTrace = null;
       renderTranscript([]);
       renderPipeline([]);
       renderModelIO([]);
@@ -2892,6 +2925,9 @@ HTML = r"""<!doctype html>
     }
     function applyLivePayload(payload) {
       if (!payload || payload.thread_id !== selected.consoleThread) return;
+      const kind = payload.record && payload.record.kind;
+      if (kind === "chat_turn") frozenTrace = null;
+      if (frozenTrace && frozenTrace.threadId === selected.consoleThread) return;
       lastLiveAt = Date.now();
       setScreenCleared(false);
       const stats = payload.stats || {};
@@ -2901,12 +2937,25 @@ HTML = r"""<!doctype html>
       renderModelIO(payload.model_io || []);
       renderBranches(payload.search_branches || []);
       renderActivity(payload.flow || []);
-      text("publicTraceNotice", `${closed ? "closed live trace" : "live journal stream"} | ${fmtNum(stats.records)} events`);
+      text("publicTraceNotice", `${closed ? "closed runtime context" : "live runtime context"} | ${fmtNum(stats.records)} events`);
       text("consoleStatus", closed ? "ready" : "running");
       cls("consoleDot", `dot ${closed ? "ok" : "running"}`);
+      if (closed) {
+        frozenTrace = {
+          threadId: selected.consoleThread,
+          transcript: payload.transcript || [],
+          topology: payload.topology || [],
+          model_io: payload.model_io || [],
+          search_branches: payload.search_branches || [],
+          flow: payload.flow || [],
+          stats,
+          frozenAt: Date.now()
+        };
+      }
     }
     function renderPendingSubmit(message) {
       const now = Date.now();
+      frozenTrace = null;
       renderTranscript([
         { role: "user", text: message, status: "submitted", at: now },
         { role: "assistant", text: "Kernel v3 is running. Model packets, tool calls, retrieval branches, verifier gates, and the final answer will stream into the graph as journal events arrive.", status: "running", at: now + 1 }
@@ -3011,15 +3060,23 @@ HTML = r"""<!doctype html>
       cls("consoleDot", `dot ${jobStatus === "running" || jobStatus === "queued" ? "running" : jobStatus === "failed" || jobStatus === "timeout" || jobStatus === "error" ? "failed" : "ok"}`);
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
       const cleared = isScreenCleared() && !["running", "queued"].includes(jobStatus);
-      const preserveLiveTrace = Boolean(lastLiveAt && Date.now() - lastLiveAt < 2500 && !cleared);
+      const hasFrozenTrace = Boolean(frozenTrace && frozenTrace.threadId === selected.consoleThread && !cleared);
+      const preserveLiveTrace = Boolean((hasFrozenTrace || (lastLiveAt && Date.now() - lastLiveAt < 2500)) && !cleared);
       if (!preserveLiveTrace) {
-        text("publicTraceNotice", consoleState.notice || "public trace only");
+        text("publicTraceNotice", consoleState.notice || "runtime context");
         renderTranscript(cleared ? [] : (consoleState.transcript || []));
         renderPipeline(cleared ? [] : (consoleState.topology || []));
         renderModelIO(cleared ? [] : (consoleState.model_io || []));
         renderBranches(cleared ? [] : (consoleState.search_branches || []));
         renderActivity(cleared ? [] : (consoleState.flow || consoleState.activity || []));
         if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
+      } else if (hasFrozenTrace) {
+        text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} events | frozen`);
+        renderTranscript(frozenTrace.transcript || []);
+        renderPipeline(frozenTrace.topology || []);
+        renderModelIO(frozenTrace.model_io || []);
+        renderBranches(frozenTrace.search_branches || []);
+        renderActivity(frozenTrace.flow || []);
       }
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
@@ -3121,7 +3178,7 @@ HTML = r"""<!doctype html>
         };
       });
       const nodeMap = new Map(nodes.map(row => [row.label, row]));
-      const svgEdges = topologyEdges.map(([from, to]) => {
+      const svgEdges = topologyEdges.map(([from, to, kind]) => {
         const a = topologyLayout[from];
         const b = topologyLayout[to];
         const fromNode = nodeMap.get(from) || {};
@@ -3129,8 +3186,8 @@ HTML = r"""<!doctype html>
         const active = Number(fromNode.value || 0) > 0 && Number(toNode.value || 0) > 0;
         const hot = toNode.state === "active" || toNode.state === "closed";
         const warn = fromNode.state === "warn" || toNode.state === "warn";
-        const curve = `M ${a[0]} ${a[1]} L ${b[0]} ${b[1]}`;
-        return `<path class="topology-edge ${active ? "active" : ""} ${hot ? "hot" : ""} ${warn ? "warn" : ""}" d="${curve}" marker-end="url(#arrow)" />`;
+        const curve = topologyEdgePath(a, b, kind);
+        return `<path class="topology-edge ${kind === "loopback" ? "loopback feedback" : ""} ${active ? "active" : ""} ${hot ? "hot" : ""} ${warn ? "warn" : ""}" d="${curve}" marker-end="url(#arrow)" />`;
       }).join("");
       const nodeHtml = nodes.map(row => {
         const pos = topologyLayout[row.label];
@@ -3150,6 +3207,7 @@ HTML = r"""<!doctype html>
           </defs>
           ${svgEdges}
         </svg>
+        <div class="topology-loop-label"><strong>Agent Loop</strong><span>model -> tools -> evidence -> verify -> answer -> continue</span></div>
         ${nodeHtml}`;
       panel.querySelectorAll(".topology-node").forEach(button => {
         button.addEventListener("click", () => {
@@ -3159,6 +3217,19 @@ HTML = r"""<!doctype html>
       });
       const activeNode = nodes.find(row => row.state === "active") || nodes.find(row => row.state === "warn") || nodes.find(row => row.value > 0) || nodes[0];
       if (activeNode && !manualInspector) showInspector(activeNode.label, `${activeNode.state} | ${fmtNum(activeNode.value)} events`, activeNode.detail);
+    }
+    function topologyEdgePath(a, b, kind) {
+      const cx = 50;
+      const cy = 50;
+      const mx = (a[0] + b[0]) / 2;
+      const my = (a[1] + b[1]) / 2;
+      const dx = mx - cx;
+      const dy = my - cy;
+      const len = Math.hypot(dx, dy) || 1;
+      const bend = kind === "loopback" ? 24 : 9;
+      const qx = mx + (dx / len) * bend;
+      const qy = my + (dy / len) * bend;
+      return `M ${a[0]} ${a[1]} Q ${qx.toFixed(1)} ${qy.toFixed(1)} ${b[0]} ${b[1]}`;
     }
     function canonicalTopologyLabel(label) {
       const value = String(label || "").toLowerCase();
@@ -3187,7 +3258,7 @@ HTML = r"""<!doctype html>
     function renderTranscript(rows) {
       const panel = document.getElementById("transcript");
       if (!rows.length) {
-        panel.innerHTML = `<div class="message assistant"><div class="role">Holo</div><div class="body">Enter a task above. The WSL Kernel v3 runtime will execute it through the live agent loop, and the public trace will appear here.</div></div>`;
+        panel.innerHTML = `<div class="message assistant"><div class="role">Holo</div><div class="body">Enter a task above. The WSL Kernel v3 runtime will execute it through the live agent loop, and the runtime context will appear here.</div></div>`;
         panel.scrollTop = panel.scrollHeight;
         return;
       }
