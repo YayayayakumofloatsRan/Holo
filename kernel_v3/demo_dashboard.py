@@ -832,7 +832,7 @@ HTML = r"""<!doctype html>
     }
     .left, .right { min-height: 0; display: grid; gap: 14px; }
     .left { grid-template-rows: 206px 1fr 178px; }
-    .right { grid-template-rows: 182px 1fr 168px; }
+    .right { grid-template-rows: 220px 1fr 150px; }
     .panel {
       min-height: 0;
       background: var(--panel);
@@ -910,10 +910,10 @@ HTML = r"""<!doctype html>
     .evidence-chip strong { display: block; font-size: 14px; line-height: 1; }
     .evidence-chip span { display: block; margin-top: 4px; font-size: 10px; color: var(--muted); }
     .tool-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-    .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; height: calc(100% - 28px); }
-    .stage { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+    .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 10px; height: calc(100% - 28px); }
+    .stage { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
     .stage .name { font-weight: 720; font-size: 14px; }
-    .stage .num { font-size: 28px; font-weight: 780; }
+    .stage .num { font-size: 24px; font-weight: 780; line-height: 1; }
     .stage.ok { border-color: #9fd4b1; }
     .stage.warn { border-color: #e5c07b; }
     .stage.active { border-color: #93b4f8; }
