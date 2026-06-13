@@ -2724,7 +2724,7 @@ HTML = r"""<!doctype html>
     }
     .loop-panel {
       display: grid;
-      grid-template-rows: 28px minmax(0, 1fr) 124px;
+      grid-template-rows: 28px 64px minmax(0, 1fr) 124px;
       gap: 12px;
     }
     .loop-panel .panel-title {
@@ -2738,15 +2738,53 @@ HTML = r"""<!doctype html>
     }
     .loop-panel .topology-shell,
     .loop-panel .loop-branch-strip { height: auto; }
-    .loop-panel-status {
-      display: inline-flex;
-      gap: 6px;
-      align-items: center;
-      min-width: 0;
-      justify-content: flex-end;
+    .loop-event-banner {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 16px minmax(0, 1fr);
+      gap: 5px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+      padding: 9px 11px;
       overflow: hidden;
     }
-    .loop-panel-status span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .event-label {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 16px;
+      font-weight: 700;
+      text-transform: uppercase;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .event-line {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-width: 0;
+    }
+    .event-code {
+      color: var(--ink);
+      font-size: 19px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 110px;
+    }
+    .event-notice {
+      color: var(--slate);
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.12;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .topology-canvas {
       position: relative;
       min-height: 0;
@@ -2765,35 +2803,6 @@ HTML = r"""<!doctype html>
       max-width: 100%;
       max-height: 100%;
     }
-    .topology-frame::before {
-      content: "";
-      position: absolute;
-      inset: 26px 54px;
-      border: 1px solid #dbe3ee;
-      border-radius: 999px;
-      background: #fbfcfd;
-      pointer-events: none;
-    }
-    .topology-loop-label {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      display: grid;
-      gap: 4px;
-      place-items: center;
-      width: 138px;
-      height: 74px;
-      border: 1px solid #dbe3ee;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, .92);
-      color: var(--slate);
-      text-align: center;
-      pointer-events: none;
-      box-shadow: 0 8px 22px rgba(15, 23, 42, .06);
-    }
-    .topology-loop-label strong { font-size: 16px; line-height: 1; }
-    .topology-loop-label span { color: var(--muted); font-size: 11px; line-height: 1.15; max-width: 118px; }
     .topology-svg {
       position: absolute;
       inset: 0;
@@ -2802,20 +2811,21 @@ HTML = r"""<!doctype html>
       pointer-events: none;
     }
     .topology-edge {
-      stroke: #b8c2d1;
-      stroke-width: 2.2;
+      stroke: #cbd5e1;
+      stroke-width: 2;
       fill: none;
-      opacity: .64;
+      opacity: .74;
       stroke-linecap: round;
+      stroke-linejoin: round;
     }
     .topology-edge.feedback {
-      stroke-dasharray: 5 5;
-      opacity: .48;
+      stroke-dasharray: 6 5;
+      opacity: .55;
     }
-    .topology-edge.loopback { stroke: var(--teal); opacity: .72; }
-    .topology-edge.active { stroke: var(--blue); stroke-width: 3; opacity: .9; }
-    .topology-edge.hot { stroke: var(--teal); stroke-width: 4; opacity: 1; }
-    .topology-edge.warn { stroke: var(--amber); stroke-width: 3; opacity: .95; }
+    .topology-edge.loopback { stroke: #94a3b8; opacity: .62; }
+    .topology-edge.active { stroke: #6f8ecf; stroke-width: 2.4; opacity: .9; }
+    .topology-edge.hot { stroke: #76b7ad; stroke-width: 2.6; opacity: .92; }
+    .topology-edge.warn { stroke: var(--amber); stroke-width: 2.6; opacity: .92; }
     .topology-node {
       position: absolute;
       width: 84px;
@@ -2923,7 +2933,7 @@ HTML = r"""<!doctype html>
       .wide-pane { grid-column: auto; }
       .topology-shell, .thread-tools { grid-template-columns: 1fr; }
       .topology-shell { grid-template-rows: minmax(360px, auto) 112px; }
-      .loop-panel { grid-template-rows: auto minmax(480px, auto) minmax(150px, auto); }
+      .loop-panel { grid-template-rows: auto 64px minmax(480px, auto) minmax(150px, auto); }
       .stage:not(:last-child)::after { display: none; }
     }
   </style>
@@ -2957,7 +2967,13 @@ HTML = r"""<!doctype html>
       <div class="panel loop-panel">
         <div class="panel-title">
           <span>Agent loop runtime</span>
-          <span class="loop-panel-status"><span id="latestItem"></span><span id="publicTraceNotice">runtime context live</span></span>
+        </div>
+        <div class="loop-event-banner">
+          <div class="event-label">Current event</div>
+          <div class="event-line">
+            <span class="event-code" id="latestItem">waiting</span>
+            <span class="event-notice" id="publicTraceNotice">runtime context live</span>
+          </div>
         </div>
         <div class="topology-shell">
           <div class="topology-canvas" id="pipeline"></div>
@@ -3040,14 +3056,14 @@ HTML = r"""<!doctype html>
     const pristineThreadIds = new Set();
     const topologyLabels = ["Intake", "Plan", "Policy", "Tools", "Search", "Evidence", "Verify", "Answer"];
     const topologyLayout = {
-      Intake: [50, 12],
-      Plan: [72, 22],
-      Policy: [86, 50],
-      Tools: [72, 78],
-      Search: [50, 88],
-      Evidence: [28, 78],
-      Verify: [14, 50],
-      Answer: [28, 22]
+      Intake: [13, 28],
+      Plan: [38, 28],
+      Policy: [63, 28],
+      Tools: [88, 28],
+      Search: [88, 72],
+      Evidence: [63, 72],
+      Verify: [38, 72],
+      Answer: [13, 72]
     };
     const topologyEdges = [
       ["Intake", "Plan"],
@@ -3057,7 +3073,7 @@ HTML = r"""<!doctype html>
       ["Search", "Evidence"],
       ["Evidence", "Verify"],
       ["Verify", "Answer"],
-      ["Answer", "Plan", "loopback"]
+      ["Answer", "Intake", "loopback"]
     ];
     let latestSpotlights = [];
     let spotlightIndex = 0;
@@ -3558,7 +3574,6 @@ HTML = r"""<!doctype html>
           <svg class="topology-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
             ${svgEdges}
           </svg>
-          <div class="topology-loop-label"><strong>Agent Loop</strong><span>model -> tools -> evidence -> verify -> answer -> continue</span></div>
           ${nodeHtml}
         </div>`;
       panel.querySelectorAll(".topology-node").forEach(button => {
@@ -3572,27 +3587,18 @@ HTML = r"""<!doctype html>
       window.requestAnimationFrame(sizeTopologyFrame);
     }
     function sizeTopologyFrame() {
-      const panel = document.getElementById("pipeline");
       const frame = document.getElementById("topologyFrame");
-      if (!panel || !frame) return;
-      const rect = panel.getBoundingClientRect();
-      const available = Math.max(180, Math.min(rect.width - 16, rect.height - 16));
-      const size = Math.min(available, 440);
-      frame.style.width = `${size}px`;
-      frame.style.height = `${size}px`;
+      if (!frame) return;
+      frame.style.width = "100%";
+      frame.style.height = "100%";
     }
     function topologyEdgePath(a, b, kind) {
-      const cx = 50;
-      const cy = 50;
-      const mx = (a[0] + b[0]) / 2;
-      const my = (a[1] + b[1]) / 2;
-      const dx = mx - cx;
-      const dy = my - cy;
-      const len = Math.hypot(dx, dy) || 1;
-      const bend = kind === "loopback" ? 24 : 9;
-      const qx = mx + (dx / len) * bend;
-      const qy = my + (dy / len) * bend;
-      return `M ${a[0]} ${a[1]} Q ${qx.toFixed(1)} ${qy.toFixed(1)} ${b[0]} ${b[1]}`;
+      if (kind === "loopback") {
+        const gutter = 7;
+        return `M ${a[0]} ${a[1]} L ${gutter} ${a[1]} L ${gutter} ${b[1]} L ${b[0]} ${b[1]}`;
+      }
+      if (a[0] === b[0] || a[1] === b[1]) return `M ${a[0]} ${a[1]} L ${b[0]} ${b[1]}`;
+      return `M ${a[0]} ${a[1]} L ${a[0]} ${b[1]} L ${b[0]} ${b[1]}`;
     }
     function canonicalTopologyLabel(label) {
       const value = String(label || "").toLowerCase();
