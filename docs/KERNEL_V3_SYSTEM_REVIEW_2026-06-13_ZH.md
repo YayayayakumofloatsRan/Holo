@@ -305,11 +305,14 @@ SEC companyfacts payload 可能明显大于普通网页。此前 4MB 截断会�
 
 - Windows 浏览器 demo 保持 `http://localhost:8787/`。
 - 界面改为英文为主，统一使用 Times New Roman。
-- 首屏改为交互控制台：用户可以直接在浏览器输入任务，dashboard 后端用真实 `holo-v3 chat --once` 在 WSL 主工作区启动 Kernel v3 agent run。
-- 同一界面展示 conversation transcript、live agent loop topology、search branches、public activity stream、LLM/tool surface 和历史 demo case selector。
+- 首屏改为正式聊天控制台：左侧是固定 chat transcript 与 composer，用户能持续看到输入、running 状态和最终回复，不再被 trace/tab 切走。
+- 工作目录单独展示：workspace root、branch/head、state dir、thread id 与 provider surface 常驻可见，明确 Windows 浏览器正在观察 WSL 主工作区 `/home/ran_yakumo/holo`。
+- 用户可以直接在浏览器输入任务，dashboard 后端用真实 `holo-v3 chat --once` 在 WSL 主工作区启动 Kernel v3 agent run。
+- 同一界面常驻展示 live agent loop topology、search branches、public activity stream 和历史 demo case selector。
 - Agent workflow 以线性 pipeline 展示 Intake、Plan、Policy、Tools、Search、Evidence、Verify、Answer，使观众能直接看到 Holo 的问题解决闭环。
 - Search branches 从 journal 的 `retrieval_search_attempt` / provider diagnostics 派生，展示每个检索分支的 provider、source count 和 accepted source count。
-- Answer/Activity panel 只展示 public trace/reason 和 host-visible journal 事件；隐藏 chain-of-thought 不暴露。
+- Running 状态会先在 transcript 里显示 Kernel v3 正在运行，并在右侧 public activity stream 中轮询 journal；只要 agent 写入 processor/tool/retrieval/verifier 事件，界面就实时追加。
+- Trace 不再作为会让用户离开聊天上下文的顶部 tab；公开 trace 以右侧 activity cards 常驻显示。Activity panel 只展示 public trace/reason 和 host-visible journal 事件；隐藏 chain-of-thought 不暴露。
 - 后台命令执行会在 WSL 环境没有 `DEEPSEEK_API_KEY` 时尝试读取 Windows User/Machine 环境变量，并只注入子进程，不打印、不写日志；如果仍不可见，UI 会立即显示 `live_model_not_enabled`。
 
 ### 4. 回归测试

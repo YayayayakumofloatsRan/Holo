@@ -556,6 +556,7 @@ def build_state(
     return {
         "generated_at": iso_time(now),
         "repo": repo_state(root),
+        "workspace": workspace_state(root, console_thread_id),
         "current": current,
         "console": console_state(journal_records, console_thread_id, command_runs or []),
         "baselines": baseline_state(bench_dir),
@@ -589,10 +590,10 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
     return {
         "thread_id": thread_id,
         "job": active,
-        "transcript": console_transcript(scoped),
+        "transcript": console_transcript(scoped, runs),
         "topology": loop_topology_state(scoped),
         "search_branches": search_branch_state(scoped),
-        "activity": public_activity_state(scoped),
+        "activity": public_activity_state(scoped, active),
         "stats": {
             "records": len(scoped),
             "actions": sum(1 for record in scoped if record.get("kind") == "action"),
@@ -601,6 +602,21 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
             "evidence": sum(1 for record in scoped if record.get("kind") in {"retrieval_evidence", "claim_ledger", "slot_frame"}),
         },
         "notice": "Public execution trace only. Hidden chain-of-thought is not exposed.",
+    }
+
+
+def workspace_state(root: Path, thread_id: str) -> Json:
+    state_dir = root / ".state/kernel_v3"
+    return {
+        "root": str(root),
+        "name": root.name,
+        "thread_id": _safe_thread_id(thread_id),
+        "branch": run_git(root, "rev-parse", "--abbrev-ref", "HEAD"),
+        "head": run_git(root, "rev-parse", "--short", "HEAD"),
+        "remote": run_git(root, "rev-parse", "--short", "github/kernel-v3"),
+        "dirty": bool(run_git(root, "status", "--short")),
+        "state_dir": str(state_dir.relative_to(root)) if state_dir.exists() else ".state/kernel_v3",
+        "journal": ".state/kernel_v3/journal/global.jsonl",
     }
 
 
@@ -613,12 +629,15 @@ def _records_for_thread_scope(records: list[Json], thread_id: str) -> list[Json]
     ]
 
 
-def console_transcript(records: list[Json]) -> list[Json]:
+def console_transcript(records: list[Json], runs: list[Json]) -> list[Json]:
     turns: list[Json] = []
+    journal_user_texts: set[str] = set()
+    journal_assistant_texts: set[str] = set()
     for record in records:
         kind = record.get("kind")
         data = record.get("data") if isinstance(record.get("data"), dict) else {}
         if kind == "chat_turn":
+            journal_user_texts.add(str(data.get("text") or ""))
             turns.append(
                 {
                     "role": "user",
@@ -627,14 +646,58 @@ def console_transcript(records: list[Json]) -> list[Json]:
                 }
             )
         elif kind == "chat_agent_result":
+            answer = clip(_chat_result_answer_text(data), 1800)
+            journal_assistant_texts.add(answer)
             turns.append(
                 {
                     "role": "assistant",
-                    "text": clip(_chat_result_answer_text(data), 1800),
+                    "text": answer,
                     "status": data.get("status") or ("failed" if data.get("failure_report") else "complete"),
                     "at": record.get("recorded_at_ms"),
                 }
             )
+    for run in reversed(runs[-8:]):
+        message = str(run.get("message") or "")
+        status = str(run.get("status") or "")
+        if message and message not in journal_user_texts:
+            turns.append(
+                {
+                    "role": "user",
+                    "text": clip(message, 1400),
+                    "status": status,
+                    "at": int(float(run.get("created_at") or 0) * 1000),
+                }
+            )
+        answer = str(run.get("answer") or "")
+        error = str(run.get("error") or "")
+        if status in {"queued", "running"}:
+            turns.append(
+                {
+                    "role": "assistant",
+                    "text": "Kernel v3 is running. Public model packets, tool calls, retrieval branches, and verifier gates will stream on the right as journal events arrive.",
+                    "status": status,
+                    "at": int(float(run.get("started_at") or run.get("created_at") or 0) * 1000),
+                }
+            )
+        elif answer and answer not in journal_assistant_texts:
+            turns.append(
+                {
+                    "role": "assistant",
+                    "text": clip(answer, 1800),
+                    "status": status,
+                    "at": int(float(run.get("finished_at") or 0) * 1000),
+                }
+            )
+        elif error and not journal_assistant_texts:
+            turns.append(
+                {
+                    "role": "assistant",
+                    "text": clip(error, 1800),
+                    "status": status or "error",
+                    "at": int(float(run.get("finished_at") or 0) * 1000),
+                }
+            )
+    turns.sort(key=lambda item: int(item.get("at") or 0))
     return turns[-12:]
 
 
@@ -721,8 +784,19 @@ def search_branch_state(records: list[Json]) -> list[Json]:
     return rows[-12:]
 
 
-def public_activity_state(records: list[Json]) -> list[Json]:
+def public_activity_state(records: list[Json], active_job: Json | None = None) -> list[Json]:
     rows: list[Json] = []
+    if active_job and active_job.get("status") in {"queued", "running"}:
+        rows.append(
+            {
+                "kind": "dashboard_job",
+                "title": "Kernel process running",
+                "detail": f"thread {active_job.get('thread_id')}; command submitted through browser console",
+                "status": str(active_job.get("status") or "running"),
+                "task_id": "",
+                "step_id": str(active_job.get("run_id") or ""),
+            }
+        )
     for record in records:
         kind = str(record.get("kind") or "")
         data = record.get("data") if isinstance(record.get("data"), dict) else {}
@@ -1717,11 +1791,38 @@ HTML = r"""<!doctype html>
     .event .desc { color: var(--muted); }
     .footer-grid { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 10px; }
     .mono { font-family: "Times New Roman", Times, serif; }
+    .grid { grid-template-columns: minmax(460px, 42%) minmax(0, 1fr); }
+    .left { grid-template-rows: 132px minmax(0, 1fr); }
+    .right { grid-template-rows: 250px minmax(0, 1fr) 210px; }
+    .workspace-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 10px; height: calc(100% - 28px); }
+    .workspace-card {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      min-width: 0;
+      background: #fbfcfd;
+    }
+    .workspace-card strong { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .workspace-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; }
+    .chat-panel .transcript { height: auto; overflow: auto; padding-right: 4px; align-content: start; }
+    .composer { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+    .composer textarea.command-input { min-height: 92px; }
+    .live-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 12px; min-height: 0; height: calc(100% - 28px); }
+    .live-pane { min-height: 0; display: grid; grid-template-rows: 26px minmax(0, 1fr); gap: 8px; }
+    .activity-list, .branch-list { overflow: auto; padding-right: 4px; }
+    .activity, .branch { cursor: default; }
+    .activity:hover, .branch:hover { border-color: #b8c5d8; background: #fbfcfd; }
+    .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; height: calc(100% - 28px); min-height: 0; }
+    .demo-rail { min-height: 0; overflow: auto; }
+    .demo-rail .run-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .answer-brief { min-height: 0; display: grid; grid-template-rows: 84px 1fr; gap: 8px; }
+    .answer-brief .diag { grid-template-columns: 1fr; }
     @media (max-width: 980px) {
       body { overflow: auto; height: auto; }
       .grid { height: auto; grid-template-columns: 1fr; }
       .left, .right { grid-template-rows: auto; }
-      .pipeline, .cards, .run-cards, .diag, .intel-list, .footer-grid { grid-template-columns: 1fr; }
+      .pipeline, .cards, .run-cards, .diag, .intel-list, .footer-grid, .workspace-grid, .live-grid, .bottom-grid { grid-template-columns: 1fr; }
       .stage:not(:last-child)::after { display: none; }
     }
   </style>
@@ -1733,18 +1834,29 @@ HTML = r"""<!doctype html>
       <div class="sub" id="subtitle">Loading live state...</div>
     </div>
     <div class="top-actions">
-      <button data-tab="console" class="active">Console</button>
-      <button data-tab="finance">Demo Evidence</button>
-      <button data-tab="intelligence">Intelligence</button>
-      <button data-tab="trace">Trace</button>
+      <span class="status"><span class="dot ok"></span><span>WSL Kernel v3</span></span>
       <a class="button" href="/workflow" target="_blank">Audit View</a>
     </div>
   </header>
   <main class="grid">
     <section class="left">
       <div class="panel">
-        <div class="panel-title"><span>Command console</span><span class="status"><span id="consoleDot" class="dot"></span><span id="consoleStatus">ready</span></span></div>
-        <div class="command-box">
+        <div class="panel-title"><span>Workspace</span><span id="repo">loading</span></div>
+        <div class="workspace-grid">
+          <div class="workspace-card">
+            <strong id="workspaceRoot">/home/ran_yakumo/holo</strong>
+            <span id="workspaceState">kernel-v3 workspace</span>
+          </div>
+          <div class="workspace-card">
+            <strong id="workspaceThread">thread demo-ui-live</strong>
+            <span id="provider">model surface</span>
+          </div>
+        </div>
+      </div>
+      <div class="panel chat-panel">
+        <div class="panel-title"><span>Chat</span><span class="status"><span id="consoleDot" class="dot"></span><span id="consoleStatus">ready</span></span></div>
+        <div class="transcript" id="transcript"></div>
+        <div class="composer">
           <textarea id="commandInput" class="command-input" placeholder="Ask Holo a finance question, or give it a research task. Example: What was Goldman Sachs' net revenues for fiscal year 2024?"></textarea>
           <div class="command-row">
             <button id="runCommand" class="primary">Run on Kernel v3</button>
@@ -1758,20 +1870,6 @@ HTML = r"""<!doctype html>
           </div>
         </div>
       </div>
-      <div class="panel">
-        <div class="panel-title"><span>Conversation</span><span id="publicTraceNotice">public trace only</span></div>
-        <div class="transcript" id="transcript"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-title"><span>LLM and tool surface</span><span id="provider"></span></div>
-        <div class="tool-grid">
-          <div class="metric"><div class="value" id="llmCalls">0</div><div class="label">processor calls</div></div>
-          <div class="metric"><div class="value" id="retrievalFetches">0</div><div class="label">fetches</div></div>
-          <div class="metric"><div class="value" id="calcCalls">0</div><div class="label">calculator</div></div>
-          <div class="metric"><div class="value" id="factCount">0</div><div class="label">facts</div></div>
-          <div class="metric"><div class="value" id="stablePasses">0/0</div><div class="label">pass traces</div></div>
-        </div>
-      </div>
     </section>
     <section class="right">
       <div class="panel">
@@ -1780,17 +1878,22 @@ HTML = r"""<!doctype html>
         <div class="pipeline" id="pipeline"></div>
       </div>
       <div class="panel">
-        <section id="console" class="tabs console-view active">
-          <div class="console-column">
-            <div class="column-title">Search branches</div>
-            <div class="branch-list" id="searchBranches"></div>
-          </div>
-          <div class="console-column">
+        <div class="panel-title"><span>Real-time public stream</span><span id="publicTraceNotice">public trace only</span></div>
+        <div class="live-grid">
+          <div class="live-pane">
             <div class="column-title">Public activity stream</div>
             <div class="activity-list" id="activityStream"></div>
           </div>
-        </section>
-        <section id="finance" class="tabs finance-view">
+          <div class="live-pane">
+            <div class="column-title">Search branches</div>
+            <div class="branch-list" id="searchBranches"></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-title"><span>Demo evidence and current item</span><span><span id="selectedRunLabel">live</span></span></div>
+        <div class="bottom-grid">
+          <div class="answer-brief">
           <div class="question">
             <div class="question-label">Current problem</div>
             <div class="question-text" id="questionText"></div>
@@ -1799,26 +1902,20 @@ HTML = r"""<!doctype html>
             <div class="diag-block"><h3>Answer state</h3><p id="answerState"></p></div>
             <div class="diag-block"><h3>Engineering diagnosis</h3><p id="diagnosis"></p></div>
           </div>
-        </section>
-        <section id="intelligence" class="tabs">
-          <div class="intel-list" id="intel"></div>
-        </section>
-        <section id="trace" class="tabs">
-          <div class="timeline" id="events"></div>
-        </section>
-      </div>
-      <div class="panel">
-        <div class="panel-title"><span>Demo case selector</span><span><span id="selectedRunLabel">live</span> | <span id="repo"></span></span></div>
-        <div class="run-cards" id="demoRuns"></div>
-        <div style="display:none"><span id="resultPath"></span><span id="summaryPath"></span><span id="refreshState"></span><span id="runStatus"></span><span id="heroTitle"></span><span id="heroCopy"></span><span id="runDot"></span><span id="passRate"></span><span id="verifierState"></span><span id="progressText"></span><span id="progressBar"></span><span id="heroCalc"></span><span id="heroFacts"></span><span id="heroCitations"></span><span id="spotlightStep"></span><span id="spotlightTitle"></span><span id="spotlightText"></span></div>
+          </div>
+          <div class="demo-rail">
+            <div class="run-cards" id="demoRuns"></div>
+          </div>
+        </div>
       </div>
     </section>
+    <div style="display:none"><span id="resultPath"></span><span id="summaryPath"></span><span id="refreshState"></span><span id="runStatus"></span><span id="heroTitle"></span><span id="heroCopy"></span><span id="runDot"></span><span id="passRate"></span><span id="verifierState"></span><span id="progressText"></span><span id="progressBar"></span><span id="heroCalc"></span><span id="heroFacts"></span><span id="heroCitations"></span><span id="spotlightStep"></span><span id="spotlightTitle"></span><span id="spotlightText"></span><span id="llmCalls"></span><span id="retrievalFetches"></span><span id="calcCalls"></span><span id="factCount"></span><span id="stablePasses"></span><div id="intel"></div><div id="events"></div></div>
   </main>
   <script>
     const fmtPct = v => (v === null || v === undefined || Number.isNaN(Number(v))) ? "-" : `${(Number(v) * 100).toFixed(1)}%`;
     const fmtNum = v => (v === null || v === undefined || v === "") ? "0" : Number(v).toLocaleString();
-    const text = (id, value) => { document.getElementById(id).textContent = value ?? ""; };
-    const cls = (id, value) => { document.getElementById(id).className = value; };
+    const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value ?? ""; };
+    const cls = (id, value) => { const el = document.getElementById(id); if (el) el.className = value; };
     const params = new URLSearchParams(window.location.search);
     const selected = {
       runPrefix: params.get("run_prefix") || "",
@@ -1899,12 +1996,16 @@ HTML = r"""<!doctype html>
       const cur = data.current || {};
       const consoleState = data.console || {};
       const consoleJob = consoleState.job || {};
+      const workspace = data.workspace || {};
       if (!selected.runPrefix && data.filters && data.filters.run_prefix) selected.runPrefix = data.filters.run_prefix;
       if (data.filters && data.filters.item_id !== undefined) selected.itemId = data.filters.item_id || "";
       if (data.filters && data.filters.console_thread) selected.consoleThread = data.filters.console_thread;
       const metrics = cur.latest_metrics || {};
       const stability = data.stability || {};
       text("subtitle", `${data.generated_at} | branch ${data.repo.branch || "-"} @ ${data.repo.head || "-"}`);
+      text("workspaceRoot", workspace.root || "-");
+      text("workspaceState", `${workspace.branch || "-"} @ ${workspace.head || "-"} | state ${workspace.state_dir || "-"}`);
+      text("workspaceThread", `thread ${workspace.thread_id || selected.consoleThread}`);
       text("heroTitle", cur.selected_item_id || cur.latest_item_id ? `Case ${cur.selected_item_id || cur.latest_item_id}` : "Financial reasoning demo");
       text("heroCopy", cur.latest_question || "LLM chooses the research move; tools retrieve and compute; the host verifies, journals, and presents evidence.");
       text("workflowStatement", `${cur.name || "Kernel v3"}: LLM semantic decisions, tool execution, evidence ledger, verification, and final answer are visible in one flow.`);
@@ -2040,6 +2141,7 @@ HTML = r"""<!doctype html>
       const panel = document.getElementById("transcript");
       if (!rows.length) {
         panel.innerHTML = `<div class="message assistant"><div class="role">Holo</div><div class="body">Enter a task above. The WSL Kernel v3 runtime will execute it through the live agent loop, and the public trace will appear here.</div></div>`;
+        panel.scrollTop = panel.scrollHeight;
         return;
       }
       panel.innerHTML = rows.slice(-8).map(row => `
@@ -2047,6 +2149,7 @@ HTML = r"""<!doctype html>
           <div class="role">${escapeHtml(row.role || "assistant")}${row.status ? " / " + escapeHtml(row.status) : ""}</div>
           <div class="body">${escapeHtml(row.text || "")}</div>
         </div>`).join("");
+      panel.scrollTop = panel.scrollHeight;
     }
     function renderBranches(rows) {
       const panel = document.getElementById("searchBranches");
@@ -2096,7 +2199,7 @@ HTML = r"""<!doctype html>
       spotlightIndex = (spotlightIndex + 1) % latestSpotlights.length;
       renderSpotlight();
     }, 4500);
-    setInterval(refresh, 2000);
+    setInterval(refresh, 1000);
   </script>
 </body>
 </html>
