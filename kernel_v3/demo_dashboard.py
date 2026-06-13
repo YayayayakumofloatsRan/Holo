@@ -20,13 +20,23 @@ DEMO_RUNS = (
         "label": "FinanceBench Activision fixed asset turnover",
         "run_prefix": "run_demo_financebench_activision_fat_live_20260613",
         "thread_prefix": "demo-financebench-activision-fat",
+        "item_id": "financebench_id_02987",
         "difficulty": "Medium-High",
         "question": "Compute Activision Blizzard FY2019 fixed asset turnover from the 2019 10-K source URL.",
+    },
+    {
+        "label": "Activision strong trace live10",
+        "run_prefix": "run_financebench_doc_live10_capability_parallel_v2",
+        "thread_prefix": "",
+        "item_id": "financebench_id_02987",
+        "difficulty": "Medium-High",
+        "question": "Same Activision task with 15 calculator calls, 738 finance facts, and verifier passed.",
     },
     {
         "label": "FinanceBench live10 capability parallel",
         "run_prefix": "run_financebench_doc_live10_capability_parallel_v2",
         "thread_prefix": "",
+        "item_id": "",
         "difficulty": "Medium-High",
         "question": "Live 10-item FinanceBench capability batch; includes the Activision fixed asset turnover pass.",
     },
@@ -34,6 +44,7 @@ DEMO_RUNS = (
         "label": "FinanceBench live10 doclink capability",
         "run_prefix": "run_financebench_doc_live10_capability_doclink_v2",
         "thread_prefix": "",
+        "item_id": "financebench_id_02987",
         "difficulty": "Medium-High",
         "question": "Live 10-item FinanceBench document-link batch; includes another Activision fixed asset turnover pass.",
     },
@@ -41,6 +52,7 @@ DEMO_RUNS = (
         "label": "FAB v2 HD vs LOW DIO search stress",
         "run_prefix": "run_demo_fabv2_hd_low_dio_flash_workbenchfollow_20260613",
         "thread_prefix": "demo-fabv2-hd-low-dio-workbenchfollow",
+        "item_id": "fabv2-hd-low-dio",
         "difficulty": "High",
         "question": "Multi-issuer DIO task used to debug workbench follow-up retrieval and LOW COGS search.",
     },
@@ -48,6 +60,7 @@ DEMO_RUNS = (
         "label": "FAB v2 HD vs LOW DIO Pro",
         "run_prefix": "run_demo_fabv2_hd_low_dio_pro_high_20260613",
         "thread_prefix": "demo-fabv2-hd-low-dio-high",
+        "item_id": "fabv2-hd-low-dio",
         "difficulty": "High",
         "question": "Same FAB v2 DIO task with DeepSeek Pro high reasoning.",
     },
@@ -55,6 +68,7 @@ DEMO_RUNS = (
         "label": "FAB v2 HD vs LOW DIO Pro Max",
         "run_prefix": "run_demo_fabv2_hd_low_dio_pro_max_20260613",
         "thread_prefix": "demo-fabv2-hd-low-dio-pro",
+        "item_id": "fabv2-hd-low-dio",
         "difficulty": "High",
         "question": "Same FAB v2 DIO task with DeepSeek Pro max reasoning.",
     },
@@ -62,6 +76,7 @@ DEMO_RUNS = (
         "label": "FAB v2 historical DIO baseline",
         "run_prefix": "run_fabv2_dev10_capability_parallel10_judgefix",
         "thread_prefix": "",
+        "item_id": "fabv2-hd-low-dio",
         "difficulty": "High",
         "question": "Historical HD/LOW DIO run with retrieval, facts, calculator traces, and citations.",
     },
@@ -69,6 +84,7 @@ DEMO_RUNS = (
         "label": "FinanceBench 3M capital intensity",
         "run_prefix": "run_financebench_doc_live10_after_source_equivalence",
         "thread_prefix": "",
+        "item_id": "financebench_id_00499",
         "difficulty": "Medium-High",
         "question": "3M capital-intensive assessment with filing evidence and calculation.",
     },
@@ -150,10 +166,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/state":
             query = parse_qs(parsed.query, keep_blank_values=True)
             run_prefix = _query_value(query, "run_prefix") or self.server.run_prefix
+            item_id = _query_value(query, "item_id") or ""
             thread_prefix = _query_value(query, "thread_prefix")
             if thread_prefix is None:
-                thread_prefix = _thread_prefix_for_run(run_prefix) or self.server.thread_prefix
-            self._send_json(build_state(self.server.root, run_prefix, thread_prefix))
+                mapped_thread_prefix = _thread_prefix_for_run(run_prefix)
+                thread_prefix = mapped_thread_prefix if mapped_thread_prefix is not None else self.server.thread_prefix
+            self._send_json(build_state(self.server.root, run_prefix, thread_prefix, item_id=item_id))
             return
         if parsed.path == "/workflow":
             workflow = self.server.root / ".state/kernel_v3/visuals/kernel_v3_live_demo_task902.html"
@@ -195,7 +213,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def build_state(root: Path, run_prefix: str, thread_prefix: str = "") -> Json:
+def build_state(root: Path, run_prefix: str, thread_prefix: str = "", *, item_id: str = "") -> Json:
     now = time.time()
     bench_dir = root / ".state/kernel_v3/bench/finance"
     journal = root / ".state/kernel_v3/journal/global.jsonl"
@@ -207,17 +225,20 @@ def build_state(root: Path, run_prefix: str, thread_prefix: str = "") -> Json:
     reasonable = read_json(reasonable_path)
     journal_records = read_jsonl(journal, max_bytes=5_000_000, max_records=900)
     events = compact_events(journal_records, thread_prefix=thread_prefix)
-    latest_item = result_records[-1] if result_records else {}
+    item_records = _records_for_item(result_records, item_id)
+    display_records = item_records if item_records else result_records
+    latest_item = display_records[-1] if display_records else {}
     latest_metrics = dict(latest_item.get("trace_metrics") or latest_item.get("scorecard", {}).get("trace_metrics") or {})
     current = current_run_state(
         result_path=result_path,
         summary_path=summary_path,
-        records=result_records,
+        records=display_records,
         summary=summary,
         reasonable=reasonable,
         latest=latest_item,
         latest_metrics=latest_metrics,
         now=now,
+        selected_item_id=item_id if item_records else "",
     )
     return {
         "generated_at": iso_time(now),
@@ -238,6 +259,7 @@ def build_state(root: Path, run_prefix: str, thread_prefix: str = "") -> Json:
         "filters": {
             "run_prefix": run_prefix,
             "thread_prefix": thread_prefix,
+            "item_id": item_id,
         },
     }
 
@@ -246,18 +268,30 @@ def demo_run_state(bench_dir: Path) -> list[Json]:
     rows: list[Json] = []
     for item in DEMO_RUNS:
         run_prefix = str(item["run_prefix"])
+        item_id = str(item.get("item_id") or "")
         summary = read_json(bench_dir / f"{run_prefix}.summary.json")
-        records = read_jsonl(bench_dir / f"{run_prefix}.jsonl", max_bytes=2_000_000, max_records=5)
-        latest = records[-1] if records else {}
+        records = read_jsonl(bench_dir / f"{run_prefix}.jsonl", max_bytes=8_000_000, max_records=200)
+        item_records = _records_for_item(records, item_id)
+        display_records = item_records if item_records else records
+        latest = display_records[-1] if display_records else {}
         latest_metrics = dict(latest.get("trace_metrics") or latest.get("scorecard", {}).get("trace_metrics") or {})
-        done = int(summary.get("scored_count") or len(records))
-        passed = int(summary.get("passed_count") or (1 if latest.get("status") == "passed" else 0))
-        failed = int(summary.get("failed_count") or (1 if latest.get("status") == "failed" else 0))
+        if item_id and item_records:
+            statuses = _status_counts(item_records)
+            done = len(item_records)
+            passed = int(statuses.get("passed", 0))
+            failed = int(statuses.get("failed", 0))
+            pass_rate = passed / max(1, done)
+        else:
+            done = int(summary.get("scored_count") or len(records))
+            passed = int(summary.get("passed_count") or (1 if latest.get("status") == "passed" else 0))
+            failed = int(summary.get("failed_count") or (1 if latest.get("status") == "failed" else 0))
+            pass_rate = safe_float(summary.get("pass_rate"))
         rows.append(
             {
                 **item,
                 "status": _run_status(bench_dir, run_prefix, summary=summary, latest=latest),
-                "pass_rate": safe_float(summary.get("pass_rate")),
+                "item_id": item_id,
+                "pass_rate": pass_rate,
                 "done": done,
                 "passed": passed,
                 "failed": failed,
@@ -265,10 +299,29 @@ def demo_run_state(bench_dir: Path) -> list[Json]:
                 "calculator_calls": latest_metrics.get("calculator_call_count"),
                 "retrieval_runs": latest_metrics.get("retrieval_run_count"),
                 "fetches": latest_metrics.get("fetch_attempt_count"),
+                "facts": latest_metrics.get("finance_fact_count") or latest_metrics.get("claim_count") or latest_metrics.get("evidence_count"),
                 "tokens": latest_metrics.get("total_tokens"),
             }
         )
     return rows
+
+
+def _records_for_item(records: list[Json], item_id: str) -> list[Json]:
+    if not item_id:
+        return []
+    return [record for record in records if _record_item_id(record) == item_id]
+
+
+def _record_item_id(record: Json) -> str:
+    return str(record.get("item_id") or record.get("id") or "")
+
+
+def _status_counts(records: list[Json]) -> dict[str, int]:
+    statuses: dict[str, int] = {}
+    for item in records:
+        status = str(item.get("status") or item.get("scorecard", {}).get("status") or "unknown")
+        statuses[status] = statuses.get(status, 0) + 1
+    return statuses
 
 
 def _query_value(query: dict[str, list[str]], key: str) -> str | None:
@@ -280,11 +333,11 @@ def _query_value(query: dict[str, list[str]], key: str) -> str | None:
     return str(values[0])
 
 
-def _thread_prefix_for_run(run_prefix: str) -> str:
+def _thread_prefix_for_run(run_prefix: str) -> str | None:
     for item in DEMO_RUNS:
         if item.get("run_prefix") == run_prefix:
             return str(item.get("thread_prefix") or "")
-    return ""
+    return None
 
 
 def current_run_state(
@@ -297,18 +350,23 @@ def current_run_state(
     latest: Json,
     latest_metrics: Json,
     now: float,
+    selected_item_id: str = "",
 ) -> Json:
-    statuses: dict[str, int] = {}
-    for item in records:
-        status = str(item.get("status") or item.get("scorecard", {}).get("status") or "unknown")
-        statuses[status] = statuses.get(status, 0) + 1
-    total = int(summary.get("item_count") or max(3, len(records)))
-    done = int(summary.get("scored_count") or len(records))
-    passed = int(summary.get("passed_count") or statuses.get("passed", 0))
-    failed = int(summary.get("failed_count") or statuses.get("failed", 0))
-    pass_rate = safe_float(summary.get("pass_rate"))
-    if pass_rate is None and done:
-        pass_rate = passed / max(1, done)
+    statuses = _status_counts(records)
+    if selected_item_id:
+        total = max(1, len(records))
+        done = len(records)
+        passed = int(statuses.get("passed", 0))
+        failed = int(statuses.get("failed", 0))
+        pass_rate = passed / max(1, done) if done else None
+    else:
+        total = int(summary.get("item_count") or max(3, len(records)))
+        done = int(summary.get("scored_count") or len(records))
+        passed = int(summary.get("passed_count") or statuses.get("passed", 0))
+        failed = int(summary.get("failed_count") or statuses.get("failed", 0))
+        pass_rate = safe_float(summary.get("pass_rate"))
+        if pass_rate is None and done:
+            pass_rate = passed / max(1, done)
     status = _run_status(result_path.parent, result_path.stem, summary=summary, latest=latest)
     mtime = result_path.stat().st_mtime if result_path.exists() else 0.0
     stale_seconds = max(0, int(now - mtime)) if mtime else None
@@ -325,6 +383,7 @@ def current_run_state(
         "reasonable_failed": reasonable.get("failed_count"),
         "status_counts": statuses or summary.get("status_counts") or {},
         "latest_item_id": latest.get("item_id") or latest.get("id") or "",
+        "selected_item_id": selected_item_id,
         "latest_question": latest.get("question") or "",
         "latest_reason": latest.get("scorecard", {}).get("reason") or latest.get("failure_report", {}).get("reason") or "",
         "latest_answer": latest.get("final_answer") or latest.get("answer") or "",
@@ -426,7 +485,9 @@ def intelligence_state(root: Path, metrics: Json) -> list[Json]:
 
 def diagnosis_state(latest: Json, metrics: Json, events: list[Json]) -> Json:
     reason = latest.get("scorecard", {}).get("reason") or latest.get("failure_report", {}).get("reason") or ""
-    failure_mode = metrics.get("latest_failure_mode") or ""
+    failure_mode = str(metrics.get("latest_failure_mode") or "")
+    if failure_mode.lower() == "none":
+        failure_mode = ""
     next_hint = metrics.get("latest_next_strategy_hint") or latest.get("failure_report", {}).get("next_possible_action") or ""
     issue = "Waiting for live run."
     if latest.get("status") == "failed":
@@ -584,6 +645,11 @@ def selected_metrics(metrics: Json) -> Json:
         "fetch_success_rate",
         "downloaded_bytes",
         "calculator_call_count",
+        "finance_fact_count",
+        "claim_count",
+        "evidence_count",
+        "citation_count",
+        "retrieval_citation_count",
         "claim_ledger_present",
         "formula_trace_present",
         "synthesis_gate_passed",
@@ -934,7 +1000,11 @@ HTML = r"""<!doctype html>
     const text = (id, value) => { document.getElementById(id).textContent = value ?? ""; };
     const cls = (id, value) => { document.getElementById(id).className = value; };
     const params = new URLSearchParams(window.location.search);
-    const selected = { runPrefix: params.get("run_prefix") || "", threadPrefix: params.has("thread_prefix") ? params.get("thread_prefix") : null };
+    const selected = {
+      runPrefix: params.get("run_prefix") || "",
+      threadPrefix: params.has("thread_prefix") ? params.get("thread_prefix") : null,
+      itemId: params.get("item_id") || ""
+    };
     function setTab(name) {
       document.querySelectorAll("button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
       document.querySelectorAll(".tabs").forEach(p => p.classList.toggle("active", p.id === name));
@@ -944,15 +1014,18 @@ HTML = r"""<!doctype html>
       const query = new URLSearchParams();
       if (selected.runPrefix) query.set("run_prefix", selected.runPrefix);
       if (selected.threadPrefix !== null) query.set("thread_prefix", selected.threadPrefix || "");
+      if (selected.itemId) query.set("item_id", selected.itemId);
       const suffix = query.toString();
       return suffix ? `/api/state?${suffix}` : "/api/state";
     }
     function selectRun(row) {
       selected.runPrefix = row.run_prefix || "";
       selected.threadPrefix = row.thread_prefix ?? "";
+      selected.itemId = row.item_id || "";
       const query = new URLSearchParams();
       if (selected.runPrefix) query.set("run_prefix", selected.runPrefix);
       query.set("thread_prefix", selected.threadPrefix || "");
+      if (selected.itemId) query.set("item_id", selected.itemId);
       window.history.replaceState(null, "", `?${query.toString()}`);
       refresh();
     }
@@ -961,9 +1034,10 @@ HTML = r"""<!doctype html>
       const data = await res.json();
       const cur = data.current || {};
       if (!selected.runPrefix && data.filters && data.filters.run_prefix) selected.runPrefix = data.filters.run_prefix;
+      if (data.filters && data.filters.item_id !== undefined) selected.itemId = data.filters.item_id || "";
       text("subtitle", `${data.generated_at} | branch ${data.repo.branch || "-"} @ ${data.repo.head || "-"}`);
       text("runStatus", cur.status || "unknown");
-      cls("runDot", `dot ${cur.status === "complete" && cur.failed ? "failed" : cur.status || ""}`);
+      cls("runDot", `dot ${cur.status === "complete" && cur.failed ? "failed" : cur.status === "complete" ? "ok" : cur.status || ""}`);
       text("passRate", fmtPct(cur.pass_rate));
       text("reasonableRate", fmtPct(cur.reasonable_pass_rate));
       text("progressText", `${cur.done || 0}/${cur.total || 0}`);
@@ -981,16 +1055,16 @@ HTML = r"""<!doctype html>
       text("resultPath", data.links.result_jsonl || "-");
       text("summaryPath", data.links.summary_json || "-");
       text("refreshState", `auto refresh on | stale ${cur.stale_seconds ?? "-"}s`);
-      text("selectedRunLabel", cur.name || (data.filters || {}).run_prefix || "live");
-      renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix);
+      text("selectedRunLabel", `${cur.name || (data.filters || {}).run_prefix || "live"}${cur.selected_item_id ? " / " + cur.selected_item_id : ""}`);
+      renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
       renderPipeline(data.pipeline || []);
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
     }
-    function renderDemoRuns(rows, activeRunPrefix) {
+    function renderDemoRuns(rows, activeRunPrefix, activeItemId) {
       document.getElementById("demoRuns").innerHTML = rows.map(row => {
-        const statusClass = row.status === "complete" && row.failed ? "failed" : row.status || "";
-        const active = row.run_prefix === activeRunPrefix ? " active" : "";
+        const statusClass = row.status === "complete" && row.failed ? "failed" : row.status === "complete" ? "ok" : row.status || "";
+        const active = row.run_prefix === activeRunPrefix && String(row.item_id || "") === String(activeItemId || "") ? " active" : "";
         return `<button class="run-card${active}" data-run="${escapeHtml(row.run_prefix)}">
           <div class="run-status-line">
             <strong>${escapeHtml(row.label)}</strong>
@@ -998,7 +1072,8 @@ HTML = r"""<!doctype html>
           </div>
           <div class="question-line">${escapeHtml(row.question)}</div>
           <div class="tiny">${escapeHtml(row.difficulty || "-")} | scored ${row.done ?? 0} | pass ${fmtPct(row.pass_rate)}</div>
-          <div class="tiny">fetch ${fmtNum(row.fetches)} | calc ${fmtNum(row.calculator_calls)} | ${escapeHtml(row.latest_item_id || "")}</div>
+          <div class="tiny">fetch ${fmtNum(row.fetches)} | calc ${fmtNum(row.calculator_calls)} | facts ${fmtNum(row.facts)}</div>
+          <div class="tiny">${escapeHtml(row.latest_item_id || row.item_id || "")}</div>
         </button>`;
       }).join("");
       document.querySelectorAll(".run-card").forEach((button, index) => {

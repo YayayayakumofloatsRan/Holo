@@ -123,7 +123,12 @@ turnover from the 2019 10-K source URL. The promoted live run
 `pass_rate=1.0`, `numeric_accuracy=1.0`, `overall_score=1.0`, `workflow_score=1.0`,
 245 finance facts, 245 claim-ledger records, a transform plan, citations, and a
 synthesis gate pass. The Windows-accessible dashboard defaults to this run at
-`http://localhost:8787/` when `kernel_v3.demo_dashboard` is running. The same
+`http://localhost:8787/` when `kernel_v3.demo_dashboard` is running. It also
+supports item-level demo selection; for recording, the stronger historical
+Activision trace is available with
+`run_prefix=run_financebench_doc_live10_capability_parallel_v2` and
+`item_id=financebench_id_02987`, showing 15 calculator calls, 738 finance
+facts, 1048 citations, and verifier `passed`. The same
 iteration also improved model-owned retrieval follow-up: LLM workbench
 `decision=continue` now routes back through standard `retrieval.run` instead of
 allowing premature finalization. The FAB v2 HD/LOW DIO task remains a high

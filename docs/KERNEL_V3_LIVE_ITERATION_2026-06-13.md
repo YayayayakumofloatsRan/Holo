@@ -100,6 +100,11 @@ Why this is the current demo case:
   scorer.
 - The dashboard is served at `http://localhost:8787/` from WSL and defaults to
   this run for recording.
+- The dashboard now supports item-level selection through `item_id`. For a
+  stronger trace view during recording, select
+  `run_financebench_doc_live10_capability_parallel_v2` with
+  `item_id=financebench_id_02987`; that record shows 15 calculator calls, 738
+  finance facts, 1048 citations, and numeric verifier `passed`.
 
 Stability evidence:
 
