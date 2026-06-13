@@ -105,6 +105,9 @@ Why this is the current demo case:
   `run_financebench_doc_live10_capability_parallel_v2` with
   `item_id=financebench_id_02987`; that record shows 15 calculator calls, 738
   finance facts, 1048 citations, and numeric verifier `passed`.
+- The dashboard now exposes same-item stability directly on the first screen:
+  3/3 live pass traces for `financebench_id_02987`, with two verifier-passed,
+  calculator-heavy traces.
 
 Stability evidence:
 

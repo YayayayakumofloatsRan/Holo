@@ -128,7 +128,10 @@ supports item-level demo selection; for recording, the stronger historical
 Activision trace is available with
 `run_prefix=run_financebench_doc_live10_capability_parallel_v2` and
 `item_id=financebench_id_02987`, showing 15 calculator calls, 738 finance
-facts, 1048 citations, and verifier `passed`. The same
+facts, 1048 citations, and verifier `passed`. The dashboard also surfaces the
+same-item stability evidence: 3/3 live pass traces across the promoted
+single-item run and two live10 capability batches, with two verifier-passed
+calculator-heavy traces. The same
 iteration also improved model-owned retrieval follow-up: LLM workbench
 `decision=continue` now routes back through standard `retrieval.run` instead of
 allowing premature finalization. The FAB v2 HD/LOW DIO task remains a high

@@ -246,6 +246,7 @@ def build_state(root: Path, run_prefix: str, thread_prefix: str = "", *, item_id
         "current": current,
         "baselines": baseline_state(bench_dir),
         "demo_runs": demo_run_state(bench_dir),
+        "stability": stability_state(bench_dir, latest_item.get("item_id") or latest_item.get("id") or item_id),
         "llm": llm_state(events),
         "pipeline": pipeline_state(latest_item, latest_metrics, events),
         "intelligence": intelligence_state(root, latest_metrics),
@@ -304,6 +305,56 @@ def demo_run_state(bench_dir: Path) -> list[Json]:
             }
         )
     return rows
+
+
+def stability_state(bench_dir: Path, item_id: Any) -> Json:
+    target = str(item_id or "")
+    runs: list[Json] = []
+    if not target:
+        return {"target_item_id": "", "pass_traces": 0, "total_traces": 0, "verified_traces": 0, "runs": runs}
+    seen: set[str] = set()
+    pass_traces = 0
+    total_traces = 0
+    verified_traces = 0
+    for item in DEMO_RUNS:
+        run_prefix = str(item.get("run_prefix") or "")
+        if str(item.get("item_id") or "") != target:
+            continue
+        if not run_prefix or run_prefix in seen:
+            continue
+        seen.add(run_prefix)
+        records = _records_for_item(
+            read_jsonl(bench_dir / f"{run_prefix}.jsonl", max_bytes=8_000_000, max_records=200),
+            target,
+        )
+        if not records:
+            continue
+        latest = records[-1]
+        metrics = dict(latest.get("trace_metrics") or latest.get("scorecard", {}).get("trace_metrics") or {})
+        passed = sum(1 for record in records if record.get("status") == "passed")
+        total_traces += len(records)
+        pass_traces += passed
+        if metrics.get("numeric_verifier_status") == "passed":
+            verified_traces += 1
+        runs.append(
+            {
+                "label": item.get("label") or run_prefix,
+                "run_prefix": run_prefix,
+                "passed": passed,
+                "total": len(records),
+                "verifier": metrics.get("numeric_verifier_status") or "",
+                "calculator_calls": metrics.get("calculator_call_count"),
+                "facts": metrics.get("finance_fact_count") or metrics.get("claim_count") or metrics.get("evidence_count"),
+                "citations": metrics.get("citation_count") or metrics.get("retrieval_citation_count"),
+            }
+        )
+    return {
+        "target_item_id": target,
+        "pass_traces": pass_traces,
+        "total_traces": total_traces,
+        "verified_traces": verified_traces,
+        "runs": runs,
+    }
 
 
 def _records_for_item(records: list[Json], item_id: str) -> list[Json]:
@@ -909,7 +960,7 @@ HTML = r"""<!doctype html>
     }
     .evidence-chip strong { display: block; font-size: 14px; line-height: 1; }
     .evidence-chip span { display: block; margin-top: 4px; font-size: 10px; color: var(--muted); }
-    .tool-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .tool-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
     .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 10px; height: calc(100% - 28px); }
     .stage { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
     .stage .name { font-weight: 720; font-size: 14px; }
@@ -996,6 +1047,7 @@ HTML = r"""<!doctype html>
           <div class="metric"><div class="value" id="retrievalFetches">0</div><div class="label">fetches</div></div>
           <div class="metric"><div class="value" id="calcCalls">0</div><div class="label">calculator</div></div>
           <div class="metric"><div class="value" id="factCount">0</div><div class="label">facts</div></div>
+          <div class="metric"><div class="value" id="stablePasses">0/0</div><div class="label">pass traces</div></div>
         </div>
       </div>
     </section>
@@ -1071,6 +1123,7 @@ HTML = r"""<!doctype html>
       if (!selected.runPrefix && data.filters && data.filters.run_prefix) selected.runPrefix = data.filters.run_prefix;
       if (data.filters && data.filters.item_id !== undefined) selected.itemId = data.filters.item_id || "";
       const metrics = cur.latest_metrics || {};
+      const stability = data.stability || {};
       text("subtitle", `${data.generated_at} | branch ${data.repo.branch || "-"} @ ${data.repo.head || "-"}`);
       text("runStatus", cur.status || "unknown");
       cls("runDot", `dot ${cur.status === "complete" && cur.failed ? "failed" : cur.status === "complete" ? "ok" : cur.status || ""}`);
@@ -1091,6 +1144,7 @@ HTML = r"""<!doctype html>
       text("retrievalFetches", fmtNum(metrics.fetch_attempt_count));
       text("calcCalls", fmtNum(metrics.calculator_call_count));
       text("factCount", fmtNum(metrics.finance_fact_count || metrics.claim_count || metrics.evidence_count));
+      text("stablePasses", `${stability.pass_traces ?? 0}/${stability.total_traces ?? 0}`);
       text("repo", `${data.repo.dirty ? "dirty" : "clean"} | remote ${data.repo.remote || "-"}`);
       text("resultPath", data.links.result_jsonl || "-");
       text("summaryPath", data.links.summary_json || "-");
