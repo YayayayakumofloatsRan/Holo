@@ -2157,13 +2157,21 @@ HTML = r"""<!doctype html>
     .quick-prompts {
       min-height: 0;
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 6px;
-      max-height: 74px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      max-height: 128px;
       overflow: auto;
       padding-right: 4px;
     }
-    .quick-prompts button { padding: 6px 7px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .quick-prompts button {
+      min-height: 38px;
+      padding: 7px 8px;
+      font-size: 12px;
+      line-height: 1.15;
+      white-space: normal;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .transcript {
       height: calc(100% - 28px);
       display: grid;
@@ -2453,13 +2461,13 @@ HTML = r"""<!doctype html>
     .composer {
       min-height: 0;
       display: grid;
-      grid-template-rows: 60px auto minmax(0, 74px);
-      gap: 6px;
+      grid-template-rows: 64px auto minmax(0, 128px);
+      gap: 7px;
       border-top: 1px solid var(--line);
       padding-top: 7px;
       overflow: hidden;
     }
-    .composer textarea.command-input { min-height: 0; height: 60px; }
+    .composer textarea.command-input { min-height: 0; height: 64px; }
     .runtime-terminal {
       min-height: 0;
       display: grid;
@@ -2735,8 +2743,18 @@ HTML = r"""<!doctype html>
       border-radius: 6px;
       background: #fff;
       overflow: hidden;
+      display: grid;
+      place-items: center;
+      padding: 8px;
     }
-    .topology-canvas::before {
+    .topology-frame {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+    }
+    .topology-frame::before {
       content: "";
       position: absolute;
       inset: 26px 54px;
@@ -2862,7 +2880,7 @@ HTML = r"""<!doctype html>
       font-size: 10px;
       line-height: 1.2;
     }
-    .chat-panel { grid-template-rows: auto auto minmax(76px, .36fr) minmax(160px, .64fr) minmax(164px, auto); }
+    .chat-panel { grid-template-rows: auto auto minmax(64px, .30fr) minmax(128px, .70fr) minmax(236px, auto); }
     .left { grid-template-rows: 98px minmax(0, 1fr); }
     .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
     .wide-pane { grid-column: 1 / span 2; }
@@ -3472,7 +3490,10 @@ HTML = r"""<!doctype html>
         };
       });
       const signature = JSON.stringify(nodes.map(row => [row.label, row.state, row.value, row.detail]));
-      if (signature === lastPipelineSignature) return;
+      if (signature === lastPipelineSignature) {
+        window.requestAnimationFrame(sizeTopologyFrame);
+        return;
+      }
       lastPipelineSignature = signature;
       const nodeMap = new Map(nodes.map(row => [row.label, row]));
       const svgEdges = topologyEdges.map(([from, to, kind]) => {
@@ -3496,11 +3517,13 @@ HTML = r"""<!doctype html>
         </button>`;
       }).join("");
       panel.innerHTML = `
-        <svg class="topology-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          ${svgEdges}
-        </svg>
-        <div class="topology-loop-label"><strong>Agent Loop</strong><span>model -> tools -> evidence -> verify -> answer -> continue</span></div>
-        ${nodeHtml}`;
+        <div class="topology-frame" id="topologyFrame">
+          <svg class="topology-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            ${svgEdges}
+          </svg>
+          <div class="topology-loop-label"><strong>Agent Loop</strong><span>model -> tools -> evidence -> verify -> answer -> continue</span></div>
+          ${nodeHtml}
+        </div>`;
       panel.querySelectorAll(".topology-node").forEach(button => {
         button.addEventListener("click", () => {
           const row = nodeMap.get(button.dataset.label) || {};
@@ -3509,6 +3532,17 @@ HTML = r"""<!doctype html>
       });
       const activeNode = nodes.find(row => row.state === "active") || nodes.find(row => row.state === "warn") || nodes.find(row => row.value > 0) || nodes[0];
       if (activeNode && !manualInspector) showInspector(activeNode.label, `${activeNode.state} | ${fmtNum(activeNode.value)} events`, activeNode.detail);
+      window.requestAnimationFrame(sizeTopologyFrame);
+    }
+    function sizeTopologyFrame() {
+      const panel = document.getElementById("pipeline");
+      const frame = document.getElementById("topologyFrame");
+      if (!panel || !frame) return;
+      const rect = panel.getBoundingClientRect();
+      const available = Math.max(180, Math.min(rect.width - 16, rect.height - 16));
+      const size = Math.min(available, 440);
+      frame.style.width = `${size}px`;
+      frame.style.height = `${size}px`;
     }
     function topologyEdgePath(a, b, kind) {
       const cx = 50;
@@ -3663,6 +3697,7 @@ HTML = r"""<!doctype html>
       renderSpotlight();
     }, 4500);
     setInterval(refresh, 5000);
+    window.addEventListener("resize", sizeTopologyFrame);
     window.addEventListener("beforeunload", () => {
       if (liveSource) liveSource.close();
     });
