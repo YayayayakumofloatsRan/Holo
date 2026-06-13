@@ -2461,13 +2461,13 @@ HTML = r"""<!doctype html>
     .composer {
       min-height: 0;
       display: grid;
-      grid-template-rows: 64px auto minmax(0, 128px);
+      grid-template-rows: 96px auto minmax(0, 128px);
       gap: 7px;
       border-top: 1px solid var(--line);
       padding-top: 7px;
       overflow: hidden;
     }
-    .composer textarea.command-input { min-height: 0; height: 64px; }
+    .composer textarea.command-input { min-height: 0; height: 96px; }
     .runtime-terminal {
       min-height: 0;
       display: grid;
@@ -2718,15 +2718,24 @@ HTML = r"""<!doctype html>
       display: grid;
       grid-template-columns: minmax(0, 1fr) 208px;
       gap: 12px;
-      height: calc(100% - 28px);
+      height: 100%;
       min-height: 0;
+      overflow: hidden;
     }
     .loop-panel {
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr) 124px;
+      grid-template-rows: 28px minmax(0, 1fr) 124px;
       gap: 12px;
     }
-    .loop-panel .panel-title { margin-bottom: 0; }
+    .loop-panel .panel-title {
+      height: 28px;
+      min-height: 28px;
+      margin-bottom: 0;
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 10px;
+      overflow: hidden;
+    }
     .loop-panel .topology-shell,
     .loop-panel .loop-branch-strip { height: auto; }
     .loop-panel-status {
@@ -2734,6 +2743,8 @@ HTML = r"""<!doctype html>
       gap: 6px;
       align-items: center;
       min-width: 0;
+      justify-content: flex-end;
+      overflow: hidden;
     }
     .loop-panel-status span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .topology-canvas {
@@ -2834,6 +2845,8 @@ HTML = r"""<!doctype html>
     .state-dot.failed { background: var(--red); }
     .state-dot.closed { background: var(--teal); }
     .graph-inspector {
+      height: 100%;
+      align-self: stretch;
       min-width: 0;
       min-height: 0;
       border: 1px solid var(--line);
@@ -2841,11 +2854,29 @@ HTML = r"""<!doctype html>
       background: #fbfcfd;
       padding: 10px;
       display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-rows: 14px 38px minmax(0, 1fr);
       gap: 7px;
+      overflow: hidden;
     }
-    .inspect-kicker { color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 700; }
-    .inspect-title { font-size: 16px; font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
+    .inspect-kicker {
+      height: 14px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 14px;
+      text-transform: uppercase;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .inspect-title {
+      height: 38px;
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.15;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+    }
     .inspect-body {
       color: var(--slate);
       font-size: 13px;
@@ -2880,7 +2911,7 @@ HTML = r"""<!doctype html>
       font-size: 10px;
       line-height: 1.2;
     }
-    .chat-panel { grid-template-rows: auto auto minmax(64px, .30fr) minmax(128px, .70fr) minmax(236px, auto); }
+    .chat-panel { grid-template-rows: auto auto minmax(48px, .24fr) minmax(112px, .76fr) minmax(268px, auto); }
     .left { grid-template-rows: 98px minmax(0, 1fr); }
     .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
     .wide-pane { grid-column: 1 / span 2; }
@@ -3091,27 +3122,33 @@ HTML = r"""<!doctype html>
     function setTab(name) {
       document.querySelectorAll("button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
       document.querySelectorAll(".tabs").forEach(p => p.classList.toggle("active", p.id === name));
-    }
-    document.querySelectorAll("button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
-    document.getElementById("runCommand").addEventListener("click", submitCommand);
-    document.getElementById("clearCommand").addEventListener("click", () => { document.getElementById("commandInput").value = ""; });
-    document.getElementById("threadSelect").addEventListener("change", event => switchThread(event.target.value));
-    document.getElementById("newThread").addEventListener("click", () => {
-      document.getElementById("runMode").value = "auto";
-      switchThread(newThreadId(), { pristine: true });
-    });
-    document.getElementById("clearScreen").addEventListener("click", () => {
-      setScreenCleared(true);
-      frozenTrace = null;
-      lastPipelineSignature = "";
-      lastBranchSignature = "";
-      renderTranscript([]);
+	    }
+	    document.querySelectorAll("button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+	    document.getElementById("runCommand").addEventListener("click", submitCommand);
+	    document.getElementById("clearCommand").addEventListener("click", () => clearLocalView("Screen cleared", "Local view cleared. The durable journal is preserved; new live events or a new submission will repopulate this thread."));
+	    document.getElementById("threadSelect").addEventListener("change", event => switchThread(event.target.value));
+	    document.getElementById("newThread").addEventListener("click", () => {
+	      document.getElementById("runMode").value = "auto";
+	      switchThread(newThreadId(), { pristine: true });
+	    });
+	    document.getElementById("clearScreen").addEventListener("click", () => clearLocalView("Screen cleared", "Local view cleared. The durable journal is preserved; start a new run or switch thread to populate this screen again."));
+	    function clearLocalView(title, detail) {
+	      const input = document.getElementById("commandInput");
+	      if (input) input.value = "";
+	      setScreenCleared(true);
+	      frozenTrace = null;
+	      lastPipelineSignature = "";
+	      lastBranchSignature = "";
+	      renderTranscript([]);
       renderPipeline([]);
-      renderBranches([]);
-      runtimeConsoleLines = [];
-      renderRuntimeConsole([]);
-      showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved; start a new run or switch thread to populate this screen again.");
-    });
+	      renderBranches([]);
+	      runtimeConsoleLines = [];
+	      renderRuntimeConsole([]);
+	      text("publicTraceNotice", "screen cleared locally | journal preserved");
+	      text("consoleStatus", "ready");
+	      cls("consoleDot", "dot ok");
+	      showInspector(title || "Screen cleared", selected.consoleThread, detail || "Local view cleared. The durable journal is preserved.");
+	    }
     document.getElementById("commandInput").addEventListener("keydown", event => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submitCommand();
     });
@@ -3352,15 +3389,15 @@ HTML = r"""<!doctype html>
       text("consoleStatus", effectiveJobStatus);
       cls("consoleDot", `dot ${effectiveJobStatus === "running" || effectiveJobStatus === "queued" ? "running" : effectiveJobStatus === "failed" || effectiveJobStatus === "timeout" || effectiveJobStatus === "error" ? "failed" : "ok"}`);
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
-      const cleared = isScreenCleared() && !["running", "queued"].includes(effectiveJobStatus);
+	      const cleared = isScreenCleared();
       const hasFrozenTrace = Boolean(frozenTrace && frozenTrace.threadId === selected.consoleThread && !cleared);
       const preserveLiveTrace = Boolean((hasFrozenTrace || (lastLiveAt && Date.now() - lastLiveAt < 2500)) && !cleared);
       if (pristineIdle) {
         text("publicTraceNotice", "new thread idle | waiting for input");
         text("consoleStatus", "ready");
         cls("consoleDot", "dot ok");
-      } else if (!preserveLiveTrace) {
-        text("publicTraceNotice", consoleState.notice || "runtime context");
+	      } else if (!preserveLiveTrace) {
+	        text("publicTraceNotice", cleared ? "screen cleared locally | journal preserved" : (consoleState.notice || "runtime context"));
         renderTranscript(cleared ? [] : (consoleState.transcript || []));
         renderPipeline(cleared ? [] : (consoleState.topology || []));
         renderBranches(cleared ? [] : (consoleState.search_branches || []));
@@ -3624,15 +3661,17 @@ HTML = r"""<!doctype html>
       }
       return 0;
     }
-    function formatConsoleTime(value, base, index) {
-      const n = Number(value || 0);
-      if (!n) return "--:--:--";
-      const start = Number(base || n);
-      if (n < 10_000_000_000 && start < 10_000_000_000) return `#${String((index || 0) + 1).padStart(3, "0")}`;
-      const scale = 1000;
-      const elapsed = Math.max(0, (n - start) / scale);
-      return `+${elapsed.toFixed(elapsed < 10 ? 1 : 0)}s`;
-    }
+	    function formatConsoleTime(value, base, index) {
+	      const n = Number(value || 0);
+	      const ordinal = `#${String((index || 0) + 1).padStart(3, "0")}`;
+	      if (!n) return ordinal;
+	      const start = Number(base || n);
+	      if (n < 10_000_000_000 || start < 10_000_000_000) return ordinal;
+	      const scale = 1000;
+	      const elapsed = (n - start) / scale;
+	      if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 3600) return ordinal;
+	      return `+${elapsed.toFixed(elapsed < 10 ? 1 : 0)}s`;
+	    }
     function renderTranscript(rows) {
       const panel = document.getElementById("transcript");
       if (!rows.length) {
