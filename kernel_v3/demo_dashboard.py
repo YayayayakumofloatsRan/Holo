@@ -9,12 +9,70 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 Json = dict[str, Any]
 
 DEFAULT_RUN_PREFIX = "run_global_finagent_limit10_live_20260613"
+DEMO_RUNS = (
+    {
+        "label": "FinanceBench Activision fixed asset turnover",
+        "run_prefix": "run_demo_financebench_activision_fat_live_20260613",
+        "thread_prefix": "demo-financebench-activision-fat",
+        "difficulty": "Medium-High",
+        "question": "Compute Activision Blizzard FY2019 fixed asset turnover from the 2019 10-K source URL.",
+    },
+    {
+        "label": "FinanceBench live10 capability parallel",
+        "run_prefix": "run_financebench_doc_live10_capability_parallel_v2",
+        "thread_prefix": "",
+        "difficulty": "Medium-High",
+        "question": "Live 10-item FinanceBench capability batch; includes the Activision fixed asset turnover pass.",
+    },
+    {
+        "label": "FinanceBench live10 doclink capability",
+        "run_prefix": "run_financebench_doc_live10_capability_doclink_v2",
+        "thread_prefix": "",
+        "difficulty": "Medium-High",
+        "question": "Live 10-item FinanceBench document-link batch; includes another Activision fixed asset turnover pass.",
+    },
+    {
+        "label": "FAB v2 HD vs LOW DIO search stress",
+        "run_prefix": "run_demo_fabv2_hd_low_dio_flash_workbenchfollow_20260613",
+        "thread_prefix": "demo-fabv2-hd-low-dio-workbenchfollow",
+        "difficulty": "High",
+        "question": "Multi-issuer DIO task used to debug workbench follow-up retrieval and LOW COGS search.",
+    },
+    {
+        "label": "FAB v2 HD vs LOW DIO Pro",
+        "run_prefix": "run_demo_fabv2_hd_low_dio_pro_high_20260613",
+        "thread_prefix": "demo-fabv2-hd-low-dio-high",
+        "difficulty": "High",
+        "question": "Same FAB v2 DIO task with DeepSeek Pro high reasoning.",
+    },
+    {
+        "label": "FAB v2 HD vs LOW DIO Pro Max",
+        "run_prefix": "run_demo_fabv2_hd_low_dio_pro_max_20260613",
+        "thread_prefix": "demo-fabv2-hd-low-dio-pro",
+        "difficulty": "High",
+        "question": "Same FAB v2 DIO task with DeepSeek Pro max reasoning.",
+    },
+    {
+        "label": "FAB v2 historical DIO baseline",
+        "run_prefix": "run_fabv2_dev10_capability_parallel10_judgefix",
+        "thread_prefix": "",
+        "difficulty": "High",
+        "question": "Historical HD/LOW DIO run with retrieval, facts, calculator traces, and citations.",
+    },
+    {
+        "label": "FinanceBench 3M capital intensity",
+        "run_prefix": "run_financebench_doc_live10_after_source_equivalence",
+        "thread_prefix": "",
+        "difficulty": "Medium-High",
+        "question": "3M capital-intensive assessment with filing evidence and calculation.",
+    },
+)
 BASELINE_RUNS = (
     ("Global FE live10 dev", "run_global_finagent_limit10_live_20260613.summary.json"),
     ("Global FE live10 test", "run_global_finagent_test10_live_20260613.summary.json"),
@@ -90,7 +148,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_text(HTML, "text/html; charset=utf-8")
             return
         if parsed.path == "/api/state":
-            self._send_json(build_state(self.server.root, self.server.run_prefix, self.server.thread_prefix))
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            run_prefix = _query_value(query, "run_prefix") or self.server.run_prefix
+            thread_prefix = _query_value(query, "thread_prefix")
+            if thread_prefix is None:
+                thread_prefix = _thread_prefix_for_run(run_prefix) or self.server.thread_prefix
+            self._send_json(build_state(self.server.root, run_prefix, thread_prefix))
             return
         if parsed.path == "/workflow":
             workflow = self.server.root / ".state/kernel_v3/visuals/kernel_v3_live_demo_task902.html"
@@ -161,6 +224,7 @@ def build_state(root: Path, run_prefix: str, thread_prefix: str = "") -> Json:
         "repo": repo_state(root),
         "current": current,
         "baselines": baseline_state(bench_dir),
+        "demo_runs": demo_run_state(bench_dir),
         "llm": llm_state(events),
         "pipeline": pipeline_state(latest_item, latest_metrics, events),
         "intelligence": intelligence_state(root, latest_metrics),
@@ -176,6 +240,51 @@ def build_state(root: Path, run_prefix: str, thread_prefix: str = "") -> Json:
             "thread_prefix": thread_prefix,
         },
     }
+
+
+def demo_run_state(bench_dir: Path) -> list[Json]:
+    rows: list[Json] = []
+    for item in DEMO_RUNS:
+        run_prefix = str(item["run_prefix"])
+        summary = read_json(bench_dir / f"{run_prefix}.summary.json")
+        records = read_jsonl(bench_dir / f"{run_prefix}.jsonl", max_bytes=2_000_000, max_records=5)
+        latest = records[-1] if records else {}
+        latest_metrics = dict(latest.get("trace_metrics") or latest.get("scorecard", {}).get("trace_metrics") or {})
+        done = int(summary.get("scored_count") or len(records))
+        passed = int(summary.get("passed_count") or (1 if latest.get("status") == "passed" else 0))
+        failed = int(summary.get("failed_count") or (1 if latest.get("status") == "failed" else 0))
+        rows.append(
+            {
+                **item,
+                "status": _run_status(bench_dir, run_prefix, summary=summary, latest=latest),
+                "pass_rate": safe_float(summary.get("pass_rate")),
+                "done": done,
+                "passed": passed,
+                "failed": failed,
+                "latest_item_id": latest.get("item_id") or latest.get("id") or "",
+                "calculator_calls": latest_metrics.get("calculator_call_count"),
+                "retrieval_runs": latest_metrics.get("retrieval_run_count"),
+                "fetches": latest_metrics.get("fetch_attempt_count"),
+                "tokens": latest_metrics.get("total_tokens"),
+            }
+        )
+    return rows
+
+
+def _query_value(query: dict[str, list[str]], key: str) -> str | None:
+    if key not in query:
+        return None
+    values = query.get(key) or []
+    if not values:
+        return ""
+    return str(values[0])
+
+
+def _thread_prefix_for_run(run_prefix: str) -> str:
+    for item in DEMO_RUNS:
+        if item.get("run_prefix") == run_prefix:
+            return str(item.get("thread_prefix") or "")
+    return ""
 
 
 def current_run_state(
@@ -200,13 +309,7 @@ def current_run_state(
     pass_rate = safe_float(summary.get("pass_rate"))
     if pass_rate is None and done:
         pass_rate = passed / max(1, done)
-    status = "running"
-    if summary_path.exists():
-        status = "complete"
-    elif latest.get("status") == "failed" and done >= total:
-        status = "complete"
-    elif result_path.exists() and done > 0:
-        status = "running"
+    status = _run_status(result_path.parent, result_path.stem, summary=summary, latest=latest)
     mtime = result_path.stat().st_mtime if result_path.exists() else 0.0
     stale_seconds = max(0, int(now - mtime)) if mtime else None
     return {
@@ -230,6 +333,18 @@ def current_run_state(
         "summary_exists": summary_path.exists(),
         "stale_seconds": stale_seconds,
     }
+
+
+def _run_status(bench_dir: Path, run_prefix: str, *, summary: Json, latest: Json) -> str:
+    result_path = bench_dir / f"{run_prefix}.jsonl"
+    summary_path = bench_dir / f"{run_prefix}.summary.json"
+    if summary_path.exists():
+        return "complete"
+    if latest.get("status") in {"failed", "passed"}:
+        return "complete"
+    if result_path.exists():
+        return "running"
+    return "waiting"
 
 
 def baseline_state(bench_dir: Path) -> list[Json]:
@@ -671,10 +786,34 @@ HTML = r"""<!doctype html>
     .dot.failed { background: var(--red); }
     .progress { height: 8px; background: #e7ebf0; border-radius: 8px; overflow: hidden; margin-top: 12px; }
     .bar { height: 100%; width: 0%; background: var(--blue); }
-    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .cards, .run-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .baseline { border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0; }
     .baseline strong { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .baseline .score { font-size: 26px; font-weight: 780; margin: 8px 0 4px; color: var(--teal); }
+    .run-card {
+      display: grid;
+      gap: 5px;
+      text-align: left;
+      min-width: 0;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+    }
+    .run-card.active { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
+    .run-card strong { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-card .question-line { color: var(--muted); font-size: 11px; line-height: 1.35; height: 30px; overflow: hidden; }
+    .run-status-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
     .tiny { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; height: calc(100% - 28px); }
     .stage { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
@@ -718,7 +857,7 @@ HTML = r"""<!doctype html>
       body { overflow: auto; height: auto; }
       .grid { height: auto; grid-template-columns: 1fr; }
       .left, .right { grid-template-rows: auto; }
-      .pipeline, .cards, .diag, .intel-list, .footer-grid { grid-template-columns: 1fr; }
+      .pipeline, .cards, .run-cards, .diag, .intel-list, .footer-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -747,8 +886,8 @@ HTML = r"""<!doctype html>
         <div class="progress"><div class="bar" id="progressBar"></div></div>
       </div>
       <div class="panel">
-        <div class="panel-title"><span>Validated baselines</span><span>live artifacts</span></div>
-        <div class="cards" id="baselines"></div>
+        <div class="panel-title"><span>Demo case selector</span><span id="selectedRunLabel">live</span></div>
+        <div class="run-cards" id="demoRuns"></div>
       </div>
       <div class="panel">
         <div class="panel-title"><span>LLM and tools</span><span id="provider"></span></div>
@@ -794,15 +933,34 @@ HTML = r"""<!doctype html>
     const fmtNum = v => (v === null || v === undefined || v === "") ? "0" : Number(v).toLocaleString();
     const text = (id, value) => { document.getElementById(id).textContent = value ?? ""; };
     const cls = (id, value) => { document.getElementById(id).className = value; };
+    const params = new URLSearchParams(window.location.search);
+    const selected = { runPrefix: params.get("run_prefix") || "", threadPrefix: params.has("thread_prefix") ? params.get("thread_prefix") : null };
     function setTab(name) {
       document.querySelectorAll("button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
       document.querySelectorAll(".tabs").forEach(p => p.classList.toggle("active", p.id === name));
     }
     document.querySelectorAll("button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+    function stateUrl() {
+      const query = new URLSearchParams();
+      if (selected.runPrefix) query.set("run_prefix", selected.runPrefix);
+      if (selected.threadPrefix !== null) query.set("thread_prefix", selected.threadPrefix || "");
+      const suffix = query.toString();
+      return suffix ? `/api/state?${suffix}` : "/api/state";
+    }
+    function selectRun(row) {
+      selected.runPrefix = row.run_prefix || "";
+      selected.threadPrefix = row.thread_prefix ?? "";
+      const query = new URLSearchParams();
+      if (selected.runPrefix) query.set("run_prefix", selected.runPrefix);
+      query.set("thread_prefix", selected.threadPrefix || "");
+      window.history.replaceState(null, "", `?${query.toString()}`);
+      refresh();
+    }
     async function refresh() {
-      const res = await fetch("/api/state", { cache: "no-store" });
+      const res = await fetch(stateUrl(), { cache: "no-store" });
       const data = await res.json();
       const cur = data.current || {};
+      if (!selected.runPrefix && data.filters && data.filters.run_prefix) selected.runPrefix = data.filters.run_prefix;
       text("subtitle", `${data.generated_at} | branch ${data.repo.branch || "-"} @ ${data.repo.head || "-"}`);
       text("runStatus", cur.status || "unknown");
       cls("runDot", `dot ${cur.status === "complete" && cur.failed ? "failed" : cur.status || ""}`);
@@ -823,10 +981,29 @@ HTML = r"""<!doctype html>
       text("resultPath", data.links.result_jsonl || "-");
       text("summaryPath", data.links.summary_json || "-");
       text("refreshState", `auto refresh on | stale ${cur.stale_seconds ?? "-"}s`);
-      renderBaselines(data.baselines || []);
+      text("selectedRunLabel", cur.name || (data.filters || {}).run_prefix || "live");
+      renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix);
       renderPipeline(data.pipeline || []);
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
+    }
+    function renderDemoRuns(rows, activeRunPrefix) {
+      document.getElementById("demoRuns").innerHTML = rows.map(row => {
+        const statusClass = row.status === "complete" && row.failed ? "failed" : row.status || "";
+        const active = row.run_prefix === activeRunPrefix ? " active" : "";
+        return `<button class="run-card${active}" data-run="${escapeHtml(row.run_prefix)}">
+          <div class="run-status-line">
+            <strong>${escapeHtml(row.label)}</strong>
+            <span class="pill"><span class="dot ${escapeHtml(statusClass)}"></span>${escapeHtml(row.status || "waiting")}</span>
+          </div>
+          <div class="question-line">${escapeHtml(row.question)}</div>
+          <div class="tiny">${escapeHtml(row.difficulty || "-")} | scored ${row.done ?? 0} | pass ${fmtPct(row.pass_rate)}</div>
+          <div class="tiny">fetch ${fmtNum(row.fetches)} | calc ${fmtNum(row.calculator_calls)} | ${escapeHtml(row.latest_item_id || "")}</div>
+        </button>`;
+      }).join("");
+      document.querySelectorAll(".run-card").forEach((button, index) => {
+        button.addEventListener("click", () => selectRun(rows[index]));
+      });
     }
     function renderBaselines(rows) {
       document.getElementById("baselines").innerHTML = rows.slice(0, 9).map(row => `

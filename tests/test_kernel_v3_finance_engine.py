@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
-from kernel_v3.agent.contracts import FinalAnswer
+from kernel_v3.agent.contracts import FinalAnswer, SemanticIntake
 from kernel_v3.agent.execution_profile import execution_profile, execution_profile_runtime_metadata
 from kernel_v3.agent.runtime import (
     _RecipeBoundPlanner,
@@ -19,9 +19,14 @@ from kernel_v3.agent.runtime import (
     _finance_missing_fact_retrieval_action,
     _finance_missing_fact_retrieval_payload,
     _finance_formula_preflight_plans,
+    _can_synthesize_partial_retrieval,
+    _finance_capability_execute_clarification_as_retrieval,
+    _finance_numeric_judge_accepts_answer,
     _planner_directive,
     _candidate_fact_evidence_text,
+    _retrieval_and_toolchain_grounding,
     _retrieval_payload,
+    _retrieval_capability_args,
     _toolchain_candidate_facts,
     _workspace_grounding,
     task_recipe,
@@ -675,6 +680,14 @@ def test_finance_fact_ledger_extracts_transaction_value_from_filing_text() -> No
     assert any(fact.value == "2200000000" for fact in facts)
 
 
+def test_finance_capability_profile_uses_model_evaluator() -> None:
+    profile = execution_profile("finance-capability")
+
+    assert profile.planner_mode == "model"
+    assert profile.evaluator_mode == "model"
+    assert profile.synthesizer_mode == "model"
+
+
 def test_planner_processor_failure_rescues_to_targeted_finance_retrieval() -> None:
     class FailedPlanner:
         def propose(self, context, feedback=None):
@@ -739,7 +752,8 @@ def test_planner_processor_failure_rescues_to_targeted_finance_retrieval() -> No
     assert action.kind == "tool"
     assert "host_planner_failure_rescue" in action.reasons
     assert action.payload["metadata"]["host_rescue"] is True
-    assert action.payload["metadata"]["source_urls"] == ["https://www.sec.gov/Archives/example/pfe-8k.htm"]
+    assert "https://www.sec.gov/Archives/example/pfe-8k.htm" in action.payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0001060736.json" in action.payload["metadata"]["source_urls"]
     assert "Pfizer" in action.payload["query"]
     assert action.payload["max_sources"] >= 24
 
@@ -814,6 +828,123 @@ def test_planner_processor_failure_preserves_benchmark_doc_target() -> None:
     assert "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf" in source_urls
     assert "3M 2018 10k" in action.payload["query"]
     assert "TARGET CORPORATION" not in action.payload["query"]
+
+
+def test_finance_capability_preserves_model_ask_user_without_host_rewrite() -> None:
+    class ClarifyingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-ask-for-ticker",
+                kind="ask_user",
+                name=None,
+                description="Need ticker",
+                score=0.2,
+                payload={"question": "请提供上市公司名称或股票代码。"},
+                reasons=["missing_company_ticker"],
+                side_effect_class="none",
+            )
+
+    profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **profile_metadata,
+            "semantic_intake": {
+                "primary_intent": "financial_analysis",
+                "suggested_mode": "retrieval_answer",
+                "requires_clarification": False,
+                "intents": [
+                    {
+                        "kind": "financial_analysis",
+                        "required_capabilities": ["retrieval.run", "calculator.compute"],
+                        "metadata": {
+                            "domain": "finance",
+                            "capability_args": {
+                                "retrieval.run": [
+                                    {
+                                        "query": "Seagen Inc 10-K 2022 total revenue annual",
+                                        "extract": "revenue",
+                                        "source_family": "sec_edgar_structured_search",
+                                    },
+                                    {
+                                        "query": "Pfizer Seagen acquisition consideration enterprise value 8-K EX-99.1 2023",
+                                        "extract": "consideration",
+                                        "source_family": "sec_edgar_structured_search",
+                                    },
+                                ]
+                            },
+                        },
+                    }
+                ],
+            },
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=ClarifyingPlanner(),
+        goal="For Pfizer's acquisition of Seagen, calculate transaction EV / revenue multiple.",
+        recipe=recipe,
+        journal=JournalStore.in_memory(),
+    )
+    context = ContextBundle(
+        context_id="ctx-clarify-model-owned",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-pfe", "run_id": "run-pfe"},
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.kind == "ask_user"
+    assert action.name is None
+    assert action.payload["question"] == "请提供上市公司名称或股票代码。"
+    assert "finance_capability_clarification_rescue" not in action.reasons
+
+
+def test_non_llm_first_ask_user_is_not_rewritten_to_retrieval() -> None:
+    class ClarifyingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-ask-missing-target",
+                kind="ask_user",
+                name=None,
+                description="Need company",
+                score=0.6,
+                payload={"question": "Which company?"},
+                reasons=["missing_target"],
+                side_effect_class="none",
+            )
+
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "semantic_intake": {
+                "primary_intent": "financial_analysis",
+                "requires_clarification": True,
+                "intents": [],
+            }
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=ClarifyingPlanner(),
+        goal="Analyze the company.",
+        recipe=recipe,
+        journal=JournalStore.in_memory(),
+    )
+    context = ContextBundle(
+        context_id="ctx-ask-preserved",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-generic", "run_id": "run-generic"},
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.kind == "ask_user"
+    assert action.name is None
 
 
 def test_planner_processor_failure_prefers_retrieval_workbench_followup() -> None:
@@ -1091,6 +1222,64 @@ def test_planner_compiles_workbench_missing_slots_into_target_source_followup() 
         "operating_margin_change_drivers",
         "mdna_analysis",
     ]
+
+
+def test_finance_capability_workbench_missing_slots_without_next_query_are_advisory() -> None:
+    class RespondingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-model-ready",
+                kind="respond",
+                name="respond",
+                description="Answer with available filing evidence",
+                score=0.91,
+                payload={"text": "Use the cited KHC filing table and state remaining limits."},
+                reasons=["model_answer_ready"],
+                side_effect_class="none",
+            )
+
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-capability"))},
+    )
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-capability-workbench-advisory",
+        run_id="run-capability-workbench-advisory",
+        step_id="step-workbench",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "reason_summary": "Some semantic slots remain uncertain, but no executable next search was proposed.",
+            "missing_slots": ["base_metric", "adjusted_metric"],
+            "next_queries": [],
+            "next_source_families": [],
+            "next_document_targets": [],
+        },
+    )
+    planner = _RecipeBoundPlanner(
+        inner=RespondingPlanner(),
+        goal="For KHC, explain the adjusted EBITDA bridge from public filings.",
+        recipe=recipe,
+        journal=journal,
+    )
+    context = ContextBundle(
+        context_id="ctx-capability-workbench-advisory",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-capability-workbench-advisory",
+            "run_id": "run-capability-workbench-advisory",
+        },
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.name == "respond"
+    assert "retrieval_workbench_followup" not in action.reasons
 
 
 def test_planner_uses_workbench_semantic_missing_slots_for_followup() -> None:
@@ -2476,7 +2665,7 @@ def test_shell_exec_facts_trigger_finance_calculator_before_final_answer() -> No
     assert plans[-1].data["fact_count"] == 2
 
 
-def test_script_exec_json_facts_become_candidate_fact_evidence_and_calculator_inputs() -> None:
+def test_finance_capability_script_exec_json_facts_do_not_trigger_host_calculator_rewrite() -> None:
     class RespondingPlanner:
         def propose(self, context, feedback=None):
             return CandidateAction(
@@ -2570,16 +2759,11 @@ def test_script_exec_json_facts_become_candidate_fact_evidence_and_calculator_in
 
     action = planner.propose(context)
 
-    assert action.name == CALCULATOR_TOOL_NAME
-    assert action.payload["variables"] == {"numerator": "50", "denominator": "200"}
-    proposed_steps = journal.records(task_id="task-script-formula", kind="toolchain_step_proposed")
-    assert proposed_steps
-    assert proposed_steps[-1].data["tool"] == CALCULATOR_TOOL_NAME
-    assert journal.records(task_id="task-script-formula", kind="toolchain_step_executed")
-    candidates = journal.records(task_id="task-script-formula", kind="toolchain_grounding_candidate")
-    assert candidates[-1].data["candidate_fact_count"] == 2
-    plans = journal.records(task_id="task-script-formula", kind="finance_formula_plan")
-    assert plans[-1].data["fact_count"] == 2
+    assert action.kind == "respond"
+    assert action.name == "respond"
+    assert action.payload["text"] == "TestCo net margin can now be answered."
+    assert not journal.records(task_id="task-script-formula", kind="finance_formula_plan")
+    assert not journal.records(task_id="task-script-formula", kind="toolchain_step_proposed")
 
 
 def test_script_exec_table_rows_become_scaled_candidate_facts() -> None:
@@ -3827,6 +4011,53 @@ def test_finance_missing_fact_payload_for_ev_ebitda_is_ticker_aware_and_market_e
     assert payload["metadata"]["target_tickers"] == ["LULU", "VSCO"]
 
 
+def test_semantic_retrieval_args_normalize_model_source_families_to_standard_interface() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "semantic_intake": {
+                "intents": [
+                    {
+                        "kind": "finance_fundamentals",
+                        "required_capabilities": ["retrieval.run", "finance.fundamentals_research"],
+                        "metadata": {
+                            "capability_args": {
+                                "retrieval.run": [
+                                    {
+                                        "query": "TJX Q4 FY2025 pre-tax profit margin guidance actual results",
+                                        "source_families": ["sec_edgar", "earnings_release"],
+                                    },
+                                    {
+                                        "query": "TJX Companies Q4 fiscal 2025 earnings release pre-tax margin",
+                                        "metadata": {
+                                            "source_family_plan": [
+                                                {"family": "investor_relations"},
+                                                {"source_family": "regulatory_filing"},
+                                            ]
+                                        },
+                                    },
+                                ]
+                            }
+                        },
+                    }
+                ]
+            }
+        },
+    )
+
+    payload = _retrieval_capability_args(recipe)
+
+    preferred = payload["metadata"]["preferred_source_families"]
+    assert payload["queries"] == [
+        "TJX Q4 FY2025 pre-tax profit margin guidance actual results",
+        "TJX Companies Q4 fiscal 2025 earnings release pre-tax margin",
+    ]
+    assert "regulatory_filing" in preferred
+    assert "earnings_release" in preferred
+    assert "company_ir" in preferred
+    assert preferred.count("regulatory_filing") == 1
+
+
 def test_finance_missing_fact_payload_for_bridge_uses_slot_frame_and_evidence_policy() -> None:
     payload = _finance_missing_fact_retrieval_payload(
         formula_name="bridge_subtotal",
@@ -3862,6 +4093,61 @@ def test_finance_missing_fact_payload_for_transaction_ev_revenue_seeds_sec_issue
     assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0001060736.json" in source_urls
     assert payload["source_urls"] == source_urls
     assert payload["metadata"]["preferred_source_families"][0] == "structured_regulatory_data"
+    assert any("Seagen SEC companyfacts annual revenue 10-K" in query for query in payload["queries"])
+
+
+def test_finance_ev_revenue_retrieval_augmentation_adds_target_companyfacts_coverage() -> None:
+    goal = (
+        "For Pfizer's acquisition of Seagen, calculate the transaction EV / revenue multiple "
+        "using public deal disclosures and filing evidence."
+    )
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+
+    payload = _augment_finance_modeling_retrieval_payload(
+        {
+            "query": "Pfizer Seagen acquisition enterprise value deal terms",
+            "queries": ["Seagen 2022 annual revenue 10-K"],
+            "metadata": {},
+        },
+        root_goal=goal,
+        recipe=recipe,
+    )
+
+    assert payload["query"] == "Pfizer Seagen acquisition enterprise value deal terms"
+    assert any("Seagen SEC companyfacts annual revenue 10-K" in query for query in payload["queries"])
+    assert any("SEC companyfacts" in query for query in payload["queries"])
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0001060736.json" in payload["source_urls"]
+    assert payload["metadata"]["target_revenue_structured_source_required"] is True
+    assert payload["max_fetches"] >= 18
+
+
+def test_finance_dio_retrieval_augmentation_adds_inventory_and_cogs_companyfacts_coverage() -> None:
+    goal = "For NYSE: HD and NYSE: LOW, calculate FY2024 days inventory outstanding (DIO)."
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+
+    payload = _augment_finance_modeling_retrieval_payload(
+        {
+            "query": "HD LOW FY2024 DIO inventory",
+            "queries": ["HD LOW FY2024 inventory"],
+            "metadata": {},
+        },
+        root_goal=goal,
+        recipe=recipe,
+    )
+
+    joined_queries = " ".join(payload["queries"])
+    assert "cost of revenue" in payload["query"].lower()
+    assert "HD SEC companyfacts inventory cost of revenue cost of sales COGS 10-K" in joined_queries
+    assert "LOW SEC companyfacts inventory cost of revenue cost of sales COGS 10-K" in joined_queries
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000354950.json" in payload["source_urls"]
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000060667.json" in payload["source_urls"]
+    assert payload["metadata"]["target_inventory_and_cogs_structured_source_required"] is True
 
 
 def test_finance_missing_fact_payload_for_capital_intensity_seeds_companyfacts() -> None:
@@ -4052,6 +4338,91 @@ def test_recipe_evaluator_continues_on_report_workbench_semantic_missing_slots()
     assert "retrieval_workbench_followup" in feedback.missing_evidence
 
 
+def test_finance_capability_evaluator_treats_empty_workbench_followup_as_advisory() -> None:
+    profile = execution_profile("finance-capability")
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "For KHC, explain the adjusted EBITDA bridge from public filings.",
+            "execution_metadata": execution_profile_runtime_metadata(profile),
+        },
+    )
+    evaluator = _RecipeEvaluator(recipe, journal=JournalStore.in_memory())
+    context = ContextBundle(
+        context_id="ctx-capability-workbench-report",
+        thread_key="thread-1",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-capability-workbench-report", "run_id": "run-1"},
+        token_budget=4096,
+    )
+    observation = Observation(
+        observation_id="obs-capability-workbench-report",
+        run_id="run-1",
+        kind="tool_result",
+        status="ok",
+        source="tool:retrieval.run",
+        content={
+            "report": {
+                "status": "sufficient",
+                "diagnostics": {
+                    "retrieval_workbench": {
+                        "status": "ok",
+                        "decision": "continue",
+                        "missing_slots": ["base_metric", "adjusted_metric"],
+                        "next_queries": [],
+                        "next_document_targets": [],
+                    }
+                },
+            }
+        },
+        observed_at_ms=1,
+        action_id="act-1",
+        tool_call_id="tool-1",
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "final_answer_ready"
+    assert "retrieval_workbench_followup" not in feedback.missing_evidence
+
+
+def test_finance_capability_evaluator_does_not_block_on_planned_action_count() -> None:
+    profile = execution_profile("finance-capability")
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "planned_action_count": 2,
+            "execution_metadata": execution_profile_runtime_metadata(profile),
+        },
+    )
+    evaluator = _RecipeEvaluator(recipe, journal=JournalStore.in_memory())
+    context = ContextBundle(
+        context_id="ctx-capability-planned-count",
+        thread_key="thread-1",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-capability-planned-count", "run_id": "run-1"},
+        token_budget=4096,
+    )
+    observation = Observation(
+        observation_id="obs-capability-planned-count",
+        run_id="run-1",
+        kind="tool_result",
+        status="ok",
+        source="tool:retrieval.run",
+        content={"report": {"status": "sufficient", "diagnostics": {}}},
+        observed_at_ms=1,
+        action_id="act-1",
+        tool_call_id="tool-1",
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "final_answer_ready"
+    assert "remaining_plan_actions" not in feedback.missing_evidence
+
+
 def test_finance_fact_ledger_ignores_press_release_time_and_exhibit_identifiers() -> None:
     evidence = [
         _finance_evidence(
@@ -4123,6 +4494,161 @@ def test_finance_formula_planner_uses_transaction_value_for_ev_revenue() -> None
     assert plan.payload["formula_name"] == "ev_revenue"
     assert plan.payload["variables"]["equity_value"] == "43000000000"
     assert plan.payload["variables"]["revenue"] == "2200000000"
+
+
+def test_finance_formula_planner_prefers_acquired_target_revenue_for_ev_revenue() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="pfe-seagen-transaction-value",
+            entity="Pfizer Inc.",
+            ticker="PFE",
+            period=None,
+            fiscal_year=None,
+            metric="transaction value",
+            value="44234000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-deal",
+            evidence_ref="ev-deal",
+            citation_ref="cite-deal",
+            metadata={"context": "Pfizer acquisition of Seagen total consideration transferred"},
+        ),
+        _year_fact(
+            "revenue",
+            "58496000000",
+            2023,
+            fact_id="pfe-revenue",
+            metadata={"source_title": "Pfizer 2023 Form 10-K", "context": "Pfizer total revenues"},
+        ),
+        _year_fact(
+            "revenue",
+            "1962412000",
+            2022,
+            fact_id="seagen-revenue",
+            metadata={
+                "source_title": "SEC companyfacts JSON for CIK 0001060736",
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0001060736.json",
+                "context": "SEC companyfacts annual financial summary entityName=Seagen Inc.",
+            },
+        ),
+    ]
+
+    plan = plan_finance_formula(
+        question="For Pfizer's acquisition of Seagen, calculate the transaction EV / revenue multiple.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["variables"]["equity_value"] == "44234000000"
+    assert plan.payload["variables"]["revenue"] == "1962412000"
+    assert plan.input_fact_ids == ["pfe-seagen-transaction-value", "seagen-revenue"]
+
+
+def test_retrieval_extraction_grounding_promotes_sec_companyfacts_spans() -> None:
+    journal = JournalStore.in_memory()
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+    report = _retrieval_report(evidence=[], citations=[], status="insufficient_evidence")
+    journal.append(
+        task_id="task-extraction-grounding",
+        run_id="run-extraction-grounding",
+        step_id="step-report",
+        kind="retrieval_report",
+        data=report.to_dict(),
+    )
+    text = (
+        "SEC companyfacts annual financial summary entityName=Seagen Inc. cik=1060736 "
+        "fy=2022 period=annual form=10-K filed=2023-02-15 end=2022-12-31 "
+        "facts=metric=revenue concept=RevenueFromContractWithCustomerExcludingAssessedTax "
+        "period_fy=2022 value=1962412000 val=1962412000 unit=USD fy=2022 fp=FY "
+        "form=10-K filed=2023-02-15 start=2022-01-01 end=2022-12-31 frame=CY2022"
+    )
+    journal.append(
+        task_id="task-extraction-grounding",
+        run_id="run-extraction-grounding",
+        step_id="step-extraction",
+        kind="retrieval_extraction",
+        data={
+            "goal_id": "goal-agent-retrieval",
+            "document": {
+                "document_id": "doc-sgen-companyfacts",
+                "source_id": "src-sgen-companyfacts",
+                "artifact_id": "artifact-sgen-companyfacts",
+                "uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0001060736.json",
+                "title": "SEC companyfacts JSON for CIK 0001060736",
+                "payload_hash": "hash-sgen-companyfacts",
+            },
+            "spans": [
+                {
+                    "span_id": "span-sgen-2022-revenue",
+                    "text": text,
+                    "score": 0.91,
+                    "metadata": {"text_mode": "sec_companyfacts_readable_text", "target_line_item": "revenue"},
+                }
+            ],
+        },
+    )
+
+    evidence, citations, updated_report = _retrieval_and_toolchain_grounding(
+        journal,
+        "task-extraction-grounding",
+        "run-extraction-grounding",
+        recipe=recipe,
+    )
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+
+    assert updated_report is not None
+    assert updated_report.status == "sufficient"
+    assert updated_report.diagnostics["retrieval_extraction_grounding"]["evidence_count"] == 1
+    assert evidence[0].evidence_id == "evidence-span-sgen-2022-revenue"
+    assert citations[0].evidence_id == "evidence-span-sgen-2022-revenue"
+    assert any(fact.entity == "Seagen Inc." and fact.metric == "revenue" and fact.value == "1962412000" for fact in facts)
+
+
+def test_html_table_fact_lines_feed_adjusted_ebitda_bridge_planner() -> None:
+    text = (
+        "The Kraft Heinz Company Reconciliation of Net Income/(Loss) to Adjusted EBITDA "
+        "(in millions) (Unaudited) scale=millions "
+        "html_table_fact_34_2_2022: metric=Net income/(loss) fy=2022 value=2,368 scale=millions "
+        "html_table_fact_34_3_2022: metric=Interest expense fy=2022 value=921 scale=millions "
+        "html_table_fact_34_4_2022: metric=Other expense/(income) fy=2022 value=(253) scale=millions "
+        "html_table_fact_34_5_2022: metric=Provision for/(benefit from) income taxes fy=2022 value=598 scale=millions "
+        "html_table_fact_34_7_2022: metric=Depreciation and amortization (excluding restructuring activities) fy=2022 value=922 scale=millions "
+        "html_table_fact_34_8_2022: metric=Divestiture-related license income fy=2022 value=(56) scale=millions "
+        "html_table_fact_34_9_2022: metric=Restructuring activities fy=2022 value=74 scale=millions "
+        "html_table_fact_34_10_2022: metric=Deal costs fy=2022 value=9 scale=millions "
+        "html_table_fact_34_11_2022: metric=Unrealized losses/(gains) on commodity hedges fy=2022 value=63 scale=millions "
+        "html_table_fact_34_12_2022: metric=Impairment losses fy=2022 value=999 scale=millions "
+        "html_table_fact_34_13_2022: metric=Certain non-ordinary course legal and regulatory matters fy=2022 value=210 scale=millions "
+        "html_table_fact_34_14_2022: metric=Equity award compensation expense fy=2022 value=148 scale=millions "
+        "html_table_fact_34_15_2022: metric=Adjusted EBITDA fy=2022 value=6,003 scale=millions"
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="khc-bridge-table",
+            title="KHC 10-K adjusted EBITDA reconciliation",
+            uri="https://www.sec.gov/Archives/edgar/data/1637459/example/khc-10k.htm",
+            text=text,
+        )
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-khc-bridge")],
+    )
+
+    plan = plan_finance_formula(
+        question="For KHC, explain the adjusted EBITDA bridge and subtotal.",
+        facts=facts,
+    )
+
+    assert any(fact.metric == "adjusted ebitda" and fact.value == "6003000000" for fact in facts)
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["formula_name"] == "bridge_subtotal"
+    assert plan.payload["variables"]["reported_adjusted"] == "6003000000"
 
 
 def test_numeric_verifier_passes_supported_scaled_finance_values() -> None:
@@ -5605,6 +6131,41 @@ def test_finance_capability_blocks_host_fallback_when_llm_numeric_judge_unavaila
     )
 
 
+def test_finance_capability_does_not_rewrite_semantic_clarification() -> None:
+    intake = SemanticIntake(
+        intake_id="intake-khc-clarify",
+        goal=(
+            "For KHC, use public filings to explain the adjusted EBITDA bridge for the requested period."
+        ),
+        primary_intent="financial_research",
+        suggested_mode="clarify_first",
+        compound=False,
+        requires_clarification=True,
+        intents=[
+            {
+                "kind": "financial_research",
+                "text": "Research KHC adjusted EBITDA bridge from public filings.",
+                "sequence_index": 1,
+                "required_capabilities": ["retrieval.run", "finance.fundamentals_research"],
+                "risk": "none",
+                "status": "needs_user_input",
+                "metadata": {"domain": "finance_fundamentals", "resource": "public_filings"},
+            }
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question="Which period?",
+    )
+
+    updated = _finance_capability_execute_clarification_as_retrieval(
+        intake,
+        execution_metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+
+    assert updated == intake
+
+
 def test_finance_numeric_verifier_failure_uses_llm_judge_before_failure() -> None:
     journal = JournalStore.in_memory()
     fabric = ProcessorFabric(
@@ -5830,6 +6391,59 @@ def test_partial_retrieval_finalizes_when_max_tool_calls_but_citations_exist() -
     assert final.trace_refs
 
 
+def test_finance_capability_partial_retrieval_synthesis_is_llm_first() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-margin",
+            title="3M 2022 10-K MD&A",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/mmm-20221231.htm",
+            text="Management says operating margin declined due to litigation, PFAS exit costs, raw materials and logistics costs.",
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-margin")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-capability"))},
+    )
+
+    assert _can_synthesize_partial_retrieval(
+        terminal_reason=None,
+        evidence=evidence,
+        citations=citations,
+        recipe=recipe,
+    )
+
+
+def test_finance_numeric_judge_semantic_pass_accepts_core_answer() -> None:
+    assert _finance_numeric_judge_accepts_answer(
+        {
+            "decision": "passed_semantically",
+            "answer_addresses_question": True,
+            "requires_more_work": False,
+            "core_numeric_claims": ["supported revenue value"],
+            "non_core_numeric_claims": ["incidental document number"],
+            "unsupported_core_values": [],
+        }
+    )
+    assert _finance_numeric_judge_accepts_answer(
+        {
+            "decision": "repair_answer",
+            "answer_addresses_question": True,
+            "requires_more_work": False,
+            "core_numeric_claims": ["supported filing table values"],
+            "unsupported_core_values": [],
+        }
+    )
+    assert not _finance_numeric_judge_accepts_answer(
+        {
+            "decision": "passed_semantically",
+            "answer_addresses_question": True,
+            "requires_more_work": False,
+            "unsupported_core_values": ["unsupported revenue value"],
+        }
+    )
+
+
 def test_finance_preflight_without_structured_facts_journals_source_grounded_trace() -> None:
     journal = JournalStore.in_memory()
     runtime = _runtime_with_synthesizer(journal, answer="fallback")
@@ -5866,6 +6480,45 @@ def test_finance_preflight_without_structured_facts_journals_source_grounded_tra
     assert claim_ledgers[-1].data["claim_count"] == 1
     assert slot_frames[-1].data["task_type"] == "source_grounded_research"
     assert any(record.data.get("method") == "source_grounded_synthesis" for record in transform_plans)
+
+
+def test_finance_capability_preflight_does_not_auto_compute_formula() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(journal, answer="fallback")
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-net-margin",
+            title="TestCo 2024 10-K",
+            uri="https://www.sec.gov/Archives/testco-2024.htm",
+            text=(
+                "entityName=TestCo metric=revenue label=Revenue unit=USD fy=2024 form=10-K value=200 "
+                "entityName=TestCo metric=net income label=Net income unit=USD fy=2024 form=10-K value=50"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-net-margin")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "goal": "Calculate TestCo FY2024 net margin.",
+        },
+    )
+
+    runtime._run_finance_numeric_preflight(  # noqa: SLF001
+        "task-llm-owned-preflight",
+        "run-1",
+        recipe=recipe,
+        evidence=evidence,
+        citations=citations,
+    )
+
+    preflights = journal.records(task_id="task-llm-owned-preflight", kind="finance_numeric_preflight")
+    assert preflights[-1].data["status"] == "skipped"
+    assert preflights[-1].data["semantic_decision_owner"] == "model"
+    assert journal.records(task_id="task-llm-owned-preflight", kind="finance_fact_ledger")
+    assert not journal.records(task_id="task-llm-owned-preflight", kind="finance_formula_plan")
+    assert not journal.records(task_id="task-llm-owned-preflight", kind="observation")
 
 
 def test_source_grounded_finance_fallback_uses_cited_evidence_when_synthesizer_adds_unsupported_number() -> None:

@@ -447,6 +447,7 @@ def assess_evidence_sufficiency(
     )
     latest_report_status = str(latest_retrieval_report.data.get("status")) if latest_retrieval_report else None
     latest_report_reason = str(report_diagnostics.get("reason") or latest_report_status or "")
+    workbench_continue = _retrieval_workbench_continue(latest_retrieval_report.data if latest_retrieval_report else {})
     latest_observation = _latest_record(journal, task_id=task_id, kind="observation")
     if (
         latest_observation is not None
@@ -481,6 +482,11 @@ def assess_evidence_sufficiency(
     missing: list[str] = []
     sufficient = True
     reason = "sufficient"
+    if recipe.mode == "retrieval_answer" and _llm_semantic_judgment_required(recipe) and workbench_continue:
+        sufficient = False
+        missing.append("retrieval_workbench_followup")
+        missing.extend(f"workbench_missing:{slot}" for slot in _string_list(workbench_continue.get("missing_slots")))
+        reason = "retrieval_workbench_continue"
     if recipe.mode in {"direct_answer", "semantic_answer"} and not recipe.citations_required:
         return EvidenceSufficiency(
             sufficiency_id=f"evidence-{run_id}-{step_id or 'final'}",
@@ -510,6 +516,11 @@ def assess_evidence_sufficiency(
         and latest_report_status
         and latest_report_status != "sufficient"
         and (not retrieval_evidence or latest_report_is_required)
+        and not (
+            _llm_semantic_judgment_required(recipe)
+            and retrieval_evidence
+            and citation_refs
+        )
     ):
         sufficient = False
         missing.append("sufficient_retrieval_evidence")
@@ -517,7 +528,11 @@ def assess_evidence_sufficiency(
         missing.extend(f"finance_facet:{facet}" for facet in missing_finance_facets)
         missing.extend(missing_source_authority)
         reason = latest_report_reason or f"retrieval_{latest_report_status}"
-    if recipe.mode == "retrieval_answer" and planned_retrieval_coverage.get("required") is True:
+    if (
+        recipe.mode == "retrieval_answer"
+        and planned_retrieval_coverage.get("required") is True
+        and not _llm_semantic_judgment_required(recipe)
+    ):
         incomplete_goal_ids = _string_list(planned_retrieval_coverage.get("incomplete_goal_ids"))
         if incomplete_goal_ids:
             sufficient = False
@@ -538,6 +553,7 @@ def assess_evidence_sufficiency(
         adaptive_completion.get("sufficient") is True
         and "citation_refs" not in missing
         and "retrieval_evidence" not in missing
+        and not workbench_continue
     ):
         soft_missing = {
             "sufficient_retrieval_evidence",
@@ -551,6 +567,7 @@ def assess_evidence_sufficiency(
         and _calculator_formula_trace_available(journal, task_id=task_id, run_id=run_id)
         and retrieval_evidence
         and citation_refs
+        and not workbench_continue
     ):
         soft_missing = {
             "sufficient_retrieval_evidence",
@@ -599,6 +616,7 @@ def assess_evidence_sufficiency(
             "source_authority_requirement": source_authority_requirement,
             "source_authority": source_authority,
             "missing_source_authority": missing_source_authority,
+            "retrieval_workbench_continue": workbench_continue,
             "planned_retrieval_coverage": planned_retrieval_coverage,
             "adaptive_retrieval_completion": adaptive_completion,
         },
@@ -1036,6 +1054,59 @@ def _retrieval_goal_required(recipe: TaskRecipe, goal_id: str) -> bool:
     if goal_id in optional:
         return False
     return True
+
+
+def _retrieval_workbench_continue(report: JsonObject) -> JsonObject:
+    workbench = _dict_or_empty(report.get("retrieval_workbench"))
+    if not workbench:
+        diagnostics = _dict_or_empty(report.get("diagnostics"))
+        workbench = _dict_or_empty(diagnostics.get("retrieval_workbench"))
+    if not workbench:
+        return {}
+    if workbench.get("status") != "ok" or workbench.get("decision") != "continue":
+        return {}
+    next_queries = _ordered_unique(
+        [
+            *_string_list(workbench.get("next_queries")),
+            *_string_list(workbench.get("next_document_targets")),
+        ]
+    )
+    if str(report.get("status") or "") == "sufficient" and not next_queries:
+        return {}
+    return {
+        "decision": "continue",
+        "missing_slots": _workbench_missing_slots(workbench),
+        "next_queries": next_queries,
+        "next_source_families": _string_list(workbench.get("next_source_families")),
+        "reason_summary": str(workbench.get("reason_summary") or ""),
+    }
+
+
+def _workbench_missing_slots(workbench: JsonObject) -> list[str]:
+    missing = _string_list(workbench.get("missing_slots"))
+    if not missing:
+        missing = _string_list(workbench.get("semantic_missing_slots"))
+    if not missing:
+        missing = _string_list(workbench.get("missing_evidence"))
+    if not missing:
+        missing = _string_list(workbench.get("missing"))
+    return missing
+
+
+def _llm_semantic_judgment_required(recipe: TaskRecipe) -> bool:
+    metadata = recipe.metadata if isinstance(recipe.metadata, dict) else {}
+    containers = [metadata]
+    execution = metadata.get("execution_metadata")
+    if isinstance(execution, dict):
+        containers.append(execution)
+    for container in containers:
+        llm_judgment = container.get("llm_judgment") if isinstance(container, dict) else None
+        if isinstance(llm_judgment, dict) and llm_judgment.get("required") is True:
+            return True
+        profile = container.get("execution_profile") if isinstance(container, dict) else None
+        if isinstance(profile, dict) and str(profile.get("profile_id") or "") == "finance-capability":
+            return True
+    return False
 
 
 def _retrieval_payload_required(payload: JsonObject) -> bool:

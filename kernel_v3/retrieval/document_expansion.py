@@ -26,6 +26,8 @@ DOCUMENT_EXPANSION_SOURCE_KINDS = {
     "issuer_earnings_releases",
     "official_search",
     "sec_edgar_search",
+    "sec_edgar_browse_ticker",
+    "sec_ticker_cik_directory",
     "scholarly_publisher_metadata",
     "crawl_seed",
     "crawl_discovered",
@@ -207,7 +209,7 @@ def expand_document_links(
 
 def _is_expandable_source(*, source: SearchSource, document: FetchedDocument, body: str) -> bool:
     kind = _source_kind(source) or _document_source_kind(document)
-    if kind in {"sec_submissions_json", "sec_complete_submission_text"}:
+    if kind in {"sec_submissions_json", "sec_complete_submission_text", "sec_ticker_cik_directory"}:
         return bool(body)
     if not body or ("href" not in body.lower() and ".pdf" not in body.lower() and "http" not in body.lower()):
         return False
@@ -305,6 +307,8 @@ def _source_from_link(
         "sec_primary_document",
         "sec_form",
         "sec_cik",
+        "ticker",
+        "company_name",
         "sec_primary_doc_description",
         "sec_items",
         "report_date",
@@ -343,6 +347,8 @@ def _structured_candidate_links(
     query_terms: list[str],
 ) -> list[JsonObject]:
     kind = _source_kind(source) or _document_source_kind(document)
+    if kind == "sec_ticker_cik_directory":
+        return _sec_ticker_directory_links(goal=goal, document=document, source=source, body=body, query_terms=query_terms)
     if kind == "sec_submissions_json":
         return _sec_submission_document_links(goal=goal, document=document, source=source, body=body, query_terms=query_terms)
     if kind == "sec_complete_submission_text":
@@ -354,6 +360,155 @@ def _structured_candidate_links(
             query_terms=query_terms,
         )
     return []
+
+
+def _sec_ticker_directory_links(
+    *,
+    goal: SearchGoal,
+    document: FetchedDocument,
+    source: SearchSource,
+    body: str,
+    query_terms: list[str],
+) -> list[JsonObject]:
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    target_tickers = _sec_target_tickers(goal=goal, document=document, source=source)
+    if not target_tickers:
+        return []
+    matches = _sec_ticker_directory_matches(payload, target_tickers=target_tickers)
+    links: list[JsonObject] = []
+    for rank, match in enumerate(matches[:8], start=1):
+        cik = str(match.get("sec_cik") or "")
+        ticker = str(match.get("ticker") or "")
+        company_name = str(match.get("company_name") or "")
+        if not cik or not ticker:
+            continue
+        common = {
+            "matched_terms": _ordered_unique([ticker.lower(), "sec", "cik", "filing", *query_terms[:8]])[:16],
+            "sec_cik": cik,
+            "ticker": ticker,
+            "company_name": company_name,
+        }
+        base_score = 3.4 - (rank * 0.04)
+        title_label = " ".join(part for part in (ticker, company_name) if part)
+        links.extend(
+            [
+                {
+                    **common,
+                    "url": f"https://data.sec.gov/submissions/CIK{cik}.json",
+                    "text": _bounded(f"SEC submissions JSON for {title_label}", 240),
+                    "score": base_score + 0.36,
+                    "source_family": "structured_regulatory_data",
+                    "source_kind": "sec_submissions_json",
+                },
+                {
+                    **common,
+                    "url": f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
+                    "text": _bounded(f"SEC companyfacts JSON for {title_label}", 240),
+                    "score": base_score + 0.22,
+                    "source_family": "structured_regulatory_data",
+                    "source_kind": "sec_companyfacts_json",
+                },
+                {
+                    **common,
+                    "url": f"https://www.sec.gov/edgar/browse/?CIK={cik}",
+                    "text": _bounded(f"SEC EDGAR browse page for {title_label}", 240),
+                    "score": base_score,
+                    "source_family": "regulatory_filing",
+                    "source_kind": "sec_edgar_browse",
+                },
+            ]
+        )
+    return links
+
+
+def _sec_target_tickers(*, goal: SearchGoal, document: FetchedDocument, source: SearchSource) -> list[str]:
+    values: list[object] = [source.metadata.get("ticker")]
+    source_metadata = document.metadata.get("source_metadata") if isinstance(document.metadata, dict) else None
+    if isinstance(source_metadata, dict):
+        values.append(source_metadata.get("ticker"))
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    for key in ("ticker", "target_ticker", "target_tickers", "tickers", "requested_tickers"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            values.extend(value)
+        else:
+            values.append(value)
+    result: list[str] = []
+    for value in values:
+        ticker = _normalize_ticker_symbol(value)
+        if ticker and ticker not in result:
+            result.append(ticker)
+    return result
+
+
+def _sec_ticker_directory_matches(payload: JsonObject, *, target_tickers: list[str]) -> list[JsonObject]:
+    fields = payload.get("fields")
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return []
+    field_indexes = _sec_ticker_directory_field_indexes(fields)
+    matches: list[JsonObject] = []
+    for item in data:
+        row = _sec_ticker_directory_row(item, field_indexes=field_indexes)
+        ticker = _normalize_ticker_symbol(row.get("ticker"))
+        if not ticker or ticker not in target_tickers:
+            continue
+        cik = _normalize_sec_cik(row.get("cik"))
+        if not cik:
+            continue
+        matches.append(
+            {
+                "ticker": ticker,
+                "sec_cik": cik,
+                "company_name": str(row.get("name") or "").strip(),
+            }
+        )
+    order = {ticker: index for index, ticker in enumerate(target_tickers)}
+    matches.sort(key=lambda item: (order.get(str(item.get("ticker") or ""), 10_000), str(item.get("company_name") or "")))
+    return matches
+
+
+def _sec_ticker_directory_field_indexes(fields: object) -> dict[str, int]:
+    if not isinstance(fields, list):
+        return {}
+    result: dict[str, int] = {}
+    for index, field in enumerate(fields):
+        name = str(field or "").strip().lower()
+        if name:
+            result[name] = index
+    return result
+
+
+def _sec_ticker_directory_row(item: object, *, field_indexes: dict[str, int]) -> JsonObject:
+    if isinstance(item, dict):
+        return dict(item)
+    if not isinstance(item, list):
+        return {}
+    result: JsonObject = {}
+    for key in ("cik", "name", "ticker", "exchange"):
+        index = field_indexes.get(key)
+        if isinstance(index, int) and 0 <= index < len(item):
+            result[key] = item[index]
+    return result
+
+
+def _normalize_sec_cik(value: object) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[-10:].zfill(10) if digits else ""
+
+
+def _normalize_ticker_symbol(value: object) -> str:
+    text = str(value or "").strip().upper()
+    if not text or len(text) > 16:
+        return ""
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,15}", text):
+        return ""
+    return text
 
 
 def _sec_complete_submission_child_document_links(

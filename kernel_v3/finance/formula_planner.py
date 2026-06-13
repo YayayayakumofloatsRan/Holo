@@ -47,7 +47,7 @@ def plan_finance_formula(
     if formula == "bps_difference":
         return _plan_bps_difference(usable)
     if formula == "ev_revenue":
-        return _plan_ev_revenue(usable)
+        return _plan_ev_revenue(question=question, facts=usable)
     if formula == "ev_ebitda":
         return _plan_ev_ebitda(usable)
     if formula == "dio":
@@ -432,7 +432,7 @@ def _plan_bps_difference(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     )
 
 
-def _plan_ev_revenue(facts: list[FinanceFact]) -> FinanceFormulaPlan:
+def _plan_ev_revenue(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
     equity_candidates = [
         fact
         for fact in facts
@@ -472,7 +472,14 @@ def _plan_ev_revenue(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     debt = _latest_fact(facts, ("debt", "long term debt", "short term debt"))
     cash = _latest_cash_fact(facts)
     investments = _latest_fact(facts, ("short-term investments", "short term investments"))
-    revenue = _latest_fact(facts, ("revenue", "net sales", "net revenues", "total revenues", "sales"))
+    target_year = _target_fiscal_year(question)
+    target_revenue_phrases = _ev_revenue_target_phrases(question)
+    revenue = _target_revenue_fact_for_ev_revenue(
+        question=question,
+        facts=facts,
+        target_year=target_year,
+        target_phrases=target_revenue_phrases,
+    )
     missing = []
     if equity is None:
         if per_share_consideration:
@@ -484,9 +491,17 @@ def _plan_ev_revenue(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     if cash is None and not _transaction_value_already_enterprise_value(equity):
         missing.append("cash")
     if revenue is None:
-        missing.append("revenue")
+        missing.append("target_revenue" if target_revenue_phrases else "revenue")
     if missing:
-        return _missing("ev_revenue", missing, facts=[item for item in (equity, debt, cash, investments, revenue) if item is not None])
+        return _missing(
+            "ev_revenue",
+            missing,
+            facts=[item for item in (equity, debt, cash, investments, revenue) if item is not None],
+            diagnostics={
+                **({"target_revenue_phrases": target_revenue_phrases} if target_revenue_phrases else {}),
+                **({"target_fiscal_year": target_year} if target_year is not None else {}),
+            },
+        )
     variables: JsonObject = {
         "equity_value": equity.value,
         "debt": debt.value if debt is not None else "0",
@@ -500,7 +515,145 @@ def _plan_ev_revenue(facts: list[FinanceFact]) -> FinanceFormulaPlan:
         variables,
         unit="x",
         facts=[item for item in (equity, debt, cash, investments, revenue) if item is not None],
+        diagnostics={
+            **({"target_revenue_phrases": target_revenue_phrases} if target_revenue_phrases else {}),
+            **({"target_fiscal_year": target_year} if target_year is not None else {}),
+            **({"revenue_fact_id": revenue.fact_id} if revenue is not None else {}),
+        },
     )
+
+
+def _target_revenue_fact_for_ev_revenue(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    target_year: int | None,
+    target_phrases: list[str],
+) -> FinanceFact | None:
+    revenue_facts = _revenue_facts(facts, target_year=target_year)
+    if not revenue_facts:
+        return None
+    if target_phrases:
+        matches = [
+            fact
+            for fact in revenue_facts
+            if any(_finance_fact_matches_entity_phrase(fact, phrase) for phrase in target_phrases)
+        ]
+        if matches:
+            return sorted(matches, key=_revenue_fact_sort_key)[-1]
+        if len(revenue_facts) == 1:
+            return revenue_facts[0]
+        return None
+    return sorted(revenue_facts, key=_revenue_fact_sort_key)[-1]
+
+
+def _revenue_facts(facts: list[FinanceFact], *, target_year: int | None) -> list[FinanceFact]:
+    matches = [
+        fact
+        for fact in _facts_for_metric(
+            facts,
+            ("revenue", "revenues", "net sales", "net revenues", "total revenues", "sales"),
+        )
+        if _is_revenue_fact(fact)
+    ]
+    if target_year is None:
+        return matches
+    return [
+        fact
+        for fact in matches
+        if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+    ]
+
+
+def _ev_revenue_target_phrases(question: str) -> list[str]:
+    text = " ".join(str(question or "").split())
+    if not text:
+        return []
+    patterns = (
+        r"\bacquisition of (?P<target>[A-Z][A-Za-z0-9&.,' -]{1,80})",
+        r"\bacquire (?P<target>[A-Z][A-Za-z0-9&.,' -]{1,80})",
+        r"\bacquiring (?P<target>[A-Z][A-Za-z0-9&.,' -]{1,80})",
+        r"\bbuyout of (?P<target>[A-Z][A-Za-z0-9&.,' -]{1,80})",
+    )
+    phrases: list[str] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            phrase = _clean_ev_target_phrase(match.group("target"))
+            if phrase:
+                phrases.append(phrase)
+    return _ordered_unique_strings(phrases)
+
+
+def _clean_ev_target_phrase(value: str) -> str:
+    text = str(value or "").strip(" .,:;?!)(")
+    text = re.split(
+        r"\b(?:using|calculate|compute|estimate|show|with|from|based|transaction|deal|ev|enterprise|revenue|multiple|latest|public|filing|disclosure|and)\b",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    text = re.sub(r"\s+", " ", text).strip(" .,:;?!)(")
+    return text
+
+
+def _finance_fact_matches_entity_phrase(fact: FinanceFact, phrase: str) -> bool:
+    tokens = _entity_significant_tokens(phrase)
+    if not tokens:
+        return False
+    haystack = _normalized_entity_text(
+        " ".join(
+            str(value or "")
+            for value in (
+                fact.entity,
+                fact.ticker,
+                fact.period,
+                fact.metadata.get("source_title"),
+                fact.metadata.get("source_uri"),
+                fact.metadata.get("context"),
+                fact.metadata.get("raw"),
+                fact.metadata.get("ticker"),
+            )
+        )
+    )
+    return all(token in haystack for token in tokens)
+
+
+def _entity_significant_tokens(value: str) -> list[str]:
+    ignored = {
+        "inc",
+        "corp",
+        "corporation",
+        "company",
+        "co",
+        "ltd",
+        "plc",
+        "llc",
+        "holdings",
+        "holding",
+        "the",
+        "class",
+    }
+    return [
+        token
+        for token in _normalized_entity_text(value).split()
+        if len(token) >= 3 and token not in ignored
+    ][:4]
+
+
+def _normalized_entity_text(value: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).split())
+
+
+def _ordered_unique_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = value.lower()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
 
 
 def _plan_ev_ebitda(facts: list[FinanceFact]) -> FinanceFormulaPlan:
@@ -1144,9 +1297,22 @@ def _bridge_component_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
             "other expense",
             "other income",
             "restructuring",
+            "restructuring activities",
+            "impairment",
+            "impairment losses",
+            "stock-based compensation",
+            "stock based compensation",
+            "equity award compensation",
+            "equity award compensation expense",
+            "legal and regulatory",
+            "regulatory matters",
+            "commodity hedges",
+            "unrealized losses",
+            "unrealized gains",
             "deduction",
             "cash charges",
             "one-time cost",
+            "deal costs",
             "license income",
             "divestiture-related license income",
             "gain",

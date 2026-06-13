@@ -355,6 +355,7 @@ FINANCE_DISCOVERY_SOURCE_KINDS = [
     "sec_ticker_cik_directory",
     "sec_edgar_search",
     "sec_edgar_browse",
+    "sec_edgar_browse_ticker",
     "sec_filing_directory",
 ]
 

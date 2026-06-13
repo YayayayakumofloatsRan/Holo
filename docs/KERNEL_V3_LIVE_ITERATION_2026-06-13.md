@@ -37,8 +37,98 @@ gate, synthesis gate, and final answer.
   packet with ClaimLedger summaries, FormulaTrace summaries, and cited evidence,
   then asks the model to write a supported answer instead of returning a failure
   report.
+- The `finance-capability` finalization path is now explicitly LLM-first. When
+  planned retrieval coverage is incomplete but the run has citable evidence, the
+  host treats missing subgoals as diagnostics and lets model synthesis produce a
+  best-supported answer with limitations. The deterministic numeric verifier
+  remains a provenance/calculator diagnostic, but `finance.numeric_judge` can
+  semantically accept a core answer when it answers the question, requires no
+  further work, and has no unsupported core numeric values.
+- Planner context now includes a finance analyst work template and standard
+  tool interface contract for `retrieval.run`, `calculator.compute`, and
+  `respond`. In strict LLM mode, host retrieval payload supervision preserves
+  the model-selected query/source strategy after applying schema/profile/budget
+  defaults instead of rewriting the research move from host hints.
 
 ## Live Results Captured
+
+### Demo-ready hard FinanceBench case: Activision fixed asset turnover
+
+Promoted demo run:
+
+`run_demo_financebench_activision_fat_live_20260613`
+
+Task:
+
+`financebench_id_02987` asks for Activision Blizzard's FY2019 fixed asset
+turnover ratio, defined as FY2019 revenue divided by average PP&E between
+FY2018 and FY2019, rounded to two decimals, using the supplied 2019 10-K source
+URL as primary evidence.
+
+Result:
+
+- Strict benchmark status: `passed`
+- Programmatic pass rate: `1/1`
+- Numeric accuracy: `1.0`
+- Dev annotation overall score: `1.0`
+- Workflow score: `1.0`
+- Substrate score: `1.0`
+- Matched answer: `24.26`
+- Retrieval runs: `1`
+- Fetch attempts: `12`
+- Finance facts: `245`
+- Claim ledger records: `245`
+- Transform plans: `1`
+- Citation present rate: `1.0`
+- Synthesis gate pass rate: `1.0`
+
+User-visible answer:
+
+Activision Blizzard FY2019 fixed asset turnover is `24.26`, using FY2019
+revenue of `$6.489B`, FY2019 PP&E net of `$253M`, FY2018 PP&E net of `$282M`,
+and average PP&E of `$267.5M`.
+
+Why this is the current demo case:
+
+- It is source-grounded against a real 10-K document URL from FinanceBench.
+- The run exercises the intended Kernel v3 loop: LLM semantic intake and
+  planning, live retrieval, evidence extraction, workbench judgment,
+  ClaimLedger, SlotFrame, TransformPlan, synthesis repair, citations, and
+  post-run benchmark scoring.
+- It is not a table lookup: the gold numeric value is in
+  `financebench_doc_retrieval.gold.jsonl` and is used only after the run by the
+  scorer.
+- The dashboard is served at `http://localhost:8787/` from WSL and defaults to
+  this run for recording.
+
+Stability evidence:
+
+- Current single-item live demo: `run_demo_financebench_activision_fat_live_20260613`
+  passed with `overall_score=1.0`.
+- Prior live capability batches also contain successful passes for the same
+  Activision fixed-asset-turnover item:
+  `run_financebench_doc_live10_capability_parallel_v2` and
+  `run_financebench_doc_live10_capability_doclink_v2`.
+- A DeepSeek Pro/high repeat attempted after the demo pass retrieved heavily
+  (`retrieval_runs=3`, `finance_facts=735`) but failed during model synthesis
+  after provider errors/circuit-open behavior, so it is recorded as an
+  operational provider failure, not as promoted capability evidence.
+- A later flash repeat was blocked immediately by DeepSeek `HTTP 402:
+  Insufficient Balance`, so additional live-repeat evidence requires provider
+  balance restoration.
+
+Related search-loop improvement:
+
+The difficult FAB v2 HD/LOW DIO task is retained as a search stress case.
+This pass fixed an important loop issue: when the LLM retrieval workbench says
+`decision=continue`, the outer workloop no longer finalizes early from partial
+evidence. The host now routes the LLM workbench next move back through the
+standard `retrieval.run` interface. On
+`run_demo_fabv2_hd_low_dio_flash_workbenchfollow_20260613`, the loop performed
+two retrieval runs and executed LOW-oriented follow-up queries. The item still
+does not pass because LOW COGS and calculator binding remain incomplete; it is
+therefore not the recording demo, but it is useful evidence that the agent loop
+is moving toward model-owned search rather than host threshold rules.
 
 ### Global FinAgent FE live10 dev/test split
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 
 from kernel_v3.contracts import JsonObject
@@ -94,6 +95,11 @@ SUPPORTED_FINANCE_METRICS = {
 
 KEY_PATTERN = re.compile(
     r"(?P<key>entityName|ticker|cik|taxonomy|concept|metric|label|unit|period_fy|period|fy|fp|form|filed|end|start|frame|accn|value|val|scale)=",
+    re.IGNORECASE,
+)
+HTML_TABLE_FACT_PATTERN = re.compile(
+    r"html_table_fact_(?P<table_index>\d+)_(?P<row_index>\d+)_(?P<fy>20\d{2}|19\d{2}):\s*"
+    r"metric=(?P<metric>.*?)\s+fy=(?P=fy)\s+value=(?P<value>\([^)]+\)|[^\s]+)\s+scale=(?P<scale>[A-Za-z]+)",
     re.IGNORECASE,
 )
 AMOUNT_PATTERN = re.compile(
@@ -199,19 +205,73 @@ def _facts_from_text(item: EvidenceItem, citation: CitationItem | None) -> list[
     text = " ".join(str(item.text or "").split())
     if not text:
         return []
-    global_text, metric_segments = _metric_segments(text)
-    global_values = _key_values(global_text)
     result: list[FinanceFact] = []
-    for segment in metric_segments:
-        values = {**global_values, **_key_values(segment)}
-        value = values.get("value") or values.get("val")
-        metric = _canonical_metric(values.get("metric") or values.get("concept") or values.get("label") or "")
-        if value is None or not metric or not _is_decimal(value):
-            continue
-        fact = _fact_from_values(values, item=item, citation=citation, metric=metric, value=value)
-        result.append(fact)
+    if "html_table_fact_" not in text:
+        global_text, metric_segments = _metric_segments(text)
+        global_values = _key_values(global_text)
+        for segment in metric_segments:
+            values = {**global_values, **_key_values(segment)}
+            value = values.get("value") or values.get("val")
+            metric = _canonical_metric(values.get("metric") or values.get("concept") or values.get("label") or "")
+            if value is None or not metric or not _is_decimal(value):
+                continue
+            fact = _fact_from_values(values, item=item, citation=citation, metric=metric, value=value)
+            result.append(fact)
+    result.extend(_html_table_facts_from_text(text, item=item, citation=citation))
     result.extend(_natural_facts_from_text(text, item=item, citation=citation))
     return result
+
+
+def _html_table_facts_from_text(text: str, *, item: EvidenceItem, citation: CitationItem | None) -> list[FinanceFact]:
+    facts: list[FinanceFact] = []
+    for match in HTML_TABLE_FACT_PATTERN.finditer(str(text or "")):
+        raw_metric = match.group("metric").strip()
+        metric = _canonical_metric(raw_metric)
+        value = _clean_html_table_fact_value(match.group("value"))
+        if value is None or not metric or not _is_decimal(value):
+            continue
+        values = {
+            "metric": raw_metric,
+            "concept": f"html_table_fact_{match.group('table_index')}_{match.group('row_index')}",
+            "fy": match.group("fy"),
+            "period": f"FY{match.group('fy')}",
+            "value": value,
+            "scale": match.group("scale"),
+        }
+        fact = _fact_from_values(values, item=item, citation=citation, metric=metric, value=value)
+        start = max(0, match.start() - 240)
+        end = min(len(text), match.end() + 240)
+        facts.append(
+            replace(
+                fact,
+                fact_id="finfact-html-table-" + _short_hash(
+                    item.evidence_id,
+                    match.group("table_index"),
+                    match.group("row_index"),
+                    match.group("fy"),
+                    raw_metric,
+                    value,
+                ),
+                metadata={
+                    **fact.metadata,
+                    "source": "html_table_fact",
+                    "raw": match.group(0),
+                    "context": text[start:end],
+                    "html_table_index": match.group("table_index"),
+                    "html_table_row_index": match.group("row_index"),
+                    "raw_metric": raw_metric,
+                },
+            )
+        )
+    return facts
+
+
+def _clean_html_table_fact_value(value: str) -> str | None:
+    text = str(value or "").strip().replace("$", "").replace(",", "")
+    text = re.sub(r"\s+", "", text)
+    if text in {"", "-", "—", "--"}:
+        return None
+    return text
 
 
 def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: CitationItem | None) -> list[FinanceFact]:
@@ -583,6 +643,7 @@ def _canonical_metric(value: str) -> str:
         "net sales": "net sales",
         "profit loss": "net income",
         "netincomeloss": "net income",
+        "net income loss": "net income",
         "incomelossfromcontinuingoperationsbeforeincometaxesextraordinaryitemsnoncontrollinginterest": "pretax income",
         "incomelossfromcontinuingoperationsbeforeincometaxes": "pretax income",
         "income loss from continuing operations before income taxes extraordinary items noncontrolling interest": "pretax income",
@@ -604,6 +665,34 @@ def _canonical_metric(value: str) -> str:
         "net cash provided by used in operating activities continuing operations": "operating cash flow",
         "grossprofit": "gross profit",
         "gross profit": "gross profit",
+        "provisionforbenefitfromincometaxes": "tax",
+        "provision for benefit from income taxes": "tax",
+        "benefitfromincometaxes": "tax",
+        "benefit from income taxes": "tax",
+        "incometaxes": "tax",
+        "income taxes": "tax",
+        "interestexpense": "interest expense",
+        "interest expense": "interest expense",
+        "otherexpenseincome": "other expense",
+        "other expense income": "other expense",
+        "operatingincomeloss": "operating income",
+        "operating income loss": "operating income",
+        "depreciationandamortizationexcludingrestructuringactivities": "depreciation and amortization",
+        "depreciation and amortization excluding restructuring activities": "depreciation and amortization",
+        "impairmentlosses": "addback",
+        "impairment losses": "addback",
+        "equityawardcompensationexpense": "addback",
+        "equity award compensation expense": "addback",
+        "stockbasedcompensation": "addback",
+        "stock based compensation": "addback",
+        "unrealizedlossesgainsoncommodityhedges": "addback",
+        "unrealized losses gains on commodity hedges": "addback",
+        "restructuringactivities": "addback",
+        "restructuring activities": "addback",
+        "dealcosts": "addback",
+        "deal costs": "addback",
+        "certainnonordinarycourselegalandregulatorymatters": "addback",
+        "certain non ordinary course legal and regulatory matters": "addback",
         "researchanddevelopmentexpense": "research and development expense",
         "research and development expense": "research and development expense",
         "research and development": "research and development expense",

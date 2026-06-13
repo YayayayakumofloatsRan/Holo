@@ -171,7 +171,7 @@ def _semantic_prompt(
             "Use broad semantic judgment instead of sample-specific phrase matching.",
             (
                 "Use open semantic labels when useful; required_capabilities "
-                "are the executable ABI the host validates."
+                "are the executable tool contract the host validates."
             ),
             (
                 "For API documentation, developer docs, SDK docs, endpoint, "
@@ -191,6 +191,12 @@ def _semantic_prompt(
             (
                 "Place structured tool arguments in intent.metadata.capability_args "
                 "keyed by capability name."
+            ),
+            (
+                "For finance-capability tasks with named entities, tickers, periods, filings, "
+                "deals, metrics, or public data needs, prefer retrieval_answer with "
+                "retrieval.run/finance.* capabilities. Do not require clarification merely "
+                "because source URLs, CIKs, or formula inputs must be retrieved."
             ),
             (
                 "When useful, place broad state hints in intent.metadata.domain, "

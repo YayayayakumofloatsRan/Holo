@@ -292,6 +292,7 @@ def _synthesizer_prompt(
             "For finance research, distinguish facts, source-backed metrics, analysis, risks, and limitations; do not rely on generic product or encyclopedia pages as if they were financial statements.",
             "For finance calculations, if retrieval_report.diagnostics.finance_formula_traces is present, use those host calculator results as authoritative computed values and do not recompute them mentally.",
             "For finance answers, every material numeric claim must be supported by retrieval_report.diagnostics.finance_formula_traces, finance fact or claim ledger evidence, or an explicit assumption label. Omit unsupported numbers or move them into limitations; do not invent bridging figures, multiples, growth rates, margins, or dates.",
+            "For finance filing tables, preserve the filing's displayed scale and numeric form when possible, such as USD millions and table values like 923 or 5,603; do not convert supported filing numbers into different display units such as Chinese 亿 unless the source itself uses that unit.",
             "Use host_situation as the source of truth for whether live retrieval, tools, permissions, and finance research are available.",
             "Do not say live retrieval, network access, or finance research is unavailable unless host_situation.retrieval or host_situation.failure says so.",
             "If host_situation says retrieval was attempted but evidence is insufficient, describe the real failure as search/fetch/extraction/citation/coverage quality instead of a permission problem.",
@@ -573,6 +574,7 @@ def _compact_sections_for_provider(value: object) -> list[JsonObject]:
         "artifact_references",
         "memory_refs",
         "citations",
+        "tool_briefs",
         "durable_memory",
         "permission_state",
     }

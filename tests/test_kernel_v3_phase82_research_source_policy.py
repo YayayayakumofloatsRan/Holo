@@ -86,6 +86,44 @@ def test_phase82_finance_profile_ranks_structured_financial_sources_before_looku
     assert ranked[-1].source_id in {"sec-directory", "sec-search"}
 
 
+def test_phase82_finance_profile_prioritizes_sec_ticker_browse_over_generic_sec_roots() -> None:
+    profile = finance_fundamentals_profile()
+    goal = SearchGoal(
+        goal_id="goal-sec-ticker-browse",
+        query="TJX Q4 fiscal 2025 pre-tax margin 10-K earnings",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "preferred_source_families": ["regulatory_filing", "company_ir"],
+        },
+    )
+    browse_ticker = _source(
+        "sec-browse-ticker",
+        "https://www.sec.gov/cgi-bin/browse-edgar?CIK=TJX&owner=exclude&action=getcompany&count=100",
+        "SEC EDGAR issuer browse page for ticker TJX",
+        "Official SEC company filing browse page resolved by ticker TJX; use it to reach issuer-specific 10-K, 10-Q, and 8-K filings.",
+        metadata={"source_family": "regulatory_filing", "source_kind": "sec_edgar_browse_ticker", "ticker": "TJX"},
+    )
+    generic_search = _source(
+        "sec-search-root",
+        "https://www.sec.gov/edgar/search/",
+        "SEC EDGAR search",
+        "Official SEC EDGAR filing search page.",
+        metadata={"source_family": "regulatory_filing", "source_kind": "source_directory_entry"},
+    )
+    generic_archive = _source(
+        "sec-archives-root",
+        "https://www.sec.gov/Archives/edgar/data/",
+        "SEC Archives root",
+        "Official SEC Archives root directory.",
+        metadata={"source_family": "regulatory_filing", "source_kind": "source_directory_entry"},
+    )
+
+    ranked = rank_sources(goal, [generic_search, generic_archive, browse_ticker], research_profile=profile)
+
+    assert ranked[0].source_id == "sec-browse-ticker"
+    assert ranked[0].metadata["source_kind"] == "sec_edgar_browse_ticker"
+
+
 def test_phase82_finance_profile_multi_query_can_recover_primary_source() -> None:
     journal = JournalStore.in_memory()
     artifacts = ArtifactStore.in_memory()

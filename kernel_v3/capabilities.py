@@ -49,6 +49,7 @@ SAFE_SEMANTIC_CAPABILITIES = frozenset(
         "technical.developer_docs",
         "technical.source_repository",
         "retrieval.run",
+        "calculator.compute",
         "workspace.list",
         "workspace.search",
         "file.read",
@@ -558,7 +559,7 @@ def semantic_capability_catalog() -> JsonObject:
             "memory": ["durable_memory.read", "durable_memory.search", "durable_memory.propose", "durable_memory.commit", "durable_memory.delete", "durable_memory.export"],
             "artifact": ["artifact.create", "artifact.read", "artifact.export"],
             "document": ["document.draft", "document.review", "report.compose", "email.draft"],
-            "data": ["data.table.analyze", "data.transform", "chart.generate"],
+            "data": ["calculator.compute", "data.table.analyze", "data.transform", "chart.generate"],
             "database": ["database.query", "database.schema.inspect"],
             "code": ["code.search", "code.read", "code.patch", "test.run"],
             "cloud": ["cloud.resource.inspect", "cloud.deploy.boundary"],
@@ -1403,6 +1404,7 @@ def _tool_capabilities(
         "shell.exec": ("shell.exec", "system", "Execute an allowlisted shell command."),
         "system.time": ("system.time", "system", "Read current host time with an explicit timezone."),
         "memory.recall": ("durable_memory.search", "memory", "Recall committed workspace/project and thread memory."),
+        "calculator.compute": ("calculator.compute", "data", "Evaluate deterministic numeric expressions from model-proposed, evidence-backed inputs."),
     }
     for tool_name, manifest in manifests.items():
         capability_id, family, description = mappings.get(

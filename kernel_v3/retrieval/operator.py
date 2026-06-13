@@ -464,12 +464,23 @@ class RetrievalOperator:
                     ).to_dict(),
                     action_ref=action_ref,
                 )
+                priority_discovery_sources = _priority_sec_filing_discovery_sources(expanded_ranked_all)
+                priority_document_sources = _priority_sec_filing_document_sources(expanded_fetchable_ranked)
                 if _wants_sec_filing_text(goal):
                     expansion_fetch_queue = _merge_ranked_sources(
                         max_count=remaining_fetch_budget,
                         groups=[
-                            _priority_sec_filing_discovery_sources(expanded_ranked_all),
-                            _priority_sec_filing_document_sources(expanded_fetchable_ranked),
+                            priority_discovery_sources,
+                            priority_document_sources,
+                            expanded_fetchable_ranked,
+                        ],
+                    )
+                elif priority_discovery_sources:
+                    expansion_fetch_queue = _merge_ranked_sources(
+                        max_count=remaining_fetch_budget,
+                        groups=[
+                            priority_discovery_sources,
+                            priority_document_sources,
                             expanded_fetchable_ranked,
                         ],
                     )
@@ -1995,7 +2006,7 @@ def _priority_direct_url_sources(sources: list[RankedSource]) -> list[RankedSour
 
 
 def _priority_sec_filing_discovery_sources(sources: list[RankedSource]) -> list[RankedSource]:
-    priority_kinds = {"sec_submissions_json", "sec_edgar_browse"}
+    priority_kinds = {"sec_submissions_json", "sec_edgar_browse", "sec_edgar_browse_ticker"}
     result = [
         source
         for source in sources

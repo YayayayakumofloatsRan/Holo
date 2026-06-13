@@ -191,6 +191,19 @@ def _sources_for_identifiers(
     if ticker:
         _append_source(
             sources,
+            uri=f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={ticker}&owner=exclude&action=getcompany&count=100",
+            title=f"SEC EDGAR issuer browse page for ticker {ticker}",
+            snippet=(
+                f"Official SEC company filing browse page resolved by ticker {ticker}; "
+                "use it to reach issuer-specific 10-K, 10-Q, and 8-K filings."
+            ),
+            source_family="regulatory_filing",
+            source_kind="sec_edgar_browse_ticker",
+            ticker=ticker,
+            cik=cik,
+        )
+        _append_source(
+            sources,
             uri="https://www.sec.gov/files/company_tickers_exchange.json",
             title="SEC company ticker and CIK directory",
             snippet=f"Official SEC ticker and CIK mapping lookup for {ticker}.",

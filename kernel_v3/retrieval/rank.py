@@ -171,7 +171,11 @@ def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "
             return 0.51
         return 0.42
     if source_kind == "sec_ticker_cik_directory":
+        if metadata.get("ticker") and not metadata.get("sec_cik"):
+            return 0.96
         return 0.62 if sec_directory_intent else -0.32
+    if source_kind == "sec_edgar_browse_ticker":
+        return 1.05 if filing_text_intent else 0.74
     if source_kind in {"sec_edgar_search", "sec_filing_directory"}:
         if filing_text_intent:
             return -0.75

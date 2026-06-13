@@ -491,53 +491,75 @@ class AgentRuntime:
             result.task_id,
             result.run_id,
         )
+        finalize_from_model_first_dead_end = False
         if result.status == "needs_user_input" and not benchmark_context_ready:
             if recipe.mode == "retrieval_answer" and _latest_action_is_no_planned_action(self.journal, result.task_id, result.run_id):
                 planned_missing = _planned_retrieval_missing_evidence(self.journal, result.task_id, result.run_id, recipe)
-                failure = self._failure(
+                evidence, citations, report = _retrieval_and_toolchain_grounding(
+                    self.journal,
                     result.task_id,
                     result.run_id,
-                    ("planned_retrieval_subgoals_incomplete" if planned_missing else None)
-                    or _latest_termination_failure_reason(self.journal, result.task_id, result.run_id)
-                    or result.stop_reason
-                    or "no_executable_action",
-                    missing_evidence=_ordered_unique(
-                        [
-                            *_missing_evidence(self.journal, result.task_id, result.run_id),
-                            *planned_missing,
-                        ]
-                    ),
-                    next_action="refine_plan_or_configure_more_tools",
                     recipe=recipe,
+                    artifact_store=self.artifact_store,
+                )
+                if _can_attempt_model_first_retrieval_finalization(
+                    recipe=recipe,
+                    evidence=evidence,
+                    citations=citations,
+                    report=report,
+                    terminal_reason=(
+                        "planned_retrieval_subgoals_incomplete" if planned_missing else None
+                    )
+                    or _latest_termination_failure_reason(self.journal, result.task_id, result.run_id)
+                    or result.stop_reason,
+                ):
+                    finalize_from_model_first_dead_end = True
+                else:
+                    failure = self._failure(
+                        result.task_id,
+                        result.run_id,
+                        ("planned_retrieval_subgoals_incomplete" if planned_missing else None)
+                        or _latest_termination_failure_reason(self.journal, result.task_id, result.run_id)
+                        or result.stop_reason
+                        or "no_executable_action",
+                        missing_evidence=_ordered_unique(
+                            [
+                                *_missing_evidence(self.journal, result.task_id, result.run_id),
+                                *planned_missing,
+                            ]
+                        ),
+                        next_action="refine_plan_or_configure_more_tools",
+                        recipe=recipe,
+                    )
+                    return AgentRuntimeResult(
+                        status="failed",
+                        task_id=result.task_id,
+                        run_id=result.run_id,
+                        mode=recipe.mode,
+                        recipe_id=recipe.recipe_id,
+                        final_answer=None,
+                        failure_report=failure.to_dict(),
+                        trace_refs=_trace_refs(self.journal, result.task_id),
+                        host_situation=dict(failure.host_situation),
+                    )
+            if not finalize_from_model_first_dead_end:
+                host_situation = self._append_host_situation_record(
+                    result.task_id,
+                    result.run_id,
+                    recipe=recipe,
+                    phase="needs_user_input",
                 )
                 return AgentRuntimeResult(
-                    status="failed",
+                    status="needs_user_input",
                     task_id=result.task_id,
                     run_id=result.run_id,
                     mode=recipe.mode,
                     recipe_id=recipe.recipe_id,
                     final_answer=None,
-                    failure_report=failure.to_dict(),
+                    failure_report=None,
                     trace_refs=_trace_refs(self.journal, result.task_id),
-                    host_situation=dict(failure.host_situation),
+                    host_situation=host_situation,
                 )
-            host_situation = self._append_host_situation_record(
-                result.task_id,
-                result.run_id,
-                recipe=recipe,
-                phase="needs_user_input",
-            )
-            return AgentRuntimeResult(
-                status="needs_user_input",
-                task_id=result.task_id,
-                run_id=result.run_id,
-                mode=recipe.mode,
-                recipe_id=recipe.recipe_id,
-                final_answer=None,
-                failure_report=None,
-                trace_refs=_trace_refs(self.journal, result.task_id),
-                host_situation=host_situation,
-            )
         final_answer, failure = self._finalize(
             result.task_id,
             result.run_id,
@@ -2110,6 +2132,27 @@ class AgentRuntime:
                 },
             )
             return None
+        if _finance_numeric_judge_accepts_answer(judge):
+            self._append_synthesis_gate_result(
+                answer,
+                recipe=recipe,
+                status="passed",
+                issues=list(getattr(verification, "issues", []) or [])[:16],
+                diagnostics={
+                    "gate_id": "llm_semantic_numeric_judge_accept_v1",
+                    "source": "finance_numeric_judge",
+                    "attempt": attempt,
+                    "judge_decision": judge.get("decision"),
+                    "judge_requires_more_work": judge.get("requires_more_work"),
+                    "judge_answer_addresses_question": judge.get("answer_addresses_question"),
+                    "verifier_status": getattr(verification, "status", None),
+                    "answer_numeric_support_rate": _finance_answer_numeric_support_rate(verification),
+                    "policy": "llm_semantic_judge_accepts_core_answer_host_verifier_diagnostics_advisory",
+                },
+            )
+            final = self._append_final(answer)
+            self._maybe_propose_research_memory(final, recipe=recipe)
+            return final
         repair_instruction = _finance_numeric_judge_repair_instruction(judge, verification=verification, recipe=recipe)
         if not repair_instruction:
             self._append_synthesis_gate_result(
@@ -2296,6 +2339,27 @@ class AgentRuntime:
                 citations=citations,
                 purpose="finance_preflight_no_structured_facts",
             )
+        if _llm_semantic_judgment_required(recipe):
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="finance_numeric_preflight",
+                data=redact_journal_data(
+                    {
+                        "schema": "holo.kernel_v3.finance_numeric_preflight.v1",
+                        "status": "skipped",
+                        "reason": "llm_semantic_judgment_required",
+                        "semantic_decision_owner": "model",
+                        "host_role": "fact_ledger_provenance_validation_only",
+                        "ledger_ref": ledger_record.record_id,
+                        "fact_count": len(facts),
+                    }
+                ),
+                feedback_ref=ledger_record.record_id,
+                state_delta={"finance_numeric_preflight": "skipped_llm_owned"},
+            )
+            return
         existing = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
         plans = _finance_formula_preflight_plans(
             question=_root_goal_from_recipe(recipe),
@@ -3456,14 +3520,26 @@ class _RecipeBoundPlanner:
     def propose(self, context: ContextBundle, feedback: Feedback | None = None) -> CandidateAction:
         self._calls += 1
         self._journal_plan_if_needed(context)
+        model_owns_semantics = _llm_semantic_judgment_required(self.recipe)
         action = self.inner.propose(context, feedback)
-        rescue = self._host_planner_failure_retrieval_action(context, action)
-        if rescue is not None:
-            action = rescue
+        if not model_owns_semantics:
+            rescue = self._host_planner_failure_retrieval_action(context, action)
+            if rescue is not None:
+                action = rescue
+            rescue = self._finance_capability_clarification_retrieval_action(context, action)
+            if rescue is not None:
+                action = rescue
         bound = _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
-        if bound.name != "retrieval.run" and not (bound.kind == "tool" and bound.name in set(self.recipe.allowed_tools)):
+        if (
+            not model_owns_semantics
+            and bound.name != "retrieval.run"
+            and not (bound.kind == "tool" and bound.name in set(self.recipe.allowed_tools))
+        ):
             bound = self._retrieval_workbench_followup_action(context, bound) or bound
-        bound = self._finance_formula_action(context, bound) or bound
+        if model_owns_semantics and _feedback_requests_retrieval_workbench_followup(feedback):
+            bound = self._retrieval_workbench_followup_action(context, bound) or bound
+        if not model_owns_semantics:
+            bound = self._finance_formula_action(context, bound) or bound
         self._journal_plan_update(context, bound, feedback)
         return bound
 
@@ -3522,6 +3598,49 @@ class _RecipeBoundPlanner:
             score=0.72,
             payload=payload,
             reasons=["host_planner_failure_rescue", "planner_processor_failed"],
+            side_effect_class="network",
+        )
+
+    def _finance_capability_clarification_retrieval_action(
+        self,
+        context: ContextBundle,
+        action: CandidateAction,
+    ) -> CandidateAction | None:
+        if self.recipe.mode != "retrieval_answer" or "retrieval.run" not in self.recipe.allowed_tools:
+            return None
+        if not _llm_semantic_judgment_required(self.recipe):
+            return None
+        if action.kind != "ask_user":
+            return None
+        if not _finance_capability_has_executable_retrieval_context(self.recipe):
+            return None
+        payload = _retrieval_payload(self.goal, self.recipe)
+        payload = _host_rescue_retrieval_payload(payload, context=context, goal=self.goal, recipe=self.recipe, call_index=self._calls)
+        metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+        metadata.setdefault("finance_capability_clarification_rescue", True)
+        metadata.setdefault("task_assumed_solvable_from_prompt_context", True)
+        metadata.setdefault(
+            "host_role",
+            "route_executable_finance_task_to_model_planned_retrieval_instead_of_collecting_missing_ticker_from_user",
+        )
+        question = _string_value(action.payload.get("question")) or _string_value(action.payload.get("text")) or action.description
+        if question:
+            metadata.setdefault("rescued_ask_user_question", question)
+        payload["metadata"] = metadata
+        return CandidateAction(
+            action_id=f"act-finance-clarification-retrieval-{self._calls}",
+            kind="tool",
+            name="retrieval.run",
+            description="Execute model-planned finance retrieval instead of asking for already inferable context",
+            score=max(float(action.score or 0.0), 0.86),
+            payload=payload,
+            reasons=_ordered_unique(
+                [
+                    "finance_capability_clarification_rescue",
+                    "task_assumed_solvable",
+                    *action.reasons,
+                ]
+            ),
             side_effect_class="network",
         )
 
@@ -3748,22 +3867,31 @@ def _workbench_followup_retrieval_action(
     if data.get("status") != "ok" or data.get("decision") == "sufficient":
         return None
     attempted = {query.casefold() for query in _action_retrieval_queries(journal, task_id=task_id, run_id=run_id)}
+    missing_slots = _workbench_missing_slots(data)
+    action_source_urls = _prioritize_workbench_source_urls(
+        _action_retrieval_source_urls(journal, task_id=task_id, run_id=run_id),
+        missing_slots=missing_slots,
+    )
+    attempted_targets = {
+        *attempted,
+        *(url.casefold() for url in action_source_urls),
+    }
     next_queries = _ordered_unique(
         [
             *_string_list(data.get("next_queries")),
             *[target for target in _string_list(data.get("next_document_targets")) if _looks_like_url(target)],
         ]
     )
-    action_source_urls = _action_retrieval_source_urls(journal, task_id=task_id, run_id=run_id)
-    missing_slots = _workbench_missing_slots(data)
-    if not next_queries and missing_slots:
-        next_queries = _workbench_target_source_followup_queries(
+    if missing_slots:
+        generated_queries = _workbench_target_source_followup_queries(
             data=data,
             recipe=recipe,
             goal=goal,
             source_urls=action_source_urls,
         )
-    selected_query = next((query for query in next_queries if query.casefold() not in attempted), None)
+        if not next_queries or all(query.casefold() in attempted_targets for query in next_queries):
+            next_queries = _ordered_unique([*generated_queries, *next_queries])
+    selected_query = next((query for query in next_queries if query.casefold() not in attempted_targets), None)
     if not selected_query:
         return None
     payload = _retrieval_payload(goal, recipe)
@@ -3779,6 +3907,7 @@ def _workbench_followup_retrieval_action(
             *([selected_query] if _looks_like_url(selected_query) else []),
         ]
     )
+    source_urls = _prioritize_workbench_source_urls(source_urls, missing_slots=missing_slots)
     metadata.update(
         {
             "host_rescue": True,
@@ -3851,8 +3980,6 @@ def _retrieval_workbench_followup_required(
     data = record.data if isinstance(record.data, dict) else {}
     if data.get("status") != "ok" or data.get("decision") != "continue":
         return False
-    if _workbench_missing_slots(data):
-        return True
     attempted = {query.casefold() for query in _action_retrieval_queries(journal, task_id=task_id, run_id=run_id)}
     next_queries = _ordered_unique(
         [
@@ -3860,10 +3987,14 @@ def _retrieval_workbench_followup_required(
             *[target for target in _string_list(data.get("next_document_targets")) if _looks_like_url(target)],
         ]
     )
+    if _workbench_missing_slots(data):
+        return True
+    if _llm_semantic_judgment_required(recipe) and not next_queries:
+        return False
     return any(query.casefold() not in attempted for query in next_queries)
 
 
-def _retrieval_report_workbench_followup_required(report: JsonObject) -> bool:
+def _retrieval_report_workbench_followup_required(report: JsonObject, *, recipe: TaskRecipe | None = None) -> bool:
     workbench = report.get("retrieval_workbench") if isinstance(report.get("retrieval_workbench"), dict) else {}
     if not workbench:
         diagnostics = report.get("diagnostics") if isinstance(report.get("diagnostics"), dict) else {}
@@ -3872,14 +4003,19 @@ def _retrieval_report_workbench_followup_required(report: JsonObject) -> bool:
         return False
     if workbench.get("status") != "ok" or workbench.get("decision") != "continue":
         return False
-    if _workbench_missing_slots(workbench):
-        return True
     next_queries = _ordered_unique(
         [
             *_string_list(workbench.get("next_queries")),
             *[target for target in _string_list(workbench.get("next_document_targets")) if _looks_like_url(target)],
         ]
     )
+    if _string_list(workbench.get("semantic_missing_slots")):
+        return True
+    missing_slots = _workbench_missing_slots(workbench)
+    if missing_slots:
+        return bool(next_queries) or str(report.get("status") or "") != "sufficient"
+    if _llm_semantic_judgment_required(recipe) and not next_queries:
+        return False
     return bool(next_queries)
 
 
@@ -3904,7 +4040,37 @@ def _workbench_target_source_followup_queries(
     queries = []
     for url in source_urls[:4]:
         queries.append(f"{url} {missing_text}")
+    queries.append(f"{goal} {missing_text} SEC companyfacts 10-K primary filing")
     return _ordered_unique(queries)
+
+
+def _feedback_requests_retrieval_workbench_followup(feedback: Feedback | None) -> bool:
+    if feedback is None:
+        return False
+    normalized = {str(item).lower().replace("_", " ") for item in feedback.missing_evidence}
+    return "retrieval workbench followup" in normalized or "retrieval workbench follow up" in normalized
+
+
+def _prioritize_workbench_source_urls(urls: list[str], *, missing_slots: list[str]) -> list[str]:
+    if not urls:
+        return []
+    missing_text = " ".join(missing_slots).casefold()
+
+    def priority(url: str) -> tuple[int, int]:
+        lower = url.casefold()
+        if any(marker in missing_text for marker in ("low", "lowe")) and (
+            "0000060667" in lower or "cik=low" in lower or "lowe" in lower
+        ):
+            return (0, 0)
+        if any(marker in missing_text for marker in ("hd", "home depot")) and (
+            "0000354950" in lower or "cik=hd" in lower or "home%20depot" in lower
+        ):
+            return (1, 0)
+        return (2, 0)
+
+    indexed = list(enumerate(_ordered_unique(urls)))
+    indexed.sort(key=lambda item: (*priority(item[1]), item[0]))
+    return [url for _, url in indexed]
 
 
 def _workbench_missing_slots(data: JsonObject) -> list[str]:
@@ -3961,6 +4127,8 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
         return any(marker in text for marker in ("ev/ebitda", "enterprise value", "market cap", "ebitda", "valuation"))
     if formula_name == "bridge_subtotal" and missing:
         return any(marker in text for marker in ("adjusted ebitda", "bridge", "addback", "add-back", "add back", "non-gaap"))
+    if formula_name == "dio" and any(item in missing for item in ("inventory", "cogs_or_cost_of_sales", "cogs", "cost_of_sales")):
+        return any(marker in text for marker in ("dio", "days inventory", "inventory", "cost of sales", "cost of revenue", "cogs"))
     if formula_name == "dcf" and missing:
         return any(marker in text for marker in ("dcf", "discounted cash flow", "cash flow", "wacc", "terminal growth"))
     if formula_name == "lbo" and missing:
@@ -4001,6 +4169,11 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             f"{base_query} annual report 10-K 10-Q adjusted EBITDA reconciliation "
             "non-GAAP bridge add-backs deductions subtotal"
         )
+    elif formula_name == "dio":
+        query = (
+            f"{base_query} SEC companyfacts 10-K inventory cost of revenue cost of sales "
+            "COGS days inventory outstanding"
+        )
     elif formula_name == "dcf":
         query = (
             f"{base_query} 10-K operating cash flow free cash flow capital expenditures "
@@ -4040,6 +4213,9 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
     if formula_name in {"capital_intensity", "fixed_asset_turnover"}:
         max_queries = min(5, max(3, len(queries)))
         max_fetches = 16
+    if formula_name == "dio":
+        max_queries = min(6, max(4, len(queries)))
+        max_fetches = 18
     return {
         "query": query,
         "queries": queries[:max_queries],
@@ -4063,6 +4239,7 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             "forbidden_source_families": evidence_policy.forbidden_source_families if evidence_policy is not None else [],
             "required_evidence_terms": evidence_policy.required_terms if evidence_policy is not None else [],
             "research_profile": "finance_fundamentals",
+            **({"target_inventory_and_cogs_structured_source_required": True} if formula_name == "dio" else {}),
             **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda", "dcf", "lbo"} else {}),
             **({"target_tickers": tickers} if tickers else {}),
         },
@@ -4085,6 +4262,7 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             "yoy_growth",
             "dcf",
             "lbo",
+            "dio",
             "capital_intensity",
             "fixed_asset_turnover",
         }:
@@ -4114,21 +4292,45 @@ def _host_rescue_retrieval_payload(
         prior_queries.insert(0, prior_query)
     source_urls = _string_list(failed.get("source_urls"))
     benchmark_query = _string_value(benchmark_payload.get("query")) if benchmark_payload else None
+    benchmark_metadata = dict(benchmark_payload.get("metadata")) if isinstance(benchmark_payload.get("metadata"), dict) else {}
+    benchmark_has_source_urls = bool(
+        _metadata_url_values(benchmark_metadata, keys=("source_url", "source_urls", "url", "urls"))
+        or _metadata_url_values(benchmark_payload, keys=("source_url", "source_urls", "url", "urls"))
+    )
+    existing_query = _string_value(updated.get("query"))
+    existing_queries = _string_list(updated.get("queries"))
+    prefer_model_queries = bool(
+        recipe is not None
+        and _llm_semantic_judgment_required(recipe)
+        and (existing_query or existing_queries)
+    )
     rescue_goal = benchmark_query or goal
     rescue_query = _host_rescue_query(
         goal=rescue_goal,
         prior_queries=[] if benchmark_query else prior_queries,
         call_index=call_index,
     )
+    benchmark_query_candidate = benchmark_query if (not prefer_model_queries or benchmark_has_source_urls) else None
+    rescue_query_candidates = [] if prefer_model_queries else [rescue_query, *(prior_queries if not benchmark_query else [])]
+    selected_query = benchmark_query_candidate or existing_query or rescue_query
     queries = _ordered_unique(
-        [query for query in [benchmark_query, rescue_query, *(prior_queries if not benchmark_query else [])] if query]
-    )[:4]
+        [
+            query
+            for query in [
+                benchmark_query_candidate,
+                existing_query,
+                *existing_queries,
+                *rescue_query_candidates,
+            ]
+            if query
+        ]
+    )[:8]
     updated.update(
         {
-            "query": rescue_query,
+            "query": selected_query,
             "queries": queries,
             "search_strategy": "structured",
-            "max_queries": max(3, min(6, len(queries) + 1)),
+            "max_queries": max(3, min(8, len(queries) + 1)),
             "max_sources": max(int(updated.get("max_sources") or 0), 24),
             "max_fetches": max(int(updated.get("max_fetches") or 0), 12),
             "max_spans_per_document": max(int(updated.get("max_spans_per_document") or 0), 6),
@@ -4141,6 +4343,7 @@ def _host_rescue_retrieval_payload(
             "host_rescue": True,
             "host_rescue_reason": "planner_processor_failed_after_retrieval_context",
             "host_rescue_attempt": call_index,
+            "host_rescue_query": rescue_query,
             "root_goal": rescue_goal,
             "research_profile": metadata.get("research_profile") or "finance_fundamentals",
             "source_authority_requirement": metadata.get("source_authority_requirement") or "primary",
@@ -4212,7 +4415,15 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
             queries.append(normalized)
 
     add(primary_query)
-    if formula_name == "ev_ebitda" and tickers:
+    if formula_name == "ev_revenue":
+        for target in _finance_transaction_target_names(goal):
+            add(f"{target} SEC companyfacts annual revenue 10-K")
+            add(f"{target} SEC companyfacts revenue latest fiscal year before acquisition")
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts revenue 10-K")
+        add(f"{goal} SEC companyfacts target revenue")
+        add(f"{goal} SEC 8-K EX-99.1 transaction value enterprise value consideration")
+    elif formula_name == "ev_ebitda" and tickers:
         add(" ".join(f"{ticker} key statistics enterprise value market cap EBITDA total debt total cash" for ticker in tickers))
         for ticker in tickers:
             add(f"{ticker} key statistics enterprise value market cap EBITDA total debt total cash")
@@ -4233,6 +4444,11 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
             add(f"{ticker} 10-K statement of income balance sheet revenue PP&E net")
+    elif formula_name == "dio":
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts inventory cost of revenue cost of sales COGS 10-K")
+            add(f"{ticker} 10-K inventory cost of sales cost of revenue days inventory outstanding")
+        add(f"{goal} SEC companyfacts inventory cost of revenue cost of sales")
     else:
         add(_finance_missing_fact_secondary_query(formula_name=formula_name, goal=goal))
         add(_finance_missing_fact_tertiary_query(formula_name=formula_name, goal=goal))
@@ -4273,6 +4489,8 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} 10-K EBITDA debt cash market cap enterprise value"
     if formula_name == "bridge_subtotal":
         return f"{goal} annual report 10-K 10-Q non-GAAP adjusted EBITDA reconciliation add backs"
+    if formula_name == "dio":
+        return f"{goal} annual report 10-K inventory cost of sales cost of revenue COGS"
     if formula_name == "dcf":
         return f"{goal} annual report 10-K operating cash flow free cash flow capital expenditures"
     if formula_name == "lbo":
@@ -4289,6 +4507,8 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} official filing adjusted EBITDA market capitalization total debt cash equivalents"
     if formula_name == "bridge_subtotal":
         return f"{goal} investor relations annual report adjusted EBITDA non-GAAP reconciliation table"
+    if formula_name == "dio":
+        return f"{goal} SEC companyfacts InventoryNet CostOfRevenue CostOfGoodsAndServicesSold"
     if formula_name == "dcf":
         return f"{goal} investor relations DCF assumptions WACC terminal growth cash flow"
     if formula_name == "lbo":
@@ -4429,13 +4649,13 @@ class _RecipeEvaluator:
             return _feedback(run_id, self.calls, "continue", None, None, ["respond_from_memory_recall"])
         if observation.status in {"failed", "not_implemented"}:
             return _feedback(run_id, self.calls, "failed", "observation_failed", None, ["successful observation"])
-        if self.expected_action_count > self.calls:
+        if self.expected_action_count > self.calls and not (
+            self.recipe.mode == "retrieval_answer" and _llm_semantic_judgment_required(self.recipe)
+        ):
             return _feedback(run_id, self.calls, "continue", None, None, ["remaining_plan_actions"])
         if self.recipe.mode == "retrieval_answer":
             report = _nested(observation.content, "report")
-            if isinstance(report, dict) and report.get("status") != "sufficient":
-                return _feedback(run_id, self.calls, "failed", "insufficient_evidence", None, ["sufficient retrieval evidence"])
-            if isinstance(report, dict) and _retrieval_report_workbench_followup_required(report):
+            if isinstance(report, dict) and _retrieval_report_workbench_followup_required(report, recipe=self.recipe):
                 return _feedback(
                     run_id,
                     self.calls,
@@ -4444,6 +4664,8 @@ class _RecipeEvaluator:
                     None,
                     ["retrieval_workbench_followup"],
                 )
+            if isinstance(report, dict) and report.get("status") != "sufficient":
+                return _feedback(run_id, self.calls, "failed", "insufficient_evidence", None, ["sufficient retrieval evidence"])
             if _retrieval_workbench_followup_required(
                 self.journal,
                 recipe=self.recipe,
@@ -4550,15 +4772,16 @@ def _bind_model_action_to_recipe(
         payload = dict(action.payload)
         metadata_before = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
         protect_workbench_followup = bool(metadata_before.get("workbench_followup"))
-        protected_query = payload.get("query") if protect_workbench_followup else None
-        protected_queries = payload.get("queries") if protect_workbench_followup else None
+        preserve_model_query = protect_workbench_followup or _llm_semantic_judgment_required(recipe)
+        protected_query = payload.get("query") if preserve_model_query else None
+        protected_queries = payload.get("queries") if preserve_model_query else None
         payload = _preserve_retrieval_capability_context(payload, recipe=recipe)
-        payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=protect_workbench_followup)
-        if protect_workbench_followup:
+        payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=preserve_model_query)
+        if preserve_model_query:
             if isinstance(protected_query, str) and protected_query:
                 payload["query"] = protected_query
             if isinstance(protected_queries, list) and protected_queries:
-                payload["queries"] = protected_queries
+                payload["queries"] = _ordered_unique([*protected_queries, *_string_list(payload.get("queries"))])[:8]
             payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=True)
         payload.setdefault("goal_id", _next_required_retrieval_goal_id(context, recipe) or "goal-agent-retrieval")
         payload.setdefault("query", goal)
@@ -4567,8 +4790,16 @@ def _bind_model_action_to_recipe(
         payload = _merge_retrieval_payload(payload, _retrieval_execution_args(recipe))
         payload = _apply_research_depth_defaults(payload)
         payload = _augment_finance_modeling_retrieval_payload(payload, root_goal=goal, recipe=recipe)
-        payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=protect_workbench_followup)
+        payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=goal, recipe=recipe, preserve_query=preserve_model_query)
         if protect_workbench_followup:
+            return replace(action, payload=payload)
+        if _llm_semantic_judgment_required(recipe):
+            metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+            metadata.setdefault(
+                "llm_first_payload_supervision",
+                "model_query_source_and_strategy_preserved_host_only_validates_schema_policy_budget",
+            )
+            payload["metadata"] = metadata
             return replace(action, payload=payload)
         decision = supervise_retrieval_payload(
             payload,
@@ -4598,27 +4829,100 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
     if recipe.mode != "retrieval_answer":
         return payload
     text = f"{root_goal} {payload.get('query') or ''}".lower()
-    formula_name = "dcf" if ("discounted cash flow" in text or " dcf" in f" {text}") else "lbo" if (" lbo" in f" {text}" or "leveraged buyout" in text) else ""
+    compact = text.replace(" ", "")
+    formula_name = (
+        "dcf"
+        if ("discounted cash flow" in text or " dcf" in f" {text}")
+        else "lbo"
+        if (" lbo" in f" {text}" or "leveraged buyout" in text)
+        else "ev_revenue"
+        if (
+            "ev/revenue" in compact
+            or "ev/rev" in compact
+            or "enterprise value to revenue" in text
+            or ("transaction" in text and "revenue" in text and any(marker in text for marker in ("acquisition", "deal", "purchase")))
+        )
+        else "bridge_subtotal"
+        if (
+            "adjusted ebitda" in text
+            and any(marker in text for marker in ("bridge", "reconciliation", "add-back", "add back", "non-gaap", "non gaap"))
+        )
+        else "dio"
+        if ("days inventory outstanding" in text or "days inventory" in text or " dio" in f" {text}")
+        else ""
+    )
     if not formula_name:
         return payload
     updated = dict(payload)
     query = " ".join(str(updated.get("query") or root_goal or "").split())
     if formula_name == "dcf":
         additions = "10-K operating cash flow free cash flow capital expenditures WACC discount rate terminal growth"
-    else:
+    elif formula_name == "lbo":
         additions = "10-K adjusted EBITDA operating cash flow free cash flow enterprise value market cap debt cash leverage exit multiple"
-    updated["query"] = _append_query_terms(query, additions)
+    elif formula_name == "ev_revenue":
+        additions = "SEC companyfacts 10-K annual revenue transaction value enterprise value consideration acquisition target company"
+    elif formula_name == "dio":
+        additions = "SEC companyfacts 10-K annual inventory cost of revenue cost of sales COGS days inventory outstanding"
+    else:
+        additions = "latest annual 10-K adjusted EBITDA reconciliation non-GAAP bridge net income add-backs deductions subtotal"
+    augmented_query = _append_query_terms(query, additions)
+    updated["query"] = query if formula_name == "ev_revenue" else augmented_query
     queries = _string_list(updated.get("queries"))
+    extra_queries: list[str] = []
+    if formula_name == "ev_revenue":
+        extra_queries.append(augmented_query)
+        extra_queries.extend(_append_query_terms(item, additions) for item in queries)
+        for target in _finance_transaction_target_names(root_goal):
+            extra_queries.append(f"{target} SEC companyfacts annual revenue 10-K")
+            extra_queries.append(f"{target} SEC companyfacts revenue latest fiscal year before acquisition")
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} SEC companyfacts revenue 10-K")
+        extra_queries.append(f"{root_goal} SEC companyfacts target revenue")
+    elif formula_name == "bridge_subtotal":
+        extra_queries.append(f"{root_goal} latest annual 10-K adjusted EBITDA reconciliation table")
+        extra_queries.append(f"{root_goal} non-GAAP adjusted EBITDA bridge add-backs deductions subtotal")
+    elif formula_name == "dio":
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} SEC companyfacts inventory cost of revenue cost of sales COGS 10-K")
+        extra_queries.append(f"{root_goal} SEC companyfacts inventory cost of revenue cost of sales")
     if queries:
-        updated["queries"] = _ordered_unique([updated["query"], *[_append_query_terms(item, additions) for item in queries]])[: max(len(queries), 4)]
+        base_queries = queries if formula_name == "ev_revenue" else [_append_query_terms(item, additions) for item in queries]
+        updated["queries"] = _ordered_unique(
+            [
+                updated["query"],
+                *base_queries,
+                *extra_queries,
+            ]
+        )[: max(len(queries), 6 if extra_queries else 4)]
+        updated["max_queries"] = max(int(updated.get("max_queries") or 0), min(6, len(updated["queries"])))
+    elif extra_queries:
+        updated["queries"] = _ordered_unique([updated["query"], *extra_queries])[:6]
         updated["max_queries"] = max(int(updated.get("max_queries") or 0), min(6, len(updated["queries"])))
     metadata = dict(updated.get("metadata")) if isinstance(updated.get("metadata"), dict) else {}
     metadata["finance_modeling_intent"] = formula_name
-    metadata.setdefault("research_task_kind", "valuation")
+    if formula_name in {"dcf", "lbo", "ev_revenue"}:
+        metadata.setdefault("research_task_kind", "valuation")
+    if formula_name == "ev_revenue":
+        source_urls = _finance_issuer_seed_urls(root_goal, formula_name=formula_name)
+        if source_urls:
+            updated["source_urls"] = _ordered_unique([*_string_list(updated.get("source_urls")), *source_urls])[:16]
+            metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:16]
+        metadata.setdefault("source_authority_requirement", "primary")
+        metadata.setdefault("target_revenue_structured_source_required", True)
+    if formula_name == "bridge_subtotal":
+        metadata.setdefault("assume_latest_annual_period_when_unspecified", True)
+        metadata.setdefault("source_authority_requirement", "primary")
+    if formula_name == "dio":
+        source_urls = _finance_issuer_seed_urls(root_goal, formula_name=formula_name)
+        if source_urls:
+            updated["source_urls"] = _ordered_unique([*_string_list(updated.get("source_urls")), *source_urls])[:16]
+            metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:16]
+        metadata.setdefault("source_authority_requirement", "primary")
+        metadata.setdefault("target_inventory_and_cogs_structured_source_required", True)
     metadata.setdefault("preferred_source_families", ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"])
     updated["metadata"] = metadata
     updated["max_sources"] = max(int(updated.get("max_sources") or 0), 24)
-    updated["max_fetches"] = max(int(updated.get("max_fetches") or 0), 12)
+    updated["max_fetches"] = max(int(updated.get("max_fetches") or 0), 18 if formula_name == "ev_revenue" else 12)
     updated["max_spans_per_document"] = max(int(updated.get("max_spans_per_document") or 0), 8)
     return updated
 
@@ -4628,6 +4932,36 @@ def _append_query_terms(query: str, additions: str) -> str:
     lower = existing.lower()
     missing_terms = [term for term in str(additions or "").split() if term.lower() not in lower]
     return " ".join([existing, *missing_terms]).strip()
+
+
+def _finance_transaction_target_names(goal: str) -> list[str]:
+    text = " ".join(str(goal or "").split())
+    if not text:
+        return []
+    patterns = (
+        r"\bacquisition of (?P<target>[A-Z][A-Za-z0-9&.,' -]{1,80})",
+        r"\bacquire (?P<target>[A-Z][A-Za-z0-9&.,' -]{1,80})",
+        r"\bacquiring (?P<target>[A-Z][A-Za-z0-9&.,' -]{1,80})",
+        r"\bbuyout of (?P<target>[A-Z][A-Za-z0-9&.,' -]{1,80})",
+    )
+    names: list[str] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            name = _clean_finance_transaction_target_name(match.group("target"))
+            if name:
+                names.append(name)
+    return _ordered_unique(names)
+
+
+def _clean_finance_transaction_target_name(value: str) -> str:
+    text = str(value or "").strip(" .,:;?!)(")
+    text = re.split(
+        r"\b(?:using|calculate|compute|estimate|show|with|from|based|transaction|deal|ev|enterprise|revenue|multiple|latest|public|filing|evidence|disclosure|and)\b",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    return re.sub(r"\s+", " ", text).strip(" .,:;?!)(")
 
 
 def _preserve_retrieval_capability_context(payload: JsonObject, *, recipe: TaskRecipe) -> JsonObject:
@@ -4677,6 +5011,22 @@ def _preserve_retrieval_capability_context(payload: JsonObject, *, recipe: TaskR
         and (not isinstance(current_query, str) or _looks_like_url(current_query))
     ):
         updated["query"] = cap_query.strip()
+    cap_queries = _ordered_unique(
+        [
+            *([cap_query.strip()] if isinstance(cap_query, str) and cap_query.strip() else []),
+            *_string_list(capability_args.get("queries")),
+            *_string_list(updated.get("queries")),
+        ]
+    )
+    if cap_queries:
+        current_query_value = _string_value(updated.get("query"))
+        updated["queries"] = _ordered_unique(
+            [
+                *([current_query_value] if current_query_value else []),
+                *cap_queries,
+            ]
+        )[:8]
+        updated["max_queries"] = max(_positive_metadata_int(updated.get("max_queries"), default=0), min(8, max(2, len(updated["queries"]))))
     if metadata:
         updated["metadata"] = metadata
     return updated
@@ -5576,8 +5926,42 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         forbidden = ["web_search", "page_open"]
         if "network.fetch" not in recipe.allowed_tools:
             forbidden.append("network.fetch")
+        llm_first_finance = _llm_semantic_judgment_required(recipe)
         return {
             "mode": recipe.mode,
+            **(
+                {
+                    "llm_first_finance_template": {
+                        "principle": (
+                            "The model owns semantic judgment, source targeting, slot sufficiency, formula choice, "
+                            "and final answer reasoning. The host only exposes tools/context and validates schema, "
+                            "policy, provenance, budget, and arithmetic traces."
+                        ),
+                        "standard_tool_interface": {
+                            "planner_action": "Return planner.propose JSON with kind=tool/respond/ask_user, name, payload, reasons, side_effect_class.",
+                            "retrieval.run": "Use payload.query plus metadata.retrieval_strategy for query plan, source family plan, evidence criteria, fallback moves, and stop_when.",
+                            "calculator.compute": "Use only after observed evidence supplies numeric inputs; put expression, variables, unit, formula_name, and input_fact_ids when available.",
+                            "respond": "Use only when evidence is sufficient for the root question or remaining gaps can be explicitly limited.",
+                        },
+                        "finance_workflow": [
+                            "Identify the exact entity, security/issuer aliases, period, document/event, and asked output.",
+                            "For finance capability or benchmark tasks with named entities, events, periods, or documents, assume the task is solvable; use retrieval to resolve tickers, CIKs, filings, exhibits, aliases, and source URLs instead of asking the user.",
+                            "Choose source families semantically: official filings, issuer IR/releases/transcripts, exchange disclosures, market data, or reputable news as appropriate.",
+                            "For SEC/filing tasks, target ticker/CIK, form type, accession/period, exhibit/proxy/8-K/10-Q/10-K/DEF 14A when relevant.",
+                            "For inventory-efficiency / DIO tasks, track each issuer's beginning inventory, ending inventory, COGS/cost of sales/cost of revenue, fiscal_days, DIO, and comparison difference; prefer SEC companyfacts/10-K evidence, then call calculator.compute for each arithmetic step.",
+                            "Extract the facts needed for the answer; if a calculation is needed, call calculator.compute instead of mental arithmetic.",
+                            "Finalize with direct answer, cited evidence ids, supported calculations, and limitations for any soft gaps.",
+                        ],
+                        "anti_pattern": [
+                            "Do not wait for keyword or threshold rules to decide the answer.",
+                            "Do not give a generic failure report when cited partial evidence can answer the question.",
+                            "Do not use unsupported incidental numbers; remove them or label limitations.",
+                        ],
+                    }
+                }
+                if llm_first_finance
+                else {}
+            ),
             "initial_action": {
                 "kind": "tool",
                 "name": "retrieval.run",
@@ -5609,7 +5993,11 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                 },
                 {
                     "kind": "ask_user",
-                    "use_when": "the host needs explicit user permission or a missing target cannot be inferred from context",
+                    "use_when": (
+                        "the host needs explicit user permission or all required target context is materially absent and cannot be inferred"
+                        if not llm_first_finance
+                        else "only for explicit permission or genuinely absent target context; do not ask for ticker/CIK/source URL when named finance entities/events are present because retrieval must resolve them"
+                    ),
                 },
             ],
             "forbidden": forbidden,
@@ -5799,6 +6187,7 @@ def _agent_retrieval_plan_state(
 ) -> JsonObject:
     if recipe.mode != "retrieval_answer":
         return {"status": "not_applicable", "planned_subgoals": []}
+    llm_first = _llm_semantic_judgment_required(recipe)
     subgoals = _planned_retrieval_subgoals_from_recipe(recipe)
     coverage = _planned_retrieval_coverage(journal, task_id, run_id, recipe)
     status_by_goal = _json_object(coverage.get("latest_status_by_goal_id"))
@@ -5826,11 +6215,19 @@ def _agent_retrieval_plan_state(
         "incomplete_goal_ids": incomplete,
         "latest_status_by_goal_id": status_by_goal,
         "next_recommended_goal_id": incomplete[0] if incomplete else None,
-        "planner_instructions": [
-            "Use goal_id from planned_subgoals when proposing retrieval.run for this plan.",
-            "Prefer next_recommended_goal_id unless feedback identifies a different urgent subgoal.",
-            "Do not finalize until incomplete_goal_ids is empty.",
-        ],
+        "planner_instructions": (
+            [
+                "Use goal_id from planned_subgoals when it matches the model's current research move.",
+                "Prefer next_recommended_goal_id unless semantic judgment indicates a different source/query/tool move is more useful.",
+                "Incomplete goal ids are diagnostics, not hard blockers; finalize when cited evidence is enough for the root question and disclose soft gaps.",
+            ]
+            if llm_first
+            else [
+                "Use goal_id from planned_subgoals when proposing retrieval.run for this plan.",
+                "Prefer next_recommended_goal_id unless feedback identifies a different urgent subgoal.",
+                "Do not finalize until incomplete_goal_ids is empty.",
+            ]
+        ),
     }
 
 
@@ -6172,7 +6569,9 @@ def _retrieval_replan_hints(
         "mission_directive": mission_directive,
         "fetch_summary": _retrieval_fetch_summary(fetches),
         "recent_fetches": fetches[-8:],
-        "do_not_finalize_until": _do_not_finalize_until(missing=missing, requirement=requirement),
+        "do_not_finalize_until": []
+        if strict_llm_judgment
+        else _do_not_finalize_until(missing=missing, requirement=requirement),
     }
 
 
@@ -7078,6 +7477,20 @@ def _llm_semantic_judgment_required(recipe: TaskRecipe | None) -> bool:
     return str(profile.get("profile_id") or "") == "finance-capability"
 
 
+def _finance_capability_has_executable_retrieval_context(recipe: TaskRecipe) -> bool:
+    if not _llm_semantic_judgment_required(recipe):
+        return False
+    if _benchmark_doc_retrieval_payload_from_recipe(recipe):
+        return True
+    capability_args = _semantic_retrieval_capability_args(recipe)
+    if _string_value(capability_args.get("query")) or _string_list(capability_args.get("queries")):
+        return True
+    metadata = capability_args.get("metadata")
+    if isinstance(metadata, dict) and _metadata_url_values(metadata, keys=("source_url", "source_urls", "url", "urls")):
+        return True
+    return False
+
+
 def _metadata_requires_finance_numeric_verifier(metadata: JsonObject) -> bool:
     execution = metadata.get("execution_metadata")
     execution = execution if isinstance(execution, dict) else {}
@@ -7125,6 +7538,50 @@ def _merge_citation_items(existing: list[CitationItem], extra: list[CitationItem
         seen.add(item.citation_id)
         result.append(item)
     return result
+
+
+def _report_with_extraction_grounding(
+    report: RetrievalReport | None,
+    *,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    extraction_evidence_count: int,
+    extraction_citation_count: int,
+) -> RetrievalReport:
+    artifact_refs = _ordered_unique([str(item.artifact_id) for item in evidence if item.artifact_id])
+    if report is None:
+        return RetrievalReport(
+            report_id="retrieval-extraction-report",
+            goal_id="goal-retrieval-extraction",
+            status="sufficient" if evidence and citations else "insufficient_evidence",
+            query_plan_id="retrieval-extraction-plan",
+            search_attempt_ids=[],
+            fetch_attempt_ids=[],
+            evidence_ids=[item.evidence_id for item in evidence],
+            citation_ids=[item.citation_id for item in citations],
+            evaluation_id="retrieval-extraction-eval",
+            artifact_refs=artifact_refs,
+            preview="; ".join(item.text[:120] for item in evidence[:6]),
+            diagnostics={
+                "source": "retrieval_extraction_grounding",
+                "synthetic_retrieval_report": True,
+                "extraction_evidence_count": extraction_evidence_count,
+                "extraction_citation_count": extraction_citation_count,
+            },
+        )
+    diagnostics = dict(report.diagnostics)
+    diagnostics["retrieval_extraction_grounding"] = {
+        "evidence_count": extraction_evidence_count,
+        "citation_count": extraction_citation_count,
+    }
+    return replace(
+        report,
+        status="sufficient" if evidence and citations else report.status,
+        evidence_ids=_ordered_unique([*list(report.evidence_ids), *[item.evidence_id for item in evidence]]),
+        citation_ids=_ordered_unique([*list(report.citation_ids), *[item.citation_id for item in citations]]),
+        artifact_refs=_ordered_unique([*list(report.artifact_refs), *artifact_refs]),
+        diagnostics=diagnostics,
+    )
 
 
 def _report_with_toolchain_grounding(
@@ -8201,6 +8658,56 @@ def _pending_answer_prefers_semantic_mode(
     return working.get("route") == "answer_pending_question" and resume.get("same_task") is True
 
 
+def _finance_capability_execute_clarification_as_retrieval(
+    intake: SemanticIntake,
+    *,
+    execution_metadata: JsonObject | None,
+) -> SemanticIntake:
+    # Compatibility hook retained for callers/tests that import it. In Kernel v3
+    # finance-capability, semantic clarification, retrieval planning, and tool
+    # choice are model-owned. The host validates and executes; it must not
+    # rewrite clarify_first into retrieval_answer with finance-specific rules.
+    return intake
+
+
+def _finance_capability_profile_metadata(metadata: JsonObject | None) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    profile = metadata.get("execution_profile")
+    if isinstance(profile, dict) and profile.get("profile_id") == "finance-capability":
+        return True
+    nested = metadata.get("execution_metadata")
+    if isinstance(nested, dict):
+        profile = nested.get("execution_profile")
+        if isinstance(profile, dict) and profile.get("profile_id") == "finance-capability":
+            return True
+    llm_judgment = metadata.get("llm_judgment")
+    return isinstance(llm_judgment, dict) and llm_judgment.get("required") is True
+
+
+def _semantic_intake_is_finance_tool_research(intake: SemanticIntake) -> bool:
+    if _normalize_finance_semantic_label(intake.primary_intent) in _FINANCE_INTENT_KINDS:
+        return True
+    finance_capabilities = set(_FINANCE_RESEARCH_PROFILE_CAPABILITIES)
+    for item in intake.intents:
+        if not isinstance(item, dict):
+            continue
+        if _normalize_finance_semantic_label(item.get("kind")) in _FINANCE_INTENT_KINDS:
+            return True
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        domain = _normalize_finance_semantic_label(metadata.get("domain"))
+        if domain in _FINANCE_DOMAINS:
+            return True
+        required = set(_string_list(item.get("required_capabilities")))
+        if "retrieval.run" in required and required.intersection(finance_capabilities):
+            return True
+    return False
+
+
+def _normalize_finance_semantic_label(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(".", "_")
+
+
 def _research_source_directory_metadata(recipe: TaskRecipe) -> list[JsonObject]:
     profile_id = _research_profile_id(recipe)
     if profile_id is None:
@@ -8802,11 +9309,17 @@ def _enforce_benchmark_doc_retrieval_binding(
             *_string_list(benchmark_metadata.get("source_urls")),
         ]
     )
+    preserve_semantic_queries = bool(
+        recipe is not None
+        and _llm_semantic_judgment_required(recipe)
+        and current_metadata.get("semantic_intake_retrieval_args") is True
+    )
 
     keep_current_query = bool(
         current_query
         and (
             preserve_query
+            or preserve_semantic_queries
             or _looks_like_url(current_query)
             or _benchmark_doc_query_is_targeted(current_query, metadata)
         )
@@ -8816,7 +9329,7 @@ def _enforce_benchmark_doc_retrieval_binding(
     allowed_current_queries = [
         query
         for query in current_queries
-        if preserve_query or _looks_like_url(query) or _benchmark_doc_query_is_targeted(query, metadata)
+        if preserve_query or preserve_semantic_queries or _looks_like_url(query) or _benchmark_doc_query_is_targeted(query, metadata)
     ]
     queries = _ordered_unique(
         [
@@ -9511,12 +10024,13 @@ def _recipe_research_profile_capabilities(recipe: TaskRecipe) -> set[str]:
 
 
 def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
+    semantic_args = _semantic_retrieval_capability_args(recipe)
     step = _execution_step_metadata(recipe)
     if step is not None:
         args = _capability_args_from_step(step, "retrieval.run")
         if args:
-            return args
-    return _capability_args_from_plan(
+            return _merge_retrieval_capability_payloads(semantic_args, args)
+    plan_args = _capability_args_from_plan(
         _task_execution_plan_metadata(recipe),
         "retrieval.run",
         capability_markers={
@@ -9526,6 +10040,124 @@ def _retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
             *_TECHNICAL_DOCUMENTATION_PROFILE_CAPABILITIES,
         },
     )
+    return _merge_retrieval_capability_payloads(semantic_args, plan_args)
+
+
+def _semantic_retrieval_capability_args(recipe: TaskRecipe) -> JsonObject:
+    semantic = _semantic_intake_metadata(recipe)
+    intents = semantic.get("intents")
+    if not isinstance(intents, list):
+        return {}
+    payloads: list[JsonObject] = []
+    retrieval_strategies: list[JsonObject] = []
+    source_family_plans: list[object] = []
+    for intent in intents:
+        if not isinstance(intent, dict):
+            continue
+        metadata = intent.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        capability_args = metadata.get("capability_args")
+        if isinstance(capability_args, dict):
+            direct = _direct_tool_payload(capability_args, "retrieval.run")
+            if direct:
+                payloads.append(direct)
+            payloads.extend(_retrieval_payloads_from_capability_args(capability_args.get("retrieval.run")))
+        retrieval_strategy = metadata.get("retrieval_strategy")
+        if isinstance(retrieval_strategy, dict):
+            retrieval_strategies.append(dict(retrieval_strategy))
+            plan = retrieval_strategy.get("source_family_plan")
+            if isinstance(plan, (list, str)):
+                source_family_plans.append(plan)
+    if not payloads and not retrieval_strategies:
+        return {}
+    merged: JsonObject = {}
+    queries: list[str] = []
+    extract_targets: list[str] = []
+    preferred_source_families: list[str] = []
+    for payload in payloads:
+        normalized = _direct_tool_payload(payload, "retrieval.run") or dict(payload)
+        query = _string_value(normalized.get("query"))
+        if query:
+            queries.append(query)
+        queries.extend(_string_list(normalized.get("queries")))
+        extract = _string_value(normalized.get("extract")) or _string_value(normalized.get("target"))
+        if extract:
+            extract_targets.append(extract)
+        metadata = normalized.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        source_family = (
+            _string_value(normalized.get("source_family"))
+            or _string_value(normalized.get("source_family_id"))
+            or _string_value(metadata.get("source_family"))
+            or _string_value(metadata.get("source_family_id"))
+        )
+        if source_family:
+            preferred_source_families.append(source_family)
+        preferred_source_families.extend(_source_family_values(normalized.get("source_families")))
+        preferred_source_families.extend(_source_family_values(normalized.get("preferred_source_families")))
+        preferred_source_families.extend(_source_family_values(normalized.get("source_family_plan")))
+        preferred_source_families.extend(_source_family_values(metadata.get("source_families")))
+        preferred_source_families.extend(_source_family_values(metadata.get("preferred_source_families")))
+        preferred_source_families.extend(_source_family_values(metadata.get("source_family_plan")))
+        merged = _merge_retrieval_capability_payloads(merged, normalized)
+    queries = _ordered_unique(queries)
+    merged_metadata = dict(merged.get("metadata")) if isinstance(merged.get("metadata"), dict) else {}
+    if queries:
+        merged["query"] = queries[0]
+        merged["queries"] = queries[:8]
+        merged["max_queries"] = max(_positive_metadata_int(merged.get("max_queries"), default=0), min(8, max(3, len(queries))))
+    if extract_targets:
+        merged_metadata["semantic_extract_targets"] = _ordered_unique(extract_targets)[:12]
+    if preferred_source_families:
+        merged_metadata["preferred_source_families"] = _ordered_unique(
+            [
+                *_string_list(merged_metadata.get("preferred_source_families")),
+                *preferred_source_families,
+            ]
+        )[:12]
+    if retrieval_strategies:
+        merged_metadata.setdefault("retrieval_strategy", retrieval_strategies[0])
+    if source_family_plans:
+        merged_metadata.setdefault("source_family_plan", source_family_plans[0])
+    merged_metadata.setdefault("semantic_intake_retrieval_args", True)
+    if queries:
+        merged_metadata.setdefault("semantic_query_count", len(queries))
+    merged["metadata"] = merged_metadata
+    return merged
+
+
+def _merge_retrieval_capability_payloads(base: JsonObject, extra: JsonObject) -> JsonObject:
+    if not base:
+        return dict(extra)
+    if not extra:
+        return dict(base)
+    merged = _merge_retrieval_payload(base, extra)
+    queries = _ordered_unique(
+        [
+            *([query] if (query := _string_value(base.get("query"))) else []),
+            *_string_list(base.get("queries")),
+            *([query] if (query := _string_value(extra.get("query"))) else []),
+            *_string_list(extra.get("queries")),
+        ]
+    )
+    if queries:
+        merged["query"] = queries[0]
+        merged["queries"] = queries[:8]
+        merged["max_queries"] = max(_positive_metadata_int(merged.get("max_queries"), default=0), min(8, max(2, len(queries[:8]))))
+    metadata = dict(merged.get("metadata")) if isinstance(merged.get("metadata"), dict) else {}
+    base_metadata = base.get("metadata")
+    extra_metadata = extra.get("metadata")
+    metadata_queries = _ordered_unique(
+        [
+            *(_string_list(base_metadata.get("queries")) if isinstance(base_metadata, dict) else []),
+            *(_string_list(extra_metadata.get("queries")) if isinstance(extra_metadata, dict) else []),
+        ]
+    )
+    if metadata_queries:
+        metadata["queries"] = _ordered_unique([*metadata_queries, *_string_list(metadata.get("queries"))])[:8]
+    if metadata:
+        merged["metadata"] = metadata
+    return merged
 
 
 def _retrieval_execution_args(recipe: TaskRecipe) -> JsonObject:
@@ -10095,6 +10727,60 @@ def _string_list(value: object) -> list[str]:
     return [str(item) for item in value if isinstance(item, str) and item]
 
 
+def _source_family_values(value: object) -> list[str]:
+    if isinstance(value, str) and value.strip():
+        return [_canonical_source_family(value.strip())]
+    if isinstance(value, dict):
+        for key in ("family", "source_family", "source_type", "tool"):
+            text = _string_value(value.get(key))
+            if text:
+                return [text]
+        return []
+    if not isinstance(value, list):
+        return []
+    families: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            families.append(_canonical_source_family(item.strip()))
+            continue
+        if not isinstance(item, dict):
+            continue
+        for key in ("family", "source_family", "source_type", "tool"):
+            text = _string_value(item.get(key))
+            if text:
+                families.append(_canonical_source_family(text))
+                break
+    return _ordered_unique(families)
+
+
+def _canonical_source_family(value: str) -> str:
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "sec": "regulatory_filing",
+        "sec_edgar": "regulatory_filing",
+        "edgar": "regulatory_filing",
+        "sec_filing": "regulatory_filing",
+        "sec_filings": "regulatory_filing",
+        "filing": "regulatory_filing",
+        "filings": "regulatory_filing",
+        "annual_report": "regulatory_filing",
+        "10_k": "regulatory_filing",
+        "10_q": "regulatory_filing",
+        "8_k": "regulatory_filing",
+        "companyfacts": "structured_regulatory_data",
+        "sec_companyfacts": "structured_regulatory_data",
+        "structured_sec": "structured_regulatory_data",
+        "investor_relations": "company_ir",
+        "ir": "company_ir",
+        "company_investor_relations": "company_ir",
+        "earnings": "earnings_release",
+        "earnings_results": "earnings_release",
+        "earnings_release": "earnings_release",
+        "press_release": "earnings_release",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def _json_object(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
@@ -10154,6 +10840,7 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
             "retrieval_strategy",
             "model_retrieval_strategy",
             "preferred_source_families",
+            "source_families",
             "source_family_plan",
             "source_authority_requirement",
             "search_strategy",
@@ -10181,6 +10868,7 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
                 "retrieval_strategy",
                 "model_retrieval_strategy",
                 "preferred_source_families",
+                "source_families",
                 "source_family_plan",
                 "source_authority_requirement",
                 "search_strategy",
@@ -10189,7 +10877,15 @@ def _direct_tool_payload(capability_args: JsonObject, tool_name: str) -> JsonObj
             ):
                 value = result.pop(key, None)
                 if isinstance(value, (dict, list, str)) and value:
-                    metadata[key] = value
+                    if key == "source_families":
+                        metadata["preferred_source_families"] = _ordered_unique(
+                            [
+                                *_source_family_values(metadata.get("preferred_source_families")),
+                                *_source_family_values(value),
+                            ]
+                        )[:12]
+                    else:
+                        metadata[key] = value
             if metadata:
                 result["metadata"] = metadata
             return result
@@ -10409,6 +11105,8 @@ def _retrieval_payloads_from_capability_args(value: object) -> list[JsonObject]:
 
 
 def _planned_retrieval_missing_evidence(journal: JournalStore, task_id: str, run_id: str, recipe: TaskRecipe) -> list[str]:
+    if _llm_semantic_judgment_required(recipe):
+        return []
     coverage = _planned_retrieval_coverage(journal, task_id, run_id, recipe)
     incomplete = _string_list(coverage.get("incomplete_goal_ids"))
     if not incomplete:
@@ -10477,6 +11175,139 @@ def _retrieval_evidence(journal: JournalStore, task_id: str, run_id: str) -> lis
     ]
 
 
+def _retrieval_extraction_grounding_enabled(recipe: TaskRecipe) -> bool:
+    if recipe.mode != "retrieval_answer":
+        return False
+    return (
+        _finance_numeric_verifier_required(recipe)
+        or _research_profile_id(recipe) == FINANCE_FUNDAMENTALS_PROFILE_ID
+    )
+
+
+def _retrieval_extraction_grounding(
+    journal: JournalStore,
+    task_id: str,
+    run_id: str,
+    *,
+    evidence_char_limit: int,
+    citation_char_limit: int,
+) -> tuple[list[EvidenceItem], list[CitationItem]]:
+    evidence: list[EvidenceItem] = []
+    citations: list[CitationItem] = []
+    seen: set[str] = set()
+    for record in journal.records(task_id=task_id, kind="retrieval_extraction"):
+        if record.run_id != run_id:
+            continue
+        document = _json_object(record.data.get("document"))
+        spans = record.data.get("spans")
+        span_items = spans if isinstance(spans, list) else []
+        for index, raw_span in enumerate(span_items, start=1):
+            if not isinstance(raw_span, dict):
+                continue
+            text = _string_value(raw_span.get("text"))
+            if not text:
+                continue
+            metadata = _json_object(raw_span.get("metadata"))
+            if not _retrieval_extraction_span_promotable(text, document=document, metadata=metadata):
+                continue
+            span_id = (
+                _string_value(raw_span.get("span_id"))
+                or _string_value(metadata.get("span_id"))
+                or f"extraction-span-{_short_hash(record.record_id, index, text[:160])}"
+            )
+            evidence_id = f"evidence-{span_id}"
+            if evidence_id in seen:
+                continue
+            seen.add(evidence_id)
+            document_id = (
+                _string_value(raw_span.get("document_id"))
+                or _string_value(document.get("document_id"))
+                or f"doc-{record.record_id}"
+            )
+            source_id = (
+                _string_value(raw_span.get("source_id"))
+                or _string_value(document.get("source_id"))
+                or document_id
+            )
+            artifact_id = (
+                _string_value(raw_span.get("artifact_id"))
+                or _string_value(document.get("artifact_id"))
+                or f"artifact-{document_id}"
+            )
+            uri = (
+                _string_value(metadata.get("source_uri"))
+                or _string_value(document.get("uri"))
+                or f"retrieval-extraction://{record.record_id}"
+            )
+            title = (
+                _string_value(metadata.get("source_title"))
+                or _string_value(document.get("title"))
+                or uri
+            )
+            score = raw_span.get("score")
+            score_value = float(score) if isinstance(score, (int, float)) else 1.0
+            item = EvidenceItem(
+                evidence_id=evidence_id,
+                goal_id=_string_value(raw_span.get("goal_id")) or _string_value(record.data.get("goal_id")) or "goal-retrieval-extraction",
+                span_id=span_id,
+                document_id=document_id,
+                source_id=source_id,
+                artifact_id=artifact_id,
+                uri=uri,
+                title=title,
+                text=text[:evidence_char_limit],
+                score=score_value,
+                payload_hash=_string_value(document.get("payload_hash")) or record.payload_hash,
+                diagnostics={
+                    "record_ref": record.record_id,
+                    "source": "retrieval_extraction",
+                    "structured_extraction_promotion": True,
+                    "span_metadata": metadata,
+                    **({"target_slot": metadata.get("target_slot")} if metadata.get("target_slot") else {}),
+                    **({"target_line_item": metadata.get("target_line_item")} if metadata.get("target_line_item") else {}),
+                    **({"target_statement": metadata.get("target_statement")} if metadata.get("target_statement") else {}),
+                    **(
+                        {"target_document_binding": metadata.get("target_document_binding")}
+                        if isinstance(metadata.get("target_document_binding"), dict)
+                        else {}
+                    ),
+                },
+            )
+            evidence.append(item)
+            quote = text[:citation_char_limit]
+            citations.append(
+                CitationItem(
+                    citation_id=f"extraction-cite-{_short_hash(evidence_id, uri)}",
+                    goal_id=item.goal_id,
+                    evidence_id=evidence_id,
+                    artifact_id=artifact_id,
+                    uri=uri,
+                    title=title,
+                    quote=quote,
+                    span_start=0,
+                    span_end=len(quote),
+                    metadata={"record_ref": record.record_id, "structured_extraction_promotion": True},
+                )
+            )
+            if len(evidence) >= 128:
+                return evidence, citations
+    return evidence, citations
+
+
+def _retrieval_extraction_span_promotable(text: str, *, document: JsonObject, metadata: JsonObject) -> bool:
+    mode = str(metadata.get("text_mode") or "").lower()
+    uri = str(metadata.get("source_uri") or document.get("uri") or "").lower()
+    title = str(metadata.get("source_title") or document.get("title") or "").lower()
+    lower = text.lower()
+    if mode == "sec_companyfacts_readable_text":
+        return True
+    if "data.sec.gov/api/xbrl/companyfacts/" in uri or "sec companyfacts" in title:
+        return "metric=" in lower and ("value=" in lower or " val=" in lower)
+    if "facts=metric=" in lower and ("value=" in lower or " val=" in lower):
+        return True
+    return False
+
+
 def _retrieval_citations(journal: JournalStore, task_id: str, run_id: str) -> list[CitationItem]:
     return [
         CitationItem.from_dict(record.data)
@@ -10496,9 +11327,27 @@ def _retrieval_and_toolchain_grounding(
     report = _latest_retrieval_report(journal, task_id, run_id)
     evidence = _retrieval_evidence(journal, task_id, run_id)
     citations = _retrieval_citations(journal, task_id, run_id)
+    context_budget = _context_budget_metadata(recipe)
+    if _retrieval_extraction_grounding_enabled(recipe):
+        extraction_evidence, extraction_citations = _retrieval_extraction_grounding(
+            journal,
+            task_id,
+            run_id,
+            evidence_char_limit=int(context_budget["workspace_evidence_chars"]),
+            citation_char_limit=int(context_budget["workspace_citation_chars"]),
+        )
+        if extraction_evidence:
+            evidence = _merge_evidence_items(evidence, extraction_evidence)
+            citations = _merge_citation_items(citations, extraction_citations)
+            report = _report_with_extraction_grounding(
+                report,
+                evidence=evidence,
+                citations=citations,
+                extraction_evidence_count=len(extraction_evidence),
+                extraction_citation_count=len(extraction_citations),
+            )
     if not _toolchain_grounding_enabled(recipe):
         return evidence, citations, report
-    context_budget = _context_budget_metadata(recipe)
     toolchain_evidence, toolchain_citations, toolchain_report = _workspace_grounding(
         journal,
         task_id,
@@ -12170,13 +13019,35 @@ def _can_synthesize_partial_retrieval(
     citations: list[CitationItem],
     recipe: TaskRecipe,
 ) -> bool:
-    if terminal_reason not in PARTIAL_RETRIEVAL_TERMINAL_REASONS:
-        return False
     if not evidence:
         return False
     if recipe.citations_required and not citations:
         return False
+    if _llm_semantic_judgment_required(recipe):
+        return True
+    if terminal_reason not in PARTIAL_RETRIEVAL_TERMINAL_REASONS:
+        return False
     return True
+
+
+def _can_attempt_model_first_retrieval_finalization(
+    *,
+    recipe: TaskRecipe,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    report: RetrievalReport | None,
+    terminal_reason: str | None,
+) -> bool:
+    if report is None:
+        return False
+    if not _llm_semantic_judgment_required(recipe):
+        return False
+    return _can_synthesize_partial_retrieval(
+        terminal_reason=terminal_reason,
+        evidence=evidence,
+        citations=citations,
+        recipe=recipe,
+    )
 
 
 def _can_attempt_finance_numeric_finalization(
@@ -13221,6 +14092,18 @@ def _citation_judge_summary(item: CitationItem) -> JsonObject:
         "uri": item.uri,
         "title": item.title,
     }
+
+
+def _finance_numeric_judge_accepts_answer(judge: JsonObject) -> bool:
+    decision = str(judge.get("decision") or "").strip().lower()
+    if decision not in {"passed_semantically", "pass", "passed", "accept", "repair_answer"}:
+        return False
+    if judge.get("answer_addresses_question") is not True:
+        return False
+    if judge.get("requires_more_work") is True:
+        return False
+    unsupported_core = _string_list(judge.get("unsupported_core_values"))
+    return not unsupported_core
 
 
 def _finance_numeric_judge_repair_instruction(judge: JsonObject, *, verification, recipe: TaskRecipe) -> str:

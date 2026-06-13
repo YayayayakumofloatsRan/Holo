@@ -814,6 +814,93 @@ def test_sec_submissions_expand_to_primary_filing_even_when_companyfacts_exists(
     )
 
 
+def test_sec_ticker_directory_expands_ticker_to_submissions_and_primary_filing():
+    ticker_directory = SearchSource(
+        source_id="sec-ticker-directory-tjx",
+        uri="https://www.sec.gov/files/company_tickers_exchange.json",
+        title="SEC company ticker and CIK directory",
+        snippet="Official SEC ticker and CIK mapping lookup for TJX.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "structured_regulatory_data",
+            "authority_level": "primary",
+            "source_kind": "sec_ticker_cik_directory",
+            "ticker": "TJX",
+        },
+    )
+    submissions_url = "https://data.sec.gov/submissions/CIK0000109198.json"
+    companyfacts_url = "https://data.sec.gov/api/xbrl/companyfacts/CIK0000109198.json"
+    primary_url = "https://www.sec.gov/Archives/edgar/data/109198/000010919825000012/tjx-20250201.htm"
+    query = "TJX fiscal 2025 10-K pre-tax margin"
+    journal = JournalStore.in_memory()
+
+    report = RetrievalOperator(
+        search_provider=FakeSearchProvider({query: [ticker_directory]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                ticker_directory.uri: json.dumps(
+                    {
+                        "fields": ["cik", "name", "ticker", "exchange"],
+                        "data": [
+                            [320193, "Apple Inc.", "AAPL", "Nasdaq"],
+                            [109198, "THE TJX COMPANIES INC /DE/", "TJX", "NYSE"],
+                        ],
+                    }
+                ),
+                companyfacts_url: "SEC companyfacts official financial statements entityName=THE TJX COMPANIES INC /DE/ cik=109198.",
+                submissions_url: json.dumps(
+                    {
+                        "cik": "109198",
+                        "filings": {
+                            "recent": {
+                                "accessionNumber": ["0000109198-25-000012"],
+                                "form": ["10-K"],
+                                "primaryDocument": ["tjx-20250201.htm"],
+                                "primaryDocDescription": ["10-K"],
+                                "reportDate": ["2025-02-01"],
+                                "filingDate": ["2025-03-26"],
+                            }
+                        },
+                    }
+                ),
+                primary_url: (
+                    "TJX fiscal 2025 Form 10-K. Pre-tax profit margin discussion "
+                    "and fiscal year 2025 financial statements."
+                ),
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-sec-ticker-directory-expansion",
+            query=query,
+            max_sources=4,
+            max_fetches=5,
+            max_spans_per_document=2,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "source_authority_requirement": "primary",
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-sec-ticker-directory-expansion",
+        run_id="run-1",
+    )
+
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-sec-ticker-directory-expansion", kind="retrieval_fetch_attempt")
+    ]
+    assert submissions_url in fetch_uris
+    assert primary_url in fetch_uris
+    expansions = journal.records(task_id="task-sec-ticker-directory-expansion", kind="retrieval_document_expansion")
+    assert expansions
+    first_candidates = expansions[0].data["expansions"][0]["candidate_sources"]
+    assert any(candidate["metadata"]["source_kind"] == "sec_submissions_json" for candidate in first_candidates)
+    assert report.diagnostics["document_expanded_source_count"] >= 1
+
+
 def test_finance_valuation_fetch_queue_preserves_market_data_provider():
     companyfacts = SearchSource(
         source_id="lulu-companyfacts",

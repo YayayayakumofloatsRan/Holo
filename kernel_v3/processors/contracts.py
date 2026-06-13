@@ -247,6 +247,33 @@ query_plan, avoid_repeating, fallback_moves, evidence_criteria, and stop_when.
 Use it for mathematics, physics, policy, engineering, finance, humanities,
 private workspace research, or any other domain where the best source families
 and query moves require semantic judgment.
+For finance-capability tasks, use retrieval_answer with required_capabilities
+including retrieval.run and finance.* when public evidence or calculation is
+needed. Treat named companies, tickers, periods, filings, deals, and metrics as
+enough to start: do not set requires_clarification=true merely because the CIK,
+source URL, exact filing accession, or formula inputs are not already present.
+If the task asks to compute, compare, bridge, beat/miss, express a difference
+in bps, calculate a ratio/multiple/CAGR/margin, or otherwise derive a number
+from retrieved facts, include calculator.compute in required_capabilities so
+the planner can call the standard calculator after evidence is observed.
+Put model-owned retrieval.run capability_args in the same standard tool
+interface used by
+planner.propose: query/queries/source_urls as known, plus
+metadata.retrieval_strategy containing target_entities, target_periods,
+evidence_slots, source_family_plan, query_plan, evidence_criteria, and
+stop_when. The host will validate and execute; the model owns the semantic
+finance plan.
+Use canonical source family names when possible: regulatory_filing,
+structured_regulatory_data, company_ir, earnings_release,
+transaction_disclosure, market_data_provider, reputable_news,
+government_statistic, central_bank_statistic, treasury_data.
+For inventory-efficiency / DIO tasks, treat the problem as solvable from public
+filings when issuers and fiscal year are named. Build evidence_slots for each
+issuer covering beginning inventory, ending inventory, COGS/cost of sales/cost
+of revenue, fiscal_days, and source citations. Prefer SEC companyfacts plus the
+corresponding 10-K when available. After evidence supplies the inputs, include
+calculator.compute so the planner can calculate each issuer's DIO and the
+difference/comparison rather than relying on mental arithmetic.
 When useful, include metadata.domain, metadata.activity, metadata.resource, and
 metadata.execution_surface to preserve broad agent state such as finance,
 database, cloud, workflow, knowledge_base, multimodal, resident, transport,
@@ -302,6 +329,49 @@ Example active memory recall:
 {"action_id":"act-memory-1","kind":"tool","name":"memory.recall","description":"recall workspace and thread memory before answering","payload":{"query":"user preferences and recent project decisions","scope_mode":"both","limit":12},"score":0.88,"reasons":["the answer depends on prior workspace/thread memory"],"side_effect_class":"read"}
 Example clarification:
 {"action_id":"act-clarify-1","kind":"ask_user","name":null,"description":"ask for missing scope","payload":{"question":"Which market, region, and time range should I research?"},"score":0.82,"reasons":["research scope is underspecified"],"side_effect_class":"none"}
+Standard tool interface:
+- Tool proposals are the only way to request tool work. Put every executable
+  argument in payload, and put planning/audit structure in payload.metadata.
+- For retrieval.run, use payload.query plus optional payload.queries,
+  payload.source_urls, max_queries, max_sources, max_fetches, and
+  max_spans_per_document. Put the model-owned plan under
+  payload.metadata.retrieval_strategy with task_understanding, evidence_slots,
+  query_plan, source_family_plan, fallback_moves, evidence_criteria,
+  stop_when, and next_decision_basis when useful.
+- For calculator.compute, use payload.expression, variables, unit,
+  formula_name, input_fact_ids, and diagnostics. Use it when the current
+  observations expose all required numeric inputs and the task needs arithmetic.
+- The host validates schemas, permissions, budgets, evidence ids, citations,
+  and execution results. The model owns semantic decomposition, source choice,
+  slot coverage judgment, formula choice, next-tool choice, and final-answer
+  readiness.
+Finance-capability prompt:
+- Assume public finance benchmark questions are solvable when named entities,
+  periods, filings, events, metrics, or tickers are present. Do not ask the
+  user for ticker, CIK, source URL, period, formula, or filing when it can be
+  inferred or retrieved from public sources.
+- Build a model-owned finance work plan in payload.metadata.retrieval_strategy:
+  identify target entities, periods, required evidence slots, preferred source
+  families, and the first retrieval campaign. Prefer primary filings, SEC/EDGAR
+  structured data, investor-relations releases, transaction disclosures, and
+  reputable market-data sources according to the task.
+- Use canonical source families in retrieval_strategy.source_family_plan:
+  regulatory_filing, structured_regulatory_data, company_ir, earnings_release,
+  transaction_disclosure, market_data_provider, reputable_news.
+- For inventory-efficiency / DIO comparisons, plan the slots explicitly:
+  entity_a/entity_b, period, inventory_begin, inventory_end, cogs or cost of
+  sales/revenue, fiscal_days, DIO for each entity, and the difference. Use SEC
+  companyfacts/10-K sources first, then call calculator.compute for the two DIO
+  calculations and the comparison once facts are observed.
+- If retrieval is incomplete, replan semantically with materially different
+  queries/source families. If facts are sufficient and calculator.compute is
+  allowed, propose calculator.compute yourself. If calculator output plus
+  evidence is sufficient, respond or allow final synthesis with explicit
+  limitations.
+Example finance retrieval proposal:
+{"action_id":"act-finance-retrieval-1","kind":"tool","name":"retrieval.run","description":"collect primary finance evidence for model-owned analysis","payload":{"query":"Pfizer Seagen acquisition enterprise value Seagen annual revenue SEC 8-K 10-K","queries":["Pfizer Seagen acquisition enterprise value SEC 8-K Exhibit 99.1","Seagen annual revenue 2022 10-K SEC companyfacts"],"max_queries":8,"max_fetches":24,"metadata":{"research_profile":"finance_fundamentals","search_strategy":"aggregate","retrieval_strategy":{"strategy_id":"model-finance-1","task_understanding":"Calculate transaction EV / revenue using public deal disclosure and target company revenue.","target_entities":["Pfizer","Seagen"],"target_periods":["pre-acquisition latest annual/TTM period"],"evidence_slots":[{"slot":"transaction_value","source_family":"transaction_disclosure"},{"slot":"target_revenue","source_family":"sec_filing_or_companyfacts"}],"query_plan":[{"query":"Pfizer Seagen acquisition enterprise value SEC 8-K Exhibit 99.1","purpose":"deal value"},{"query":"Seagen annual revenue 2022 10-K SEC companyfacts","purpose":"target revenue"}],"evidence_criteria":["primary SEC filing or official transaction disclosure","revenue period clearly tied to Seagen"],"stop_when":["transaction value and target revenue are both supported"]}}},"score":0.93,"reasons":["finance facts require live primary evidence"],"side_effect_class":"network"}
+Example finance calculator proposal:
+{"action_id":"act-finance-calc-1","kind":"tool","name":"calculator.compute","description":"compute EV / revenue from supported inputs","payload":{"expression":"enterprise_value / revenue","variables":{"enterprise_value":"43000000000","revenue":"1962412000"},"unit":"multiple","formula_name":"ev_revenue","input_fact_ids":["fact-transaction-value","fact-target-revenue"],"diagnostics":{"semantic_decision_owner":"model","formula_explanation":"transaction EV divided by target company revenue"}},"score":0.94,"reasons":["supported inputs are available and arithmetic is required"],"side_effect_class":"read"}
 For user-visible respond/ask_user payload text, match the user's language when it is clear.
 If a response_language preference is present in context, use it as the default for user-visible text when the user's requested language is unclear or mixed.
 For user-visible respond/ask_user payload text, never begin with generic

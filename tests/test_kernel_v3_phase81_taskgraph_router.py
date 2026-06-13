@@ -119,6 +119,59 @@ def test_phase81_simple_retrieval_graph_selects_retrieval_recipe():
     assert journal.records(task_id=result.task_id, kind="retrieval_report")
 
 
+def test_phase81_calculator_compute_is_standard_tool_capability():
+    intake = SemanticIntake(
+        intake_id="semantic-intake-calculator",
+        goal="Compute the EV / revenue multiple from already-supported facts.",
+        primary_intent="financial_modeling",
+        suggested_mode="retrieval_answer",
+        compound=False,
+        requires_clarification=False,
+        intents=[
+            {
+                "kind": "financial_modeling",
+                "text": "Compute EV / revenue from supported transaction value and revenue facts.",
+                "sequence_index": 1,
+                "required_capabilities": ["calculator.compute"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {
+                    "suggested_mode": "retrieval_answer",
+                    "capability_args": {
+                        "calculator.compute": {
+                            "expression": "enterprise_value / revenue",
+                            "variables": {
+                                "enterprise_value": "43000000000",
+                                "revenue": "1962412000",
+                            },
+                            "unit": "multiple",
+                            "formula_name": "ev_revenue",
+                            "input_fact_ids": ["fact-ev", "fact-revenue"],
+                        }
+                    },
+                },
+            }
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
+
+    proposal = task_graph_from_semantic(intake)
+    validation = validate_task_graph(proposal)
+    plan = build_task_execution_plan(proposal, validation)
+
+    step = plan.steps[0]
+    assert validation.status == "ready"
+    assert validation.blocked_capabilities == []
+    assert validation.selected_mode == "retrieval_answer"
+    assert step["action_kind"] == "tool"
+    assert step["tool_name"] == "calculator.compute"
+    assert step["metadata"]["capability_plan"]["tools"] == ["calculator.compute"]
+    assert step["metadata"]["capability_args"]["calculator.compute"]["formula_name"] == "ev_revenue"
+
+
 def test_phase81_open_semantic_label_routes_by_capability_not_intent_table():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(

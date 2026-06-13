@@ -43,11 +43,31 @@ def test_phase98_sec_edgar_provider_builds_structured_sources_from_cik_metadata(
         "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
         "https://data.sec.gov/submissions/CIK0000320193.json",
         "https://www.sec.gov/edgar/browse/?CIK=0000320193",
+        "https://www.sec.gov/cgi-bin/browse-edgar?CIK=AAPL&owner=exclude&action=getcompany&count=100",
         "https://www.sec.gov/files/company_tickers_exchange.json",
-        "https://www.sec.gov/edgar/search/#/q=AAPL",
     ]
     assert all(source.metadata["authority_level"] == "primary" for source in sources)
     assert provider.search_diagnostics()["cik_present"] is True
+
+
+def test_sec_edgar_provider_adds_issuer_browse_source_for_ticker_only_queries():
+    provider = SecEdgarSearchProvider()
+
+    sources = provider.search(
+        "TJX Q4 fiscal 2025 pre-tax margin 10-K earnings",
+        goal=SearchGoal(
+            goal_id="goal-ticker-only-sec",
+            query="TJX Q4 fiscal 2025 pre-tax margin 10-K earnings",
+            max_sources=5,
+            metadata={"research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID},
+        ),
+        plan=_plan(),
+    )
+
+    kinds = [source.metadata["source_kind"] for source in sources]
+    assert "sec_edgar_browse_ticker" in kinds
+    assert "sec_ticker_cik_directory" in kinds
+    assert any(source.uri.endswith("CIK=TJX&owner=exclude&action=getcompany&count=100") for source in sources)
 
 
 def test_phase98_sec_companyfacts_ranks_before_submissions_for_finance_evidence():

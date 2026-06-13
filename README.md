@@ -116,6 +116,19 @@ WSC adjusted EBITDA add-back trend, but it should not yet be described as a
 stable Finance Agent v2 solver. The main open gap is robust generalization to
 harder filing/modeling tasks such as DCF/LBO, fixed-charge coverage, MLR,
 valuation multiples, and purchase-price-allocation analysis.
+As of 2026-06-13, the current demo-ready Kernel v3 finance case is
+FinanceBench `financebench_id_02987`: Activision Blizzard FY2019 fixed asset
+turnover from the 2019 10-K source URL. The promoted live run
+`run_demo_financebench_activision_fat_live_20260613` passes strict scoring with
+`pass_rate=1.0`, `numeric_accuracy=1.0`, `overall_score=1.0`, `workflow_score=1.0`,
+245 finance facts, 245 claim-ledger records, a transform plan, citations, and a
+synthesis gate pass. The Windows-accessible dashboard defaults to this run at
+`http://localhost:8787/` when `kernel_v3.demo_dashboard` is running. The same
+iteration also improved model-owned retrieval follow-up: LLM workbench
+`decision=continue` now routes back through standard `retrieval.run` instead of
+allowing premature finalization. The FAB v2 HD/LOW DIO task remains a high
+stress case for multi-issuer COGS/inventory search and is not yet the promoted
+demo result.
 As of 2026-06-11, DCF/LBO are no longer only benchmark annotations: the finance
 domain pack has modeling-lite transform planning for DCF and LBO, operating
 cash flow / capex fact extraction, transparent assumption diagnostics, and
@@ -1539,6 +1552,15 @@ In this profile, semantic fallback is blocked: host scaffolds may expose tool
 interfaces, provenance, budgets, and schema constraints, but cannot replace the
 LLM's task decomposition, source/evidence relevance judgment, slot/transform
 selection, numeric semantic repair, or final synthesis decision.
+As of the 2026-06-13 LLM-first finalization pass, this is also true at the
+retrieval and numeric gates: incomplete planned retrieval subgoals are advisory
+when citable evidence already exists, and the runtime proceeds to model
+synthesis instead of emitting a host-authored failure report. Deterministic
+numeric verification still records provenance and support diagnostics, but
+`finance.numeric_judge` can accept a semantically correct core answer when it
+answers the question, does not require more work, and contains no unsupported
+core numeric values. Host rules therefore remain safety, schema, budget,
+calculation, and provenance boundaries; they are not the final semantic judge.
 
 The execution program itself is now model-first in the finance fast lane.
 `task.compile` is a structured processor packet that asks the LLM to produce
