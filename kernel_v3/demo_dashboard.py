@@ -2568,7 +2568,7 @@ HTML = r"""<!doctype html>
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
       const cleared = isScreenCleared() && !["running", "queued"].includes(jobStatus);
       renderTranscript(cleared ? [] : (consoleState.transcript || []));
-      renderPipeline(cleared ? [] : ((consoleState.topology && consoleState.topology.some(row => Number(row.value || 0) > 0)) ? consoleState.topology : (data.pipeline || [])));
+      renderPipeline(cleared ? [] : (consoleState.topology || []));
       renderModelIO(cleared ? [] : (consoleState.model_io || []));
       renderBranches(cleared ? [] : (consoleState.search_branches || []));
       renderActivity(cleared ? [] : (consoleState.activity || []));
