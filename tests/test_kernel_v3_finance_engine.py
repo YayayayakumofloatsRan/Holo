@@ -286,6 +286,49 @@ def test_finance_fact_ledger_parses_period_fy_without_polluting_concept() -> Non
     assert facts[0].metadata["concept"] == "PaymentsToAcquirePropertyPlantAndEquipment"
 
 
+def test_finance_fact_ledger_preserves_specific_revenue_concepts() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="gs-net-revenues",
+            title="SEC companyfacts JSON for CIK 0000886982",
+            uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000886982.json",
+            text=(
+                "SEC companyfacts official financial statement entityName=Goldman Sachs "
+                "concept=RevenuesNetOfInterestExpense label=Revenues, Net of Interest Expense "
+                "metric=RevenuesNetOfInterestExpense unit=USD period=annual fy=2024 "
+                "form=10-K value=53512000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="xom-total-revenues-other-income",
+            title="ExxonMobil 2024 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/34088/000003408825000018/xom-20241231.htm",
+            text=(
+                "Consolidated statement of income, dollars in millions 2024 2023 2022 "
+                "Total revenues and other income 349,585 344,582 413,680"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="cvx-sales-other-operating-revenues",
+            title="Chevron 2024 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/93410/000009341025000009/cvx-20241231.htm",
+            text=(
+                "Consolidated statement of income, dollars in millions 2024 2023 "
+                "Sales and other operating revenues 193,414 196,913"
+            ),
+        ),
+    ]
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence],
+    )
+
+    by_metric = {(fact.metric, fact.fiscal_year): fact for fact in facts}
+    assert by_metric[("net revenues", 2024)].value == "53512000000"
+    assert by_metric[("total revenues and other income", 2024)].value == "349585000000"
+    assert by_metric[("sales and other operating revenues", 2024)].value == "193414000000"
+
+
 def test_companyfacts_readable_text_prioritizes_target_year_missing_slots() -> None:
     body = json.dumps(
         {
@@ -1585,6 +1628,24 @@ def test_target_document_binding_preserves_required_line_item_when_reused() -> N
     assert reused["required_line_item"] == "capital expenditures"
     assert reused["doc_period"] == "2018"
     assert reused["primary_source_required"] is True
+
+
+def test_target_document_binding_refines_generic_revenue_with_question_metric_phrase() -> None:
+    reused = target_document_binding_from_metadata(
+        {
+            "target_document_binding": {
+                "schema": "holo.kernel_v3.finance.target_document_binding.v1",
+                "company": "Goldman Sachs",
+                "doc_period": "2024",
+                "doc_type": "10-K",
+                "required_line_item": "revenue",
+            }
+        },
+        question="What was Goldman Sachs' net revenues for fiscal year 2024?",
+    )
+
+    assert reused["required_line_item"] == "net revenues"
+    assert reused["line_item_refined_from"] == "revenue"
 
 
 def test_primary_source_numeric_binding_selects_target_capex_and_rejects_secondary_value() -> None:

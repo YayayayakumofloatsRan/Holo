@@ -11,8 +11,7 @@ from kernel_v3.finance.contracts import FinanceFact
 def target_document_binding_from_metadata(metadata: JsonObject | None, *, question: str = "") -> JsonObject:
     metadata = metadata if isinstance(metadata, dict) else {}
     existing = metadata.get("target_document_binding")
-    if isinstance(existing, dict) and existing:
-        return dict(existing)
+    existing_binding = existing if isinstance(existing, dict) else {}
     text = " ".join(
         str(item or "")
         for item in (
@@ -24,8 +23,16 @@ def target_document_binding_from_metadata(metadata: JsonObject | None, *, questi
             metadata.get("doc_period"),
             metadata.get("required_statement"),
             metadata.get("required_line_item"),
+            existing_binding.get("company"),
+            existing_binding.get("doc_name"),
+            existing_binding.get("doc_type"),
+            existing_binding.get("doc_period"),
+            existing_binding.get("required_statement"),
+            existing_binding.get("required_line_item"),
         )
     )
+    if isinstance(existing, dict) and existing:
+        return _refine_existing_binding_with_question(existing, text=text)
     doc_link = _string(metadata.get("doc_link") or metadata.get("source_url"))
     required_line_item = _string(metadata.get("required_line_item")) or _required_line_item(text)
     required_statement = _string(metadata.get("required_statement")) or _required_statement(text, required_line_item=required_line_item)
@@ -52,6 +59,36 @@ def target_document_binding_from_metadata(metadata: JsonObject | None, *, questi
         binding["doc_host"] = parsed.netloc.lower()
         binding["doc_path_tail"] = parsed.path.rsplit("/", 1)[-1].lower()
     return {key: value for key, value in binding.items() if value not in (None, "", [])}
+
+
+def _refine_existing_binding_with_question(existing: JsonObject, *, text: str) -> JsonObject:
+    binding = dict(existing)
+    inferred_line_item = _required_line_item(text)
+    existing_line_item = _string(binding.get("required_line_item")).lower()
+    if _should_refine_required_line_item(existing_line_item, inferred_line_item):
+        binding["required_line_item"] = inferred_line_item
+        binding.setdefault("line_item_refined_from", existing_line_item or "unspecified")
+        required_statement = _required_statement(text, required_line_item=inferred_line_item)
+        if required_statement and not binding.get("required_statement"):
+            binding["required_statement"] = required_statement
+    return binding
+
+
+def _should_refine_required_line_item(existing_line_item: str, inferred_line_item: str | None) -> bool:
+    inferred = _string(inferred_line_item).lower()
+    if not inferred or inferred == existing_line_item:
+        return False
+    generic_items = {"", "revenue", "revenues"}
+    if existing_line_item in generic_items:
+        return True
+    specific_revenue_items = {
+        "net revenues",
+        "net sales",
+        "sales and other operating revenues",
+        "total revenues and other income",
+        "operating revenues",
+    }
+    return existing_line_item == "total revenues" and inferred in specific_revenue_items
 
 
 def attach_target_binding_to_facts(facts: list[FinanceFact], binding: JsonObject | None, *, question: str = "") -> list[FinanceFact]:

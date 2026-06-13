@@ -253,6 +253,39 @@ formula traces to the LLM so the model can choose the requested metric and
 answer shape. The host still validates citations, numeric support, units, and
 trace contracts.
 
+Post-demo metric-disambiguation ability pass:
+
+- Generic `target_document_binding.required_line_item=revenue` is no longer
+  allowed to erase a more specific metric phrase from the user's question. When
+  the question asks for a specific statement line such as `net revenues`, a
+  reused generic binding is refined to that specific line item before facts are
+  scored and exposed to the model.
+- The finance fact ledger now preserves specific revenue captions instead of
+  collapsing them all into generic `revenue`: `net revenues`, `net sales`,
+  `total revenues`, `total revenues and other income`, `operating revenues`,
+  and `sales and other operating revenues` are first-class fact metrics.
+- Natural 10-K table extraction now recognizes rows such as `Total revenues and
+  other income`, `Sales and other operating revenues`, `Operating revenues`,
+  `Total net revenues`, and `Sales to customers` before generic revenue
+  matching.
+- `finance-capability` prompt instructions now tell the LLM to treat conflicting
+  same-period SEC companyfacts revenue concepts as competing evidence, compare
+  official statement captions, and inspect the 10-K statement table before
+  finalizing when the structured caption is ambiguous.
+- Regression coverage:
+  `tests/test_kernel_v3_finance_metric_intent.py`,
+  `tests/test_kernel_v3_phase5_semantic_processors.py`,
+  `tests/test_kernel_v3_finance_engine.py`,
+  `tests/test_kernel_v3_retrieval_document_expansion.py`, and
+  `tests/test_kernel_v3_phase98_sec_edgar_provider.py` passed together:
+  `298 passed in 8.31s`.
+- A minimal live FE_009 Goldman net-revenues rerun was attempted:
+  `run_goldman_net_revenues_metric_binding_live_20260613`. The run started with
+  the Windows DeepSeek key injected into WSL, but DeepSeek returned `HTTP 402:
+  Insufficient Balance` before any model tokens, retrieval calls, facts,
+  citations, or verifier gates. This is recorded as provider/account blockage,
+  not promoted capability evidence.
+
 Remaining hard gaps after these batches:
 
 1. `FE_020` and `FE_021`: total-revenue questions still need better line-item

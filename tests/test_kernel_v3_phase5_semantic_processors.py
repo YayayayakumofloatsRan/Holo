@@ -147,6 +147,18 @@ def test_phase5_research_prompts_tell_model_to_judge_soft_gaps_like_researcher()
     assert "not an automatic reason to loop forever" in combined
 
 
+def test_phase5_finance_prompt_preserves_exact_metric_phrase_for_line_item_disambiguation():
+    lowered = PLANNER_PROMPT_CONTRACT.lower()
+
+    assert "exact requested metric phrase" in lowered
+    assert "net revenues" in lowered
+    assert "sales and other operating revenues" in lowered
+    assert "derivative" in lowered
+    assert "multiple candidate values" in lowered
+    assert "competing evidence" in lowered
+    assert "10-k statement table" in lowered
+
+
 def test_phase5_user_visible_text_guard_trims_only_stock_agreement_prefix():
     assert guard_user_visible_text("你说得对，这个 bug 在 prompt 层。") == "这个 bug 在 prompt 层。"
     assert guard_user_visible_text("You are right: this needs a host-side guard.") == "this needs a host-side guard."

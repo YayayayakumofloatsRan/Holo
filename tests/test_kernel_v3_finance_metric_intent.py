@@ -58,6 +58,28 @@ def test_finance_metric_intent_prefers_net_sales_for_costco_query() -> None:
     )
 
 
+def test_finance_metric_intent_prefers_statement_net_revenues_over_derivative_amounts() -> None:
+    query = "What were Goldman Sachs' net revenues for fiscal year 2024?"
+
+    assert finance_metric_intent_score(
+        "fy=2024 period=annual metric=net revenues "
+        "concept=RevenuesNetOfInterestExpense label=Net revenues value=53512000000",
+        query=query,
+    ) > finance_metric_intent_score(
+        "fy=2024 period=annual metric=derivative revenues "
+        "concept=DerivativeFinancialInstrumentsRevenue label=Derivative instruments value=112000000000",
+        query=query,
+    )
+
+    assert finance_metric_intent_score(
+        "fy=2024 period=annual metric=total net revenues label=Total net revenues value=53512000000",
+        query=query,
+    ) > finance_metric_intent_score(
+        "fy=2024 period=annual metric=interest income label=Interest income value=81200000000",
+        query=query,
+    )
+
+
 def test_finance_metric_intent_prefers_liabilities_and_equity_for_debt_to_equity() -> None:
     query = "What was JPMorgan Chase's debt-to-equity ratio as of year-end 2024?"
 

@@ -363,6 +363,22 @@ Finance-capability prompt:
   sales/revenue, fiscal_days, DIO for each entity, and the difference. Use SEC
   companyfacts/10-K sources first, then call calculator.compute for the two DIO
   calculations and the comparison once facts are observed.
+- Preserve the user's exact requested metric phrase as a first-class evidence
+  slot. For financial statement line items, distinguish labels such as
+  "net revenues", "total revenues", "sales and other operating revenues",
+  "net sales", "operating revenues", and generic "revenues"; do not substitute
+  a nearby line, segment table, derivative/instrument amount, total including
+  other income, or broader/narrower metric unless the final answer explicitly
+  states and justifies that limitation. When multiple candidate values appear,
+  make the LLM choose the line whose label and statement context best match the
+  requested phrase.
+- If SEC companyfacts exposes multiple same-period revenue candidates with
+  different concepts or labels, treat them as competing evidence, not as
+  interchangeable facts. Compare official statement captions such as "sales to
+  customers", "sales and other operating revenues", "total revenues and other
+  income", "total revenues", "net revenues", and generic "Revenues"; if the
+  caption needed by the question is missing from structured facts, use
+  retrieval.run to inspect the 10-K statement table before finalizing.
 - If retrieval is incomplete, replan semantically with materially different
   queries/source families. If facts are sufficient and calculator.compute is
   allowed, propose calculator.compute yourself. If calculator output plus

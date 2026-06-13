@@ -137,6 +137,20 @@ iteration also improved model-owned retrieval follow-up: LLM workbench
 allowing premature finalization. The FAB v2 HD/LOW DIO task remains a high
 stress case for multi-issuer COGS/inventory search and is not yet the promoted
 demo result.
+The post-demo finance ability pass on 2026-06-13 strengthens real line-item
+disambiguation rather than adding answer tables. Generic target bindings such
+as `revenue` are now refined when the user's question explicitly asks for a
+more specific metric phrase such as `net revenues`; the finance fact ledger
+preserves specific captions such as `net revenues`, `total revenues and other
+income`, and `sales and other operating revenues`; and the
+`finance-capability` prompt tells the LLM to treat same-period SEC companyfacts
+revenue concepts as competing evidence and inspect the 10-K statement table
+before finalizing when the caption is ambiguous. The focused regression suite
+passed with 298 tests. A minimal live FE_009 Goldman net-revenues rerun was
+attempted as
+`run_goldman_net_revenues_metric_binding_live_20260613`, but DeepSeek returned
+`HTTP 402: Insufficient Balance` before any model tokens or retrieval calls, so
+that run is recorded as provider/account blockage, not capability evidence.
 As of 2026-06-11, DCF/LBO are no longer only benchmark annotations: the finance
 domain pack has modeling-lite transform planning for DCF and LBO, operating
 cash flow / capex fact extraction, transparent assumption diagnostics, and

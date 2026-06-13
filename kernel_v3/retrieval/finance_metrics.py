@@ -61,6 +61,37 @@ def finance_metric_intent(query: str) -> FinanceMetricIntent:
             ),
         )
 
+    if "net revenues" in normalized or "net revenue" in normalized or _has_all(normalized, "net", "revenues"):
+        return FinanceMetricIntent(
+            metric_family="net_revenues",
+            preferred_phrases=(
+                "metric=net revenues",
+                "metric=net revenue",
+                "concept=revenuesnetofinterestexpense",
+                "label=net revenues",
+                "label=net revenue",
+                "total net revenues",
+                "net revenues",
+                "net revenue",
+            ),
+            required_phrases=("revenue",),
+            demoted_phrases=(
+                "derivative",
+                "derivatives",
+                "financial instruments",
+                "trading assets",
+                "fair value",
+                "unobservable inputs",
+                "brokerage commissions",
+                "interest income",
+                "interest expense",
+                "deferred revenue",
+                "cost of revenue",
+                "product sales",
+                "subscription",
+            ),
+        )
+
     if "sales and other operating revenues" in normalized:
         return FinanceMetricIntent(
             metric_family="sales_and_other_operating_revenues",
@@ -91,15 +122,26 @@ def finance_metric_intent(query: str) -> FinanceMetricIntent:
             preferred_phrases=(
                 "metric=total revenues and other income",
                 "concept=totalrevenuesandotherincome",
+                "label=total revenues and other income",
                 "total revenues and other income",
                 "metric=sales and other operating revenues",
                 "concept=salesandotheroperatingrevenue",
+                "label=sales and other operating revenues",
                 "sales and other operating revenues",
-                "metric=operating revenues",
-                "concept=operatingrevenues",
-                "total revenues",
                 "concept=revenuefromcontractwithcustomerexcludingassessedtax",
                 "revenue from contract with customer excluding assessed tax",
+                "metric=operating revenues",
+                "concept=operatingrevenues",
+                "label=operating revenues",
+                "metric=total revenues",
+                "metric=total revenue",
+                "label=total revenues",
+                "label=total revenue",
+                "total revenues",
+                "total revenue",
+                "metric=sales to customers",
+                "label=sales to customers",
+                "sales to customers",
                 "metric=revenue",
             ),
             required_phrases=("revenue",),
@@ -108,6 +150,7 @@ def finance_metric_intent(query: str) -> FinanceMetricIntent:
                 "net interest income",
                 "investment income",
                 "deferred revenue",
+                "revenue not from contract",
             ),
         )
 
