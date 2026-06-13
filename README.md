@@ -1873,10 +1873,21 @@ The 2026-06-13 capability-first live iteration is tracked in
 [`docs/KERNEL_V3_LIVE_ITERATION_2026-06-13.md`](docs/KERNEL_V3_LIVE_ITERATION_2026-06-13.md).
 That note records the current LLM-owned judgment pivot, compact LLM synthesis
 rescue, high-parallel FAB dev10 and FinanceBench doc-retrieval live results,
-and the remaining document/table grounding and numeric-selection gaps. The
-FinanceBench doc-retrieval live10 slice is still not solved, but it now exposes
-claim/slot/transform and synthesis-gate traces instead of failing as an opaque
-retrieval loop.
+and the remaining document/table grounding and numeric-selection gaps. It now
+also records the global FinAgent FE live10 dev/test split: both the dev
+high-score slice and the separate 10-item test/holdout slice scored `8/10`
+strict and `8/10` under the post-run reasonable/source-grounded judge, while
+preserving complete citation, ClaimLedger, SlotFrame, TransformPlan,
+numeric-verifier, and synthesis-gate traces. A broader live holdout stress run
+scored `9/20`, and two live failure-regression batches repaired five real
+previous failures: `FE_009` Goldman net revenues, `FE_031` Apple R&D,
+`FE_037` JPMorgan net interest income, `NR_005` Meta net income growth, and
+`NR_004` NVIDIA gross margin. The remaining known gaps are total-revenue
+line-item disambiguation, incorrect-premise synthesis closure, revenue
+denominator acquisition for some margin questions, and debt-to-equity final
+answer alignment. The FinanceBench doc-retrieval live10 slice is still not
+solved, but it now exposes claim/slot/transform and synthesis-gate traces
+instead of failing as an opaque retrieval loop.
 
 The next public27 work is now deliberately narrow. Generic source-grounded
 retrieval finalization writes a domain-neutral `ClaimLedger`, `SlotFrame`, and

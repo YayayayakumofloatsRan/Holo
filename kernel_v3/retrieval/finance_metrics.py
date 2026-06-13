@@ -98,6 +98,8 @@ def finance_metric_intent(query: str) -> FinanceMetricIntent:
                 "metric=operating revenues",
                 "concept=operatingrevenues",
                 "total revenues",
+                "concept=revenuefromcontractwithcustomerexcludingassessedtax",
+                "revenue from contract with customer excluding assessed tax",
                 "metric=revenue",
             ),
             required_phrases=("revenue",),
@@ -120,6 +122,86 @@ def finance_metric_intent(query: str) -> FinanceMetricIntent:
             ),
             required_phrases=("cash",),
             demoted_phrases=("investing activities", "financing activities"),
+        )
+
+    if "net interest income" in normalized:
+        return FinanceMetricIntent(
+            metric_family="net_interest_income",
+            preferred_phrases=(
+                "metric=net interest income",
+                "concept=netinterestincome",
+                "concept=interestincomeexpensenet",
+                "net interest income",
+            ),
+            required_phrases=("interest", "income"),
+            demoted_phrases=("interest expense", "interest income", "noninterest income", "revenue"),
+        )
+
+    if (
+        "research and development" in normalized
+        or "r&d" in normalized
+        or "rd spending" in normalized
+        or "research development" in normalized
+    ):
+        return FinanceMetricIntent(
+            metric_family="research_and_development",
+            preferred_phrases=(
+                "metric=research and development expense",
+                "concept=researchanddevelopmentexpense",
+                "research and development expense",
+                "research and development",
+                "r&d",
+            ),
+            required_phrases=("research", "development"),
+            demoted_phrases=("revenue", "cost of revenue", "sales", "net income"),
+        )
+
+    if "gross margin" in normalized or "gross profit" in normalized:
+        return FinanceMetricIntent(
+            metric_family="gross_margin",
+            preferred_phrases=(
+                "metric=gross profit",
+                "concept=grossprofit",
+                "gross profit",
+                "metric=cost of revenue",
+                "metric=cost of goods sold",
+                "metric=cost of sales",
+                "metric=revenue",
+            ),
+            required_phrases=("gross",),
+            demoted_phrases=("net income", "operating income"),
+        )
+
+    if "debt-to-equity" in normalized or "debt to equity" in normalized or "debt/equity" in normalized:
+        return FinanceMetricIntent(
+            metric_family="debt_to_equity",
+            preferred_phrases=(
+                "metric=liabilities",
+                "concept=liabilities",
+                "total liabilities",
+                "metric=shareholders equity",
+                "concept=stockholdersequity",
+                "shareholders equity",
+                "stockholders equity",
+                "metric=assets",
+                "concept=assets",
+                "metric=debt",
+            ),
+            required_phrases=("equity",),
+            demoted_phrases=("revenue", "net income", "gross profit"),
+        )
+
+    if "operating margin" in normalized:
+        return FinanceMetricIntent(
+            metric_family="operating_margin",
+            preferred_phrases=(
+                "metric=operating income",
+                "concept=operatingincomeloss",
+                "operating income",
+                "metric=revenue",
+            ),
+            required_phrases=("operating",),
+            demoted_phrases=("net income", "gross profit"),
         )
 
     if "dio" in normalized or "days inventory" in normalized or _has_all(normalized, "inventory", "cost"):

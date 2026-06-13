@@ -1720,13 +1720,13 @@ def _dedupe_sources(sources: list[SearchSource]) -> list[SearchSource]:
 
 
 DIRECT_URL_METADATA_KEYS = (
+    "source_url",
+    "url",
     "preferred_source_urls",
     "required_source_urls",
     "target_document_source_urls",
     "source_urls",
-    "source_url",
     "urls",
-    "url",
 )
 
 
@@ -1734,11 +1734,17 @@ def _explicit_direct_url_sources(goal: SearchGoal, *, existing_sources: list[Sea
     urls = _ordered_unique([*_explicit_direct_url_values(goal.metadata), *_urls_from_text(goal.query)])
     if not urls:
         return []
-    existing_uris = {source.uri for source in existing_sources}
+    existing_direct_uris = {
+        source.uri
+        for source in existing_sources
+        if bool(source.metadata.get("explicit_acquisition_target"))
+        or bool(source.metadata.get("explicit_source_url"))
+        or str(source.metadata.get("source_kind") or "").strip().lower() == "direct_url"
+    }
     result: list[SearchSource] = []
     binding = _dict_or_empty(goal.metadata.get("target_document_binding"))
     for index, url in enumerate(urls, start=1):
-        if url in existing_uris:
+        if url in existing_direct_uris:
             continue
         parsed = urllib.parse.urlparse(url)
         host = (parsed.hostname or "").lower()
@@ -1771,24 +1777,24 @@ def _explicit_direct_url_sources(goal: SearchGoal, *, existing_sources: list[Sea
                 metadata=metadata,
             )
         )
-        existing_uris.add(url)
+        existing_direct_uris.add(url)
     return result
 
 
 def _explicit_direct_url_values(metadata: JsonObject) -> list[str]:
     values: list[str] = []
-    for key in DIRECT_URL_METADATA_KEYS:
-        value = metadata.get(key)
-        if isinstance(value, str) and _is_http_url(value):
-            values.append(value)
-        elif isinstance(value, list):
-            values.extend(str(item).strip() for item in value if _is_http_url(item))
     binding = metadata.get("target_document_binding")
     if isinstance(binding, dict):
         for key in ("doc_link", "source_url", "url"):
             value = binding.get(key)
             if isinstance(value, str) and _is_http_url(value):
                 values.append(value)
+    for key in DIRECT_URL_METADATA_KEYS:
+        value = metadata.get(key)
+        if isinstance(value, str) and _is_http_url(value):
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(str(item).strip() for item in value if _is_http_url(item))
     source_refs = metadata.get("source_refs")
     if isinstance(source_refs, list):
         for item in source_refs:

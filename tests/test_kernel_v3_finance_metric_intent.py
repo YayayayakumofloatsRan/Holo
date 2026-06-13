@@ -25,6 +25,14 @@ def test_finance_metric_intent_prefers_energy_specific_total_revenue_concepts() 
         "fy=2024 period=annual metric=revenue concept=Revenues value=202792000000",
         query=chevron_query,
     )
+    assert finance_metric_intent_score(
+        "fy=2024 period=annual metric=revenue "
+        "concept=RevenueFromContractWithCustomerExcludingAssessedTax value=193414000000",
+        query=chevron_query,
+    ) > finance_metric_intent_score(
+        "fy=2024 period=annual metric=revenue concept=Revenues value=202792000000",
+        query=chevron_query,
+    )
 
     conoco_query = "What was ConocoPhillips' total revenues for fiscal year 2024?"
     assert finance_metric_intent_score(
@@ -46,6 +54,25 @@ def test_finance_metric_intent_prefers_net_sales_for_costco_query() -> None:
     ) > finance_metric_intent_score(
         "fy=2024 period=annual metric=revenue from contract "
         "concept=RevenueFromContractWithCustomerExcludingAssessedTax value=254453000000",
+        query=query,
+    )
+
+
+def test_finance_metric_intent_prefers_liabilities_and_equity_for_debt_to_equity() -> None:
+    query = "What was JPMorgan Chase's debt-to-equity ratio as of year-end 2024?"
+
+    assert finance_metric_intent_score(
+        "fy=2024 period=annual metric=liabilities concept=Liabilities value=3658056000000",
+        query=query,
+    ) > finance_metric_intent_score(
+        "fy=2024 period=annual metric=revenue concept=Revenues value=177556000000",
+        query=query,
+    )
+    assert finance_metric_intent_score(
+        "fy=2024 period=annual metric=shareholders equity concept=StockholdersEquity value=344758000000",
+        query=query,
+    ) > finance_metric_intent_score(
+        "fy=2024 period=annual metric=net income concept=NetIncomeLoss value=58500000000",
         query=query,
     )
 

@@ -164,6 +164,8 @@ SEC_COMPANYFACTS_CONCEPTS = (
     ("IncomeTaxExpenseBenefit", "income tax expense"),
     ("OperatingIncomeLoss", "operating income"),
     ("GrossProfit", "gross profit"),
+    ("ResearchAndDevelopmentExpense", "research and development expense"),
+    ("ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost", "research and development expense"),
     ("Depreciation", "depreciation and amortization"),
     ("DepreciationDepletionAndAmortization", "depreciation and amortization"),
     ("DepreciationDepletionAndAmortizationPropertyPlantAndEquipment", "depreciation and amortization"),
@@ -680,6 +682,7 @@ def _target_structured_companyfacts_candidates(
         for marker in (metric, str(year), "companyfacts", "sec_xbrl_companyfacts"):
             if marker and marker not in matched:
                 matched.append(marker)
+        intent_score = finance_metric_intent_score(stripped, query=intent_text)
         candidate = {
             "start_offset": offset,
             "end_offset": offset + len(line),
@@ -692,6 +695,7 @@ def _target_structured_companyfacts_candidates(
         }
         priority = (
             metric_order.get(metric, 999),
+            -intent_score,
             0 if exact_accession else 1,
             0 if exact_form else 1,
             offset,
@@ -1798,7 +1802,8 @@ def _companyfacts_target_binding_lines(
     except ValueError:
         target_doc_period = None
     target_accession = _target_binding_accession(binding)
-    candidates: list[tuple[tuple[int, int, int, str], str]] = []
+    metric_order = {metric: index for index, metric in enumerate(target_metrics)}
+    candidates: list[tuple[tuple[int, int, int, int, float, str], str]] = []
     seen: set[tuple[str, str, str, str]] = set()
     for taxonomy_name in ("us-gaap", "ifrs-full"):
         taxonomy = facts.get(taxonomy_name)
@@ -1842,12 +1847,6 @@ def _companyfacts_target_binding_lines(
                     exact_accession = bool(target_accession and record_accession == target_accession)
                     target_form = str(binding.get("doc_type") or "").upper().replace(" ", "").replace("-", "")
                     record_form = str(record.get("form") or "").upper().replace(" ", "").replace("-", "")
-                    priority = (
-                        0 if exact_accession else 1,
-                        0 if exact_target_fy else 1,
-                        0 if target_form and target_form == record_form else 1,
-                        str(record.get("filed") or ""),
-                    )
                     line = _companyfacts_record_line(
                         entity_name=entity_name,
                         cik=cik,
@@ -1857,6 +1856,14 @@ def _companyfacts_target_binding_lines(
                         label=label,
                         unit=_structured_value(unit),
                         record=record,
+                    )
+                    priority = (
+                        metric_order.get(metric, 999),
+                        0 if exact_accession else 1,
+                        0 if exact_target_fy else 1,
+                        0 if target_form and target_form == record_form else 1,
+                        -finance_metric_intent_score(line, query=intent_text),
+                        str(record.get("filed") or ""),
                     )
                     candidates.append((priority, line))
     return [line for _priority, line in sorted(candidates, key=lambda item: item[0])[:24]]
@@ -1983,8 +1990,17 @@ def _companyfacts_dynamic_metric(*, concept: str, label: str) -> str | None:
         return "cloud and AI infrastructure investment"
     if "artificial intelligence" in lower and ("investment" in lower or "infrastructure" in lower):
         return "cloud and AI infrastructure investment"
+    if "revenue" in lower and any(marker in lower for marker in ("contract liability", "deferred revenue", "remaining performance obligation")):
+        return None
     if "capitalexpenditure" in compact or ("capital" in lower and "expenditure" in lower):
         return "capital expenditures"
+    if (
+        "researchanddevelopmentexpense" in compact
+        or "research and development expense" in lower
+        or "research and development" in lower
+        or "r&d" in lower
+    ):
+        return "research and development expense"
     if (
         "propertyplantandequipmentnet" in compact
         or "property plant and equipment, net" in lower
@@ -2060,7 +2076,9 @@ def _companyfacts_dynamic_priority(*, concept: str, label: str, metric: str) -> 
         "cost of revenue",
         "cost of goods sold",
         "capital expenditures",
+        "gross profit",
         "property plant and equipment net",
+        "research and development expense",
     }:
         priority += 40
     if "abstract" in text or "policy" in text or "schedule" in text:
@@ -2196,6 +2214,18 @@ def _companyfacts_query_priority_metrics(query: str) -> tuple[str, ...]:
         if metric not in priorities:
             priorities.append(metric)
 
+    if "capital intensive" in normalized or "capital-intensive" in normalized or "capital intensity" in normalized:
+        add("revenue")
+        add("operating cash flow")
+        add("capital expenditures")
+        add("property plant and equipment net")
+        add("assets")
+        add("net income")
+    if "debt-to-equity" in normalized or "debt to equity" in normalized or "debt/equity" in normalized:
+        add("liabilities")
+        add("shareholders equity")
+        add("assets")
+        add("debt")
     if any(
         alias in normalized
         for alias in (
@@ -2223,9 +2253,42 @@ def _companyfacts_query_priority_metrics(query: str) -> tuple[str, ...]:
         add("capital expenditures")
     if any(alias in normalized for alias in ("operating cash flow", "cash flow from operating", "operating activities")):
         add("operating cash flow")
+    if "net interest income" in normalized:
+        add("net interest income")
+    if (
+        "research and development" in normalized
+        or "r&d" in normalized
+        or "rd spending" in normalized
+        or "research development" in normalized
+    ):
+        add("research and development expense")
+    if "gross margin" in normalized or "gross profit" in normalized:
+        add("gross profit")
+        add("cost of revenue")
+        add("cost of goods sold")
+        add("cost of sales")
+        add("revenue")
+    if "operating margin" in normalized:
+        add("operating income")
+        add("revenue")
     if any(alias in normalized for alias in ("total assets", "assets")):
         add("assets")
+    if "sales and other operating revenues" in normalized:
+        add("sales and other operating revenues")
+    if "total revenues and other income" in normalized:
+        add("total revenues and other income")
+    if "operating revenues" in normalized or "operating revenue" in normalized:
+        add("operating revenues")
+    if any(alias in normalized for alias in ("net revenues", "net revenue")):
+        add("net revenues")
+    if any(alias in normalized for alias in ("total revenues", "total revenue")):
+        add("sales and other operating revenues")
+        add("total revenues and other income")
+        add("operating revenues")
+        add("revenue")
     if any(alias in normalized for alias in ("revenue", "revenues", "sales", "net sales")):
+        if "net sales" in normalized:
+            add("net sales")
         add("revenue")
         add("net sales")
     if any(alias in normalized for alias in ("net income", "net earnings", "profit")):

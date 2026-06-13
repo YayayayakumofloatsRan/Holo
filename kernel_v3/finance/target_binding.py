@@ -161,12 +161,16 @@ def primary_source_numeric_binding_score(
     elif binding.get("doc_period"):
         score -= 25
         reasons.append("target_period_missing_or_mismatch")
+    line_item = _string(binding.get("required_line_item"))
     if _metric_matches(fact, binding=binding, question=question):
         score += 35
         reasons.append("target_line_item_match")
-    elif not _string(binding.get("required_line_item")) and "data.sec.gov/api/xbrl/companyfacts" in source_uri.lower():
+    elif not line_item and "data.sec.gov/api/xbrl/companyfacts" in source_uri.lower():
         score += 20
         reasons.append("target_period_structured_companion")
+    elif line_item:
+        score -= 40
+        reasons.append("target_line_item_mismatch")
     if _statement_matches(fact, binding=binding):
         score += 15
         reasons.append("target_statement_match")
@@ -215,12 +219,52 @@ def _period_matches(fact: FinanceFact, binding: JsonObject) -> bool:
 
 def _metric_matches(fact: FinanceFact, *, binding: JsonObject, question: str) -> bool:
     metric = _string(fact.metric).lower()
+    concept = _normalize(fact.metadata.get("concept"))
+    label = _normalize(fact.metadata.get("label"))
+    metric_text = " ".join(part for part in (metric, concept, label) if part)
     line_item = _string(binding.get("required_line_item")).lower()
     text = f"{question} {line_item}"
     if line_item in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}:
         return metric in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}
     if line_item == "capital expenditures":
         return metric == "capital expenditures"
+    if line_item == "net revenues":
+        return metric == "net revenues" or "revenuesnetofinterestexpense" in concept or "net revenues" in metric_text
+    if line_item == "net sales":
+        return metric == "net sales" or "salesrevenuenet" in concept or "net sales" in metric_text
+    if line_item == "sales and other operating revenues":
+        return (
+            metric == "sales and other operating revenues"
+            or "salesandotheroperatingrevenue" in concept
+            or "sales and other operating revenues" in metric_text
+        )
+    if line_item == "total revenues and other income":
+        return (
+            metric == "total revenues and other income"
+            or "totalrevenuesandotherincome" in concept
+            or "total revenues and other income" in metric_text
+        )
+    if line_item == "operating revenues":
+        return metric == "operating revenues" or "operatingrevenues" in concept or "operating revenues" in metric_text
+    if line_item == "total revenues":
+        return metric in {
+            "revenue",
+            "revenues",
+            "net sales",
+            "net revenues",
+            "sales and other operating revenues",
+            "total revenues and other income",
+            "operating revenues",
+        } or any(
+            marker in concept
+            for marker in (
+                "revenues",
+                "revenuefromcontractwithcustomer",
+                "salesandotheroperatingrevenue",
+                "totalrevenuesandotherincome",
+                "operatingrevenues",
+            )
+        )
     if line_item == "revenue":
         return metric in {"revenue", "revenues", "net sales", "net revenues"}
     if line_item == "net income":
@@ -285,7 +329,19 @@ def _required_line_item(text: str) -> str | None:
         return "property plant and equipment net"
     if any(marker in normalized for marker in ("net income", "net earnings")):
         return "net income"
-    if any(marker in normalized for marker in ("revenue", "revenues", "net sales")):
+    if "sales and other operating revenues" in normalized:
+        return "sales and other operating revenues"
+    if "total revenues and other income" in normalized:
+        return "total revenues and other income"
+    if any(marker in normalized for marker in ("net revenues", "net revenue")):
+        return "net revenues"
+    if "net sales" in normalized:
+        return "net sales"
+    if "operating revenues" in normalized or "operating revenue" in normalized:
+        return "operating revenues"
+    if "total revenues" in normalized or "total revenue" in normalized:
+        return "total revenues"
+    if any(marker in normalized for marker in ("revenue", "revenues")):
         return "revenue"
     return None
 

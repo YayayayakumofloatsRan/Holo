@@ -39,6 +39,8 @@ def finance_facts_to_claims(facts: list[FinanceFact]) -> list[Claim]:
                     "ticker": fact.ticker,
                     "fiscal_year": fact.fiscal_year,
                     "scale": fact.scale,
+                    "concept": fact.metadata.get("concept"),
+                    "label": fact.metadata.get("label"),
                     "source_title": fact.metadata.get("source_title"),
                     "source_uri": fact.metadata.get("source_uri"),
                     "supported_metric": fact.metadata.get("supported_metric"),

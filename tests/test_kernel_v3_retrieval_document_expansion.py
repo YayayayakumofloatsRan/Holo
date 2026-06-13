@@ -230,6 +230,88 @@ def test_target_document_binding_doc_link_is_fetched_before_search_noise():
     assert fetch_uris[:1] == [direct_url]
 
 
+def test_explicit_source_url_promotes_existing_search_candidate_to_front():
+    query = "3M FY2018 capital expenditure cash flow statement"
+    direct_url = "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
+    derived_sec_text = "https://www.sec.gov/Archives/edgar/data/1558370/000155837019000470/0001558370-19-000470.txt"
+    same_uri_search_candidate = SearchSource(
+        source_id="sec-structured-derived-text",
+        uri=derived_sec_text,
+        title="SEC complete submission text",
+        snippet="A derived source URL from search.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "regulatory_filing",
+            "authority_level": "primary",
+            "source_kind": "sec_complete_submission_text",
+        },
+    )
+    pdf_search_candidate = SearchSource(
+        source_id="search-returned-target-pdf",
+        uri=direct_url,
+        title="3M 2018 10-K PDF",
+        snippet="The same URI was already returned by search, but not as an explicit target.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "regulatory_filing",
+            "authority_level": "primary",
+            "source_kind": "sec_edgar_search_result",
+        },
+    )
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider({query: [same_uri_search_candidate, pdf_search_candidate]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                direct_url: "3M 2018 10-K cash flow statement. Purchases of property, plant and equipment were (1,577).",
+                derived_sec_text: "SEC shell text without the target table row.",
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-promote-explicit-source-url",
+            query=query,
+            max_sources=2,
+            max_fetches=1,
+            max_spans_per_document=2,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "source_authority_requirement": "primary",
+                "source_url": direct_url,
+                "source_urls": [derived_sec_text, direct_url],
+                "target_document_binding": {
+                    "company": "3M",
+                    "doc_name": "3M_2018_10K",
+                    "doc_type": "10k",
+                    "doc_period": "2018",
+                    "doc_link": direct_url,
+                    "required_statement": "cash_flow_statement",
+                    "required_line_item": "capital expenditures",
+                    "primary_source_required": True,
+                },
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-promote-explicit-source-url",
+        run_id="run-1",
+    )
+
+    direct_target_records = list(
+        journal.records(task_id="task-promote-explicit-source-url", kind="retrieval_direct_url_targets")
+    )
+    assert direct_target_records
+    assert direct_target_records[0].data["sources"][0]["uri"] == direct_url
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-promote-explicit-source-url", kind="retrieval_fetch_attempt")
+    ]
+    assert fetch_uris[:1] == [direct_url]
+
+
 def test_compiled_task_objective_source_url_is_fetched_before_search_noise():
     query = "Retrieve target filing evidence"
     direct_url = "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"

@@ -43,7 +43,7 @@ def plan_finance_formula(
     if formula == "cagr":
         return _plan_cagr(usable)
     if formula == "margin":
-        return _plan_margin(usable)
+        return _plan_margin(question=question, facts=usable)
     if formula == "bps_difference":
         return _plan_bps_difference(usable)
     if formula == "ev_revenue":
@@ -53,7 +53,9 @@ def plan_finance_formula(
     if formula == "dio":
         return _plan_dio(question=question, facts=usable)
     if formula == "yoy_growth":
-        return _plan_yoy_growth(usable)
+        return _plan_yoy_growth(question=question, facts=usable)
+    if formula == "debt_to_equity":
+        return _plan_debt_to_equity(question=question, facts=usable)
     if formula == "bridge_subtotal":
         return _plan_bridge_subtotal(usable)
     if formula == "dcf":
@@ -86,6 +88,8 @@ def _detect_formula(question: str) -> str | None:
         return "ev_revenue"
     if "ev/ebitda" in compact or "enterprise value to ebitda" in text:
         return "ev_ebitda"
+    if "debt-to-equity" in text or "debt to equity" in text or "debt/equity" in compact:
+        return "debt_to_equity"
     if "basis point" in text or "bps" in text:
         return "bps_difference"
     if "bridge" in text or "add-back" in text or "add back" in text or "addback" in text:
@@ -96,7 +100,7 @@ def _detect_formula(question: str) -> str | None:
         return None
     if "margin" in text or "利润率" in text:
         return "margin"
-    if "growth rate" in text or "增长率" in text:
+    if "growth rate" in text or "增长率" in text or ("growth" in text and len(re.findall(r"\b(?:19|20)\d{2}\b", text)) >= 2):
         return "yoy_growth"
     return None
 
@@ -165,8 +169,20 @@ def _plan_cagr(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     )
 
 
-def _plan_yoy_growth(facts: list[FinanceFact]) -> FinanceFormulaPlan:
-    pair = _first_metric_pair(facts, ("revenue", "net sales", "net income", "operating income", "ebitda"))
+def _plan_yoy_growth(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    normalized = " ".join(str(question or "").lower().split())
+    markers = ("revenue", "net sales", "net income", "operating income", "ebitda")
+    if "net income" in normalized or "net earnings" in normalized:
+        markers = ("net income",)
+    elif "operating income" in normalized:
+        markers = ("operating income",)
+    elif "ebitda" in normalized:
+        markers = ("ebitda",)
+    elif "net sales" in normalized:
+        markers = ("net sales",)
+    elif "revenue" in normalized or "revenues" in normalized:
+        markers = ("revenue", "net sales", "net revenues")
+    pair = _first_metric_pair(facts, markers)
     if pair is None:
         return _missing("yoy_growth", ["prior_period_value", "current_period_value"])
     prior, current = pair
@@ -179,21 +195,85 @@ def _plan_yoy_growth(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     )
 
 
-def _plan_margin(facts: list[FinanceFact]) -> FinanceFormulaPlan:
-    numerator = _latest_fact(facts, ("net income", "operating income", "adjusted ebitda", "ebitda"))
-    denominator = _latest_fact(facts, ("revenue", "net sales", "net revenues", "total revenues", "sales"))
+def _plan_margin(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    normalized = " ".join(str(question or "").lower().split())
+    target_year = _target_fiscal_year(question)
+    denominator = _latest_revenue_fact(facts, target_year=target_year)
+    numerator: FinanceFact | None
+    extra_facts: list[FinanceFact] = []
+    expression = "numerator / denominator"
+    variables: JsonObject
+    if "gross margin" in normalized or "gross profit margin" in normalized:
+        numerator = _latest_fact_for_year(facts, ("gross profit",), target_year=target_year)
+        if numerator is None:
+            cost = _latest_fact_for_year(
+                facts,
+                ("cost of revenue", "cost of sales", "cost of goods sold", "cogs"),
+                target_year=target_year,
+            )
+            if denominator is not None and cost is not None:
+                expression = "(denominator - cost_of_revenue) / denominator"
+                variables = {"denominator": denominator.value, "cost_of_revenue": cost.value}
+                return _ready(
+                    "margin",
+                    expression,
+                    variables,
+                    unit="percent",
+                    facts=[denominator, cost],
+                )
+        missing_numerator = "gross_profit_numerator"
+    elif "operating margin" in normalized:
+        numerator = _latest_fact_for_year(facts, ("operating income",), target_year=target_year)
+        missing_numerator = "operating_income_numerator"
+    elif "net profit margin" in normalized or "net margin" in normalized or "profit margin" in normalized:
+        numerator = _latest_fact_for_year(facts, ("net income",), target_year=target_year)
+        missing_numerator = "net_income_numerator"
+    else:
+        numerator = _latest_fact_for_year(
+            facts,
+            ("net income", "operating income", "adjusted ebitda", "ebitda"),
+            target_year=target_year,
+        )
+        missing_numerator = "margin_numerator"
     missing = []
     if numerator is None:
-        missing.append("margin_numerator")
+        missing.append(missing_numerator)
     if denominator is None:
         missing.append("revenue_denominator")
     if missing:
-        return _missing("margin", missing, facts=[item for item in (numerator, denominator) if item is not None])
+        return _missing("margin", missing, facts=[item for item in (numerator, denominator, *extra_facts) if item is not None])
+    variables = {"numerator": numerator.value, "denominator": denominator.value}
     return _ready(
         "margin",
-        "numerator / denominator",
-        {"numerator": numerator.value, "denominator": denominator.value},
+        expression,
+        variables,
         unit="percent",
+        facts=[numerator, denominator],
+    )
+
+
+def _plan_debt_to_equity(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    numerator = _latest_fact_for_year(facts, ("liabilities",), target_year=target_year)
+    if numerator is None:
+        numerator = _latest_fact_for_year(facts, ("debt", "long-term debt", "short-term debt"), target_year=target_year)
+    denominator = _latest_fact_for_year(
+        facts,
+        ("shareholders equity", "stockholders equity", "equity"),
+        target_year=target_year,
+    )
+    missing = []
+    if numerator is None:
+        missing.append("liabilities_or_debt")
+    if denominator is None:
+        missing.append("shareholders_equity")
+    if missing:
+        return _missing("debt_to_equity", missing, facts=[item for item in (numerator, denominator) if item is not None])
+    return _ready(
+        "debt_to_equity",
+        "liabilities_or_debt / shareholders_equity",
+        {"liabilities_or_debt": numerator.value, "shareholders_equity": denominator.value},
+        unit="ratio",
         facts=[numerator, denominator],
     )
 
@@ -1731,6 +1811,14 @@ def _is_revenue_fact(fact: FinanceFact) -> bool:
         _metric_text(str(fact.metadata.get("concept") or "")),
     ]
     blocked = ("cost of revenue", "costofrevenue", "expense", "interest income")
+    blocked += (
+        "contract liability",
+        "contractwithcustomerliability",
+        "deferred revenue",
+        "remaining performance obligation",
+        "performance obligation",
+        "revenuerecognized",
+    )
     if any(any(marker in text for marker in blocked) for text in texts):
         return False
     exact = {

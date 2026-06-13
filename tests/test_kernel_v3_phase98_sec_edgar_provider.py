@@ -384,6 +384,43 @@ def test_sec_companyfacts_extracts_sector_specific_revenue_concepts():
     assert "value=24753000000" in text
 
 
+def test_sec_companyfacts_prioritizes_revenue_contract_line_over_generic_total_revenues():
+    goal = SearchGoal(
+        goal_id="goal-sec-chevron-total-revenues",
+        query="What was Chevron's total revenues for fiscal year 2024?",
+        max_spans_per_document=2,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+            "target_document_binding": {
+                "company": "Chevron",
+                "doc_period": "2024",
+                "doc_type": "10-K",
+                "required_line_item": "total revenues",
+            },
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-chevron-companyfacts",
+        goal_id=goal.goal_id,
+        source_id="source-sec-chevron-companyfacts",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000093410.json",
+        title="SEC companyfacts JSON for CIK 0000093410",
+        artifact_id="artifact-sec-chevron-companyfacts",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_chevron_companyfacts_json())
+
+    assert spans
+    assert "concept=RevenueFromContractWithCustomerExcludingAssessedTax" in spans[0].text
+    assert "value=193414000000" in spans[0].text
+    assert "concept=Revenues" not in spans[0].text
+
+
 def test_phase98_sec_companyfacts_compaction_selects_requested_income_metrics_over_newer_balance_sheet_noise():
     source = SearchSource(
         source_id="src-sec-companyfacts-aapl",
@@ -1298,6 +1335,22 @@ def _sector_revenue_companyfacts_json() -> str:
         "]}},"
         '"OperatingRevenues":{"label":"Operating revenues","units":{"USD":['
         '{"val":24753000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-15","end":"2024-12-31","accn":"0000753308-25-000010"}'
+        "]}}"
+        "}}}"
+    )
+
+
+def _chevron_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"Chevron Corp",'
+        '"cik":93410,'
+        '"facts":{"us-gaap":{'
+        '"Revenues":{"label":"Revenues","units":{"USD":['
+        '{"val":202792000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-21","end":"2024-12-31","accn":"0000093410-25-000009"}'
+        "]}},"
+        '"RevenueFromContractWithCustomerExcludingAssessedTax":{"label":"Revenue from Contract with Customer, Excluding Assessed Tax","units":{"USD":['
+        '{"val":193414000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-21","end":"2024-12-31","accn":"0000093410-25-000009"}'
         "]}}"
         "}}}"
     )

@@ -665,6 +665,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             "host_situation": _compact_prompt_value(host_situation),
             "finance_synthesis_directive": diagnostics.get("finance_synthesis_directive"),
             "finance_numeric_claim_policy": _json_object(diagnostics.get("finance_numeric_claim_policy")),
+            "finance_metric_disambiguation": _json_object(diagnostics.get("finance_metric_disambiguation")),
             "finance_formula_traces": _compact_list_for_provider(finance_formula_traces, limit=16),
             "finance_fact_ledger": _compact_list_for_provider(finance_fact_ledger, limit=96),
             "finance_fact_ledger_count": diagnostics.get("finance_fact_ledger_count"),

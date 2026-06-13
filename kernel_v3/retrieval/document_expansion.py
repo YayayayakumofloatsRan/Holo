@@ -20,6 +20,7 @@ from kernel_v3.retrieval.contracts import (
 
 DOCUMENT_LINK_EXPANSION_PROVIDER_ID = "document_link_expansion"
 DOCUMENT_EXPANSION_SOURCE_KINDS = {
+    "direct_url",
     "issuer_investor_relations",
     "issuer_annual_reports",
     "issuer_earnings_releases",
@@ -31,6 +32,7 @@ DOCUMENT_EXPANSION_SOURCE_KINDS = {
     "crawl_sitemap",
 }
 DOCUMENT_EXPANSION_SOURCE_FAMILIES = {
+    "company_filing",
     "company_ir",
     "regulatory_filing",
     "exchange_filing",

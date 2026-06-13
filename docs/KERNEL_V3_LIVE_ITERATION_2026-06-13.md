@@ -40,6 +40,135 @@ gate, synthesis gate, and final answer.
 
 ## Live Results Captured
 
+### Global FinAgent FE live10 dev/test split
+
+Runs:
+
+- Dev/high-score slice: `run_global_finagent_limit10_live_20260613`
+- Test/holdout slice: `run_global_finagent_test10_live_20260613`
+
+Both runs used live DeepSeek generation plus live web/source retrieval. The
+gold/reference records were used only by the scorer after each item completed;
+they were not injected into the agent loop.
+
+Dev/high-score slice summary:
+
+- Strict programmatic score: `8/10`
+- Post-run reasonable/source-grounded LLM judge: `8/10`
+- `citation_present_rate=1.0`
+- `citation_preservation_rate=1.0`
+- `claim_ledger_present_rate=1.0`
+- `slot_frame_present_rate=1.0`
+- `transform_plan_present_rate=1.0`
+- `numeric_verifier_pass_rate=1.0`
+- `synthesis_gate_pass_rate=1.0`
+- `unsupported_numeric_claim_rate=0.0`
+- `average_answer_numeric_support_rate=1.0`
+
+Test/holdout slice summary:
+
+- Strict programmatic score: `8/10`
+- Post-run reasonable/source-grounded LLM judge: `8/10`
+- `citation_present_rate=1.0`
+- `citation_preservation_rate=1.0`
+- `claim_ledger_present_rate=1.0`
+- `slot_frame_present_rate=1.0`
+- `transform_plan_present_rate=1.0`
+- `numeric_verifier_pass_rate=1.0`
+- `synthesis_gate_pass_rate=1.0`
+- `unsupported_numeric_claim_rate=0.0`
+- `average_answer_numeric_support_rate=1.0`
+
+The dev/high-score failures are honest capability gaps rather than scoring
+noise:
+
+- `FE_006` Salesforce: the agent refused to answer because it did not close the
+  revenue evidence path; the expected answer is about `$34.8B`.
+- `FE_009` Goldman Sachs: the agent selected a nearby derivative-sales metric
+  instead of net revenues; the expected answer is about `$53.512B`.
+
+The test/holdout failures are also useful diagnostics:
+
+- `FE_015` Pfizer: the agent failed to surface the 2024 revenue value, about
+  `$63.6B`, and returned a limitation answer.
+- `FE_020` Chevron: the agent answered total revenues including broader line
+  items, while the benchmark expects sales and other operating revenues, about
+  `$193.4B`.
+
+This gives the current reportable Kernel v3 headline: the general finance
+agent path can reproduce the historical live10 best score (`8/10`) and also
+hold `8/10` on a separate 10-item slice while preserving the full workflow
+spine. The remaining work is not to add rules or answer tables; it is to make
+the LLM/tool loop better at metric disambiguation and missing-source recovery.
+
+### Extended holdout and failure-regression live testing
+
+Additional live batches were run after the dev/test headline to expose broader
+weaknesses and verify that fixes close real failures. These are debug and
+regression slices, not promoted headline test sets. The benchmark reference
+answers and gold annotations were still scoring-only material and were not
+available to the agent loop.
+
+Global holdout stress:
+
+- Run: `run_global_finagent_holdout20_live_20260613`
+- Dataset slice: `finagent_test_0_40.jsonl`, offset `20`, limit `20`
+- Strict score: `9/20`
+- Numeric accuracy: `0.4737`
+- `citation_present_rate=1.0`
+- `citation_preservation_rate=1.0`
+- `claim_ledger_present_rate=1.0`
+- `slot_frame_present_rate=1.0`
+- `transform_plan_present_rate=1.0`
+- `numeric_verifier_pass_rate=1.0`
+- `synthesis_gate_pass_rate=1.0`
+- `unsupported_numeric_claim_rate=0.0`
+- `average_answer_numeric_support_rate=1.0`
+
+Failure-regression batch:
+
+- Run: `run_failure_regression_metric_nr_live_20260613`
+- Scope: 11 real failures selected from FE and numerical-reasoning rows
+- Strict score: `4/11`
+- Closed failures: `FE_009` Goldman net revenues, `FE_031` Apple R&D,
+  `FE_037` JPMorgan net interest income, and `NR_005` Meta net income growth
+- Full trace spine remained present:
+  `citation_present_rate=1.0`, `claim_ledger_present_rate=1.0`,
+  `slot_frame_present_rate=1.0`, `transform_plan_present_rate=1.0`,
+  `numeric_verifier_pass_rate=1.0`, `unsupported_numeric_claim_rate=0.0`
+
+Second failure-regression batch:
+
+- Run: `run_failure_regression_round2_live_20260613`
+- Scope: the 7 remaining hard failures from the first regression batch
+- Strict score: `1/7`
+- Closed failure: `NR_004` NVIDIA gross margin
+- Full trace spine again remained present:
+  `citation_present_rate=1.0`, `claim_ledger_present_rate=1.0`,
+  `slot_frame_present_rate=1.0`, `transform_plan_present_rate=1.0`,
+  `numeric_verifier_pass_rate=1.0`, `unsupported_numeric_claim_rate=0.0`
+
+The repaired rows demonstrate that the current work improved real capability
+rather than tuning a fixed answer table. The host now exposes finance concepts,
+labels, source provenance, target-binding reasons, fact-ledger context, and
+formula traces to the LLM so the model can choose the requested metric and
+answer shape. The host still validates citations, numeric support, units, and
+trace contracts.
+
+Remaining hard gaps after these batches:
+
+1. `FE_020` and `FE_021`: total-revenue questions still need better line-item
+   disambiguation across `sales and other operating revenues`, total revenues,
+   total revenues plus other income, and generic SEC `Revenues`.
+2. `FE_028`: adversarial or incorrect-premise questions need stronger LLM
+   synthesis closure so the final answer says the premise is wrong instead of
+   selecting a nearby line item.
+3. `NR_001` and `NR_003`: net/operating margin questions still need more
+   reliable acquisition of the correct revenue denominator.
+4. `NR_007`: debt-to-equity now has formula intent support, but the live answer
+   path still needs better alignment between liabilities/equity facts,
+   calculator output, and final text.
+
 ### FAB v2 dev10, finance-capability, parallel=10
 
 Run:
@@ -154,4 +283,3 @@ The strongest demo is not a single final answer. It is the internal flow:
 question -> LLM task compiler -> toolchain/retrieval -> ClaimLedger -> SlotFrame
 -> TransformPlan -> calculator trace -> LLM numeric judge -> verifier gate ->
 synthesis gate -> final answer or diagnosed failure.
-

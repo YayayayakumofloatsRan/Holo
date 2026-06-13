@@ -957,6 +957,12 @@ class AgentRuntime:
                 evidence=evidence,
                 citations=citations,
             )
+            report = _report_with_finance_fact_context(
+                report,
+                recipe=recipe,
+                evidence=evidence,
+                citations=citations,
+            )
             report = _report_with_finance_formula_traces(self.journal, report, task_id=task_id, run_id=run_id)
         elif evidence:
             self._append_source_grounded_workflow_trace(
@@ -9742,7 +9748,42 @@ def _benchmark_doc_retrieval_primary_citation_satisfies_required_source(
             return True
         if any(_same_url_or_prefix(uri, allowed_url) for allowed_url in allowed_urls):
             return True
+        if (
+            source_url.lower().split("?", 1)[0].endswith(".pdf")
+            and _url_host(uri) in {"data.sec.gov", "sec.gov", "www.sec.gov"}
+            and _companyfacts_citation_matches_target_line_item(
+                citation,
+                metadata=metadata,
+                recipe=recipe,
+                question=str(payload.get("query") or ""),
+            )
+        ):
+            return True
     return False
+
+
+def _companyfacts_citation_matches_target_line_item(
+    citation: CitationItem,
+    *,
+    metadata: JsonObject,
+    recipe: TaskRecipe,
+    question: str = "",
+) -> bool:
+    binding = target_document_binding_from_metadata(metadata, question=" ".join([_root_goal_from_recipe(recipe), question]).strip())
+    line_item = _string_value(binding.get("required_line_item"))
+    if not line_item:
+        return False
+    quote = f"{citation.title} {citation.quote}".lower()
+    normalized_line = line_item.lower()
+    if normalized_line in quote:
+        return True
+    aliases = {
+        "capital expenditures": ("capex", "payments to acquire", "purchases of property"),
+        "property plant and equipment net": ("propertyplantandequipmentnet", "net ppne", "net ppe"),
+        "net revenues": ("revenuesnetofinterestexpense", "net revenues"),
+        "net sales": ("salesrevenuenet", "net sales"),
+    }
+    return any(alias in quote for alias in aliases.get(normalized_line, ()))
 
 
 def _finance_pdf_target_satisfied_by_primary_sec_citation(
@@ -12015,6 +12056,51 @@ def _report_with_finance_formula_traces(
     return replace(report, diagnostics=diagnostics)
 
 
+def _report_with_finance_fact_context(
+    report: RetrievalReport,
+    *,
+    recipe: TaskRecipe,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+) -> RetrievalReport:
+    question = _benchmark_oracle_question_text(_root_goal_from_recipe(recipe))
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    binding = _target_document_binding_from_recipe(recipe)
+    facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+    diagnostics = dict(report.diagnostics)
+    diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:160]]
+    diagnostics["finance_fact_ledger_count"] = len(facts)
+    diagnostics["claim_ledger_present"] = bool(facts)
+    diagnostics["finance_metric_disambiguation"] = {
+        "semantic_decision_owner": "model",
+        "host_role": "expose candidate facts, concepts, labels, provenance, and verification only",
+        "instruction": (
+            "When several source-backed facts share a broad metric such as revenue, compare the question's requested slot "
+            "against each fact's metric, SEC concept, label, fiscal period, and source. Do not answer a consolidated metric "
+            "with a component revenue line. If a narrower supported concept better matches the company's reported revenue "
+            "caption than a generic total, explain the chosen basis. If no fact matches the requested slot, say so as a "
+            "limitation or continue work instead of turning a nearby component into the answer."
+        ),
+    }
+    diagnostics.setdefault(
+        "finance_synthesis_directive",
+        (
+            "The model owns final finance judgment. Use the provided finance_fact_ledger, FormulaTrace values, citations, "
+            "and evidence to answer only the actual requested metric. Material finance numbers must be source-backed; "
+            "nearby component metrics are not substitutes for the requested consolidated line item."
+        ),
+    )
+    diagnostics.setdefault(
+        "finance_numeric_claim_policy",
+        {
+            "allowed_numeric_sources": ["formula_trace", "finance_fact_ledger", "claim_ledger", "explicit_assumption_label"],
+            "unsupported_numeric_behavior": "omit_or_limit",
+            "material_claim_scope": "figures, percentages, multiples, margins, growth rates, periods, transaction values, and bridge components",
+        },
+    )
+    return replace(report, diagnostics=diagnostics)
+
+
 def _compact_finance_synthesis_rescue_packet(
     journal: JournalStore,
     *,
@@ -13088,7 +13174,24 @@ def _finance_fact_judge_summary(fact: FinanceFact) -> JsonObject:
         "metadata": {
             key: value
             for key, value in fact.metadata.items()
-            if key in {"form", "source_uri", "line_item", "statement", "source_kind", "source_family", "target_document_match"}
+            if key in {
+                "accn",
+                "concept",
+                "filed",
+                "form",
+                "label",
+                "line_item",
+                "source_family",
+                "source_kind",
+                "source_title",
+                "source_uri",
+                "statement",
+                "target_document_binding_accepted",
+                "target_document_binding_reasons",
+                "target_document_binding_score",
+                "target_document_match",
+                "taxonomy",
+            }
         },
     }
 

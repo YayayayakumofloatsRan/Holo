@@ -1505,6 +1505,65 @@ def test_primary_source_numeric_binding_selects_balance_sheet_net_ppne() -> None
     assert resolution["selected_fact_ids"] == ["target-net-ppne"]
 
 
+def test_target_binding_distinguishes_net_revenues_from_component_revenue() -> None:
+    binding = target_document_binding_from_metadata(
+        {"company": "Goldman Sachs", "doc_period": "2024", "doc_type": "10-K"},
+        question="What was Goldman Sachs' net revenues for fiscal year 2024?",
+    )
+    facts = [
+        FinanceFact(
+            fact_id="component-sales",
+            entity="Goldman Sachs",
+            ticker="GS",
+            period="annual",
+            fiscal_year=2024,
+            metric="revenue",
+            value="885000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-component",
+            evidence_ref="ev-component",
+            citation_ref="cite-component",
+            metadata={
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000886982.json",
+                "source_title": "SEC companyfacts JSON for CIK 0000886982",
+                "concept": "FairValueNetDerivativeAssetLiabilityMeasuredOnRecurringBasisUnobservableInputsReconciliationSales",
+                "label": "Fair Value, Net Derivative Asset (Liability) Measured on Recurring Basis, Unobservable Inputs Reconciliation, Sales",
+                "form": "10-K",
+            },
+        ),
+        FinanceFact(
+            fact_id="net-revenues",
+            entity="Goldman Sachs",
+            ticker="GS",
+            period="annual",
+            fiscal_year=2024,
+            metric="net revenues",
+            value="53512000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-net",
+            evidence_ref="ev-net",
+            citation_ref="cite-net",
+            metadata={
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000886982.json",
+                "source_title": "SEC companyfacts JSON for CIK 0000886982",
+                "concept": "RevenuesNetOfInterestExpense",
+                "label": "Revenues, Net of Interest Expense",
+                "form": "10-K",
+            },
+        ),
+    ]
+
+    resolution = primary_source_numeric_binding_resolution(facts, binding, question="Goldman Sachs net revenues 2024")
+
+    assert binding["required_line_item"] == "net revenues"
+    assert resolution["status"] == "selected"
+    assert resolution["selected_fact_ids"] == ["net-revenues"]
+    rejected = {item["fact_id"]: item for item in resolution["rejected_candidates"]}
+    assert "component-sales" in rejected
+
+
 def test_primary_source_numeric_binding_accepts_target_period_sec_structured_companion_for_compute_task() -> None:
     binding = target_document_binding_from_metadata(
         {
@@ -2715,6 +2774,89 @@ def test_finance_formula_planner_still_allows_explicit_margin_calculation() -> N
 
     assert plan.status == "ready"
     assert plan.formula_name == "margin"
+
+
+def test_finance_formula_planner_uses_net_income_for_net_profit_margin() -> None:
+    plan = plan_finance_formula(
+        question="What was Apple's net profit margin for fiscal year 2024?",
+        facts=[
+            _year_fact("revenue", "391035000000", 2024, fact_id="apple-revenue"),
+            _year_fact("net income", "93736000000", 2024, fact_id="apple-net-income"),
+            _year_fact("operating income", "123216000000", 2024, fact_id="apple-operating-income"),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload["variables"] == {"numerator": "93736000000", "denominator": "391035000000"}
+    assert plan.input_fact_ids == ["apple-net-income", "apple-revenue"]
+
+
+def test_finance_formula_planner_rejects_contract_liability_revenue_denominator() -> None:
+    plan = plan_finance_formula(
+        question="What was Apple's net profit margin for fiscal year 2024?",
+        facts=[
+            _year_fact(
+                "revenue",
+                "7728000000",
+                2024,
+                fact_id="apple-contract-liability-revenue",
+                metadata={"concept": "ContractWithCustomerLiabilityRevenueRecognized"},
+            ),
+            _year_fact("net income", "93736000000", 2024, fact_id="apple-net-income"),
+        ],
+    )
+
+    assert plan.status == "missing_facts"
+    assert "revenue_denominator" in plan.missing_facts
+
+
+def test_finance_formula_planner_uses_gross_profit_for_gross_margin() -> None:
+    plan = plan_finance_formula(
+        question="What was NVIDIA's gross margin for fiscal year 2024?",
+        facts=[
+            _year_fact("revenue", "60922000000", 2024, fact_id="nvda-revenue"),
+            _year_fact("gross profit", "44301000000", 2024, fact_id="nvda-gross-profit"),
+            _year_fact("net income", "29760000000", 2024, fact_id="nvda-net-income"),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload["variables"] == {"numerator": "44301000000", "denominator": "60922000000"}
+    assert plan.input_fact_ids == ["nvda-gross-profit", "nvda-revenue"]
+
+
+def test_finance_formula_planner_uses_requested_metric_for_growth() -> None:
+    plan = plan_finance_formula(
+        question="What was Meta's net income growth from fiscal year 2023 to 2024?",
+        facts=[
+            _year_fact("revenue", "134902000000", 2023, fact_id="meta-revenue-2023"),
+            _year_fact("revenue", "164501000000", 2024, fact_id="meta-revenue-2024"),
+            _year_fact("net income", "39098000000", 2023, fact_id="meta-net-income-2023"),
+            _year_fact("net income", "62360000000", 2024, fact_id="meta-net-income-2024"),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "yoy_growth"
+    assert plan.payload["variables"] == {"prior_value": "39098000000", "current_value": "62360000000"}
+    assert plan.input_fact_ids == ["meta-net-income-2023", "meta-net-income-2024"]
+
+
+def test_finance_formula_planner_supports_debt_to_equity_ratio() -> None:
+    plan = plan_finance_formula(
+        question="What was JPMorgan Chase's debt-to-equity ratio as of year-end 2024?",
+        facts=[
+            _year_fact("liabilities", "3658056000000", 2024, fact_id="jpm-liabilities"),
+            _year_fact("shareholders equity", "344758000000", 2024, fact_id="jpm-equity"),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "debt_to_equity"
+    assert plan.payload["variables"] == {
+        "liabilities_or_debt": "3658056000000",
+        "shareholders_equity": "344758000000",
+    }
 
 
 def test_finance_formula_planner_generates_capital_intensity_payload() -> None:
@@ -6240,6 +6382,24 @@ def _finance_fact(
         source_ref="source",
         evidence_ref=None,
         citation_ref=None,
+        metadata=dict(metadata or {}),
+    )
+
+
+def _year_fact(metric: str, value: str, fiscal_year: int, *, fact_id: str, metadata: dict | None = None) -> FinanceFact:
+    return FinanceFact(
+        fact_id=fact_id,
+        entity=None,
+        ticker=None,
+        period=str(fiscal_year),
+        fiscal_year=fiscal_year,
+        metric=metric,
+        value=value,
+        unit="USD",
+        scale="actual",
+        source_ref=f"cite-{fact_id}",
+        evidence_ref=f"ev-{fact_id}",
+        citation_ref=f"cite-{fact_id}",
         metadata=dict(metadata or {}),
     )
 
