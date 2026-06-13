@@ -305,9 +305,12 @@ SEC companyfacts payload 可能明显大于普通网页。此前 4MB 截断会�
 
 - Windows 浏览器 demo 保持 `http://localhost:8787/`。
 - 界面改为英文为主，统一使用 Times New Roman。
-- 首屏按 presentation focus、demo case selector、LLM/tool surface、agent pipeline、current problem、answer state、engineering diagnosis 组织。
-- Agent workflow 以线性 pipeline 展示 LLM plan、Retrieve、Evidence、Compute、Verify、Synthesize、Score、Provider，使观众能直接看到 Holo 的问题解决闭环。
-- Answer panel 默认展示英文状态摘要、证据数量和 verifier gate，而不是把历史 run 的长篇原始答案直接塞进首屏。
+- 首屏改为交互控制台：用户可以直接在浏览器输入任务，dashboard 后端用真实 `holo-v3 chat --once` 在 WSL 主工作区启动 Kernel v3 agent run。
+- 同一界面展示 conversation transcript、live agent loop topology、search branches、public activity stream、LLM/tool surface 和历史 demo case selector。
+- Agent workflow 以线性 pipeline 展示 Intake、Plan、Policy、Tools、Search、Evidence、Verify、Answer，使观众能直接看到 Holo 的问题解决闭环。
+- Search branches 从 journal 的 `retrieval_search_attempt` / provider diagnostics 派生，展示每个检索分支的 provider、source count 和 accepted source count。
+- Answer/Activity panel 只展示 public trace/reason 和 host-visible journal 事件；隐藏 chain-of-thought 不暴露。
+- 后台命令执行会在 WSL 环境没有 `DEEPSEEK_API_KEY` 时尝试读取 Windows User/Machine 环境变量，并只注入子进程，不打印、不写日志；如果仍不可见，UI 会立即显示 `live_model_not_enabled`。
 
 ### 4. 回归测试
 

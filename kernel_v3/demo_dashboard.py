@@ -4,7 +4,9 @@ import argparse
 import json
 import os
 import subprocess
+import threading
 import time
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -118,19 +120,36 @@ BASELINE_RUNS = (
     ("FAB v2 dev10 capability", "run_fabv2_dev10_capability_parallel10_judgefix.summary.json"),
 )
 RELEVANT_EVENT_KINDS = {
+    "chat_turn",
+    "chat_routing_decision",
     "processor_request",
     "processor_result",
+    "semantic_intake",
+    "compiled_task_program",
+    "policy_decision",
     "retrieval_search_attempt",
     "retrieval_fetch",
     "retrieval_fetch_attempt",
     "retrieval_extraction",
+    "retrieval_evidence",
+    "retrieval_citation",
     "retrieval_report",
     "retrieval_evaluation",
     "retrieval_evidence_rejections",
+    "retrieval_workbench_decision",
+    "claim_ledger",
+    "slot_frame",
+    "transform_plan",
+    "finance_numeric_judge",
+    "verifier_gate_result",
+    "synthesis_gate_result",
     "action",
     "observation",
     "feedback",
     "termination_decision",
+    "agent_final_answer",
+    "agent_failure_report",
+    "chat_agent_result",
 }
 
 
@@ -169,6 +188,8 @@ class DashboardServer(ThreadingHTTPServer):
         self.root = root
         self.run_prefix = run_prefix
         self.thread_prefix = thread_prefix
+        self.command_runs: dict[str, Json] = {}
+        self.command_lock = threading.Lock()
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -183,15 +204,66 @@ class DashboardHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query, keep_blank_values=True)
             run_prefix = _query_value(query, "run_prefix") or self.server.run_prefix
             item_id = _query_value(query, "item_id") or ""
+            console_thread = _query_value(query, "console_thread") or "demo-ui-live"
             thread_prefix = _query_value(query, "thread_prefix")
             if thread_prefix is None:
                 mapped_thread_prefix = _thread_prefix_for_run(run_prefix)
                 thread_prefix = mapped_thread_prefix if mapped_thread_prefix is not None else self.server.thread_prefix
-            self._send_json(build_state(self.server.root, run_prefix, thread_prefix, item_id=item_id))
+            self._send_json(
+                build_state(
+                    self.server.root,
+                    run_prefix,
+                    thread_prefix,
+                    item_id=item_id,
+                    console_thread_id=console_thread,
+                    command_runs=_command_runs_snapshot(self.server),
+                )
+            )
             return
         if parsed.path == "/workflow":
             workflow = self.server.root / ".state/kernel_v3/visuals/kernel_v3_live_demo_task902.html"
             self._send_file(workflow, "text/html; charset=utf-8")
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/command":
+            payload = self._read_json_body(max_bytes=24_000)
+            message = str(payload.get("message") or "").strip()
+            if not message:
+                self._send_json({"status": "error", "error": "empty_message"})
+                return
+            if len(message) > 12_000:
+                self._send_json({"status": "error", "error": "message_too_large"})
+                return
+            thread_id = _safe_thread_id(str(payload.get("thread_id") or "demo-ui-live"))
+            profile = str(payload.get("profile") or "quality")
+            run_id = f"ui-{uuid.uuid4().hex[:10]}"
+            record: Json = {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "message": clip(message, 1000),
+                "status": "queued",
+                "created_at": time.time(),
+                "started_at": None,
+                "finished_at": None,
+                "returncode": None,
+                "answer": "",
+                "error": "",
+                "profile": profile,
+            }
+            with self.server.command_lock:
+                self.server.command_runs[run_id] = record
+                _trim_command_runs(self.server.command_runs)
+            worker = threading.Thread(
+                target=_run_dashboard_command_guarded,
+                args=(self.server, run_id, message, thread_id, profile),
+                name=f"holo-dashboard-command-{run_id}",
+                daemon=True,
+            )
+            worker.start()
+            self._send_json({"status": "accepted", "run_id": run_id, "thread_id": thread_id})
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -228,8 +300,233 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _read_json_body(self, *, max_bytes: int) -> Json:
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            length = 0
+        if length <= 0 or length > max_bytes:
+            return {}
+        try:
+            raw = self.rfile.read(length)
+            value = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return {}
+        return value if isinstance(value, dict) else {}
 
-def build_state(root: Path, run_prefix: str, thread_prefix: str = "", *, item_id: str = "") -> Json:
+
+def _command_runs_snapshot(server: DashboardServer) -> list[Json]:
+    with server.command_lock:
+        return [dict(item) for item in server.command_runs.values()]
+
+
+def _trim_command_runs(command_runs: dict[str, Json], *, limit: int = 12) -> None:
+    if len(command_runs) <= limit:
+        return
+    ordered = sorted(command_runs.values(), key=lambda item: float(item.get("created_at") or 0), reverse=True)
+    keep = {str(item.get("run_id") or "") for item in ordered[:limit]}
+    for key in list(command_runs):
+        if key not in keep:
+            command_runs.pop(key, None)
+
+
+def _run_dashboard_command(server: DashboardServer, run_id: str, message: str, thread_id: str, profile: str) -> None:
+    _update_command_run(server, run_id, status="running", started_at=time.time())
+    cmd = [
+        str(server.root / "holo-v3"),
+        "chat",
+        "--thread",
+        thread_id,
+        "--once",
+        message,
+        "--output",
+        "json",
+        "--planner",
+        "model",
+        "--evaluator",
+        "model",
+        "--synthesizer",
+        "model",
+        "--semantic-intake",
+        "model",
+        "--turn-router",
+        "model",
+        "--profile",
+        profile if profile in {"fast", "balanced", "quality"} else "quality",
+        "--reasoning-effort",
+        "high",
+        "--response-language",
+        "english",
+        "--live-retrieval",
+        "--live-max-network-fetches",
+        "96",
+        "--research-depth",
+        "deep",
+        "--max-agent-steps",
+        "8",
+        "--max-agent-tool-calls",
+        "14",
+    ]
+    env = _dashboard_command_env()
+    if not env.get("DEEPSEEK_API_KEY"):
+        _update_command_run(
+            server,
+            run_id,
+            status="blocked",
+            finished_at=time.time(),
+            returncode=1,
+            error='{"reason":"live_model_not_enabled","status":"blocked","message":"DEEPSEEK_API_KEY is not visible to the WSL dashboard process."}',
+        )
+        return
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=server.root,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=900,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _update_command_run(
+            server,
+            run_id,
+            status="timeout",
+            finished_at=time.time(),
+            returncode=None,
+            error=clip(str(exc), 1200),
+        )
+        return
+    except Exception as exc:
+        _update_command_run(
+            server,
+            run_id,
+            status="error",
+            finished_at=time.time(),
+            returncode=None,
+            error=clip(str(exc), 1200),
+        )
+        return
+    answer = ""
+    status = "complete" if proc.returncode == 0 else "failed"
+    parsed = _parse_last_json_object(proc.stdout)
+    if parsed:
+        answer = _chat_payload_answer(parsed)
+        payload_status = str(parsed.get("status") or "")
+        if payload_status in {"failed", "blocked"}:
+            status = payload_status
+    error = proc.stderr.strip() or (proc.stdout.strip() if proc.returncode != 0 and not answer else "")
+    _update_command_run(
+        server,
+        run_id,
+        status=status,
+        finished_at=time.time(),
+        returncode=proc.returncode,
+        answer=clip(answer, 1600),
+        error=clip(error, 1600),
+    )
+
+
+def _run_dashboard_command_guarded(server: DashboardServer, run_id: str, message: str, thread_id: str, profile: str) -> None:
+    try:
+        _run_dashboard_command(server, run_id, message, thread_id, profile)
+    except Exception as exc:
+        _update_command_run(
+            server,
+            run_id,
+            status="error",
+            finished_at=time.time(),
+            returncode=None,
+            error=clip(f"{type(exc).__name__}: {exc}", 1600),
+        )
+
+
+def _update_command_run(server: DashboardServer, run_id: str, **updates: Any) -> None:
+    with server.command_lock:
+        current = dict(server.command_runs.get(run_id) or {"run_id": run_id})
+        current.update(updates)
+        server.command_runs[run_id] = current
+
+
+def _dashboard_command_env() -> dict[str, str]:
+    env = dict(os.environ)
+    if not env.get("DEEPSEEK_API_KEY"):
+        key = _read_windows_env("DEEPSEEK_API_KEY")
+        if key:
+            env["DEEPSEEK_API_KEY"] = key
+    return env
+
+
+def _read_windows_env(name: str) -> str:
+    powershell = Path("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+    if not powershell.exists():
+        return ""
+    script = (
+        f"$v=[Environment]::GetEnvironmentVariable('{name}','User');"
+        f"if(-not $v){{$v=[Environment]::GetEnvironmentVariable('{name}','Machine')}};"
+        "if($v){[Console]::Out.Write($v)}"
+    )
+    try:
+        proc = subprocess.run(
+            [str(powershell), "-NoProfile", "-Command", script],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return ""
+    value = proc.stdout.strip()
+    return value if value and "%" not in value and "\n" not in value else ""
+
+
+def _parse_last_json_object(text: str) -> Json:
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            value = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _chat_payload_answer(payload: Json) -> str:
+    for key in ("answer", "text", "message"):
+        if payload.get(key):
+            return clip(payload.get(key), 1600)
+    final = payload.get("final_answer")
+    if isinstance(final, dict):
+        for key in ("answer", "text", "result"):
+            if final.get(key):
+                return clip(final.get(key), 1600)
+    failure = payload.get("failure_report")
+    if isinstance(failure, dict):
+        return clip(failure.get("reason") or failure.get("summary") or json.dumps(failure, ensure_ascii=True), 1600)
+    return ""
+
+
+def _safe_thread_id(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in value.strip())
+    cleaned = "-".join(part for part in cleaned.split("-") if part)
+    return cleaned[:96] or "demo-ui-live"
+
+
+def build_state(
+    root: Path,
+    run_prefix: str,
+    thread_prefix: str = "",
+    *,
+    item_id: str = "",
+    console_thread_id: str = "demo-ui-live",
+    command_runs: list[Json] | None = None,
+) -> Json:
     now = time.time()
     bench_dir = root / ".state/kernel_v3/bench/finance"
     journal = root / ".state/kernel_v3/journal/global.jsonl"
@@ -260,6 +557,7 @@ def build_state(root: Path, run_prefix: str, thread_prefix: str = "", *, item_id
         "generated_at": iso_time(now),
         "repo": repo_state(root),
         "current": current,
+        "console": console_state(journal_records, console_thread_id, command_runs or []),
         "baselines": baseline_state(bench_dir),
         "demo_runs": demo_run_state(bench_dir),
         "stability": stability_state(bench_dir, latest_item.get("item_id") or latest_item.get("id") or item_id),
@@ -277,8 +575,245 @@ def build_state(root: Path, run_prefix: str, thread_prefix: str = "", *, item_id
             "run_prefix": run_prefix,
             "thread_prefix": thread_prefix,
             "item_id": item_id,
+            "console_thread": console_thread_id,
         },
     }
+
+
+def console_state(records: list[Json], thread_id: str, command_runs: list[Json]) -> Json:
+    thread_id = _safe_thread_id(thread_id)
+    scoped = _records_for_thread_scope(records, thread_id)
+    runs = [dict(item) for item in command_runs if str(item.get("thread_id") or "") == thread_id]
+    runs.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
+    active = next((item for item in runs if item.get("status") in {"queued", "running"}), runs[0] if runs else {})
+    return {
+        "thread_id": thread_id,
+        "job": active,
+        "transcript": console_transcript(scoped),
+        "topology": loop_topology_state(scoped),
+        "search_branches": search_branch_state(scoped),
+        "activity": public_activity_state(scoped),
+        "stats": {
+            "records": len(scoped),
+            "actions": sum(1 for record in scoped if record.get("kind") == "action"),
+            "searches": sum(1 for record in scoped if record.get("kind") == "retrieval_search_attempt"),
+            "fetches": sum(1 for record in scoped if record.get("kind") in {"retrieval_fetch", "retrieval_fetch_attempt"}),
+            "evidence": sum(1 for record in scoped if record.get("kind") in {"retrieval_evidence", "claim_ledger", "slot_frame"}),
+        },
+        "notice": "Public execution trace only. Hidden chain-of-thought is not exposed.",
+    }
+
+
+def _records_for_thread_scope(records: list[Json], thread_id: str) -> list[Json]:
+    task_ids, run_ids = _thread_scoped_ids(records, thread_id)
+    return [
+        record
+        for record in records
+        if _record_in_thread_scope(record, thread_id, allowed_task_ids=task_ids, allowed_run_ids=run_ids)
+    ]
+
+
+def console_transcript(records: list[Json]) -> list[Json]:
+    turns: list[Json] = []
+    for record in records:
+        kind = record.get("kind")
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        if kind == "chat_turn":
+            turns.append(
+                {
+                    "role": "user",
+                    "text": clip(data.get("text"), 1400),
+                    "at": record.get("recorded_at_ms"),
+                }
+            )
+        elif kind == "chat_agent_result":
+            turns.append(
+                {
+                    "role": "assistant",
+                    "text": clip(_chat_result_answer_text(data), 1800),
+                    "status": data.get("status") or ("failed" if data.get("failure_report") else "complete"),
+                    "at": record.get("recorded_at_ms"),
+                }
+            )
+    return turns[-12:]
+
+
+def _chat_result_answer_text(data: Json) -> str:
+    for key in ("answer", "text", "message"):
+        if data.get(key):
+            return str(data.get(key) or "")
+    final = data.get("final_answer") if isinstance(data.get("final_answer"), dict) else {}
+    for key in ("answer", "text", "result"):
+        if final.get(key):
+            return str(final.get(key) or "")
+    failure = data.get("failure_report") if isinstance(data.get("failure_report"), dict) else {}
+    if failure:
+        return str(failure.get("reason") or failure.get("stop_reason") or "The run ended with a failure report.")
+    return ""
+
+
+def loop_topology_state(records: list[Json]) -> list[Json]:
+    groups = [
+        ("Intake", {"chat_turn", "chat_routing_decision", "semantic_intake", "compiled_task_program"}, "understand task"),
+        ("Plan", {"processor_request", "processor_result", "action", "toolchain_step_proposed"}, "LLM proposes next move"),
+        ("Policy", {"policy_decision"}, "host validates action"),
+        ("Tools", {"observation", "retrieval_fetch", "retrieval_fetch_attempt"}, "execute bounded tools"),
+        ("Search", {"retrieval_query_plan", "retrieval_search_attempt", "retrieval_workbench_decision"}, "branch over sources"),
+        ("Evidence", {"retrieval_extraction", "retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame"}, "build cited ledger"),
+        ("Verify", {"transform_plan", "finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}, "check numbers and support"),
+        ("Answer", {"termination_decision", "feedback", "agent_final_answer", "agent_failure_report", "chat_agent_result"}, "reply or explain gap"),
+    ]
+    latest_kind = str(records[-1].get("kind") or "") if records else ""
+    has_failure = any(
+        record.get("kind") in {"agent_failure_report"}
+        or (record.get("kind") == "chat_agent_result" and isinstance(record.get("data"), dict) and record["data"].get("failure_report"))
+        for record in records
+    )
+    rows: list[Json] = []
+    for label, kinds, detail in groups:
+        count = sum(1 for record in records if record.get("kind") in kinds)
+        state = "idle"
+        if count:
+            state = "active" if latest_kind in kinds else "ok"
+        if has_failure and label in {"Verify", "Answer"} and count:
+            state = "warn"
+        rows.append(stage(label, state, count, detail))
+    return rows
+
+
+def search_branch_state(records: list[Json]) -> list[Json]:
+    rows: list[Json] = []
+    for index, record in enumerate([r for r in records if r.get("kind") == "retrieval_search_attempt"], start=1):
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
+        attempts = (
+            diagnostics.get("provider_diagnostics", {}).get("attempts")
+            if isinstance(diagnostics.get("provider_diagnostics"), dict)
+            else []
+        )
+        providers: list[str] = []
+        accepted = 0
+        sources = 0
+        query_hash = ""
+        if isinstance(attempts, list):
+            for attempt in attempts[:6]:
+                if not isinstance(attempt, dict):
+                    continue
+                provider = str(attempt.get("provider_id") or "provider")
+                count = int(attempt.get("accepted_source_count") or attempt.get("source_count") or 0)
+                accepted += int(attempt.get("accepted_source_count") or 0)
+                sources += int(attempt.get("source_count") or 0)
+                ad = attempt.get("diagnostics") if isinstance(attempt.get("diagnostics"), dict) else {}
+                query_hash = query_hash or str(ad.get("query_hash") or "")[:10]
+                providers.append(f"{provider}:{count}")
+        rows.append(
+            {
+                "index": index,
+                "step_id": record.get("step_id") or "",
+                "query": clip(data.get("query") or data.get("goal") or f"search branch {index}", 180),
+                "status": data.get("status") or diagnostics.get("status") or "ok",
+                "sources": sources or diagnostics.get("journaled_source_count") or 0,
+                "accepted": accepted,
+                "query_hash": query_hash,
+                "providers": providers,
+            }
+        )
+    return rows[-12:]
+
+
+def public_activity_state(records: list[Json]) -> list[Json]:
+    rows: list[Json] = []
+    for record in records:
+        kind = str(record.get("kind") or "")
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        title = _activity_title(kind, data)
+        if not title:
+            continue
+        rows.append(
+            {
+                "kind": kind,
+                "title": title,
+                "detail": _activity_detail(kind, data),
+                "status": _activity_status(kind, data),
+                "task_id": record.get("task_id") or data.get("task_id") or "",
+                "step_id": record.get("step_id") or data.get("step_id") or "",
+            }
+        )
+    return rows[-40:]
+
+
+def _activity_title(kind: str, data: Json) -> str:
+    if kind == "chat_turn":
+        return "User command"
+    if kind == "chat_routing_decision":
+        return f"Route: {data.get('route') or 'new_task'}"
+    if kind == "processor_request":
+        return f"Model packet: {data.get('task_type') or data.get('processor') or 'processor'}"
+    if kind == "processor_result":
+        return f"Model result: {data.get('task_type') or 'processor'}"
+    if kind == "semantic_intake":
+        return "Semantic intake"
+    if kind == "compiled_task_program":
+        return "Task program compiled"
+    if kind == "action":
+        return f"Action: {data.get('name') or data.get('kind') or 'tool'}"
+    if kind == "policy_decision":
+        return "Policy gate"
+    if kind == "observation":
+        return f"Observation: {data.get('source') or data.get('kind') or 'tool'}"
+    if kind == "retrieval_search_attempt":
+        return "Search branch"
+    if kind in {"retrieval_fetch", "retrieval_fetch_attempt"}:
+        return "Fetch source"
+    if kind == "retrieval_extraction":
+        return "Extract evidence"
+    if kind == "retrieval_workbench_decision":
+        return "LLM workbench judgment"
+    if kind in {"claim_ledger", "slot_frame", "transform_plan"}:
+        return kind.replace("_", " ").title()
+    if kind in {"finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}:
+        return kind.replace("_", " ").title()
+    if kind == "termination_decision":
+        return f"Termination: {data.get('decision') or 'continue'}"
+    if kind == "feedback":
+        return f"Feedback: {data.get('status') or 'status'}"
+    if kind == "chat_agent_result":
+        return "Assistant reply"
+    return kind.replace("_", " ").title() if kind else ""
+
+
+def _activity_detail(kind: str, data: Json) -> str:
+    if kind == "chat_turn":
+        return clip(data.get("text"), 180)
+    if kind == "action":
+        return clip(data.get("description") or data.get("payload"), 180)
+    if kind in {"retrieval_fetch", "retrieval_fetch_attempt"}:
+        source = data.get("source") if isinstance(data.get("source"), dict) else {}
+        return clip(data.get("uri") or source.get("uri"), 180)
+    if kind == "retrieval_extraction":
+        doc = data.get("document") if isinstance(data.get("document"), dict) else {}
+        return clip(doc.get("title") or doc.get("uri"), 180)
+    if kind == "retrieval_search_attempt":
+        diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
+        return clip(data.get("query") or f"{diagnostics.get('journaled_source_count', 0)} sources considered", 180)
+    if kind == "feedback":
+        missing = data.get("missing_evidence")
+        return clip(", ".join(str(item) for item in missing[:4]) if isinstance(missing, list) else data.get("stop_reason"), 180)
+    if kind == "termination_decision":
+        return clip(data.get("reason") or data.get("feedback_status"), 180)
+    if kind == "chat_agent_result":
+        return clip(_chat_result_answer_text(data), 180)
+    return clip(data.get("reason") or data.get("status") or data.get("decision") or data.get("task_type"), 180)
+
+
+def _activity_status(kind: str, data: Json) -> str:
+    if kind == "processor_result":
+        return str(data.get("status") or "")
+    if kind == "policy_decision":
+        return "allowed" if data.get("allowed") is True else str(data.get("status") or "")
+    if kind == "chat_agent_result":
+        return "failed" if data.get("failure_report") else "complete"
+    return str(data.get("status") or data.get("decision") or "")
 
 
 def demo_run_state(bench_dir: Path) -> list[Json]:
@@ -634,9 +1169,10 @@ def compact_events(records: list[Json], *, thread_prefix: str = "") -> list[Json
                 }
             )
         elif kind in {"retrieval_fetch", "retrieval_fetch_attempt"}:
+            source = data.get("source") if isinstance(data.get("source"), dict) else {}
             event.update(
                 {
-                    "uri": clip(data.get("uri") or data.get("source", {}).get("uri"), 160),
+                    "uri": clip(data.get("uri") or source.get("uri"), 160),
                     "status": data.get("status"),
                 }
             )
@@ -900,7 +1436,7 @@ HTML = r"""<!doctype html>
       overflow: hidden;
     }
     .left, .right { min-height: 0; display: grid; gap: 16px; }
-    .left { grid-template-rows: 356px 1fr 164px; }
+    .left { grid-template-rows: 318px 1fr 164px; }
     .right { grid-template-rows: 262px 1fr 142px; }
     .panel {
       min-height: 0;
@@ -921,6 +1457,50 @@ HTML = r"""<!doctype html>
       text-transform: uppercase;
       letter-spacing: 0;
     }
+    .command-box {
+      display: grid;
+      grid-template-rows: 1fr auto auto;
+      gap: 10px;
+      height: calc(100% - 28px);
+    }
+    textarea.command-input {
+      width: 100%;
+      min-height: 96px;
+      resize: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 16px;
+      line-height: 1.35;
+      color: var(--ink);
+      background: #fbfcfd;
+      outline: none;
+    }
+    textarea.command-input:focus { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
+    .command-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+    .command-row button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .command-row .thread { flex: 1; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .quick-prompts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .quick-prompts button { padding: 7px 8px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .transcript {
+      height: calc(100% - 28px);
+      display: grid;
+      align-content: start;
+      gap: 9px;
+      overflow: hidden;
+    }
+    .message {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fff;
+      min-width: 0;
+    }
+    .message.user { background: #f8fbff; border-color: #c8d8fb; }
+    .message.assistant { background: #fbfcfd; }
+    .message .role { color: var(--muted); font-size: 12px; text-transform: uppercase; font-weight: 700; margin-bottom: 4px; }
+    .message .body { color: var(--slate); font-size: 15px; line-height: 1.38; max-height: 94px; overflow: hidden; }
     .hero-title {
       margin: 2px 0 8px;
       font-size: 22px;
@@ -1075,6 +1655,27 @@ HTML = r"""<!doctype html>
     .stage.idle { opacity: 0.72; }
     .tabs { display: none; height: 100%; min-height: 0; }
     .tabs.active { display: grid; }
+    .console-view { grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
+    .console-column { min-height: 0; display: grid; grid-template-rows: 28px 1fr; gap: 8px; }
+    .column-title { color: var(--muted); font-size: 13px; font-weight: 700; text-transform: uppercase; }
+    .branch-list, .activity-list {
+      min-height: 0;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      overflow: hidden;
+    }
+    .branch, .activity {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fff;
+      min-width: 0;
+    }
+    .branch-head, .activity-head { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+    .branch-title, .activity-title { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .branch-status, .activity-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .branch-detail, .activity-detail { margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.32; max-height: 36px; overflow: hidden; }
     .finance-view { grid-template-rows: 104px 1fr; gap: 12px; }
     .question {
       border: 1px solid var(--line);
@@ -1132,7 +1733,8 @@ HTML = r"""<!doctype html>
       <div class="sub" id="subtitle">Loading live state...</div>
     </div>
     <div class="top-actions">
-      <button data-tab="finance" class="active">Finance</button>
+      <button data-tab="console" class="active">Console</button>
+      <button data-tab="finance">Demo Evidence</button>
       <button data-tab="intelligence">Intelligence</button>
       <button data-tab="trace">Trace</button>
       <a class="button" href="/workflow" target="_blank">Audit View</a>
@@ -1141,29 +1743,24 @@ HTML = r"""<!doctype html>
   <main class="grid">
     <section class="left">
       <div class="panel">
-        <div class="panel-title"><span>Presentation focus</span><span class="status"><span id="runDot" class="dot"></span><span id="runStatus">loading</span></span></div>
-        <div class="hero-title" id="heroTitle">Financial reasoning demo</div>
-        <div class="hero-copy" id="heroCopy">LLM chooses the research move; tools retrieve and compute; the host verifies, journals, and presents evidence.</div>
-        <div class="hero-metric">
-          <div class="metric"><div class="value" id="passRate">-</div><div class="label">live pass rate</div></div>
-          <div class="metric"><div class="value" id="verifierState">-</div><div class="label">verifier gate</div></div>
-          <div class="metric"><div class="value" id="progressText">0/0</div><div class="label">scored items</div></div>
-        </div>
-        <div class="progress"><div class="bar" id="progressBar"></div></div>
-        <div class="evidence-ribbon">
-          <div class="evidence-chip"><strong id="heroCalc">0</strong><span>calculator</span></div>
-          <div class="evidence-chip"><strong id="heroFacts">0</strong><span>finance facts</span></div>
-          <div class="evidence-chip"><strong id="heroCitations">0</strong><span>citations</span></div>
-        </div>
-        <div class="spotlight">
-          <div class="spotlight-kicker"><span>Auto demo reel</span><span id="spotlightStep">1/1</span></div>
-          <div class="spotlight-title" id="spotlightTitle">Loading spotlight</div>
-          <div class="spotlight-text" id="spotlightText">The dashboard will rotate through live capability evidence automatically.</div>
+        <div class="panel-title"><span>Command console</span><span class="status"><span id="consoleDot" class="dot"></span><span id="consoleStatus">ready</span></span></div>
+        <div class="command-box">
+          <textarea id="commandInput" class="command-input" placeholder="Ask Holo a finance question, or give it a research task. Example: What was Goldman Sachs' net revenues for fiscal year 2024?"></textarea>
+          <div class="command-row">
+            <button id="runCommand" class="primary">Run on Kernel v3</button>
+            <button id="clearCommand">Clear</button>
+            <div class="thread" id="consoleThread">thread demo-ui-live</div>
+          </div>
+          <div class="quick-prompts">
+            <button data-prompt="What was Goldman Sachs' net revenues for fiscal year 2024?">Goldman revenue</button>
+            <button data-prompt="Compute Activision Blizzard FY2019 fixed asset turnover from revenue and average PP&E.">Fixed asset turnover</button>
+            <button data-prompt="Explain Holo Kernel v3's agent loop and tool workflow in one concise paragraph.">Explain loop</button>
+          </div>
         </div>
       </div>
       <div class="panel">
-        <div class="panel-title"><span>Demo case selector</span><span id="selectedRunLabel">live</span></div>
-        <div class="run-cards" id="demoRuns"></div>
+        <div class="panel-title"><span>Conversation</span><span id="publicTraceNotice">public trace only</span></div>
+        <div class="transcript" id="transcript"></div>
       </div>
       <div class="panel">
         <div class="panel-title"><span>LLM and tool surface</span><span id="provider"></span></div>
@@ -1178,12 +1775,22 @@ HTML = r"""<!doctype html>
     </section>
     <section class="right">
       <div class="panel">
-        <div class="panel-title"><span>Agent pipeline</span><span id="latestItem"></span></div>
+        <div class="panel-title"><span>Live agent loop topology</span><span id="latestItem"></span></div>
         <div class="workflow-statement" id="workflowStatement">Model planning, live retrieval, evidence ledger, calculator trace, verifier gate, and final synthesis are visible as one workflow.</div>
         <div class="pipeline" id="pipeline"></div>
       </div>
       <div class="panel">
-        <section id="finance" class="tabs finance-view active">
+        <section id="console" class="tabs console-view active">
+          <div class="console-column">
+            <div class="column-title">Search branches</div>
+            <div class="branch-list" id="searchBranches"></div>
+          </div>
+          <div class="console-column">
+            <div class="column-title">Public activity stream</div>
+            <div class="activity-list" id="activityStream"></div>
+          </div>
+        </section>
+        <section id="finance" class="tabs finance-view">
           <div class="question">
             <div class="question-label">Current problem</div>
             <div class="question-text" id="questionText"></div>
@@ -1201,12 +1808,9 @@ HTML = r"""<!doctype html>
         </section>
       </div>
       <div class="panel">
-        <div class="panel-title"><span>Run files</span><span id="repo"></span></div>
-        <div class="footer-grid">
-          <div class="diag-block"><h3>Result JSONL</h3><p class="mono" id="resultPath"></p></div>
-          <div class="diag-block"><h3>Summary JSON</h3><p class="mono" id="summaryPath"></p></div>
-          <div class="diag-block"><h3>Refresh</h3><p id="refreshState"></p></div>
-        </div>
+        <div class="panel-title"><span>Demo case selector</span><span><span id="selectedRunLabel">live</span> | <span id="repo"></span></span></div>
+        <div class="run-cards" id="demoRuns"></div>
+        <div style="display:none"><span id="resultPath"></span><span id="summaryPath"></span><span id="refreshState"></span><span id="runStatus"></span><span id="heroTitle"></span><span id="heroCopy"></span><span id="runDot"></span><span id="passRate"></span><span id="verifierState"></span><span id="progressText"></span><span id="progressBar"></span><span id="heroCalc"></span><span id="heroFacts"></span><span id="heroCitations"></span><span id="spotlightStep"></span><span id="spotlightTitle"></span><span id="spotlightText"></span></div>
       </div>
     </section>
   </main>
@@ -1219,7 +1823,8 @@ HTML = r"""<!doctype html>
     const selected = {
       runPrefix: params.get("run_prefix") || "",
       threadPrefix: params.has("thread_prefix") ? params.get("thread_prefix") : null,
-      itemId: params.get("item_id") || ""
+      itemId: params.get("item_id") || "",
+      consoleThread: params.get("console_thread") || localStorage.getItem("holo_console_thread") || "demo-ui-live"
     };
     let latestSpotlights = [];
     let spotlightIndex = 0;
@@ -1228,11 +1833,20 @@ HTML = r"""<!doctype html>
       document.querySelectorAll(".tabs").forEach(p => p.classList.toggle("active", p.id === name));
     }
     document.querySelectorAll("button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+    document.getElementById("runCommand").addEventListener("click", submitCommand);
+    document.getElementById("clearCommand").addEventListener("click", () => { document.getElementById("commandInput").value = ""; });
+    document.getElementById("commandInput").addEventListener("keydown", event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submitCommand();
+    });
+    document.querySelectorAll("button[data-prompt]").forEach(button => {
+      button.addEventListener("click", () => { document.getElementById("commandInput").value = button.dataset.prompt || ""; });
+    });
     function stateUrl() {
       const query = new URLSearchParams();
       if (selected.runPrefix) query.set("run_prefix", selected.runPrefix);
       if (selected.threadPrefix !== null) query.set("thread_prefix", selected.threadPrefix || "");
       if (selected.itemId) query.set("item_id", selected.itemId);
+      if (selected.consoleThread) query.set("console_thread", selected.consoleThread);
       const suffix = query.toString();
       return suffix ? `/api/state?${suffix}` : "/api/state";
     }
@@ -1244,15 +1858,50 @@ HTML = r"""<!doctype html>
       if (selected.runPrefix) query.set("run_prefix", selected.runPrefix);
       query.set("thread_prefix", selected.threadPrefix || "");
       if (selected.itemId) query.set("item_id", selected.itemId);
+      if (selected.consoleThread) query.set("console_thread", selected.consoleThread);
       window.history.replaceState(null, "", `?${query.toString()}`);
       refresh();
+    }
+    async function submitCommand() {
+      const input = document.getElementById("commandInput");
+      const message = input.value.trim();
+      if (!message) return;
+      const button = document.getElementById("runCommand");
+      button.disabled = true;
+      text("consoleStatus", "starting");
+      cls("consoleDot", "dot running");
+      try {
+        const res = await fetch("/api/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message, thread_id: selected.consoleThread, profile: "quality" })
+        });
+        const payload = await res.json();
+        if (payload.thread_id) {
+          selected.consoleThread = payload.thread_id;
+          localStorage.setItem("holo_console_thread", selected.consoleThread);
+        }
+        input.value = "";
+        const query = new URLSearchParams(window.location.search);
+        query.set("console_thread", selected.consoleThread);
+        window.history.replaceState(null, "", `?${query.toString()}`);
+        refresh();
+      } catch (err) {
+        text("consoleStatus", "submit failed");
+        cls("consoleDot", "dot failed");
+      } finally {
+        button.disabled = false;
+      }
     }
     async function refresh() {
       const res = await fetch(stateUrl(), { cache: "no-store" });
       const data = await res.json();
       const cur = data.current || {};
+      const consoleState = data.console || {};
+      const consoleJob = consoleState.job || {};
       if (!selected.runPrefix && data.filters && data.filters.run_prefix) selected.runPrefix = data.filters.run_prefix;
       if (data.filters && data.filters.item_id !== undefined) selected.itemId = data.filters.item_id || "";
+      if (data.filters && data.filters.console_thread) selected.consoleThread = data.filters.console_thread;
       const metrics = cur.latest_metrics || {};
       const stability = data.stability || {};
       text("subtitle", `${data.generated_at} | branch ${data.repo.branch || "-"} @ ${data.repo.head || "-"}`);
@@ -1284,8 +1933,16 @@ HTML = r"""<!doctype html>
       text("summaryPath", data.links.summary_json || "-");
       text("refreshState", `auto refresh on | stale ${cur.stale_seconds ?? "-"}s`);
       text("selectedRunLabel", `${cur.name || (data.filters || {}).run_prefix || "live"}${cur.selected_item_id ? " / " + cur.selected_item_id : ""}`);
+      text("consoleThread", `thread ${consoleState.thread_id || selected.consoleThread}`);
+      text("publicTraceNotice", consoleState.notice || "public trace only");
+      const jobStatus = consoleJob.status || (consoleState.transcript && consoleState.transcript.length ? "ready" : "ready");
+      text("consoleStatus", jobStatus);
+      cls("consoleDot", `dot ${jobStatus === "running" || jobStatus === "queued" ? "running" : jobStatus === "failed" || jobStatus === "timeout" || jobStatus === "error" ? "failed" : "ok"}`);
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
-      renderPipeline(data.pipeline || []);
+      renderTranscript(consoleState.transcript || []);
+      renderPipeline((consoleState.topology && consoleState.topology.some(row => Number(row.value || 0) > 0)) ? consoleState.topology : (data.pipeline || []));
+      renderBranches(consoleState.search_branches || []);
+      renderActivity(consoleState.activity || []);
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
       latestSpotlights = buildSpotlights(data);
@@ -1377,6 +2034,42 @@ HTML = r"""<!doctype html>
         <div class="stage ${escapeHtml(row.state)}">
           <div><div class="stage-index">${index + 1}</div><div class="name">${escapeHtml(row.label)}</div><div class="tiny">${escapeHtml(row.detail)}</div></div>
           <div class="num">${fmtNum(row.value)}</div>
+        </div>`).join("");
+    }
+    function renderTranscript(rows) {
+      const panel = document.getElementById("transcript");
+      if (!rows.length) {
+        panel.innerHTML = `<div class="message assistant"><div class="role">Holo</div><div class="body">Enter a task above. The WSL Kernel v3 runtime will execute it through the live agent loop, and the public trace will appear here.</div></div>`;
+        return;
+      }
+      panel.innerHTML = rows.slice(-8).map(row => `
+        <div class="message ${escapeHtml(row.role || "assistant")}">
+          <div class="role">${escapeHtml(row.role || "assistant")}${row.status ? " / " + escapeHtml(row.status) : ""}</div>
+          <div class="body">${escapeHtml(row.text || "")}</div>
+        </div>`).join("");
+    }
+    function renderBranches(rows) {
+      const panel = document.getElementById("searchBranches");
+      if (!rows.length) {
+        panel.innerHTML = `<div class="branch"><div class="branch-head"><div class="branch-title">No search branch yet</div><div class="branch-status">idle</div></div><div class="branch-detail">Retrieval branches will appear when the agent calls retrieval.run.</div></div>`;
+        return;
+      }
+      panel.innerHTML = rows.slice(-8).reverse().map(row => `
+        <div class="branch">
+          <div class="branch-head"><div class="branch-title">Branch ${row.index}: ${escapeHtml(row.query || "search")}</div><div class="branch-status">${escapeHtml(row.status || "ok")}</div></div>
+          <div class="branch-detail">sources ${fmtNum(row.sources)} | accepted ${fmtNum(row.accepted)} | ${escapeHtml((row.providers || []).join(", ") || row.query_hash || "")}</div>
+        </div>`).join("");
+    }
+    function renderActivity(rows) {
+      const panel = document.getElementById("activityStream");
+      if (!rows.length) {
+        panel.innerHTML = `<div class="activity"><div class="activity-head"><div class="activity-title">Waiting for activity</div><div class="activity-status">idle</div></div><div class="activity-detail">Public model packets, tool calls, evidence and gates will stream here.</div></div>`;
+        return;
+      }
+      panel.innerHTML = rows.slice(-14).reverse().map(row => `
+        <div class="activity">
+          <div class="activity-head"><div class="activity-title">${escapeHtml(row.title || row.kind)}</div><div class="activity-status">${escapeHtml(row.status || "")}</div></div>
+          <div class="activity-detail">${escapeHtml(row.detail || row.step_id || row.task_id || "")}</div>
         </div>`).join("");
     }
     function renderIntel(rows) {
