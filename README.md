@@ -132,9 +132,14 @@ synthesis gate pass. The Windows-accessible dashboard defaults to this run at
 dashboard is chat-first: the right side is the interactive Holo console, while
 the left side shows WSL workspace state, a graphical SVG agent topology with
 explicit arrows, compact processor/search/event signal cards, and a click-through
-inspector for details. It supports thread switching, new demo threads, local
-screen clearing, model-routed Auto Chat, Finance Deep mode with larger finance
-retrieval/tool budgets, and stable hard finance prompts for recording. It also supports item-level demo
+inspector for details. The browser no longer depends on high-frequency full-state
+polling for the agent loop: `/api/live` streams Server-Sent Events from the
+Kernel v3 journal and updates topology, processor packets, retrieval branches,
+and transcript fragments as events are appended; `/api/state` is now a slower
+calibration path for workspace, benchmark, and command metadata. It supports
+thread switching, new demo threads, local screen clearing, model-routed Auto
+Chat, Finance Deep mode with larger finance retrieval/tool budgets, and stable
+hard finance prompts for recording. It also supports item-level demo
 selection; for recording, the stronger historical
 Activision trace is available with
 `run_prefix=run_financebench_doc_live10_capability_parallel_v2` and

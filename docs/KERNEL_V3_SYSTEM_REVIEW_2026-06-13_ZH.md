@@ -313,13 +313,15 @@ SEC companyfacts payload 可能明显大于普通网页。此前 4MB 截断会�
 - Topology graph 严格按当前 console thread 的 journal 事件渲染；新线程没有事件时只显示 idle 节点，不再用历史 benchmark pipeline 填充当前线程视图。
 - Processor / search / activity 不再默认展示长 prompt 或长输出；主界面只显示短标签、状态点、计数和 badges。点击节点或 signal card 后，inspector 才展示 host-visible processor contract、输出摘要、usage、错误状态或检索细节；隐藏 chain-of-thought 不暴露。
 - Search branches 从 journal 的 `retrieval_search_attempt` / provider diagnostics 派生，默认展示分支号、source count、accepted source count 和 provider badges。
-- Running 状态会先在 transcript 里显示 Kernel v3 正在运行，并在左侧 signal stream 中轮询 journal；只要 agent 写入 processor/tool/retrieval/verifier 事件，拓扑节点和 signal cards 就实时变化。
+- Running 状态会先在 transcript 里显示 Kernel v3 正在运行，并在左侧 signal stream 中订阅 live journal；只要 agent 写入 processor/tool/retrieval/verifier 事件，拓扑节点和 signal cards 就实时变化。
 - Trace 不再作为会让用户离开聊天上下文的顶部 tab；公开 trace 以图形拓扑、短 signal cards 和 inspector 显示。
 - UI 支持 thread selector、New Thread 和 Clear Screen。Clear Screen 只清空本地演示视图，不删除 durable journal。
 - 浏览器输入默认使用 Auto Chat：仍然启用模型 `turn-router`、`semantic-intake`、`planner`、`evaluator`、`synthesizer`，由 LLM 判断是普通回复、继续任务还是新任务；host 不做关键词拦截。Auto 只是不强制打开 live retrieval / deep research。Finance Deep 模式和金融快捷题会暴露更大的金融检索与工具预算。
 - 快捷题目已换成更稳定的高难度金融案例：Goldman net revenues、Activision fixed asset turnover、3M capital intensity、NextEra operating revenue。
 - Topology 和 signal stream 现在只展示当前最新 chat turn 的事件段，并在 terminal answer / failure 后冻结该轮 trace；这避免 Answer 已经输出后 Search/Tools 仍继续增长造成的错觉。
-- 拓扑主路径改为统一左到右的 SVG 有向边，轮询间隔缩短到 500ms，并扩大 journal tail 读取窗口以降低长 run 中事件后知后觉的问题。
+- Dashboard 新增 `/api/live` Server-Sent Events 通道，直接 tail Kernel v3 durable journal。浏览器收到 `chat_turn`、processor、tool、retrieval、evidence、verifier、answer 等记录后立即重绘 topology、signal cards、processor packets 和 transcript，不再等待下一次全量 state。
+- `/api/state` 改为低频校准路径，刷新间隔为 5s，负责 workspace、benchmark、command metadata 和历史 trace 的初始化；新 live event 后的短窗口内不会被慢 state 响应反向覆盖，避免拓扑倒退或错序。
+- 拓扑主路径改为两层图形结构：Intake -> Plan -> Policy -> Tools 与 Search/Evidence/Verify 分支汇合到 Answer，箭头保持前进方向；节点点击后的 inspector 状态不会被自动刷新抢焦点。
 - 渲染层已针对录屏做抗遮挡处理：主视图减少文字，详细文字只在 inspector/局部滚动区域出现，避免长 prompt、长输出或长 URL 被组件遮挡。
 - 后台命令执行会在 WSL 环境没有 `DEEPSEEK_API_KEY` 时尝试读取 Windows User/Machine 环境变量，并只注入子进程，不打印、不写日志；如果仍不可见，UI 会立即显示 `live_model_not_enabled`。
 

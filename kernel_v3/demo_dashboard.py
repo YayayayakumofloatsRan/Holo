@@ -127,6 +127,8 @@ RELEVANT_EVENT_KINDS = {
     "semantic_intake",
     "compiled_task_program",
     "policy_decision",
+    "toolchain_step_proposed",
+    "retrieval_query_plan",
     "retrieval_search_attempt",
     "retrieval_fetch",
     "retrieval_fetch_attempt",
@@ -220,6 +222,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 )
             )
             return
+        if parsed.path == "/api/live":
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            console_thread = _safe_thread_id(_query_value(query, "console_thread") or "demo-ui-live")
+            self._stream_live_events(console_thread)
+            return
         if parsed.path == "/workflow":
             workflow = self.server.root / ".state/kernel_v3/visuals/kernel_v3_live_demo_task902.html"
             self._send_file(workflow, "text/html; charset=utf-8")
@@ -277,7 +284,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _send_text(self, text: str, content_type: str) -> None:
         body = text.encode("utf-8")
@@ -286,7 +296,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _send_file(self, path: Path, content_type: str) -> None:
         if not path.exists():
@@ -298,7 +311,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _read_json_body(self, *, max_bytes: int) -> Json:
         try:
@@ -313,6 +329,92 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception:
             return {}
         return value if isinstance(value, dict) else {}
+
+    def _stream_live_events(self, thread_id: str) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        journal = self.server.root / ".state/kernel_v3/journal/global.jsonl"
+        position = journal.stat().st_size if journal.exists() else 0
+        allowed_task_ids: set[str] = set()
+        allowed_run_ids: set[str] = set()
+        turn_records: list[Json] = []
+        closed = False
+        last_heartbeat = time.time()
+        if not self._write_sse("ready", {"thread_id": thread_id}):
+            return
+        while True:
+            if time.time() - last_heartbeat > 10:
+                if not self._write_sse("heartbeat", {"thread_id": thread_id, "at": time.time()}):
+                    return
+                last_heartbeat = time.time()
+            if not journal.exists():
+                time.sleep(0.15)
+                continue
+            try:
+                with journal.open("r", encoding="utf-8", errors="ignore") as handle:
+                    handle.seek(position)
+                    while True:
+                        line = handle.readline()
+                        if not line:
+                            position = handle.tell()
+                            break
+                        position = handle.tell()
+                        try:
+                            record = json.loads(line)
+                        except Exception:
+                            continue
+                        if not isinstance(record, dict):
+                            continue
+                        direct = _record_matches_thread_prefix(record, thread_id)
+                        if direct and record.get("kind") == "chat_turn":
+                            allowed_task_ids.clear()
+                            allowed_run_ids.clear()
+                            turn_records.clear()
+                            closed = False
+                        if direct:
+                            _add_record_scope_ids(record, allowed_task_ids=allowed_task_ids, allowed_run_ids=allowed_run_ids)
+                        if not direct and not _live_record_in_scope(record, allowed_task_ids=allowed_task_ids, allowed_run_ids=allowed_run_ids):
+                            continue
+                        if closed and not (direct and record.get("kind") == "chat_turn"):
+                            continue
+                        kind = str(record.get("kind") or "")
+                        if kind not in RELEVANT_EVENT_KINDS:
+                            continue
+                        turn_records.append(record)
+                        visible_turn = _records_until_terminal(turn_records)
+                        closed = _has_terminal_record(visible_turn)
+                        payload = {
+                            "thread_id": thread_id,
+                            "record": _public_flow_record(record),
+                            "transcript": console_transcript(visible_turn, []),
+                            "topology": loop_topology_state(visible_turn),
+                            "flow": loop_flow_state(visible_turn, None),
+                            "search_branches": search_branch_state(visible_turn),
+                            "model_io": model_io_stream_state(visible_turn),
+                            "stats": _console_trace_stats(visible_turn, thread_records=len(turn_records)),
+                            "closed": closed,
+                        }
+                        if not self._write_sse("journal", payload):
+                            return
+            except BrokenPipeError:
+                return
+            except Exception as exc:
+                if not self._write_sse("stream_error", {"thread_id": thread_id, "error": clip(f"{type(exc).__name__}: {exc}", 400)}):
+                    return
+                time.sleep(0.5)
+            time.sleep(0.15)
+
+    def _write_sse(self, event: str, payload: Json) -> bool:
+        try:
+            body = f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=True, separators=(',', ':'))}\n\n"
+            self.wfile.write(body.encode("utf-8"))
+            self.wfile.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            return False
 
 
 def _command_runs_snapshot(server: DashboardServer) -> list[Json]:
@@ -623,17 +725,77 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
         "search_branches": search_branch_state(visible_turn),
         "model_io": model_io_stream_state(visible_turn),
         "activity": public_activity_state(visible_turn, active),
-        "stats": {
-            "records": len(visible_turn),
-            "thread_records": len(scoped),
-            "actions": sum(1 for record in visible_turn if record.get("kind") == "action"),
-            "searches": sum(1 for record in visible_turn if record.get("kind") == "retrieval_search_attempt"),
-            "fetches": sum(1 for record in visible_turn if record.get("kind") in {"retrieval_fetch", "retrieval_fetch_attempt"}),
-            "evidence": sum(1 for record in visible_turn if record.get("kind") in {"retrieval_evidence", "claim_ledger", "slot_frame"}),
-            "closed": _has_terminal_record(visible_turn),
-        },
+        "stats": _console_trace_stats(visible_turn, thread_records=len(scoped)),
         "notice": "Current turn only. Public trace; hidden chain-of-thought is not exposed.",
     }
+
+
+def _console_trace_stats(records: list[Json], *, thread_records: int) -> Json:
+    return {
+        "records": len(records),
+        "thread_records": thread_records,
+        "actions": sum(1 for record in records if record.get("kind") == "action"),
+        "searches": sum(1 for record in records if record.get("kind") == "retrieval_search_attempt"),
+        "fetches": sum(1 for record in records if record.get("kind") in {"retrieval_fetch", "retrieval_fetch_attempt"}),
+        "evidence": sum(
+            1
+            for record in records
+            if record.get("kind") in {"retrieval_evidence", "claim_ledger", "slot_frame"}
+        ),
+        "closed": _has_terminal_record(records),
+    }
+
+
+def _public_flow_record(record: Json) -> Json:
+    kind = str(record.get("kind") or "")
+    data = record.get("data") if isinstance(record.get("data"), dict) else {}
+    event: Json = {
+        "kind": kind,
+        "record_id": record.get("record_id"),
+        "task_id": record.get("task_id") or data.get("task_id") or "",
+        "run_id": record.get("run_id") or data.get("run_id") or "",
+        "step_id": record.get("step_id") or data.get("step_id") or "",
+        "at": record.get("recorded_at_ms"),
+        "stage": _stage_for_kind(kind),
+        "title": _activity_title(kind, data),
+        "status": _activity_status(kind, data),
+        "detail": _activity_detail(kind, data),
+    }
+    if kind == "processor_request":
+        params = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
+        prompt = data.get("prompt") if isinstance(data.get("prompt"), dict) else {}
+        event.update(
+            {
+                "processor": data.get("task_type") or data.get("processor") or "",
+                "provider": data.get("provider") or params.get("provider") or "",
+                "model": data.get("model") or params.get("model") or "",
+                "prompt_chars": prompt.get("chars"),
+                "prompt_hash": prompt.get("hash"),
+            }
+        )
+    elif kind == "processor_result":
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        event.update(
+            {
+                "processor": data.get("task_type") or data.get("processor") or "",
+                "provider": data.get("provider") or "",
+                "model": data.get("model") or "",
+                "duration_ms": data.get("duration_ms"),
+                "tokens": usage.get("total_tokens"),
+            }
+        )
+    elif kind == "retrieval_search_attempt":
+        diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
+        event.update(
+            {
+                "query": clip(data.get("query") or data.get("goal"), 180),
+                "source_count": diagnostics.get("journaled_source_count") or len(data.get("sources") or []),
+            }
+        )
+    elif kind in {"retrieval_fetch", "retrieval_fetch_attempt"}:
+        source = data.get("source") if isinstance(data.get("source"), dict) else {}
+        event.update({"uri": clip(data.get("uri") or source.get("uri"), 220)})
+    return event
 
 
 def workspace_state(root: Path, thread_id: str) -> Json:
@@ -1575,15 +1737,38 @@ def _thread_scoped_ids(records: list[Json], thread_prefix: str) -> tuple[set[str
     for record in records:
         if not _record_matches_thread_prefix(record, thread_prefix):
             continue
-        data = record.get("data") if isinstance(record.get("data"), dict) else {}
-        for value in (record.get("task_id"), data.get("task_id")):
-            if isinstance(value, str) and value:
-                task_ids.add(value)
-        for value in (record.get("run_id"), data.get("run_id")):
-            if isinstance(value, str) and value:
-                if value.startswith("chat-") or value.startswith("mission-") or thread_prefix in value:
-                    run_ids.add(value)
+        _add_record_scope_ids(record, allowed_task_ids=task_ids, allowed_run_ids=run_ids)
     return task_ids, run_ids
+
+
+def _add_record_scope_ids(record: Json, *, allowed_task_ids: set[str], allowed_run_ids: set[str]) -> None:
+    data = record.get("data") if isinstance(record.get("data"), dict) else {}
+    thread_id = _record_thread_id(record)
+    for value in (record.get("task_id"), data.get("task_id")):
+        if isinstance(value, str) and value:
+            allowed_task_ids.add(value)
+    for value in (record.get("run_id"), data.get("run_id")):
+        if isinstance(value, str) and _is_thread_scoped_run_id(value, thread_id):
+            allowed_run_ids.add(value)
+
+
+def _is_thread_scoped_run_id(value: str, thread_id: str = "") -> bool:
+    if not value:
+        return False
+    if value.startswith("chat-") or value.startswith("mission-"):
+        return True
+    return bool(thread_id and thread_id in value)
+
+
+def _live_record_in_scope(record: Json, *, allowed_task_ids: set[str], allowed_run_ids: set[str]) -> bool:
+    data = record.get("data") if isinstance(record.get("data"), dict) else {}
+    task_id = record.get("task_id") or data.get("task_id")
+    run_id = record.get("run_id") or data.get("run_id")
+    if isinstance(task_id, str) and task_id in allowed_task_ids:
+        return True
+    if isinstance(run_id, str) and run_id in allowed_run_ids:
+        return True
+    return False
 
 
 def _record_in_thread_scope(
@@ -1600,24 +1785,21 @@ def _record_in_thread_scope(
     run_id = record.get("run_id") or data.get("run_id")
     if isinstance(run_id, str) and run_id in allowed_run_ids:
         return True
-    if isinstance(run_id, str) and run_id:
-        return False
     if isinstance(task_id, str) and task_id in allowed_task_ids:
         return True
     return False
 
 
-def _record_matches_thread_prefix(record: Json, thread_prefix: str) -> bool:
+def _record_thread_id(record: Json) -> str:
     data = record.get("data") if isinstance(record.get("data"), dict) else {}
-    candidates = [
-        record.get("thread_id"),
-        data.get("thread_id"),
-        data.get("thread_key"),
-    ]
-    for candidate in candidates:
-        if isinstance(candidate, str) and candidate.startswith(thread_prefix):
-            return True
-    return False
+    for candidate in (record.get("thread_id"), data.get("thread_id"), data.get("thread_key")):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return ""
+
+
+def _record_matches_thread_prefix(record: Json, thread_prefix: str) -> bool:
+    return bool(thread_prefix and _record_thread_id(record).startswith(thread_prefix))
 
 
 def selected_metrics(metrics: Json) -> Json:
@@ -2106,7 +2288,7 @@ HTML = r"""<!doctype html>
     .event .desc { color: var(--muted); }
     .footer-grid { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 10px; }
     .mono { font-family: "Times New Roman", Times, serif; }
-    .grid { grid-template-columns: minmax(0, 54%) minmax(520px, 46%); }
+    .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
     .left { grid-template-rows: 120px 292px minmax(0, 1fr); }
     .right { grid-template-rows: minmax(0, 1fr); }
     .workspace-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 10px; height: calc(100% - 28px); }
@@ -2340,13 +2522,13 @@ HTML = r"""<!doctype html>
     .topology-edge.warn { stroke: var(--amber); stroke-width: 3; opacity: .95; }
     .topology-node {
       position: absolute;
-      width: 82px;
-      min-height: 62px;
+      width: 76px;
+      min-height: 58px;
       transform: translate(-50%, -50%);
       border: 1px solid var(--line);
       border-radius: 6px;
       background: #fff;
-      padding: 9px;
+      padding: 8px;
       box-shadow: 0 8px 18px rgba(15, 23, 42, .07);
       cursor: pointer;
       text-align: left;
@@ -2358,7 +2540,7 @@ HTML = r"""<!doctype html>
     .topology-node.idle { opacity: .62; }
     .topology-node .node-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
     .topology-node .node-name { font-size: 12px; font-weight: 700; line-height: 1.05; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .topology-node .node-count { margin-top: 7px; font-size: 22px; font-weight: 700; line-height: 1; color: var(--ink); }
+    .topology-node .node-count { margin-top: 6px; font-size: 20px; font-weight: 700; line-height: 1; color: var(--ink); }
     .topology-node .node-detail { margin-top: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
     .state-dot.ok { background: var(--green); }
@@ -2415,7 +2597,7 @@ HTML = r"""<!doctype html>
     }
     .chat-panel { grid-template-rows: auto auto minmax(0, 1fr) auto; }
     .left { grid-template-rows: 98px 410px minmax(0, 1fr); }
-    .grid { grid-template-columns: minmax(620px, 58%) minmax(470px, 42%); }
+    .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
     .wide-pane { grid-column: 1 / span 2; }
     @media (max-width: 980px) {
       body { overflow: auto; height: auto; }
@@ -2527,22 +2709,27 @@ HTML = r"""<!doctype html>
       itemId: params.get("item_id") || "",
       consoleThread: params.get("console_thread") || localStorage.getItem("holo_console_thread") || "demo-ui-live"
     };
+    let liveSource = null;
+    let liveConnectedThread = "";
+    let lastLiveAt = 0;
+    let manualInspector = false;
     const topologyLabels = ["Intake", "Plan", "Policy", "Tools", "Search", "Evidence", "Verify", "Answer"];
     const topologyLayout = {
-      Intake: [8, 50],
-      Plan: [20, 50],
-      Policy: [32, 50],
-      Tools: [44, 50],
-      Search: [56, 50],
-      Evidence: [68, 50],
-      Verify: [80, 50],
+      Intake: [10, 50],
+      Plan: [28, 28],
+      Policy: [46, 28],
+      Tools: [64, 28],
+      Search: [46, 72],
+      Evidence: [64, 72],
+      Verify: [80, 72],
       Answer: [92, 50]
     };
     const topologyEdges = [
       ["Intake", "Plan"],
       ["Plan", "Policy"],
       ["Policy", "Tools"],
-      ["Tools", "Search"],
+      ["Policy", "Search"],
+      ["Tools", "Evidence"],
       ["Search", "Evidence"],
       ["Evidence", "Verify"],
       ["Verify", "Answer"]
@@ -2584,6 +2771,8 @@ HTML = r"""<!doctype html>
       localStorage.setItem("holo_console_thread", selected.consoleThread);
       rememberThread(selected.consoleThread);
       updateLocation();
+      resetLiveView();
+      connectLive();
       refresh();
     }
     function clearKey() { return `holo_clear_${selected.consoleThread}`; }
@@ -2595,7 +2784,8 @@ HTML = r"""<!doctype html>
     function newThreadId() {
       return `demo-ui-${Date.now().toString(36)}`;
     }
-    function showInspector(title, meta, body) {
+    function showInspector(title, meta, body, manual = false) {
+      if (manual) manualInspector = true;
       const panel = document.getElementById("graphInspector");
       if (!panel) return;
       panel.innerHTML = `
@@ -2642,6 +2832,92 @@ HTML = r"""<!doctype html>
       const suffix = query.toString();
       return suffix ? `/api/state?${suffix}` : "/api/state";
     }
+    function liveUrl() {
+      const query = new URLSearchParams();
+      query.set("console_thread", selected.consoleThread || "demo-ui-live");
+      return `/api/live?${query.toString()}`;
+    }
+    function resetLiveView() {
+      manualInspector = false;
+      lastLiveAt = 0;
+      renderTranscript([]);
+      renderPipeline([]);
+      renderModelIO([]);
+      renderBranches([]);
+      renderActivity([]);
+      text("consoleThread", `thread ${selected.consoleThread}`);
+      text("consoleStatus", "ready");
+      text("publicTraceNotice", "live stream starting");
+      cls("consoleDot", "dot ok");
+      showInspector("Waiting for events", selected.consoleThread, "This thread has no visible agent-loop events yet. Submit a task to stream model packets, tool calls, search branches, verifier gates, and the final answer.");
+    }
+    function connectLive() {
+      if (liveSource) {
+        liveSource.close();
+        liveSource = null;
+      }
+      if (!window.EventSource) {
+        text("publicTraceNotice", "SSE unavailable; low-frequency state refresh active");
+        return;
+      }
+      liveConnectedThread = selected.consoleThread || "demo-ui-live";
+      liveSource = new EventSource(liveUrl());
+      liveSource.addEventListener("ready", event => {
+        let payload = {};
+        try { payload = JSON.parse(event.data || "{}"); } catch (err) { payload = {}; }
+        if ((payload.thread_id || liveConnectedThread) !== selected.consoleThread) return;
+        text("publicTraceNotice", "live stream connected");
+      });
+      liveSource.addEventListener("heartbeat", event => {
+        let payload = {};
+        try { payload = JSON.parse(event.data || "{}"); } catch (err) { payload = {}; }
+        if ((payload.thread_id || liveConnectedThread) !== selected.consoleThread) return;
+        const age = lastLiveAt ? Math.max(0, Math.round((Date.now() - lastLiveAt) / 1000)) : 0;
+        text("publicTraceNotice", age ? `live stream connected | last event ${age}s ago` : "live stream connected");
+      });
+      liveSource.addEventListener("journal", event => {
+        let payload = {};
+        try { payload = JSON.parse(event.data || "{}"); } catch (err) { payload = {}; }
+        applyLivePayload(payload);
+      });
+      liveSource.addEventListener("stream_error", event => {
+        let payload = {};
+        try { payload = JSON.parse(event.data || "{}"); } catch (err) { payload = {}; }
+        if ((payload.thread_id || liveConnectedThread) !== selected.consoleThread) return;
+        text("publicTraceNotice", `live stream error: ${payload.error || "unknown"}`);
+      });
+      liveSource.addEventListener("error", () => {
+        if (liveConnectedThread === selected.consoleThread) text("publicTraceNotice", "live stream reconnecting");
+      });
+    }
+    function applyLivePayload(payload) {
+      if (!payload || payload.thread_id !== selected.consoleThread) return;
+      lastLiveAt = Date.now();
+      setScreenCleared(false);
+      const stats = payload.stats || {};
+      const closed = Boolean(payload.closed || stats.closed);
+      if (Array.isArray(payload.transcript) && payload.transcript.length) renderTranscript(payload.transcript);
+      renderPipeline(payload.topology || []);
+      renderModelIO(payload.model_io || []);
+      renderBranches(payload.search_branches || []);
+      renderActivity(payload.flow || []);
+      text("publicTraceNotice", `${closed ? "closed live trace" : "live journal stream"} | ${fmtNum(stats.records)} events`);
+      text("consoleStatus", closed ? "ready" : "running");
+      cls("consoleDot", `dot ${closed ? "ok" : "running"}`);
+    }
+    function renderPendingSubmit(message) {
+      const now = Date.now();
+      renderTranscript([
+        { role: "user", text: message, status: "submitted", at: now },
+        { role: "assistant", text: "Kernel v3 is running. Model packets, tool calls, retrieval branches, verifier gates, and the final answer will stream into the graph as journal events arrive.", status: "running", at: now + 1 }
+      ]);
+      renderActivity([{ stage: "Run", title: "Start", kind: "dashboard_job", status: "running", detail: `thread ${selected.consoleThread}`, at: now }]);
+      renderPipeline([]);
+      renderModelIO([]);
+      renderBranches([]);
+      manualInspector = false;
+      showInspector("Kernel process running", selected.consoleThread, "Waiting for the first journal event from the WSL runtime.");
+    }
     function selectRun(row) {
       selected.runPrefix = row.run_prefix || "";
       selected.threadPrefix = row.thread_prefix ?? "";
@@ -2659,6 +2935,8 @@ HTML = r"""<!doctype html>
       cls("consoleDot", "dot running");
       setScreenCleared(false);
       rememberThread(selected.consoleThread);
+      if (!liveSource || liveConnectedThread !== selected.consoleThread) connectLive();
+      renderPendingSubmit(message);
       try {
         const res = await fetch("/api/command", {
           method: "POST",
@@ -2673,7 +2951,8 @@ HTML = r"""<!doctype html>
         input.value = "";
         rememberThread(selected.consoleThread);
         updateLocation();
-        refresh();
+        if (liveConnectedThread !== selected.consoleThread) connectLive();
+        window.setTimeout(refresh, 900);
       } catch (err) {
         text("consoleStatus", "submit failed");
         cls("consoleDot", "dot failed");
@@ -2727,18 +3006,21 @@ HTML = r"""<!doctype html>
       text("refreshState", `auto refresh on | stale ${cur.stale_seconds ?? "-"}s`);
       text("selectedRunLabel", `${cur.name || (data.filters || {}).run_prefix || "live"}${cur.selected_item_id ? " / " + cur.selected_item_id : ""}`);
       text("consoleThread", `thread ${consoleState.thread_id || selected.consoleThread}`);
-      text("publicTraceNotice", consoleState.notice || "public trace only");
       const jobStatus = consoleJob.status || (consoleState.transcript && consoleState.transcript.length ? "ready" : "ready");
       text("consoleStatus", jobStatus);
       cls("consoleDot", `dot ${jobStatus === "running" || jobStatus === "queued" ? "running" : jobStatus === "failed" || jobStatus === "timeout" || jobStatus === "error" ? "failed" : "ok"}`);
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
       const cleared = isScreenCleared() && !["running", "queued"].includes(jobStatus);
-      renderTranscript(cleared ? [] : (consoleState.transcript || []));
-      renderPipeline(cleared ? [] : (consoleState.topology || []));
-      renderModelIO(cleared ? [] : (consoleState.model_io || []));
-      renderBranches(cleared ? [] : (consoleState.search_branches || []));
-      renderActivity(cleared ? [] : (consoleState.flow || consoleState.activity || []));
-      if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
+      const preserveLiveTrace = Boolean(lastLiveAt && Date.now() - lastLiveAt < 2500 && !cleared);
+      if (!preserveLiveTrace) {
+        text("publicTraceNotice", consoleState.notice || "public trace only");
+        renderTranscript(cleared ? [] : (consoleState.transcript || []));
+        renderPipeline(cleared ? [] : (consoleState.topology || []));
+        renderModelIO(cleared ? [] : (consoleState.model_io || []));
+        renderBranches(cleared ? [] : (consoleState.search_branches || []));
+        renderActivity(cleared ? [] : (consoleState.flow || consoleState.activity || []));
+        if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
+      }
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
       latestSpotlights = buildSpotlights(data);
@@ -2872,11 +3154,11 @@ HTML = r"""<!doctype html>
       panel.querySelectorAll(".topology-node").forEach(button => {
         button.addEventListener("click", () => {
           const row = nodeMap.get(button.dataset.label) || {};
-          showInspector(row.label, `${row.state || "idle"} | ${fmtNum(row.value)} events`, row.detail || "");
+          showInspector(row.label, `${row.state || "idle"} | ${fmtNum(row.value)} events`, row.detail || "", true);
         });
       });
       const activeNode = nodes.find(row => row.state === "active") || nodes.find(row => row.state === "warn") || nodes.find(row => row.value > 0) || nodes[0];
-      if (activeNode) showInspector(activeNode.label, `${activeNode.state} | ${fmtNum(activeNode.value)} events`, activeNode.detail);
+      if (activeNode && !manualInspector) showInspector(activeNode.label, `${activeNode.state} | ${fmtNum(activeNode.value)} events`, activeNode.detail);
     }
     function canonicalTopologyLabel(label) {
       const value = String(label || "").toLowerCase();
@@ -2931,7 +3213,7 @@ HTML = r"""<!doctype html>
         </button>`).join("");
       panel.querySelectorAll(".signal-card").forEach((button, index) => {
         const row = shown[index] || {};
-        button.addEventListener("click", () => showInspector(`Search branch ${row.index || ""}`, `${row.status || "ok"} | ${fmtNum(row.sources)} sources`, `${row.query || ""}\n${(row.providers || []).join(", ")}`));
+        button.addEventListener("click", () => showInspector(`Search branch ${row.index || ""}`, `${row.status || "ok"} | ${fmtNum(row.sources)} sources`, `${row.query || ""}\n${(row.providers || []).join(", ")}`, true));
       });
     }
     function renderModelIO(rows) {
@@ -2954,7 +3236,7 @@ HTML = r"""<!doctype html>
         const row = shown[index] || {};
         const children = Array.isArray(row.children) ? row.children : [];
         const body = children.map(child => `${child.label || child.kind}: ${child.meta || ""}\n${child.body || ""}`).join("\n\n");
-        button.addEventListener("click", () => showInspector(row.title || row.processor || "processor", [row.phase, row.status, row.meta].filter(Boolean).join(" | "), body || row.summary || ""));
+        button.addEventListener("click", () => showInspector(row.title || row.processor || "processor", [row.phase, row.status, row.meta].filter(Boolean).join(" | "), body || row.summary || "", true));
       });
     }
     function renderActivity(rows) {
@@ -2974,7 +3256,7 @@ HTML = r"""<!doctype html>
       }).join("");
       panel.querySelectorAll(".signal-card").forEach((button, index) => {
         const row = shown[index] || {};
-        button.addEventListener("click", () => showInspector(row.title || row.kind || "event", row.status || row.kind || "", row.detail || row.step_id || row.task_id || ""));
+        button.addEventListener("click", () => showInspector(row.title || row.kind || "event", row.status || row.kind || "", row.detail || row.step_id || row.task_id || "", true));
       });
     }
     function renderIntel(rows) {
@@ -2996,13 +3278,17 @@ HTML = r"""<!doctype html>
       return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
     }
     rememberThread(selected.consoleThread);
+    connectLive();
     refresh();
     setInterval(() => {
       if (!latestSpotlights.length) return;
       spotlightIndex = (spotlightIndex + 1) % latestSpotlights.length;
       renderSpotlight();
     }, 4500);
-    setInterval(refresh, 500);
+    setInterval(refresh, 5000);
+    window.addEventListener("beforeunload", () => {
+      if (liveSource) liveSource.close();
+    });
   </script>
 </body>
 </html>
