@@ -130,16 +130,22 @@ turnover from the 2019 10-K source URL. The promoted live run
 synthesis gate pass. The Windows-accessible dashboard defaults to this run at
 `http://localhost:8787/` when `kernel_v3.demo_dashboard` is running. The current
 dashboard is chat-first: the right side is the interactive Holo console, while
-the left side shows WSL workspace state, a graphical SVG agent topology with
-explicit arrows, compact processor/search/event signal cards, and a click-through
-inspector for details. The browser no longer depends on high-frequency full-state
-polling for the agent loop: `/api/live` streams Server-Sent Events from the
-Kernel v3 journal and updates topology, processor packets, retrieval branches,
-and transcript fragments as events are appended; `/api/state` is now a slower
-calibration path for workspace, benchmark, and command metadata. The chat panel
-also includes a large Runtime Console that streams host-visible model request/
-result packets, structured outputs, tool calls, retrieval events, evidence,
-verifier gates, and final/failure records in a command-line style view. It
+the left side shows WSL workspace state and a merged Agent Loop Runtime panel.
+That panel combines a graphical SVG loop, compact processor/search/event signal
+cards, and a click-through inspector; the graph uses a continuous loop path
+without arrowhead markers because it reflects observed journal stages rather
+than a synthetic animation. The browser no longer depends on high-frequency
+full-state polling for the agent loop: `/api/live` streams lightweight
+Server-Sent Events from the Kernel v3 journal and updates topology, processor
+packets, retrieval branches, and transcript fragments as events are appended;
+`/api/state` is now a slower calibration path for workspace, benchmark, and
+command metadata. The chat panel also includes a large white Runtime Console
+that streams host-visible model request/result packets, structured outputs,
+tool calls, retrieval events, evidence, verifier gates, and final/failure
+records in a command-line style view. Its default hard prompts are restricted to
+cases with existing pass evidence for recording: Activision FY2019 fixed asset
+turnover, 3M capital intensity, Goldman FY2024 net revenues, and NextEra FY2024
+operating revenues. It
 supports thread switching, new demo threads, local screen clearing, model-routed
 Auto Chat, Finance Deep mode with larger finance retrieval/tool budgets, and
 stable hard finance prompts for recording. It also supports item-level demo

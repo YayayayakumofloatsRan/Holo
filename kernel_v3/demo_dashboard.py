@@ -335,6 +335,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
         journal = self.server.root / ".state/kernel_v3/journal/global.jsonl"
         position = journal.stat().st_size if journal.exists() else 0
@@ -394,10 +395,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             "flow": loop_flow_state(visible_turn, None),
                             "search_branches": search_branch_state(visible_turn),
                             "model_io": model_io_stream_state(visible_turn),
-                            "runtime_console": runtime_console_state(visible_turn, None),
                             "stats": _console_trace_stats(visible_turn, thread_records=len(turn_records)),
                             "closed": closed,
                         }
+                        if closed:
+                            payload["runtime_console"] = runtime_console_state(visible_turn, None)
                         if not self._write_sse("journal", payload):
                             return
             except BrokenPipeError:
@@ -406,7 +408,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 if not self._write_sse("stream_error", {"thread_id": thread_id, "error": clip(f"{type(exc).__name__}: {exc}", 400)}):
                     return
                 time.sleep(0.5)
-            time.sleep(0.15)
+            time.sleep(0.05)
 
     def _write_sse(self, event: str, payload: Json) -> bool:
         try:
@@ -2111,7 +2113,7 @@ HTML = r"""<!doctype html>
       overflow: hidden;
     }
     .left, .right { min-height: 0; display: grid; gap: 16px; }
-    .left { grid-template-rows: 318px 1fr 164px; }
+    .left { grid-template-rows: 318px 1fr; }
     .right { grid-template-rows: 262px 1fr 142px; }
     .panel {
       min-height: 0;
@@ -2411,7 +2413,7 @@ HTML = r"""<!doctype html>
     .footer-grid { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 10px; }
     .mono { font-family: "Times New Roman", Times, serif; }
     .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
-    .left { grid-template-rows: 120px 292px minmax(0, 1fr); }
+    .left { grid-template-rows: 120px minmax(0, 1fr); }
     .right { grid-template-rows: minmax(0, 1fr); }
     .workspace-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 10px; height: calc(100% - 28px); }
     .workspace-card {
@@ -2452,10 +2454,10 @@ HTML = r"""<!doctype html>
       display: grid;
       grid-template-rows: 28px minmax(0, 1fr);
       gap: 8px;
-      border: 1px solid #1e293b;
+      border: 1px solid var(--line);
       border-radius: 6px;
-      background: #0b1020;
-      color: #dbeafe;
+      background: #fff;
+      color: var(--ink);
       padding: 10px;
       overflow: hidden;
     }
@@ -2465,14 +2467,14 @@ HTML = r"""<!doctype html>
       align-items: center;
       gap: 10px;
       min-width: 0;
-      color: #e5e7eb;
+      color: var(--slate);
       font-size: 13px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0;
     }
     .runtime-terminal-head span:last-child {
-      color: #94a3b8;
+      color: var(--muted);
       font-size: 12px;
       font-weight: 400;
       text-transform: none;
@@ -2494,34 +2496,34 @@ HTML = r"""<!doctype html>
       grid-template-columns: 118px minmax(0, 1fr);
       gap: 10px;
       padding: 6px 0;
-      border-bottom: 1px solid rgba(148, 163, 184, .16);
+      border-bottom: 1px solid #edf0f4;
       min-width: 0;
     }
     .console-line .console-time {
-      color: #7dd3fc;
+      color: var(--blue);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
     .console-main { min-width: 0; }
     .console-command {
-      color: #f8fafc;
+      color: var(--ink);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
     .console-body {
       margin-top: 3px;
-      color: #a7b3c5;
+      color: var(--muted);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       max-height: 130px;
       overflow: auto;
     }
-    .console-line.active .console-command { color: #93c5fd; }
-    .console-line.failed .console-command { color: #fca5a5; }
-    .console-line.ok .console-command { color: #d1fae5; }
+    .console-line.active .console-command { color: var(--blue); }
+    .console-line.failed .console-command { color: var(--red); }
+    .console-line.ok .console-command { color: var(--teal); }
     .console-empty {
-      color: #94a3b8;
+      color: var(--muted);
       padding: 10px 0;
       white-space: pre-wrap;
     }
@@ -2692,6 +2694,21 @@ HTML = r"""<!doctype html>
       height: calc(100% - 28px);
       min-height: 0;
     }
+    .loop-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, .58fr) minmax(0, .42fr);
+      gap: 12px;
+    }
+    .loop-panel .panel-title { margin-bottom: 0; }
+    .loop-panel .topology-shell,
+    .loop-panel .live-grid { height: auto; }
+    .loop-panel-status {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+    }
+    .loop-panel-status span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .topology-canvas {
       position: relative;
       min-height: 0;
@@ -2741,6 +2758,7 @@ HTML = r"""<!doctype html>
       stroke-width: 2.2;
       fill: none;
       opacity: .64;
+      stroke-linecap: round;
     }
     .topology-edge.feedback {
       stroke-dasharray: 5 5;
@@ -2826,7 +2844,7 @@ HTML = r"""<!doctype html>
       line-height: 1.2;
     }
     .chat-panel { grid-template-rows: auto auto minmax(140px, .42fr) minmax(260px, .58fr) auto; }
-    .left { grid-template-rows: 98px 410px minmax(0, 1fr); }
+    .left { grid-template-rows: 98px minmax(0, 1fr); }
     .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
     .wide-pane { grid-column: 1 / span 2; }
     @media (max-width: 980px) {
@@ -2836,6 +2854,7 @@ HTML = r"""<!doctype html>
       .pipeline, .cards, .run-cards, .diag, .intel-list, .footer-grid, .workspace-grid, .live-grid, .bottom-grid { grid-template-columns: 1fr; }
       .wide-pane { grid-column: auto; }
       .topology-shell, .thread-tools { grid-template-columns: 1fr; }
+      .loop-panel { grid-template-rows: auto minmax(360px, auto) minmax(320px, auto); }
       .stage:not(:last-child)::after { display: none; }
     }
   </style>
@@ -2866,8 +2885,11 @@ HTML = r"""<!doctype html>
           </div>
         </div>
       </div>
-      <div class="panel">
-        <div class="panel-title"><span>Agent topology graph</span><span id="latestItem"></span></div>
+      <div class="panel loop-panel">
+        <div class="panel-title">
+          <span>Agent loop runtime</span>
+          <span class="loop-panel-status"><span id="latestItem"></span><span id="publicTraceNotice">runtime context live</span></span>
+        </div>
         <div class="topology-shell">
           <div class="topology-canvas" id="pipeline"></div>
           <div class="graph-inspector" id="graphInspector">
@@ -2876,9 +2898,6 @@ HTML = r"""<!doctype html>
             <div class="inspect-body">The graph shows the live agent loop: model decisions, host validation, tool execution, search, evidence, verification, answer, and continuation.</div>
           </div>
         </div>
-      </div>
-      <div class="panel">
-        <div class="panel-title"><span>Execution signals</span><span id="publicTraceNotice">runtime context live</span></div>
         <div class="live-grid">
           <div class="live-pane">
             <div class="column-title">Events</div>
@@ -2921,10 +2940,10 @@ HTML = r"""<!doctype html>
             <div class="thread" id="consoleThread">thread demo-ui-live</div>
           </div>
           <div class="quick-prompts">
-            <button data-mode="finance_deep" data-prompt="What was Goldman Sachs' net revenues for fiscal year 2024? Use SEC or annual-report evidence and identify the exact line item.">Goldman net revenues</button>
-            <button data-mode="finance_deep" data-prompt="Compute Activision Blizzard FY2019 fixed asset turnover using FY2019 revenue and average net PP&E from the 2019 10-K. Show the formula and evidence.">Activision FAT</button>
-            <button data-mode="finance_deep" data-prompt="Assess whether 3M was capital intensive using filing evidence for sales and PP&E/assets, and compute the relevant ratio.">3M capital intensity</button>
-            <button data-mode="finance_deep" data-prompt="What was NextEra Energy's operating revenues for fiscal year 2024? Use the exact operating revenue line item and cite evidence.">NextEra operating revenue</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable finance task: compute Activision Blizzard's FY2019 fixed asset turnover from its FY2019 10-K. Retrieve the filing evidence, identify revenue and beginning/ending net PP&E, compute average net PP&E, show the formula, and cite the exact source lines used.">Hard: Activision FAT</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable finance task: assess whether 3M was capital intensive using filing evidence. Retrieve sales/revenue and PP&E or asset evidence, compute a relevant capital-intensity ratio, explain the threshold-free reasoning, and cite the exact line items.">Hard: 3M capital intensity</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable metric-disambiguation task: what was Goldman Sachs' net revenues for fiscal year 2024? Use filing or annual-report evidence, distinguish net revenues from component revenue lines, name the exact caption, and cite the source.">Hard: Goldman net revenues</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable metric-disambiguation task: what was NextEra Energy's operating revenues for fiscal year 2024? Use filing evidence, choose the exact operating revenues caption rather than a generic revenue concept, and cite the source.">Hard: NextEra operating revenue</button>
           </div>
         </div>
       </div>
@@ -3114,6 +3133,10 @@ HTML = r"""<!doctype html>
         let payload = {};
         try { payload = JSON.parse(event.data || "{}"); } catch (err) { payload = {}; }
         if ((payload.thread_id || liveConnectedThread) !== selected.consoleThread) return;
+        if (frozenTrace && frozenTrace.threadId === selected.consoleThread) {
+          text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} events | frozen`);
+          return;
+        }
         const age = lastLiveAt ? Math.max(0, Math.round((Date.now() - lastLiveAt) / 1000)) : 0;
         text("publicTraceNotice", age ? `live stream connected | last event ${age}s ago` : "live stream connected");
       });
@@ -3141,18 +3164,18 @@ HTML = r"""<!doctype html>
       setScreenCleared(false);
       const stats = payload.stats || {};
       const closed = Boolean(payload.closed || stats.closed);
-      if (Array.isArray(payload.runtime_console)) {
-        runtimeConsoleLines = payload.runtime_console;
-        renderRuntimeConsole(runtimeConsoleLines);
-      } else if (payload.record) {
-        appendRuntimeConsoleRecord(payload.record);
-      }
       if (Array.isArray(payload.transcript) && payload.transcript.length) renderTranscript(payload.transcript);
       renderPipeline(payload.topology || []);
       renderModelIO(payload.model_io || []);
       renderBranches(payload.search_branches || []);
       renderActivity(payload.flow || []);
-      text("publicTraceNotice", `${closed ? "closed runtime context" : "live runtime context"} | ${fmtNum(stats.records)} events`);
+      if (closed && Array.isArray(payload.runtime_console)) {
+        runtimeConsoleLines = payload.runtime_console;
+        renderRuntimeConsole(runtimeConsoleLines);
+      } else if (payload.record) {
+        appendRuntimeConsoleRecord(payload.record);
+      }
+      text("publicTraceNotice", `${closed ? "closed runtime context" : "live runtime context"} | ${fmtNum(stats.records)} events${kind ? " | last " + kind : ""}`);
       text("consoleStatus", closed ? "ready" : "running");
       cls("consoleDot", `dot ${closed ? "ok" : "running"}`);
       if (closed) {
@@ -3297,6 +3320,20 @@ HTML = r"""<!doctype html>
         renderActivity(cleared ? [] : (consoleState.flow || consoleState.activity || []));
         runtimeConsoleLines = cleared ? [] : (consoleState.runtime_console || []);
         renderRuntimeConsole(runtimeConsoleLines);
+        if (!cleared && consoleState.stats && consoleState.stats.closed) {
+          frozenTrace = {
+            threadId: selected.consoleThread,
+            transcript: consoleState.transcript || [],
+            topology: consoleState.topology || [],
+            model_io: consoleState.model_io || [],
+            search_branches: consoleState.search_branches || [],
+            flow: consoleState.flow || consoleState.activity || [],
+            runtime_console: runtimeConsoleLines.slice(),
+            stats: consoleState.stats || {},
+            frozenAt: Date.now()
+          };
+          text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} events | frozen`);
+        }
         if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
       } else if (hasFrozenTrace) {
         text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} events | frozen`);
@@ -3417,7 +3454,7 @@ HTML = r"""<!doctype html>
         const hot = toNode.state === "active" || toNode.state === "closed";
         const warn = fromNode.state === "warn" || toNode.state === "warn";
         const curve = topologyEdgePath(a, b, kind);
-        return `<path class="topology-edge ${kind === "loopback" ? "loopback feedback" : ""} ${active ? "active" : ""} ${hot ? "hot" : ""} ${warn ? "warn" : ""}" d="${curve}" marker-end="url(#arrow)" />`;
+        return `<path class="topology-edge ${kind === "loopback" ? "loopback feedback" : ""} ${active ? "active" : ""} ${hot ? "hot" : ""} ${warn ? "warn" : ""}" d="${curve}" />`;
       }).join("");
       const nodeHtml = nodes.map(row => {
         const pos = topologyLayout[row.label];
@@ -3430,11 +3467,6 @@ HTML = r"""<!doctype html>
       }).join("");
       panel.innerHTML = `
         <svg class="topology-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          <defs>
-            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
-              <path d="M0,0 L7,3.5 L0,7 Z" fill="#64748b"></path>
-            </marker>
-          </defs>
           ${svgEdges}
         </svg>
         <div class="topology-loop-label"><strong>Agent Loop</strong><span>model -> tools -> evidence -> verify -> answer -> continue</span></div>
@@ -3499,7 +3531,7 @@ HTML = r"""<!doctype html>
       const level = record.status === "failed" || record.status === "error" ? "failed" : record.status === "request" ? "active" : "ok";
       const line = record.line || `[${stage}] ${record.title || kind}`;
       const body = record.body || record.detail || record.query || record.uri || "";
-      return { at: record.at || Date.now(), level, stage, line, body };
+      return { at: Date.now(), source_at: record.at || 0, level, stage, line, body };
     }
     function renderRuntimeConsole(rows) {
       const panel = document.getElementById("runtimeConsole");
@@ -3510,9 +3542,10 @@ HTML = r"""<!doctype html>
         panel.innerHTML = `<div class="console-empty">$ waiting for model packets, tool calls, retrieval branches, evidence, verifier gates, and final answer...</div>`;
         return;
       }
+      const baseAt = firstConsoleAt(shown);
       panel.innerHTML = shown.map(row => `
         <div class="console-line ${escapeHtml(row.level || "ok")}">
-          <div class="console-time">${escapeHtml(formatConsoleTime(row.at))}</div>
+          <div class="console-time">${escapeHtml(formatConsoleTime(row.at, baseAt))}</div>
           <div class="console-main">
             <div class="console-command">${escapeHtml(row.line || "")}</div>
             ${row.body ? `<div class="console-body">${escapeHtml(row.body)}</div>` : ""}
@@ -3520,11 +3553,20 @@ HTML = r"""<!doctype html>
         </div>`).join("");
       panel.scrollTop = panel.scrollHeight;
     }
-    function formatConsoleTime(value) {
+    function firstConsoleAt(rows) {
+      for (const row of rows || []) {
+        const n = Number(row.at || 0);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return 0;
+    }
+    function formatConsoleTime(value, base) {
       const n = Number(value || 0);
       if (!n) return "--:--:--";
-      const date = new Date(n > 10_000_000_000 ? n : n * 1000);
-      return date.toLocaleTimeString([], { hour12: false });
+      const start = Number(base || n);
+      const scale = n > 10_000_000_000 || start > 10_000_000_000 ? 1000 : 1;
+      const elapsed = Math.max(0, (n - start) / scale);
+      return `+${elapsed.toFixed(elapsed < 10 ? 1 : 0)}s`;
     }
     function renderTranscript(rows) {
       const panel = document.getElementById("transcript");

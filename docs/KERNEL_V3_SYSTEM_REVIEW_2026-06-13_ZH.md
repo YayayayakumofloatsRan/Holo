@@ -308,9 +308,10 @@ SEC companyfacts payload 可能明显大于普通网页。此前 4MB 截断会�
 - 首屏改为正式聊天控制台：右侧为大面积 chat transcript 与 composer，用户能持续看到输入、running 状态和最终回复，不再被 trace/tab 切走。
 - 工作目录单独展示：workspace root、branch/head、state dir、thread id 与 provider surface 常驻可见，明确 Windows 浏览器正在观察 WSL 主工作区 `/home/ran_yakumo/holo`。
 - 用户可以直接在浏览器输入任务，dashboard 后端用真实 `holo-v3 chat --once` 在 WSL 主工作区启动 Kernel v3 agent run。
-- 同一界面常驻展示 workspace 状态、图形化 agent topology、processor/search/event signal cards 与 click-through inspector。
-- Agent workflow 以 SVG 拓扑图展示 Intake、Plan、Policy、Tools、Search、Evidence、Verify、Answer，并用明确箭头表现执行连接与 verify-to-plan 回路，使观众能直接看到 Holo 的问题解决闭环，而不是只能读线性日志。
+- 同一界面常驻展示 workspace 状态，以及合并后的 Agent Loop Runtime 面板：图形化 agent topology、processor/search/event signal cards 与 click-through inspector 在同一块中同步刷新。
+- Agent workflow 以 SVG 闭环路径展示 Intake、Plan、Policy、Tools、Search、Evidence、Verify、Answer；图中移除三角箭头，避免方向标记与真实 journal 阶段错位，改用节点状态、事件计数和 last event 文案表现真实执行衔接。
 - 右侧 chat 面板新增大面积 Runtime Console，以命令行风格流式显示 host-visible model request/result packets、结构化输出、tool calls、retrieval、evidence、verifier gates 和 final/failure records，避免模型/工具流被挤在短 cards 里看不清。
+- Runtime Console 改为白底，与主界面视觉统一；时间列显示相对本轮起点的 `+Xs`，不再把 journal 内部相对 tick 误当 Unix 时间戳。
 - Topology graph 严格按当前 console thread 的 journal 事件渲染；新线程没有事件时只显示 idle 节点，不再用历史 benchmark pipeline 填充当前线程视图。
 - Processor / search / activity 主界面只显示短标签、状态点、计数和 badges；点击节点或 signal card 后，inspector 展示 host-visible processor contract、prompt preview、结构化输出、usage、错误状态、工具参数、检索细节、证据与 verifier 状态，用于调试和演示内部 runtime context。
 - Search branches 从 journal 的 `retrieval_search_attempt` / provider diagnostics 派生，默认展示分支号、source count、accepted source count 和 provider badges。
@@ -318,10 +319,10 @@ SEC companyfacts payload 可能明显大于普通网页。此前 4MB 截断会�
 - Trace 不再作为会让用户离开聊天上下文的顶部 tab；runtime context 以图形拓扑、短 signal cards 和 inspector 显示。
 - UI 支持 thread selector、New Thread 和 Clear Screen。Clear Screen 只清空本地演示视图，不删除 durable journal。
 - 浏览器输入默认使用 Auto Chat：仍然启用模型 `turn-router`、`semantic-intake`、`planner`、`evaluator`、`synthesizer`，由 LLM 判断是普通回复、继续任务还是新任务；host 不做关键词拦截。Auto 只是不强制打开 live retrieval / deep research。Finance Deep 模式和金融快捷题会暴露更大的金融检索与工具预算。
-- 快捷题目已换成更稳定的高难度金融案例：Goldman net revenues、Activision fixed asset turnover、3M capital intensity、NextEra operating revenue。
+- 默认快捷题目已换成有通过证据的 hard stable 金融案例：Activision FY2019 fixed asset turnover、3M capital intensity、Goldman FY2024 net revenues、NextEra FY2024 operating revenues。FAB DIO 这类失败/压力项保留为研究材料，不作为默认录屏题。
 - Topology 和 signal stream 现在只展示当前最新 chat turn 的事件段，并在 terminal answer / failure 后冻结该轮 trace；这避免 Answer 已经输出后 Search/Tools 仍继续增长造成的错觉。
 - 前端维护 frozen turn snapshot：一旦收到 terminal answer / failure，该轮 topology、model context、search branches、activity 和 transcript 立即冻结；后续 late journal event 或 5s `/api/state` 校准不能改动这轮图，只有新的用户提交或新的 `chat_turn` 才解冻。
-- Dashboard 新增 `/api/live` Server-Sent Events 通道，直接 tail Kernel v3 durable journal。浏览器收到 `chat_turn`、processor、tool、retrieval、evidence、verifier、answer 等记录后立即重绘 topology、signal cards、processor packets 和 transcript，不再等待下一次全量 state。
+- Dashboard 新增 `/api/live` Server-Sent Events 通道，直接 tail Kernel v3 durable journal。live payload 现在是轻量增量包：每条 journal event 立即刷新 topology、signal cards、processor packets 和 transcript；Runtime Console 运行中逐行追加，terminal/frozen 帧才发送完整 console 快照，避免大 payload 拖慢 graph 实时性。
 - `/api/state` 改为低频校准路径，刷新间隔为 5s，负责 workspace、benchmark、command metadata 和历史 trace 的初始化；新 live event 后的短窗口内不会被慢 state 响应反向覆盖，避免拓扑倒退或错序。
 - 拓扑主路径改为两层图形结构：Intake -> Plan -> Policy -> Tools 与 Search/Evidence/Verify 分支汇合到 Answer，箭头保持前进方向；节点点击后的 inspector 状态不会被自动刷新抢焦点。
 - 渲染层已针对录屏做抗遮挡处理：主视图减少文字，详细文字只在 inspector/局部滚动区域出现，避免长 prompt、长输出或长 URL 被组件遮挡。
