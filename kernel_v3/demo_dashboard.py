@@ -2977,6 +2977,9 @@ HTML = r"""<!doctype html>
     let manualInspector = false;
     let frozenTrace = null;
     let runtimeConsoleLines = [];
+    let lastPipelineSignature = "";
+    let lastBranchSignature = "";
+    const pristineThreadIds = new Set();
     const topologyLabels = ["Intake", "Plan", "Policy", "Tools", "Search", "Evidence", "Verify", "Answer"];
     const topologyLayout = {
       Intake: [50, 12],
@@ -3030,11 +3033,12 @@ HTML = r"""<!doctype html>
       query.set("console_thread", selected.consoleThread);
       window.history.replaceState(null, "", `?${query.toString()}`);
     }
-    function switchThread(threadId) {
+    function switchThread(threadId, options = {}) {
       selected.consoleThread = threadId || "demo-ui-live";
       localStorage.setItem("holo_console_thread", selected.consoleThread);
       rememberThread(selected.consoleThread);
       updateLocation();
+      if (options.pristine) pristineThreadIds.add(selected.consoleThread);
       resetLiveView();
       connectLive();
       refresh();
@@ -3067,11 +3071,13 @@ HTML = r"""<!doctype html>
     document.getElementById("threadSelect").addEventListener("change", event => switchThread(event.target.value));
     document.getElementById("newThread").addEventListener("click", () => {
       document.getElementById("runMode").value = "auto";
-      switchThread(newThreadId());
+      switchThread(newThreadId(), { pristine: true });
     });
     document.getElementById("clearScreen").addEventListener("click", () => {
       setScreenCleared(true);
       frozenTrace = null;
+      lastPipelineSignature = "";
+      lastBranchSignature = "";
       renderTranscript([]);
       renderPipeline([]);
       renderBranches([]);
@@ -3106,6 +3112,8 @@ HTML = r"""<!doctype html>
       manualInspector = false;
       lastLiveAt = 0;
       frozenTrace = null;
+      lastPipelineSignature = "";
+      lastBranchSignature = "";
       renderTranscript([]);
       renderPipeline([]);
       renderBranches([]);
@@ -3165,6 +3173,7 @@ HTML = r"""<!doctype html>
       const kind = payload.record && payload.record.kind;
       if (kind === "chat_turn") frozenTrace = null;
       if (frozenTrace && frozenTrace.threadId === selected.consoleThread) return;
+      pristineThreadIds.delete(selected.consoleThread);
       lastLiveAt = Date.now();
       setScreenCleared(false);
       const stats = payload.stats || {};
@@ -3196,6 +3205,9 @@ HTML = r"""<!doctype html>
     function renderPendingSubmit(message) {
       const now = Date.now();
       frozenTrace = null;
+      pristineThreadIds.delete(selected.consoleThread);
+      lastPipelineSignature = "";
+      lastBranchSignature = "";
       renderTranscript([
         { role: "user", text: message, status: "submitted", at: now },
         { role: "assistant", text: "Kernel v3 is running. Model packets, tool calls, retrieval branches, verifier gates, and the final answer will stream into the graph as journal events arrive.", status: "running", at: now + 1 }
@@ -3306,13 +3318,21 @@ HTML = r"""<!doctype html>
       const jobStatus = consoleJob.status || (consoleState.transcript && consoleState.transcript.length ? "ready" : "ready");
       const traceClosed = Boolean(consoleState.stats && consoleState.stats.closed);
       const effectiveJobStatus = traceClosed ? "complete" : jobStatus;
+      const threadRecordCount = Number((consoleState.stats || {}).thread_records || 0);
+      const pristineIdle = pristineThreadIds.has(selected.consoleThread)
+        && threadRecordCount === 0
+        && !["running", "queued"].includes(effectiveJobStatus);
       text("consoleStatus", effectiveJobStatus);
       cls("consoleDot", `dot ${effectiveJobStatus === "running" || effectiveJobStatus === "queued" ? "running" : effectiveJobStatus === "failed" || effectiveJobStatus === "timeout" || effectiveJobStatus === "error" ? "failed" : "ok"}`);
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
       const cleared = isScreenCleared() && !["running", "queued"].includes(effectiveJobStatus);
       const hasFrozenTrace = Boolean(frozenTrace && frozenTrace.threadId === selected.consoleThread && !cleared);
       const preserveLiveTrace = Boolean((hasFrozenTrace || (lastLiveAt && Date.now() - lastLiveAt < 2500)) && !cleared);
-      if (!preserveLiveTrace) {
+      if (pristineIdle) {
+        text("publicTraceNotice", "new thread idle | waiting for input");
+        text("consoleStatus", "ready");
+        cls("consoleDot", "dot ok");
+      } else if (!preserveLiveTrace) {
         text("publicTraceNotice", consoleState.notice || "runtime context");
         renderTranscript(cleared ? [] : (consoleState.transcript || []));
         renderPipeline(cleared ? [] : (consoleState.topology || []));
@@ -3442,6 +3462,9 @@ HTML = r"""<!doctype html>
           detail: row.detail || idleDetail(label)
         };
       });
+      const signature = JSON.stringify(nodes.map(row => [row.label, row.state, row.value, row.detail]));
+      if (signature === lastPipelineSignature) return;
+      lastPipelineSignature = signature;
       const nodeMap = new Map(nodes.map(row => [row.label, row]));
       const svgEdges = topologyEdges.map(([from, to, kind]) => {
         const a = topologyLayout[from];
@@ -3584,6 +3607,17 @@ HTML = r"""<!doctype html>
     function renderBranches(rows) {
       const panel = document.getElementById("searchBranches");
       if (!panel) return;
+      const signature = JSON.stringify((rows || []).slice(-8).map(row => [
+        row.index || "",
+        row.status || "",
+        row.sources || 0,
+        row.accepted || 0,
+        row.query_hash || "",
+        (row.providers || []).join("|")
+      ]));
+      if (signature === lastBranchSignature) return;
+      lastBranchSignature = signature;
+      rows = rows || [];
       if (!rows.length) {
         panel.innerHTML = `<button class="signal-card"><div class="signal-head"><div class="signal-title">No branch</div><span class="state-dot idle"></span></div><div class="signal-meta">retrieval.run not called</div></button>`;
         return;
