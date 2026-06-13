@@ -392,9 +392,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             "record": _public_flow_record(record),
                             "transcript": console_transcript(visible_turn, []),
                             "topology": loop_topology_state(visible_turn),
-                            "flow": loop_flow_state(visible_turn, None),
                             "search_branches": search_branch_state(visible_turn),
-                            "model_io": model_io_stream_state(visible_turn),
                             "stats": _console_trace_stats(visible_turn, thread_records=len(turn_records)),
                             "closed": closed,
                         }
@@ -724,11 +722,8 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
         "job": active,
         "transcript": console_transcript(scoped, runs),
         "topology": loop_topology_state(visible_turn),
-        "flow": loop_flow_state(visible_turn, active),
         "search_branches": search_branch_state(visible_turn),
-        "model_io": model_io_stream_state(visible_turn),
         "runtime_console": runtime_console_state(visible_turn, active),
-        "activity": public_activity_state(visible_turn, active),
         "stats": _console_trace_stats(visible_turn, thread_records=len(scoped)),
         "notice": "Current turn runtime context: model packets, prompt/contract previews, structured outputs, tools, evidence, verifier gates, and answers.",
     }
@@ -2159,7 +2154,14 @@ HTML = r"""<!doctype html>
     .command-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
     .command-row button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
     .command-row .thread { flex: 1; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .quick-prompts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .quick-prompts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      max-height: 126px;
+      overflow: auto;
+      padding-right: 4px;
+    }
     .quick-prompts button { padding: 7px 8px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .transcript {
       height: calc(100% - 28px);
@@ -2528,6 +2530,14 @@ HTML = r"""<!doctype html>
       white-space: pre-wrap;
     }
     .live-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) 154px; gap: 12px; min-height: 0; height: calc(100% - 28px); }
+    .loop-branch-strip {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 22px minmax(0, 1fr);
+      gap: 6px;
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+    }
     .live-pane { min-height: 0; display: grid; grid-template-rows: 26px minmax(0, 1fr); gap: 8px; }
     .activity-list, .branch-list { overflow: auto; padding-right: 4px; }
     .activity, .branch { cursor: default; }
@@ -2689,19 +2699,19 @@ HTML = r"""<!doctype html>
     }
     .topology-shell {
       display: grid;
-      grid-template-rows: minmax(0, 1fr) 112px;
+      grid-template-columns: minmax(0, 1fr) 208px;
       gap: 12px;
       height: calc(100% - 28px);
       min-height: 0;
     }
     .loop-panel {
       display: grid;
-      grid-template-rows: auto minmax(0, .58fr) minmax(0, .42fr);
+      grid-template-rows: auto minmax(0, 1fr) 124px;
       gap: 12px;
     }
     .loop-panel .panel-title { margin-bottom: 0; }
     .loop-panel .topology-shell,
-    .loop-panel .live-grid { height: auto; }
+    .loop-panel .loop-branch-strip { height: auto; }
     .loop-panel-status {
       display: inline-flex;
       gap: 6px;
@@ -2854,7 +2864,8 @@ HTML = r"""<!doctype html>
       .pipeline, .cards, .run-cards, .diag, .intel-list, .footer-grid, .workspace-grid, .live-grid, .bottom-grid { grid-template-columns: 1fr; }
       .wide-pane { grid-column: auto; }
       .topology-shell, .thread-tools { grid-template-columns: 1fr; }
-      .loop-panel { grid-template-rows: auto minmax(360px, auto) minmax(320px, auto); }
+      .topology-shell { grid-template-rows: minmax(360px, auto) 112px; }
+      .loop-panel { grid-template-rows: auto minmax(480px, auto) minmax(150px, auto); }
       .stage:not(:last-child)::after { display: none; }
     }
   </style>
@@ -2898,19 +2909,9 @@ HTML = r"""<!doctype html>
             <div class="inspect-body">The graph shows the live agent loop: model decisions, host validation, tool execution, search, evidence, verification, answer, and continuation.</div>
           </div>
         </div>
-        <div class="live-grid">
-          <div class="live-pane">
-            <div class="column-title">Events</div>
-            <div class="activity-list" id="activityStream"></div>
-          </div>
-          <div class="live-pane">
-            <div class="column-title">Model context</div>
-            <div class="llm-list" id="modelIoStream"></div>
-          </div>
-          <div class="live-pane wide-pane">
-            <div class="column-title">Search branches</div>
-            <div class="branch-list" id="searchBranches"></div>
-          </div>
+        <div class="loop-branch-strip">
+          <div class="column-title">Search branches</div>
+          <div class="branch-list" id="searchBranches"></div>
         </div>
       </div>
     </section>
@@ -2940,15 +2941,23 @@ HTML = r"""<!doctype html>
             <div class="thread" id="consoleThread">thread demo-ui-live</div>
           </div>
           <div class="quick-prompts">
-            <button data-mode="finance_deep" data-prompt="Hard stable finance task: compute Activision Blizzard's FY2019 fixed asset turnover from its FY2019 10-K. Retrieve the filing evidence, identify revenue and beginning/ending net PP&E, compute average net PP&E, show the formula, and cite the exact source lines used.">Hard: Activision FAT</button>
-            <button data-mode="finance_deep" data-prompt="Hard stable finance task: assess whether 3M was capital intensive using filing evidence. Retrieve sales/revenue and PP&E or asset evidence, compute a relevant capital-intensity ratio, explain the threshold-free reasoning, and cite the exact line items.">Hard: 3M capital intensity</button>
-            <button data-mode="finance_deep" data-prompt="Hard stable metric-disambiguation task: what was Goldman Sachs' net revenues for fiscal year 2024? Use filing or annual-report evidence, distinguish net revenues from component revenue lines, name the exact caption, and cite the source.">Hard: Goldman net revenues</button>
-            <button data-mode="finance_deep" data-prompt="Hard stable metric-disambiguation task: what was NextEra Energy's operating revenues for fiscal year 2024? Use filing evidence, choose the exact operating revenues caption rather than a generic revenue concept, and cite the source.">Hard: NextEra operating revenue</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable FinanceBench task: compute Activision Blizzard's FY2019 fixed asset turnover ratio. Fixed asset turnover is FY2019 revenue divided by average net PP&E between FY2018 and FY2019. Retrieve the FY2019 10-K evidence, bind revenue and beginning/ending net PP&E to exact filing captions, compute average net PP&E, show the formula, round to two decimals, and cite the source lines used.">FB: Activision FAT</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable FinanceBench task: is 3M a capital-intensive business based on FY2022 data? Retrieve 3M filing evidence, identify sales or revenue and PP&E or asset intensity evidence, compute a relevant capital-intensity ratio, avoid any hard-coded threshold, reason from the business context, and cite exact filing line items.">FB: 3M capital intensity</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable FinanceBench task: what is 3M's FY2018 capital expenditure amount in USD millions? Rely primarily on the cash flow statement, bind the exact investing cash-flow caption, handle sign convention clearly, and cite the filing source.">FB: 3M capex</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable FinanceBench task: assume you are a public equities analyst. Using primarily 3M's balance sheet, find year-end FY2018 net PP&E and answer in USD billions. Bind the exact caption, convert units carefully, and cite the source.">FB: 3M net PP&E</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable FinanceBench task: what drove operating margin change as of FY2022 for 3M? If operating margin is not a useful metric for this company or period, state that and explain why. Retrieve evidence, compute or compare the margin components when appropriate, separate numeric facts from interpretation, and cite sources.">FB: 3M margin drivers</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable FinanceBench task: excluding the impact of M&A, which 3M segment dragged down overall growth in 2022? Retrieve segment revenue or organic growth evidence, separate acquisition/divestiture effects from underlying growth, identify the segment, and cite the filing table or management discussion used.">FB: 3M ex-M&A segment</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable metric-disambiguation task: what was Goldman Sachs' net revenues for fiscal year 2024? Use filing or annual-report evidence, distinguish net revenues from component revenue lines, name the exact caption, preserve the reported unit, and cite the source.">Metric: Goldman net rev</button>
+            <button data-mode="finance_deep" data-prompt="Hard stable metric-disambiguation task: what was NextEra Energy's operating revenues for fiscal year 2024? Use filing evidence, choose the exact operating revenues caption rather than a generic revenue concept, preserve units, and cite the source.">Metric: NextEra op rev</button>
+            <button data-mode="finance_deep" data-prompt="Long research task: for NYSE: HD and NYSE: LOW, calculate FY2024 days inventory outstanding and compare inventory efficiency. Retrieve public filings for both companies, bind inventory and cost-of-sales inputs, state whether average or ending inventory is used, show formulas, compare results, and explain which company appears more inventory-efficient.">Research: HD vs LOW DIO</button>
+            <button data-mode="finance_deep" data-prompt="Long research task: for Kraft Heinz, use public filings to explain the adjusted EBITDA bridge for the requested period. Identify the base metric, add-backs, deductions, subtotal, and any non-recurring or management-adjusted components. Cite each bridge component and explain whether the adjustment quality looks conservative or aggressive.">Research: KHC EBITDA bridge</button>
+            <button data-mode="finance_deep" data-prompt="Long research task: for Pfizer's acquisition of Seagen, calculate the transaction enterprise value to revenue multiple using public deal disclosures and filing evidence. Identify consideration, debt/cash treatment if disclosed, revenue basis, formula, limitations, and cite the relevant deal or filing sources.">Research: PFE-Seagen multiple</button>
+            <button data-mode="finance_deep" data-prompt="Long research task: for WillScot Mobile Mini, investigate the adjusted EBITDA add-back trend across the relevant public filings. Summarize direction, key components, whether the add-backs appear recurring or one-time, and cite the evidence used for each claim.">Research: WSC add-backs</button>
           </div>
         </div>
       </div>
     </section>
-    <div style="display:none"><span id="selectedRunLabel"></span><div id="demoRuns"></div><span id="questionText"></span><span id="answerState"></span><span id="diagnosis"></span><span id="resultPath"></span><span id="summaryPath"></span><span id="refreshState"></span><span id="runStatus"></span><span id="heroTitle"></span><span id="heroCopy"></span><span id="runDot"></span><span id="passRate"></span><span id="verifierState"></span><span id="progressText"></span><span id="progressBar"></span><span id="heroCalc"></span><span id="heroFacts"></span><span id="heroCitations"></span><span id="spotlightStep"></span><span id="spotlightTitle"></span><span id="spotlightText"></span><span id="llmCalls"></span><span id="retrievalFetches"></span><span id="calcCalls"></span><span id="factCount"></span><span id="stablePasses"></span><div id="intel"></div><div id="events"></div></div>
+    <div style="display:none"><span id="selectedRunLabel"></span><div id="demoRuns"></div><span id="questionText"></span><span id="answerState"></span><span id="diagnosis"></span><span id="resultPath"></span><span id="summaryPath"></span><span id="refreshState"></span><span id="runStatus"></span><span id="heroTitle"></span><span id="heroCopy"></span><span id="runDot"></span><span id="passRate"></span><span id="verifierState"></span><span id="progressText"></span><span id="progressBar"></span><span id="heroCalc"></span><span id="heroFacts"></span><span id="heroCitations"></span><span id="spotlightStep"></span><span id="spotlightTitle"></span><span id="spotlightText"></span><span id="llmCalls"></span><span id="retrievalFetches"></span><span id="calcCalls"></span><span id="factCount"></span><span id="stablePasses"></span><div id="intel"></div></div>
   </main>
   <script>
     const fmtPct = v => (v === null || v === undefined || Number.isNaN(Number(v))) ? "-" : `${(Number(v) * 100).toFixed(1)}%`;
@@ -3065,9 +3074,7 @@ HTML = r"""<!doctype html>
       frozenTrace = null;
       renderTranscript([]);
       renderPipeline([]);
-      renderModelIO([]);
       renderBranches([]);
-      renderActivity([]);
       runtimeConsoleLines = [];
       renderRuntimeConsole([]);
       showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved; start a new run or switch thread to populate this screen again.");
@@ -3101,9 +3108,7 @@ HTML = r"""<!doctype html>
       frozenTrace = null;
       renderTranscript([]);
       renderPipeline([]);
-      renderModelIO([]);
       renderBranches([]);
-      renderActivity([]);
       runtimeConsoleLines = [];
       renderRuntimeConsole([]);
       text("consoleThread", `thread ${selected.consoleThread}`);
@@ -3134,7 +3139,7 @@ HTML = r"""<!doctype html>
         try { payload = JSON.parse(event.data || "{}"); } catch (err) { payload = {}; }
         if ((payload.thread_id || liveConnectedThread) !== selected.consoleThread) return;
         if (frozenTrace && frozenTrace.threadId === selected.consoleThread) {
-          text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} events | frozen`);
+          text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} records | frozen`);
           return;
         }
         const age = lastLiveAt ? Math.max(0, Math.round((Date.now() - lastLiveAt) / 1000)) : 0;
@@ -3166,26 +3171,22 @@ HTML = r"""<!doctype html>
       const closed = Boolean(payload.closed || stats.closed);
       if (Array.isArray(payload.transcript) && payload.transcript.length) renderTranscript(payload.transcript);
       renderPipeline(payload.topology || []);
-      renderModelIO(payload.model_io || []);
       renderBranches(payload.search_branches || []);
-      renderActivity(payload.flow || []);
       if (closed && Array.isArray(payload.runtime_console)) {
         runtimeConsoleLines = payload.runtime_console;
         renderRuntimeConsole(runtimeConsoleLines);
       } else if (payload.record) {
         appendRuntimeConsoleRecord(payload.record);
       }
-      text("publicTraceNotice", `${closed ? "closed runtime context" : "live runtime context"} | ${fmtNum(stats.records)} events${kind ? " | last " + kind : ""}`);
-      text("consoleStatus", closed ? "ready" : "running");
+      text("publicTraceNotice", `${closed ? "closed runtime context" : "live runtime context"} | ${fmtNum(stats.records)} records${kind ? " | last " + kind : ""}`);
+      text("consoleStatus", closed ? "complete" : "running");
       cls("consoleDot", `dot ${closed ? "ok" : "running"}`);
       if (closed) {
         frozenTrace = {
           threadId: selected.consoleThread,
           transcript: payload.transcript || [],
           topology: payload.topology || [],
-          model_io: payload.model_io || [],
           search_branches: payload.search_branches || [],
-          flow: payload.flow || [],
           runtime_console: runtimeConsoleLines.slice(),
           stats,
           frozenAt: Date.now()
@@ -3199,9 +3200,7 @@ HTML = r"""<!doctype html>
         { role: "user", text: message, status: "submitted", at: now },
         { role: "assistant", text: "Kernel v3 is running. Model packets, tool calls, retrieval branches, verifier gates, and the final answer will stream into the graph as journal events arrive.", status: "running", at: now + 1 }
       ]);
-      renderActivity([{ stage: "Run", title: "Start", kind: "dashboard_job", status: "running", detail: `thread ${selected.consoleThread}`, at: now }]);
       renderPipeline([]);
-      renderModelIO([]);
       renderBranches([]);
       runtimeConsoleLines = [
         {
@@ -3305,19 +3304,19 @@ HTML = r"""<!doctype html>
       text("selectedRunLabel", `${cur.name || (data.filters || {}).run_prefix || "live"}${cur.selected_item_id ? " / " + cur.selected_item_id : ""}`);
       text("consoleThread", `thread ${consoleState.thread_id || selected.consoleThread}`);
       const jobStatus = consoleJob.status || (consoleState.transcript && consoleState.transcript.length ? "ready" : "ready");
-      text("consoleStatus", jobStatus);
-      cls("consoleDot", `dot ${jobStatus === "running" || jobStatus === "queued" ? "running" : jobStatus === "failed" || jobStatus === "timeout" || jobStatus === "error" ? "failed" : "ok"}`);
+      const traceClosed = Boolean(consoleState.stats && consoleState.stats.closed);
+      const effectiveJobStatus = traceClosed ? "complete" : jobStatus;
+      text("consoleStatus", effectiveJobStatus);
+      cls("consoleDot", `dot ${effectiveJobStatus === "running" || effectiveJobStatus === "queued" ? "running" : effectiveJobStatus === "failed" || effectiveJobStatus === "timeout" || effectiveJobStatus === "error" ? "failed" : "ok"}`);
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
-      const cleared = isScreenCleared() && !["running", "queued"].includes(jobStatus);
+      const cleared = isScreenCleared() && !["running", "queued"].includes(effectiveJobStatus);
       const hasFrozenTrace = Boolean(frozenTrace && frozenTrace.threadId === selected.consoleThread && !cleared);
       const preserveLiveTrace = Boolean((hasFrozenTrace || (lastLiveAt && Date.now() - lastLiveAt < 2500)) && !cleared);
       if (!preserveLiveTrace) {
         text("publicTraceNotice", consoleState.notice || "runtime context");
         renderTranscript(cleared ? [] : (consoleState.transcript || []));
         renderPipeline(cleared ? [] : (consoleState.topology || []));
-        renderModelIO(cleared ? [] : (consoleState.model_io || []));
         renderBranches(cleared ? [] : (consoleState.search_branches || []));
-        renderActivity(cleared ? [] : (consoleState.flow || consoleState.activity || []));
         runtimeConsoleLines = cleared ? [] : (consoleState.runtime_console || []);
         renderRuntimeConsole(runtimeConsoleLines);
         if (!cleared && consoleState.stats && consoleState.stats.closed) {
@@ -3325,28 +3324,27 @@ HTML = r"""<!doctype html>
             threadId: selected.consoleThread,
             transcript: consoleState.transcript || [],
             topology: consoleState.topology || [],
-            model_io: consoleState.model_io || [],
             search_branches: consoleState.search_branches || [],
-            flow: consoleState.flow || consoleState.activity || [],
             runtime_console: runtimeConsoleLines.slice(),
             stats: consoleState.stats || {},
             frozenAt: Date.now()
           };
-          text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} events | frozen`);
+          text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} records | frozen`);
+          text("consoleStatus", "complete");
+          cls("consoleDot", "dot ok");
         }
         if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
       } else if (hasFrozenTrace) {
-        text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} events | frozen`);
+        text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} records | frozen`);
+        text("consoleStatus", "complete");
+        cls("consoleDot", "dot ok");
         renderTranscript(frozenTrace.transcript || []);
         renderPipeline(frozenTrace.topology || []);
-        renderModelIO(frozenTrace.model_io || []);
         renderBranches(frozenTrace.search_branches || []);
-        renderActivity(frozenTrace.flow || []);
         runtimeConsoleLines = frozenTrace.runtime_console || [];
         renderRuntimeConsole(runtimeConsoleLines);
       }
       renderIntel(data.intelligence || []);
-      renderEvents(data.events || []);
       latestSpotlights = buildSpotlights(data);
       if (spotlightIndex >= latestSpotlights.length) spotlightIndex = 0;
       renderSpotlight();
@@ -3543,9 +3541,9 @@ HTML = r"""<!doctype html>
         return;
       }
       const baseAt = firstConsoleAt(shown);
-      panel.innerHTML = shown.map(row => `
+      panel.innerHTML = shown.map((row, index) => `
         <div class="console-line ${escapeHtml(row.level || "ok")}">
-          <div class="console-time">${escapeHtml(formatConsoleTime(row.at, baseAt))}</div>
+          <div class="console-time">${escapeHtml(formatConsoleTime(row.at, baseAt, index))}</div>
           <div class="console-main">
             <div class="console-command">${escapeHtml(row.line || "")}</div>
             ${row.body ? `<div class="console-body">${escapeHtml(row.body)}</div>` : ""}
@@ -3560,11 +3558,12 @@ HTML = r"""<!doctype html>
       }
       return 0;
     }
-    function formatConsoleTime(value, base) {
+    function formatConsoleTime(value, base, index) {
       const n = Number(value || 0);
       if (!n) return "--:--:--";
       const start = Number(base || n);
-      const scale = n > 10_000_000_000 || start > 10_000_000_000 ? 1000 : 1;
+      if (n < 10_000_000_000 && start < 10_000_000_000) return `#${String((index || 0) + 1).padStart(3, "0")}`;
+      const scale = 1000;
       const elapsed = Math.max(0, (n - start) / scale);
       return `+${elapsed.toFixed(elapsed < 10 ? 1 : 0)}s`;
     }
@@ -3584,6 +3583,7 @@ HTML = r"""<!doctype html>
     }
     function renderBranches(rows) {
       const panel = document.getElementById("searchBranches");
+      if (!panel) return;
       if (!rows.length) {
         panel.innerHTML = `<button class="signal-card"><div class="signal-head"><div class="signal-title">No branch</div><span class="state-dot idle"></span></div><div class="signal-meta">retrieval.run not called</div></button>`;
         return;
@@ -3600,49 +3600,6 @@ HTML = r"""<!doctype html>
         button.addEventListener("click", () => showInspector(`Search branch ${row.index || ""}`, `${row.status || "ok"} | ${fmtNum(row.sources)} sources`, `${row.query || ""}\n${(row.providers || []).join(", ")}`, true));
       });
     }
-    function renderModelIO(rows) {
-      const panel = document.getElementById("modelIoStream");
-      if (!panel) return;
-      if (!rows.length) {
-        panel.innerHTML = `<button class="signal-card"><div class="signal-head"><div class="signal-title">No processor</div><span class="state-dot idle"></span></div><div class="signal-meta">waiting for LLM call</div></button>`;
-        return;
-      }
-      const shown = rows.slice(-9).reverse();
-      panel.innerHTML = shown.map(row => {
-        const statusClass = row.status === "failed" ? "failed" : row.status === "requested" ? "active" : "ok";
-        return `<button class="signal-card">
-          <div class="signal-head"><div class="signal-title">${escapeHtml(row.title || row.processor || "processor")}</div><span class="state-dot ${escapeHtml(statusClass)}"></span></div>
-          <div class="signal-meta">${escapeHtml(row.phase || "Model")} | ${escapeHtml(row.status || "")}</div>
-          <div class="signal-badges"><span>${fmtNum(row.child_count || (row.children || []).length)} packets</span><span>${escapeHtml(row.model || "model")}</span></div>
-        </button>`;
-      }).join("");
-      panel.querySelectorAll(".signal-card").forEach((button, index) => {
-        const row = shown[index] || {};
-        const children = Array.isArray(row.children) ? row.children : [];
-        const body = children.map(child => `${child.label || child.kind}: ${child.meta || ""}\n${child.body || ""}`).join("\n\n");
-        button.addEventListener("click", () => showInspector(row.title || row.processor || "processor", [row.phase, row.status, row.meta].filter(Boolean).join(" | "), body || row.summary || "", true));
-      });
-    }
-    function renderActivity(rows) {
-      const panel = document.getElementById("activityStream");
-      if (!rows.length) {
-        panel.innerHTML = `<button class="signal-card"><div class="signal-head"><div class="signal-title">Waiting</div><span class="state-dot idle"></span></div><div class="signal-meta">no public event</div></button>`;
-        return;
-      }
-      const shown = rows.slice(-14).reverse();
-      panel.innerHTML = shown.map(row => {
-        const statusClass = row.status === "failed" || row.status === "error" ? "failed" : row.status === "running" || row.status === "queued" || row.status === "request" ? "active" : "ok";
-        return `<button class="signal-card">
-          <div class="signal-head"><div class="signal-title">${escapeHtml(row.title || row.kind)}</div><span class="state-dot ${escapeHtml(statusClass)}"></span></div>
-          <div class="signal-stage">${escapeHtml(row.stage || "Run")}</div>
-          <div class="signal-meta">${escapeHtml(row.status || row.kind || "event")}</div>
-        </button>`;
-      }).join("");
-      panel.querySelectorAll(".signal-card").forEach((button, index) => {
-        const row = shown[index] || {};
-        button.addEventListener("click", () => showInspector(row.title || row.kind || "event", row.status || row.kind || "", row.detail || row.step_id || row.task_id || "", true));
-      });
-    }
     function renderIntel(rows) {
       document.getElementById("intel").innerHTML = rows.map(row => `
         <div class="intel">
@@ -3650,13 +3607,6 @@ HTML = r"""<!doctype html>
           <div class="state">${escapeHtml(row.state)}</div>
           <div class="detail">${escapeHtml(row.detail)}</div>
         </div>`).join("");
-    }
-    function renderEvents(rows) {
-      const recent = rows.slice(-10).reverse();
-      document.getElementById("events").innerHTML = recent.map(row => {
-        const desc = row.query || row.uri || row.title || row.reason || row.task_type || "";
-        return `<div class="event"><div class="kind">${escapeHtml(row.kind)}</div><div class="state">${escapeHtml(row.status || "")}</div><div class="desc">${escapeHtml(desc)}</div></div>`;
-      }).join("");
     }
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));

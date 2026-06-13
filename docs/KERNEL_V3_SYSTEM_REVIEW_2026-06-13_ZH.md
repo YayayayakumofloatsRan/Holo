@@ -315,14 +315,15 @@ SEC companyfacts payload 可能明显大于普通网页。此前 4MB 截断会�
 - Topology graph 严格按当前 console thread 的 journal 事件渲染；新线程没有事件时只显示 idle 节点，不再用历史 benchmark pipeline 填充当前线程视图。
 - Processor / search / activity 主界面只显示短标签、状态点、计数和 badges；点击节点或 signal card 后，inspector 展示 host-visible processor contract、prompt preview、结构化输出、usage、错误状态、工具参数、检索细节、证据与 verifier 状态，用于调试和演示内部 runtime context。
 - Search branches 从 journal 的 `retrieval_search_attempt` / provider diagnostics 派生，默认展示分支号、source count、accepted source count 和 provider badges。
-- Running 状态会先在 transcript 里显示 Kernel v3 正在运行，并在左侧 signal stream 中订阅 live journal；只要 agent 写入 processor/tool/retrieval/verifier 事件，拓扑节点和 signal cards 就实时变化。
-- Trace 不再作为会让用户离开聊天上下文的顶部 tab；runtime context 以图形拓扑、短 signal cards 和 inspector 显示。
+- Running 状态会先在 transcript 里显示 Kernel v3 正在运行，并在左侧 Agent Loop Runtime 订阅 live journal；只要 agent 写入 processor/tool/retrieval/verifier/answer 事件，拓扑节点、搜索分支和 Runtime Console 就实时变化。
+- Trace 不再作为会让用户离开聊天上下文的顶部 tab；runtime context 以图形拓扑、搜索分支 strip、inspector 和右侧 Runtime Console 显示。旧的 Model Context / Events 可见面板已经删除，把空间让给真实 agent loop 图。
 - UI 支持 thread selector、New Thread 和 Clear Screen。Clear Screen 只清空本地演示视图，不删除 durable journal。
 - 浏览器输入默认使用 Auto Chat：仍然启用模型 `turn-router`、`semantic-intake`、`planner`、`evaluator`、`synthesizer`，由 LLM 判断是普通回复、继续任务还是新任务；host 不做关键词拦截。Auto 只是不强制打开 live retrieval / deep research。Finance Deep 模式和金融快捷题会暴露更大的金融检索与工具预算。
-- 默认快捷题目已换成有通过证据的 hard stable 金融案例：Activision FY2019 fixed asset turnover、3M capital intensity、Goldman FY2024 net revenues、NextEra FY2024 operating revenues。FAB DIO 这类失败/压力项保留为研究材料，不作为默认录屏题。
-- Topology 和 signal stream 现在只展示当前最新 chat turn 的事件段，并在 terminal answer / failure 后冻结该轮 trace；这避免 Answer 已经输出后 Search/Tools 仍继续增长造成的错觉。
-- 前端维护 frozen turn snapshot：一旦收到 terminal answer / failure，该轮 topology、model context、search branches、activity 和 transcript 立即冻结；后续 late journal event 或 5s `/api/state` 校准不能改动这轮图，只有新的用户提交或新的 `chat_turn` 才解冻。
-- Dashboard 新增 `/api/live` Server-Sent Events 通道，直接 tail Kernel v3 durable journal。live payload 现在是轻量增量包：每条 journal event 立即刷新 topology、signal cards、processor packets 和 transcript；Runtime Console 运行中逐行追加，terminal/frozen 帧才发送完整 console 快照，避免大 payload 拖慢 graph 实时性。
+- 默认快捷题目已扩展为可滚动 prompt bank：严格 benchmark-style 稳定题包括 Activision FY2019 fixed asset turnover、3M FY2018 capex、3M FY2018 net PP&E、3M FY2022 capital intensity、3M operating-margin drivers、3M ex-M&A segment growth、Goldman FY2024 net revenues、NextEra FY2024 operating revenues；更长的研究演示题包括 HD vs LOW FY2024 DIO、KHC adjusted EBITDA bridge、Pfizer/Seagen EV/revenue multiple、WSC adjusted EBITDA add-back trend。报告口径上，前一组可作为严格分数/稳定通过题，后一组作为复杂金融研究 workflow 展示题。
+- Topology、搜索分支和 Runtime Console 现在只展示当前最新 chat turn 的事件段，并在 terminal answer / failure 后冻结该轮 trace；这避免 Answer 已经输出后 Search/Tools 仍继续增长造成的错觉。
+- 前端维护 frozen turn snapshot：一旦收到 terminal answer / failure，该轮 topology、search branches、Runtime Console 和 transcript 立即冻结；后续 late journal event 或 5s `/api/state` 校准不能改动这轮图，只有新的用户提交或新的 `chat_turn` 才解冻。
+- Dashboard 新增 `/api/live` Server-Sent Events 通道，直接 tail Kernel v3 durable journal。live payload 现在是轻量增量包：每条 journal event 立即刷新 topology、search branches 和 transcript；Runtime Console 运行中逐行追加，terminal/frozen 帧才发送完整 console 快照，避免大 payload 拖慢 graph 实时性。
+- `/api/state` 的 console payload 也收窄为 transcript、topology、search branches、runtime console 与状态统计，不再为已删除面板构造 flow/model_io/activity，降低校准路径对 live graph 的干扰。
 - `/api/state` 改为低频校准路径，刷新间隔为 5s，负责 workspace、benchmark、command metadata 和历史 trace 的初始化；新 live event 后的短窗口内不会被慢 state 响应反向覆盖，避免拓扑倒退或错序。
 - 拓扑主路径改为两层图形结构：Intake -> Plan -> Policy -> Tools 与 Search/Evidence/Verify 分支汇合到 Answer，箭头保持前进方向；节点点击后的 inspector 状态不会被自动刷新抢焦点。
 - 渲染层已针对录屏做抗遮挡处理：主视图减少文字，详细文字只在 inspector/局部滚动区域出现，避免长 prompt、长输出或长 URL 被组件遮挡。

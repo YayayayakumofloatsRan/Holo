@@ -130,22 +130,27 @@ turnover from the 2019 10-K source URL. The promoted live run
 synthesis gate pass. The Windows-accessible dashboard defaults to this run at
 `http://localhost:8787/` when `kernel_v3.demo_dashboard` is running. The current
 dashboard is chat-first: the right side is the interactive Holo console, while
-the left side shows WSL workspace state and a merged Agent Loop Runtime panel.
-That panel combines a graphical SVG loop, compact processor/search/event signal
-cards, and a click-through inspector; the graph uses a continuous loop path
-without arrowhead markers because it reflects observed journal stages rather
-than a synthetic animation. The browser no longer depends on high-frequency
+the left side shows compact WSL workspace state and a large Agent Loop Runtime
+panel. That panel now focuses on a graphical SVG loop, search-branch strip, and
+click-through inspector; the old Events and Model Context panes were removed so
+the actual loop has more room. The browser no longer depends on high-frequency
 full-state polling for the agent loop: `/api/live` streams lightweight
-Server-Sent Events from the Kernel v3 journal and updates topology, processor
-packets, retrieval branches, and transcript fragments as events are appended;
-`/api/state` is now a slower calibration path for workspace, benchmark, and
-command metadata. The chat panel also includes a large white Runtime Console
-that streams host-visible model request/result packets, structured outputs,
-tool calls, retrieval events, evidence, verifier gates, and final/failure
-records in a command-line style view. Its default hard prompts are restricted to
-cases with existing pass evidence for recording: Activision FY2019 fixed asset
-turnover, 3M capital intensity, Goldman FY2024 net revenues, and NextEra FY2024
-operating revenues. It
+Server-Sent Events from the Kernel v3 journal and updates topology, retrieval
+branches, and transcript fragments as events are appended; `/api/state` is now a
+slower calibration path for workspace, benchmark, and command metadata. The chat
+panel also includes a large white Runtime Console that streams host-visible
+model request/result packets, structured outputs, tool calls, retrieval events,
+evidence, verifier gates, and final/failure records in a command-line style
+view. Closed turns freeze the visible graph and force the console status to
+`complete`, so late journal records cannot make an answered turn look like it is
+still running. Its scrollable default prompt bank now separates strict
+benchmark-style prompts from longer research tasks. The strict/stable prompts
+include Activision FY2019 fixed asset turnover, 3M FY2018 capex, 3M FY2018 net
+PP&E, 3M FY2022 capital intensity, 3M operating-margin drivers, 3M ex-M&A
+segment growth, Goldman FY2024 net revenues, and NextEra FY2024 operating
+revenues. The longer research prompts cover HD vs LOW FY2024 DIO, KHC adjusted
+EBITDA bridge quality, Pfizer/Seagen transaction EV/revenue multiple, and WSC
+adjusted EBITDA add-back trends. It
 supports thread switching, new demo threads, local screen clearing, model-routed
 Auto Chat, Finance Deep mode with larger finance retrieval/tool budgets, and
 stable hard finance prompts for recording. It also supports item-level demo
