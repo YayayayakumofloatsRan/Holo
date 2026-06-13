@@ -2155,14 +2155,15 @@ HTML = r"""<!doctype html>
     .command-row button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
     .command-row .thread { flex: 1; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .quick-prompts {
+      min-height: 0;
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      max-height: 126px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      max-height: 74px;
       overflow: auto;
       padding-right: 4px;
     }
-    .quick-prompts button { padding: 7px 8px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .quick-prompts button { padding: 6px 7px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .transcript {
       height: calc(100% - 28px);
       display: grid;
@@ -2449,8 +2450,16 @@ HTML = r"""<!doctype html>
       font-family: "Times New Roman", Times, serif;
       font-size: 14px;
     }
-    .composer { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
-    .composer textarea.command-input { min-height: 92px; }
+    .composer {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 60px auto minmax(0, 74px);
+      gap: 6px;
+      border-top: 1px solid var(--line);
+      padding-top: 7px;
+      overflow: hidden;
+    }
+    .composer textarea.command-input { min-height: 0; height: 60px; }
     .runtime-terminal {
       min-height: 0;
       display: grid;
@@ -2853,7 +2862,7 @@ HTML = r"""<!doctype html>
       font-size: 10px;
       line-height: 1.2;
     }
-    .chat-panel { grid-template-rows: auto auto minmax(140px, .42fr) minmax(260px, .58fr) auto; }
+    .chat-panel { grid-template-rows: auto auto minmax(76px, .36fr) minmax(160px, .64fr) minmax(164px, auto); }
     .left { grid-template-rows: 98px minmax(0, 1fr); }
     .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
     .wide-pane { grid-column: 1 / span 2; }
