@@ -136,10 +136,13 @@ inspector for details. The browser no longer depends on high-frequency full-stat
 polling for the agent loop: `/api/live` streams Server-Sent Events from the
 Kernel v3 journal and updates topology, processor packets, retrieval branches,
 and transcript fragments as events are appended; `/api/state` is now a slower
-calibration path for workspace, benchmark, and command metadata. It supports
-thread switching, new demo threads, local screen clearing, model-routed Auto
-Chat, Finance Deep mode with larger finance retrieval/tool budgets, and stable
-hard finance prompts for recording. It also supports item-level demo
+calibration path for workspace, benchmark, and command metadata. The chat panel
+also includes a large Runtime Console that streams host-visible model request/
+result packets, structured outputs, tool calls, retrieval events, evidence,
+verifier gates, and final/failure records in a command-line style view. It
+supports thread switching, new demo threads, local screen clearing, model-routed
+Auto Chat, Finance Deep mode with larger finance retrieval/tool budgets, and
+stable hard finance prompts for recording. It also supports item-level demo
 selection; for recording, the stronger historical
 Activision trace is available with
 `run_prefix=run_financebench_doc_live10_capability_parallel_v2` and

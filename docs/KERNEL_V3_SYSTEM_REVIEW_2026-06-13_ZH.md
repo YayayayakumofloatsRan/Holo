@@ -310,6 +310,7 @@ SEC companyfacts payload 可能明显大于普通网页。此前 4MB 截断会�
 - 用户可以直接在浏览器输入任务，dashboard 后端用真实 `holo-v3 chat --once` 在 WSL 主工作区启动 Kernel v3 agent run。
 - 同一界面常驻展示 workspace 状态、图形化 agent topology、processor/search/event signal cards 与 click-through inspector。
 - Agent workflow 以 SVG 拓扑图展示 Intake、Plan、Policy、Tools、Search、Evidence、Verify、Answer，并用明确箭头表现执行连接与 verify-to-plan 回路，使观众能直接看到 Holo 的问题解决闭环，而不是只能读线性日志。
+- 右侧 chat 面板新增大面积 Runtime Console，以命令行风格流式显示 host-visible model request/result packets、结构化输出、tool calls、retrieval、evidence、verifier gates 和 final/failure records，避免模型/工具流被挤在短 cards 里看不清。
 - Topology graph 严格按当前 console thread 的 journal 事件渲染；新线程没有事件时只显示 idle 节点，不再用历史 benchmark pipeline 填充当前线程视图。
 - Processor / search / activity 主界面只显示短标签、状态点、计数和 badges；点击节点或 signal card 后，inspector 展示 host-visible processor contract、prompt preview、结构化输出、usage、错误状态、工具参数、检索细节、证据与 verifier 状态，用于调试和演示内部 runtime context。
 - Search branches 从 journal 的 `retrieval_search_attempt` / provider diagnostics 派生，默认展示分支号、source count、accepted source count 和 provider badges。

@@ -394,6 +394,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             "flow": loop_flow_state(visible_turn, None),
                             "search_branches": search_branch_state(visible_turn),
                             "model_io": model_io_stream_state(visible_turn),
+                            "runtime_console": runtime_console_state(visible_turn, None),
                             "stats": _console_trace_stats(visible_turn, thread_records=len(turn_records)),
                             "closed": closed,
                         }
@@ -724,6 +725,7 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
         "flow": loop_flow_state(visible_turn, active),
         "search_branches": search_branch_state(visible_turn),
         "model_io": model_io_stream_state(visible_turn),
+        "runtime_console": runtime_console_state(visible_turn, active),
         "activity": public_activity_state(visible_turn, active),
         "stats": _console_trace_stats(visible_turn, thread_records=len(scoped)),
         "notice": "Current turn runtime context: model packets, prompt/contract previews, structured outputs, tools, evidence, verifier gates, and answers.",
@@ -771,10 +773,12 @@ def _public_flow_record(record: Json) -> Json:
                 "model": data.get("model") or params.get("model") or "",
                 "prompt_chars": prompt.get("chars"),
                 "prompt_hash": prompt.get("hash"),
+                "body": clip(prompt.get("preview") or "", 1200),
             }
         )
     elif kind == "processor_result":
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        output = data.get("output") if isinstance(data.get("output"), dict) else {}
         event.update(
             {
                 "processor": data.get("task_type") or data.get("processor") or "",
@@ -782,6 +786,7 @@ def _public_flow_record(record: Json) -> Json:
                 "model": data.get("model") or "",
                 "duration_ms": data.get("duration_ms"),
                 "tokens": usage.get("total_tokens"),
+                "body": _processor_output_body(output, data.get("error")),
             }
         )
     elif kind == "retrieval_search_attempt":
@@ -796,6 +801,123 @@ def _public_flow_record(record: Json) -> Json:
         source = data.get("source") if isinstance(data.get("source"), dict) else {}
         event.update({"uri": clip(data.get("uri") or source.get("uri"), 220)})
     return event
+
+
+def runtime_console_state(records: list[Json], active_job: Json | None = None) -> list[Json]:
+    rows: list[Json] = []
+    if active_job and active_job.get("status") in {"queued", "running"} and not records:
+        rows.append(
+            {
+                "kind": "dashboard_job",
+                "stage": "run",
+                "level": "active",
+                "line": f"$ holo-v3 chat --thread {active_job.get('thread_id')} --once ...",
+                "body": clip(active_job.get("message"), 700),
+                "at": int(float(active_job.get("started_at") or active_job.get("created_at") or time.time()) * 1000),
+            }
+        )
+    for record in records:
+        item = _runtime_console_record(record)
+        if item:
+            rows.append(item)
+    return rows[-160:]
+
+
+def _runtime_console_record(record: Json) -> Json:
+    kind = str(record.get("kind") or "")
+    if kind not in RELEVANT_EVENT_KINDS:
+        return {}
+    data = record.get("data") if isinstance(record.get("data"), dict) else {}
+    at = int(record.get("recorded_at_ms") or 0)
+    stage = _stage_for_kind(kind).lower()
+    status = _activity_status(kind, data)
+    title = _activity_title(kind, data) or kind.replace("_", ".")
+    line = f"[{stage}] {title}"
+    body = _activity_detail(kind, data)
+    level = "active" if kind == "processor_request" else "ok"
+
+    if kind == "chat_turn":
+        line = "$ user"
+        body = clip(data.get("text"), 1200)
+    elif kind in {"processor_request", "processor_result"}:
+        processor = data.get("task_type") or data.get("processor") or "processor"
+        if kind == "processor_request":
+            params = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
+            prompt = data.get("prompt") if isinstance(data.get("prompt"), dict) else {}
+            provider = data.get("provider") or params.get("provider") or "provider"
+            model = data.get("model") or params.get("model") or "model"
+            line = f"[model:request] {processor} :: {provider}/{model} :: {prompt.get('chars', 0)} chars :: {str(prompt.get('hash') or '')[:10]}"
+            body = clip(prompt.get("preview") or "", 1600)
+        else:
+            output = data.get("output") if isinstance(data.get("output"), dict) else {}
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            line = f"[model:result] {processor} :: {data.get('status') or 'result'} :: {data.get('duration_ms') or 0} ms :: {usage.get('total_tokens', '-')} tokens"
+            body = _processor_output_body(output, data.get("error"))
+            level = "failed" if data.get("status") not in {None, "", "ok", "complete", "success"} and data.get("error") else "ok"
+    elif kind in {"action", "toolchain_step_proposed"}:
+        name = data.get("name") or data.get("kind") or data.get("tool") or "tool"
+        line = f"[tool:call] {name}"
+        body = _runtime_json_body(data, keys=("arguments", "payload", "input", "description", "reason"))
+        level = "active"
+    elif kind == "policy_decision":
+        line = f"[policy] allowed={data.get('allowed')}"
+        body = _runtime_json_body(data, keys=("reason", "violations", "action", "tool"))
+        level = "ok" if data.get("allowed") is not False else "failed"
+    elif kind == "observation":
+        line = f"[tool:observation] {data.get('source') or data.get('kind') or 'observation'}"
+        body = _runtime_json_body(data, keys=("summary", "result", "observation", "text", "error"))
+        level = "failed" if data.get("error") else "ok"
+    elif kind == "retrieval_query_plan":
+        line = "[retrieval:plan]"
+        body = _runtime_json_body(data, keys=("queries", "goal", "reason", "sources"))
+    elif kind == "retrieval_search_attempt":
+        diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
+        source_count = diagnostics.get("journaled_source_count") or len(data.get("sources") or [])
+        line = f"[retrieval:search] {source_count} sources :: {data.get('status') or 'ok'}"
+        body = clip(data.get("query") or data.get("goal") or "", 1000)
+    elif kind in {"retrieval_fetch", "retrieval_fetch_attempt"}:
+        source = data.get("source") if isinstance(data.get("source"), dict) else {}
+        line = f"[retrieval:fetch] {data.get('status') or 'fetch'}"
+        body = clip(data.get("uri") or source.get("uri") or data.get("url") or "", 1200)
+        level = "failed" if str(data.get("status") or "").lower() in {"failed", "error"} else "ok"
+    elif kind == "retrieval_extraction":
+        doc = data.get("document") if isinstance(data.get("document"), dict) else {}
+        diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
+        line = f"[retrieval:extract] spans={diagnostics.get('span_count', '-')}"
+        body = clip(doc.get("title") or doc.get("uri") or "", 1200)
+    elif kind in {"retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame", "transform_plan"}:
+        line = f"[evidence] {kind.replace('_', '.')}"
+        body = _runtime_json_body(data, keys=("claim", "slot", "value", "metric", "citation", "source", "formula", "reason"))
+    elif kind in {"finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}:
+        line = f"[verify] {kind.replace('_', '.')} :: {status or data.get('decision') or 'checked'}"
+        body = _runtime_json_body(data, keys=("status", "decision", "reason", "issues", "numeric_status", "support_status"))
+        level = "failed" if str(status).lower() in {"failed", "error", "blocked"} else "ok"
+    elif kind in {"termination_decision", "feedback"}:
+        line = f"[loop] {kind.replace('_', '.')} :: {status or data.get('decision') or ''}"
+        body = _runtime_json_body(data, keys=("reason", "stop_reason", "missing_evidence", "next_action", "feedback_status"))
+    elif kind in {"agent_final_answer", "agent_failure_report", "chat_agent_result"}:
+        line = f"[answer] {status or 'complete'}"
+        body = clip(_chat_result_answer_text(data) if kind == "chat_agent_result" else _runtime_json_body(data), 1800)
+        level = "failed" if kind == "agent_failure_report" or data.get("failure_report") else "ok"
+
+    return {
+        "kind": kind,
+        "stage": stage,
+        "level": level,
+        "line": clip(line, 240),
+        "body": clip(body, 1800),
+        "at": at,
+        "task_id": record.get("task_id") or data.get("task_id") or "",
+        "step_id": record.get("step_id") or data.get("step_id") or "",
+    }
+
+
+def _runtime_json_body(data: Json, keys: tuple[str, ...] = ()) -> str:
+    if keys:
+        selected = {key: data.get(key) for key in keys if data.get(key) not in (None, "", [], {})}
+        if selected:
+            return clip(json.dumps(selected, ensure_ascii=True, sort_keys=True), 1600)
+    return clip(json.dumps(data, ensure_ascii=True, sort_keys=True), 1600)
 
 
 def workspace_state(root: Path, thread_id: str) -> Json:
@@ -2325,6 +2447,84 @@ HTML = r"""<!doctype html>
     }
     .composer { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
     .composer textarea.command-input { min-height: 92px; }
+    .runtime-terminal {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 28px minmax(0, 1fr);
+      gap: 8px;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      background: #0b1020;
+      color: #dbeafe;
+      padding: 10px;
+      overflow: hidden;
+    }
+    .runtime-terminal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      color: #e5e7eb;
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+    .runtime-terminal-head span:last-child {
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 400;
+      text-transform: none;
+      white-space: nowrap;
+    }
+    .runtime-console {
+      min-height: 0;
+      overflow: auto;
+      padding-right: 6px;
+      display: grid;
+      align-content: start;
+      gap: 7px;
+      font-family: "Times New Roman", Times, serif;
+      font-size: 13px;
+      line-height: 1.28;
+    }
+    .console-line {
+      display: grid;
+      grid-template-columns: 118px minmax(0, 1fr);
+      gap: 10px;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(148, 163, 184, .16);
+      min-width: 0;
+    }
+    .console-line .console-time {
+      color: #7dd3fc;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .console-main { min-width: 0; }
+    .console-command {
+      color: #f8fafc;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .console-body {
+      margin-top: 3px;
+      color: #a7b3c5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      max-height: 130px;
+      overflow: auto;
+    }
+    .console-line.active .console-command { color: #93c5fd; }
+    .console-line.failed .console-command { color: #fca5a5; }
+    .console-line.ok .console-command { color: #d1fae5; }
+    .console-empty {
+      color: #94a3b8;
+      padding: 10px 0;
+      white-space: pre-wrap;
+    }
     .live-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) 154px; gap: 12px; min-height: 0; height: calc(100% - 28px); }
     .live-pane { min-height: 0; display: grid; grid-template-rows: 26px minmax(0, 1fr); gap: 8px; }
     .activity-list, .branch-list { overflow: auto; padding-right: 4px; }
@@ -2625,7 +2825,7 @@ HTML = r"""<!doctype html>
       font-size: 10px;
       line-height: 1.2;
     }
-    .chat-panel { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+    .chat-panel { grid-template-rows: auto auto minmax(140px, .42fr) minmax(260px, .58fr) auto; }
     .left { grid-template-rows: 98px 410px minmax(0, 1fr); }
     .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
     .wide-pane { grid-column: 1 / span 2; }
@@ -2709,6 +2909,10 @@ HTML = r"""<!doctype html>
           <button id="clearScreen">Clear Screen</button>
         </div>
         <div class="transcript" id="transcript"></div>
+        <div class="runtime-terminal">
+          <div class="runtime-terminal-head"><span>Runtime Console</span><span id="runtimeConsoleState">waiting</span></div>
+          <div class="runtime-console" id="runtimeConsole"></div>
+        </div>
         <div class="composer">
           <textarea id="commandInput" class="command-input" placeholder="Ask Holo a finance question, or give it a research task. Example: What was Goldman Sachs' net revenues for fiscal year 2024?"></textarea>
           <div class="command-row">
@@ -2744,6 +2948,7 @@ HTML = r"""<!doctype html>
     let lastLiveAt = 0;
     let manualInspector = false;
     let frozenTrace = null;
+    let runtimeConsoleLines = [];
     const topologyLabels = ["Intake", "Plan", "Policy", "Tools", "Search", "Evidence", "Verify", "Answer"];
     const topologyLayout = {
       Intake: [50, 12],
@@ -2844,6 +3049,8 @@ HTML = r"""<!doctype html>
       renderModelIO([]);
       renderBranches([]);
       renderActivity([]);
+      runtimeConsoleLines = [];
+      renderRuntimeConsole([]);
       showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved; start a new run or switch thread to populate this screen again.");
     });
     document.getElementById("commandInput").addEventListener("keydown", event => {
@@ -2878,6 +3085,8 @@ HTML = r"""<!doctype html>
       renderModelIO([]);
       renderBranches([]);
       renderActivity([]);
+      runtimeConsoleLines = [];
+      renderRuntimeConsole([]);
       text("consoleThread", `thread ${selected.consoleThread}`);
       text("consoleStatus", "ready");
       text("publicTraceNotice", "live stream starting");
@@ -2932,6 +3141,12 @@ HTML = r"""<!doctype html>
       setScreenCleared(false);
       const stats = payload.stats || {};
       const closed = Boolean(payload.closed || stats.closed);
+      if (Array.isArray(payload.runtime_console)) {
+        runtimeConsoleLines = payload.runtime_console;
+        renderRuntimeConsole(runtimeConsoleLines);
+      } else if (payload.record) {
+        appendRuntimeConsoleRecord(payload.record);
+      }
       if (Array.isArray(payload.transcript) && payload.transcript.length) renderTranscript(payload.transcript);
       renderPipeline(payload.topology || []);
       renderModelIO(payload.model_io || []);
@@ -2948,6 +3163,7 @@ HTML = r"""<!doctype html>
           model_io: payload.model_io || [],
           search_branches: payload.search_branches || [],
           flow: payload.flow || [],
+          runtime_console: runtimeConsoleLines.slice(),
           stats,
           frozenAt: Date.now()
         };
@@ -2964,6 +3180,16 @@ HTML = r"""<!doctype html>
       renderPipeline([]);
       renderModelIO([]);
       renderBranches([]);
+      runtimeConsoleLines = [
+        {
+          at: now,
+          level: "active",
+          stage: "run",
+          line: `$ browser submit -> holo-v3 chat --thread ${selected.consoleThread} --once ...`,
+          body: message
+        }
+      ];
+      renderRuntimeConsole(runtimeConsoleLines);
       manualInspector = false;
       showInspector("Kernel process running", selected.consoleThread, "Waiting for the first journal event from the WSL runtime.");
     }
@@ -3069,6 +3295,8 @@ HTML = r"""<!doctype html>
         renderModelIO(cleared ? [] : (consoleState.model_io || []));
         renderBranches(cleared ? [] : (consoleState.search_branches || []));
         renderActivity(cleared ? [] : (consoleState.flow || consoleState.activity || []));
+        runtimeConsoleLines = cleared ? [] : (consoleState.runtime_console || []);
+        renderRuntimeConsole(runtimeConsoleLines);
         if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
       } else if (hasFrozenTrace) {
         text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} events | frozen`);
@@ -3077,6 +3305,8 @@ HTML = r"""<!doctype html>
         renderModelIO(frozenTrace.model_io || []);
         renderBranches(frozenTrace.search_branches || []);
         renderActivity(frozenTrace.flow || []);
+        runtimeConsoleLines = frozenTrace.runtime_console || [];
+        renderRuntimeConsole(runtimeConsoleLines);
       }
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
@@ -3254,6 +3484,47 @@ HTML = r"""<!doctype html>
         Verify: "numeric/support gate",
         Answer: "final response"
       })[label] || "";
+    }
+    function appendRuntimeConsoleRecord(record) {
+      if (!record) return;
+      const line = runtimeLineFromRecord(record);
+      if (!line) return;
+      runtimeConsoleLines.push(line);
+      runtimeConsoleLines = runtimeConsoleLines.slice(-160);
+      renderRuntimeConsole(runtimeConsoleLines);
+    }
+    function runtimeLineFromRecord(record) {
+      const kind = record.kind || "event";
+      const stage = (record.stage || kind || "run").toString().toLowerCase();
+      const level = record.status === "failed" || record.status === "error" ? "failed" : record.status === "request" ? "active" : "ok";
+      const line = record.line || `[${stage}] ${record.title || kind}`;
+      const body = record.body || record.detail || record.query || record.uri || "";
+      return { at: record.at || Date.now(), level, stage, line, body };
+    }
+    function renderRuntimeConsole(rows) {
+      const panel = document.getElementById("runtimeConsole");
+      if (!panel) return;
+      const shown = (rows || []).slice(-160);
+      text("runtimeConsoleState", shown.length ? `${fmtNum(shown.length)} lines` : "waiting");
+      if (!shown.length) {
+        panel.innerHTML = `<div class="console-empty">$ waiting for model packets, tool calls, retrieval branches, evidence, verifier gates, and final answer...</div>`;
+        return;
+      }
+      panel.innerHTML = shown.map(row => `
+        <div class="console-line ${escapeHtml(row.level || "ok")}">
+          <div class="console-time">${escapeHtml(formatConsoleTime(row.at))}</div>
+          <div class="console-main">
+            <div class="console-command">${escapeHtml(row.line || "")}</div>
+            ${row.body ? `<div class="console-body">${escapeHtml(row.body)}</div>` : ""}
+          </div>
+        </div>`).join("");
+      panel.scrollTop = panel.scrollHeight;
+    }
+    function formatConsoleTime(value) {
+      const n = Number(value || 0);
+      if (!n) return "--:--:--";
+      const date = new Date(n > 10_000_000_000 ? n : n * 1000);
+      return date.toLocaleTimeString([], { hour12: false });
     }
     function renderTranscript(rows) {
       const panel = document.getElementById("transcript");
