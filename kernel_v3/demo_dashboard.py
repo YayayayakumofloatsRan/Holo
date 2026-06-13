@@ -1701,7 +1701,7 @@ HTML = r"""<!doctype html>
     .command-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
     .command-row button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
     .command-row .thread { flex: 1; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .quick-prompts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .quick-prompts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     .quick-prompts button { padding: 7px 8px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .transcript {
       height: calc(100% - 28px);
@@ -1969,6 +1969,26 @@ HTML = r"""<!doctype html>
     .workspace-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; overflow: auto; white-space: nowrap; text-overflow: ellipsis; }
     .chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; }
     .chat-panel .transcript { height: auto; overflow: auto; padding-right: 4px; align-content: start; }
+    .thread-tools {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+    }
+    .thread-tools select {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: #fff;
+      color: var(--ink);
+      font-family: "Times New Roman", Times, serif;
+      font-size: 14px;
+    }
     .composer { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
     .composer textarea.command-input { min-height: 92px; }
     .live-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) 154px; gap: 12px; min-height: 0; height: calc(100% - 28px); }
@@ -2131,6 +2151,115 @@ HTML = r"""<!doctype html>
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+    .topology-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 220px;
+      gap: 12px;
+      height: calc(100% - 28px);
+      min-height: 0;
+    }
+    .topology-canvas {
+      position: relative;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background:
+        linear-gradient(#eef2f7 1px, transparent 1px),
+        linear-gradient(90deg, #eef2f7 1px, transparent 1px),
+        #fff;
+      background-size: 28px 28px;
+      overflow: hidden;
+    }
+    .topology-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .topology-edge {
+      stroke: #b8c2d1;
+      stroke-width: 2.2;
+      fill: none;
+      opacity: .64;
+    }
+    .topology-edge.active { stroke: var(--blue); stroke-width: 3; opacity: .9; }
+    .topology-edge.warn { stroke: var(--amber); stroke-width: 3; opacity: .95; }
+    .topology-node {
+      position: absolute;
+      width: 112px;
+      min-height: 68px;
+      transform: translate(-50%, -50%);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      padding: 9px;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, .07);
+      cursor: pointer;
+      text-align: left;
+    }
+    .topology-node.ok { border-color: #9fd4b1; }
+    .topology-node.warn { border-color: #e5c07b; box-shadow: 0 8px 18px rgba(180, 83, 9, .12); }
+    .topology-node.active { border-color: #93b4f8; box-shadow: 0 8px 18px rgba(29, 78, 216, .13); }
+    .topology-node.idle { opacity: .62; }
+    .topology-node .node-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .topology-node .node-name { font-size: 14px; font-weight: 700; line-height: 1.05; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topology-node .node-count { margin-top: 8px; font-size: 25px; font-weight: 700; line-height: 1; color: var(--ink); }
+    .topology-node .node-detail { margin-top: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+    .state-dot.ok { background: var(--green); }
+    .state-dot.active { background: var(--blue); }
+    .state-dot.warn { background: var(--amber); }
+    .state-dot.failed { background: var(--red); }
+    .graph-inspector {
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+      padding: 10px;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 7px;
+    }
+    .inspect-kicker { color: var(--muted); font-size: 11px; text-transform: uppercase; font-weight: 700; }
+    .inspect-title { font-size: 16px; font-weight: 700; line-height: 1.15; overflow-wrap: anywhere; }
+    .inspect-body {
+      color: var(--slate);
+      font-size: 13px;
+      line-height: 1.35;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .signal-card {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+      display: grid;
+      gap: 5px;
+      text-align: left;
+      min-width: 0;
+    }
+    .signal-card:hover { border-color: #b8c5d8; background: #fbfcfd; }
+    .signal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+    .signal-title { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .signal-meta { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .signal-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+    .signal-badges span {
+      border: 1px solid #dfe5ee;
+      border-radius: 999px;
+      padding: 2px 6px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.2;
+    }
+    .chat-panel { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+    .left { grid-template-rows: 98px 410px minmax(0, 1fr); }
+    .grid { grid-template-columns: minmax(620px, 58%) minmax(470px, 42%); }
     .wide-pane { grid-column: 1 / span 2; }
     @media (max-width: 980px) {
       body { overflow: auto; height: auto; }
@@ -2138,6 +2267,7 @@ HTML = r"""<!doctype html>
       .left, .right { grid-template-rows: auto; }
       .pipeline, .cards, .run-cards, .diag, .intel-list, .footer-grid, .workspace-grid, .live-grid, .bottom-grid { grid-template-columns: 1fr; }
       .wide-pane { grid-column: auto; }
+      .topology-shell, .thread-tools { grid-template-columns: 1fr; }
       .stage:not(:last-child)::after { display: none; }
     }
   </style>
@@ -2169,19 +2299,25 @@ HTML = r"""<!doctype html>
         </div>
       </div>
       <div class="panel">
-        <div class="panel-title"><span>2D agent loop topology</span><span id="latestItem"></span></div>
-        <div class="workflow-statement" id="workflowStatement">Model input, planning, policy, tools, search, evidence, verification, and answer are shown as a live topology.</div>
-        <div class="pipeline topology-map" id="pipeline"></div>
+        <div class="panel-title"><span>Agent topology graph</span><span id="latestItem"></span></div>
+        <div class="topology-shell">
+          <div class="topology-canvas" id="pipeline"></div>
+          <div class="graph-inspector" id="graphInspector">
+            <div class="inspect-kicker">Inspector</div>
+            <div class="inspect-title">Select a node</div>
+            <div class="inspect-body">The graph shows model decisions, host validation, tools, search, evidence, verification, and answer flow as connected runtime nodes.</div>
+          </div>
+        </div>
       </div>
       <div class="panel">
-        <div class="panel-title"><span>Streaming console</span><span id="publicTraceNotice">public trace only</span></div>
+        <div class="panel-title"><span>Execution signals</span><span id="publicTraceNotice">public trace only</span></div>
         <div class="live-grid">
           <div class="live-pane">
-            <div class="column-title">Console stream</div>
+            <div class="column-title">Events</div>
             <div class="activity-list" id="activityStream"></div>
           </div>
           <div class="live-pane">
-            <div class="column-title">Structured LLM workflow</div>
+            <div class="column-title">Processors</div>
             <div class="llm-list" id="modelIoStream"></div>
           </div>
           <div class="live-pane wide-pane">
@@ -2194,6 +2330,11 @@ HTML = r"""<!doctype html>
     <section class="right">
       <div class="panel chat-panel">
         <div class="panel-title"><span>Chat with Holo Kernel v3</span><span class="status"><span id="consoleDot" class="dot"></span><span id="consoleStatus">ready</span></span></div>
+        <div class="thread-tools">
+          <select id="threadSelect" aria-label="Console thread"></select>
+          <button id="newThread">New Thread</button>
+          <button id="clearScreen">Clear Screen</button>
+        </div>
         <div class="transcript" id="transcript"></div>
         <div class="composer">
           <textarea id="commandInput" class="command-input" placeholder="Ask Holo a finance question, or give it a research task. Example: What was Goldman Sachs' net revenues for fiscal year 2024?"></textarea>
@@ -2203,9 +2344,10 @@ HTML = r"""<!doctype html>
             <div class="thread" id="consoleThread">thread demo-ui-live</div>
           </div>
           <div class="quick-prompts">
-            <button data-prompt="What was Goldman Sachs' net revenues for fiscal year 2024?">Goldman revenue</button>
-            <button data-prompt="Compute Activision Blizzard FY2019 fixed asset turnover from revenue and average PP&E.">Fixed asset turnover</button>
-            <button data-prompt="Explain Holo Kernel v3's agent loop and tool workflow in one concise paragraph.">Explain loop</button>
+            <button data-prompt="What was Goldman Sachs' net revenues for fiscal year 2024? Use SEC or annual-report evidence and identify the exact line item.">Goldman net revenues</button>
+            <button data-prompt="Compute Activision Blizzard FY2019 fixed asset turnover using FY2019 revenue and average net PP&E from the 2019 10-K. Show the formula and evidence.">Activision FAT</button>
+            <button data-prompt="Assess whether 3M was capital intensive using filing evidence for sales and PP&E/assets, and compute the relevant ratio.">3M capital intensity</button>
+            <button data-prompt="What was NextEra Energy's operating revenues for fiscal year 2024? Use the exact operating revenue line item and cite evidence.">NextEra operating revenue</button>
           </div>
         </div>
       </div>
@@ -2224,8 +2366,83 @@ HTML = r"""<!doctype html>
       itemId: params.get("item_id") || "",
       consoleThread: params.get("console_thread") || localStorage.getItem("holo_console_thread") || "demo-ui-live"
     };
+    const topologyLabels = ["Intake", "Plan", "Policy", "Tools", "Search", "Evidence", "Verify", "Answer"];
+    const topologyLayout = {
+      Intake: [12, 20],
+      Plan: [32, 20],
+      Policy: [52, 20],
+      Tools: [72, 20],
+      Search: [88, 50],
+      Evidence: [72, 80],
+      Verify: [52, 80],
+      Answer: [32, 80]
+    };
+    const topologyEdges = [
+      ["Intake", "Plan"],
+      ["Plan", "Policy"],
+      ["Policy", "Tools"],
+      ["Tools", "Search"],
+      ["Search", "Evidence"],
+      ["Evidence", "Verify"],
+      ["Verify", "Answer"],
+      ["Verify", "Plan"]
+    ];
     let latestSpotlights = [];
     let spotlightIndex = 0;
+    function threadList() {
+      let rows = [];
+      try { rows = JSON.parse(localStorage.getItem("holo_threads") || "[]"); } catch (err) { rows = []; }
+      rows = Array.isArray(rows) ? rows.filter(Boolean).map(String) : [];
+      if (!rows.includes("demo-ui-live")) rows.unshift("demo-ui-live");
+      if (!rows.includes(selected.consoleThread)) rows.unshift(selected.consoleThread);
+      return Array.from(new Set(rows)).slice(0, 12);
+    }
+    function saveThreadList(rows) {
+      localStorage.setItem("holo_threads", JSON.stringify(Array.from(new Set(rows.filter(Boolean))).slice(0, 12)));
+    }
+    function rememberThread(threadId) {
+      const rows = threadList().filter(row => row !== threadId);
+      rows.unshift(threadId);
+      saveThreadList(rows);
+      renderThreadSelect();
+    }
+    function renderThreadSelect() {
+      const select = document.getElementById("threadSelect");
+      if (!select) return;
+      select.innerHTML = threadList().map(row => `<option value="${escapeHtml(row)}"${row === selected.consoleThread ? " selected" : ""}>${escapeHtml(row)}</option>`).join("");
+    }
+    function updateLocation() {
+      const query = new URLSearchParams(window.location.search);
+      if (selected.runPrefix) query.set("run_prefix", selected.runPrefix);
+      if (selected.threadPrefix !== null) query.set("thread_prefix", selected.threadPrefix || "");
+      if (selected.itemId) query.set("item_id", selected.itemId); else query.delete("item_id");
+      query.set("console_thread", selected.consoleThread);
+      window.history.replaceState(null, "", `?${query.toString()}`);
+    }
+    function switchThread(threadId) {
+      selected.consoleThread = threadId || "demo-ui-live";
+      localStorage.setItem("holo_console_thread", selected.consoleThread);
+      rememberThread(selected.consoleThread);
+      updateLocation();
+      refresh();
+    }
+    function clearKey() { return `holo_clear_${selected.consoleThread}`; }
+    function isScreenCleared() { return localStorage.getItem(clearKey()) === "1"; }
+    function setScreenCleared(value) {
+      if (value) localStorage.setItem(clearKey(), "1");
+      else localStorage.removeItem(clearKey());
+    }
+    function newThreadId() {
+      return `demo-ui-${Date.now().toString(36)}`;
+    }
+    function showInspector(title, meta, body) {
+      const panel = document.getElementById("graphInspector");
+      if (!panel) return;
+      panel.innerHTML = `
+        <div class="inspect-kicker">${escapeHtml(meta || "Inspector")}</div>
+        <div class="inspect-title">${escapeHtml(title || "Runtime node")}</div>
+        <div class="inspect-body">${escapeHtml(body || "No additional detail.")}</div>`;
+    }
     function setTab(name) {
       document.querySelectorAll("button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
       document.querySelectorAll(".tabs").forEach(p => p.classList.toggle("active", p.id === name));
@@ -2233,6 +2450,17 @@ HTML = r"""<!doctype html>
     document.querySelectorAll("button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
     document.getElementById("runCommand").addEventListener("click", submitCommand);
     document.getElementById("clearCommand").addEventListener("click", () => { document.getElementById("commandInput").value = ""; });
+    document.getElementById("threadSelect").addEventListener("change", event => switchThread(event.target.value));
+    document.getElementById("newThread").addEventListener("click", () => switchThread(newThreadId()));
+    document.getElementById("clearScreen").addEventListener("click", () => {
+      setScreenCleared(true);
+      renderTranscript([]);
+      renderPipeline([]);
+      renderModelIO([]);
+      renderBranches([]);
+      renderActivity([]);
+      showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved; start a new run or switch thread to populate this screen again.");
+    });
     document.getElementById("commandInput").addEventListener("keydown", event => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submitCommand();
     });
@@ -2252,12 +2480,7 @@ HTML = r"""<!doctype html>
       selected.runPrefix = row.run_prefix || "";
       selected.threadPrefix = row.thread_prefix ?? "";
       selected.itemId = row.item_id || "";
-      const query = new URLSearchParams();
-      if (selected.runPrefix) query.set("run_prefix", selected.runPrefix);
-      query.set("thread_prefix", selected.threadPrefix || "");
-      if (selected.itemId) query.set("item_id", selected.itemId);
-      if (selected.consoleThread) query.set("console_thread", selected.consoleThread);
-      window.history.replaceState(null, "", `?${query.toString()}`);
+      updateLocation();
       refresh();
     }
     async function submitCommand() {
@@ -2268,6 +2491,8 @@ HTML = r"""<!doctype html>
       button.disabled = true;
       text("consoleStatus", "starting");
       cls("consoleDot", "dot running");
+      setScreenCleared(false);
+      rememberThread(selected.consoleThread);
       try {
         const res = await fetch("/api/command", {
           method: "POST",
@@ -2280,9 +2505,8 @@ HTML = r"""<!doctype html>
           localStorage.setItem("holo_console_thread", selected.consoleThread);
         }
         input.value = "";
-        const query = new URLSearchParams(window.location.search);
-        query.set("console_thread", selected.consoleThread);
-        window.history.replaceState(null, "", `?${query.toString()}`);
+        rememberThread(selected.consoleThread);
+        updateLocation();
         refresh();
       } catch (err) {
         text("consoleStatus", "submit failed");
@@ -2301,6 +2525,7 @@ HTML = r"""<!doctype html>
       if (!selected.runPrefix && data.filters && data.filters.run_prefix) selected.runPrefix = data.filters.run_prefix;
       if (data.filters && data.filters.item_id !== undefined) selected.itemId = data.filters.item_id || "";
       if (data.filters && data.filters.console_thread) selected.consoleThread = data.filters.console_thread;
+      if ((document.getElementById("threadSelect")?.value || "") !== selected.consoleThread) rememberThread(selected.consoleThread);
       const metrics = cur.latest_metrics || {};
       const stability = data.stability || {};
       text("subtitle", `${data.generated_at} | branch ${data.repo.branch || "-"} @ ${data.repo.head || "-"}`);
@@ -2341,11 +2566,13 @@ HTML = r"""<!doctype html>
       text("consoleStatus", jobStatus);
       cls("consoleDot", `dot ${jobStatus === "running" || jobStatus === "queued" ? "running" : jobStatus === "failed" || jobStatus === "timeout" || jobStatus === "error" ? "failed" : "ok"}`);
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
-      renderTranscript(consoleState.transcript || []);
-      renderPipeline((consoleState.topology && consoleState.topology.some(row => Number(row.value || 0) > 0)) ? consoleState.topology : (data.pipeline || []));
-      renderModelIO(consoleState.model_io || []);
-      renderBranches(consoleState.search_branches || []);
-      renderActivity(consoleState.activity || []);
+      const cleared = isScreenCleared() && !["running", "queued"].includes(jobStatus);
+      renderTranscript(cleared ? [] : (consoleState.transcript || []));
+      renderPipeline(cleared ? [] : ((consoleState.topology && consoleState.topology.some(row => Number(row.value || 0) > 0)) ? consoleState.topology : (data.pipeline || [])));
+      renderModelIO(cleared ? [] : (consoleState.model_io || []));
+      renderBranches(cleared ? [] : (consoleState.search_branches || []));
+      renderActivity(cleared ? [] : (consoleState.activity || []));
+      if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
       latestSpotlights = buildSpotlights(data);
@@ -2433,11 +2660,82 @@ HTML = r"""<!doctype html>
         </div>`).join("");
     }
     function renderPipeline(rows) {
-      document.getElementById("pipeline").innerHTML = rows.map((row, index) => `
-        <div class="stage ${escapeHtml(row.state)}">
-          <div><div class="stage-index">${index + 1}</div><div class="name">${escapeHtml(row.label)}</div><div class="tiny">${escapeHtml(row.detail)}</div></div>
-          <div class="num">${fmtNum(row.value)}</div>
-        </div>`).join("");
+      const panel = document.getElementById("pipeline");
+      const byLabel = new Map();
+      (rows || []).forEach(row => byLabel.set(canonicalTopologyLabel(row.label), row));
+      const nodes = topologyLabels.map(label => {
+        const row = byLabel.get(label) || {};
+        return {
+          label,
+          state: row.state || "idle",
+          value: Number(row.value || 0),
+          detail: row.detail || idleDetail(label)
+        };
+      });
+      const nodeMap = new Map(nodes.map(row => [row.label, row]));
+      const svgEdges = topologyEdges.map(([from, to]) => {
+        const a = topologyLayout[from];
+        const b = topologyLayout[to];
+        const fromNode = nodeMap.get(from) || {};
+        const toNode = nodeMap.get(to) || {};
+        const active = Number(fromNode.value || 0) > 0 && Number(toNode.value || 0) > 0;
+        const warn = fromNode.state === "warn" || toNode.state === "warn";
+        const curve = from === "Verify" && to === "Plan"
+          ? `M ${a[0]} ${a[1]} C ${a[0] - 24} ${a[1] + 8}, ${b[0] - 20} ${b[1] + 20}, ${b[0]} ${b[1]}`
+          : `M ${a[0]} ${a[1]} L ${b[0]} ${b[1]}`;
+        return `<path class="topology-edge ${active ? "active" : ""} ${warn ? "warn" : ""}" d="${curve}" marker-end="url(#arrow)" />`;
+      }).join("");
+      const nodeHtml = nodes.map(row => {
+        const pos = topologyLayout[row.label];
+        const statusClass = row.state === "failed" ? "failed" : row.state;
+        return `<button class="topology-node ${escapeHtml(row.state)}" style="left:${pos[0]}%;top:${pos[1]}%" data-label="${escapeHtml(row.label)}" title="${escapeHtml(row.detail)}">
+          <div class="node-top"><div class="node-name">${escapeHtml(row.label)}</div><span class="state-dot ${escapeHtml(statusClass)}"></span></div>
+          <div class="node-count">${fmtNum(row.value)}</div>
+          <div class="node-detail">${escapeHtml(row.detail)}</div>
+        </button>`;
+      }).join("");
+      panel.innerHTML = `
+        <svg class="topology-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 Z" fill="#64748b"></path>
+            </marker>
+          </defs>
+          ${svgEdges}
+        </svg>
+        ${nodeHtml}`;
+      panel.querySelectorAll(".topology-node").forEach(button => {
+        button.addEventListener("click", () => {
+          const row = nodeMap.get(button.dataset.label) || {};
+          showInspector(row.label, `${row.state || "idle"} | ${fmtNum(row.value)} events`, row.detail || "");
+        });
+      });
+      const activeNode = nodes.find(row => row.state === "active") || nodes.find(row => row.state === "warn") || nodes.find(row => row.value > 0) || nodes[0];
+      if (activeNode) showInspector(activeNode.label, `${activeNode.state} | ${fmtNum(activeNode.value)} events`, activeNode.detail);
+    }
+    function canonicalTopologyLabel(label) {
+      const value = String(label || "").toLowerCase();
+      if (value.includes("intake")) return "Intake";
+      if (value.includes("plan") || value.includes("llm")) return "Plan";
+      if (value.includes("policy") || value.includes("provider")) return "Policy";
+      if (value.includes("tool") || value.includes("compute")) return "Tools";
+      if (value.includes("search") || value.includes("retrieve")) return "Search";
+      if (value.includes("evidence")) return "Evidence";
+      if (value.includes("verify") || value.includes("gate")) return "Verify";
+      if (value.includes("answer") || value.includes("synth") || value.includes("score")) return "Answer";
+      return String(label || "");
+    }
+    function idleDetail(label) {
+      return ({
+        Intake: "task parsed",
+        Plan: "LLM chooses move",
+        Policy: "host validates",
+        Tools: "tools execute",
+        Search: "retrieval branches",
+        Evidence: "facts and citations",
+        Verify: "numeric/support gate",
+        Answer: "final response"
+      })[label] || "";
     }
     function renderTranscript(rows) {
       const panel = document.getElementById("transcript");
@@ -2456,64 +2754,62 @@ HTML = r"""<!doctype html>
     function renderBranches(rows) {
       const panel = document.getElementById("searchBranches");
       if (!rows.length) {
-        panel.innerHTML = `<div class="branch"><div class="branch-head"><div class="branch-title">No search branch yet</div><div class="branch-status">idle</div></div><div class="branch-detail">Retrieval branches will appear when the agent calls retrieval.run.</div></div>`;
+        panel.innerHTML = `<button class="signal-card"><div class="signal-head"><div class="signal-title">No branch</div><span class="state-dot idle"></span></div><div class="signal-meta">retrieval.run not called</div></button>`;
         return;
       }
-      panel.innerHTML = rows.slice(-8).reverse().map(row => `
-        <div class="branch">
-          <div class="branch-head"><div class="branch-title">Branch ${row.index}: ${escapeHtml(row.query || "search")}</div><div class="branch-status">${escapeHtml(row.status || "ok")}</div></div>
-          <div class="branch-detail">sources ${fmtNum(row.sources)} | accepted ${fmtNum(row.accepted)} | ${escapeHtml((row.providers || []).join(", ") || row.query_hash || "")}</div>
-        </div>`).join("");
+      const shown = rows.slice(-8).reverse();
+      panel.innerHTML = shown.map(row => `
+        <button class="signal-card">
+          <div class="signal-head"><div class="signal-title">Branch ${fmtNum(row.index)}</div><span class="state-dot ${escapeHtml(row.status === "failed" ? "failed" : "ok")}"></span></div>
+          <div class="signal-meta">${fmtNum(row.sources)} sources | ${fmtNum(row.accepted)} accepted</div>
+          <div class="signal-badges"><span>${escapeHtml((row.providers || []).slice(0, 3).join(" | ") || row.query_hash || "provider")}</span></div>
+        </button>`).join("");
+      panel.querySelectorAll(".signal-card").forEach((button, index) => {
+        const row = shown[index] || {};
+        button.addEventListener("click", () => showInspector(`Search branch ${row.index || ""}`, `${row.status || "ok"} | ${fmtNum(row.sources)} sources`, `${row.query || ""}\n${(row.providers || []).join(", ")}`));
+      });
     }
     function renderModelIO(rows) {
       const panel = document.getElementById("modelIoStream");
       if (!panel) return;
       if (!rows.length) {
-        panel.innerHTML = `<div class="workflow-node"><div class="workflow-root"><div class="workflow-phase">Model</div><div class="workflow-main"><div class="workflow-head"><div class="workflow-title">No processor node yet</div><div class="workflow-status">idle</div></div><div class="workflow-meta">structured workflow appears when Kernel v3 calls an LLM processor</div><div class="workflow-summary">The dashboard shows host-visible processor contracts, structured outputs, tool decisions, and verification status. Hidden chain-of-thought is not exposed.</div></div></div></div>`;
+        panel.innerHTML = `<button class="signal-card"><div class="signal-head"><div class="signal-title">No processor</div><span class="state-dot idle"></span></div><div class="signal-meta">waiting for LLM call</div></button>`;
         return;
       }
-      panel.innerHTML = rows.slice(-7).reverse().map(row => {
-        const children = Array.isArray(row.children) ? row.children : [];
-        const childHtml = children.map(child => `
-          <div class="workflow-child ${escapeHtml(child.kind || "")}">
-            <div class="workflow-indent"><span></span></div>
-            <div class="workflow-main">
-              <div class="workflow-child-head">
-                <div class="workflow-child-label">${escapeHtml(child.label || child.kind || "node")}</div>
-                <div class="workflow-status">${escapeHtml(child.status || "")}</div>
-              </div>
-              <div class="workflow-meta">${escapeHtml(child.meta || "")}</div>
-              <div class="workflow-body">${escapeHtml(child.body || "")}</div>
-            </div>
-          </div>`).join("");
-        return `
-          <div class="workflow-node">
-            <div class="workflow-root">
-              <div class="workflow-phase">${escapeHtml(row.phase || "Model")}</div>
-              <div class="workflow-main">
-                <div class="workflow-head">
-                  <div class="workflow-title">${escapeHtml(row.title || row.processor || "model.processor")}</div>
-                  <div class="workflow-status">${escapeHtml(row.status || "")}</div>
-                </div>
-                <div class="workflow-meta">${escapeHtml([row.provider, row.model, row.meta].filter(Boolean).join(" | "))}</div>
-                <div class="workflow-summary">${escapeHtml(row.summary || "")}</div>
-              </div>
-            </div>
-            <div class="workflow-children">${childHtml}</div>
-          </div>`;
+      const shown = rows.slice(-9).reverse();
+      panel.innerHTML = shown.map(row => {
+        const statusClass = row.status === "failed" ? "failed" : row.status === "requested" ? "active" : "ok";
+        return `<button class="signal-card">
+          <div class="signal-head"><div class="signal-title">${escapeHtml(row.title || row.processor || "processor")}</div><span class="state-dot ${escapeHtml(statusClass)}"></span></div>
+          <div class="signal-meta">${escapeHtml(row.phase || "Model")} | ${escapeHtml(row.status || "")}</div>
+          <div class="signal-badges"><span>${fmtNum(row.child_count || (row.children || []).length)} packets</span><span>${escapeHtml(row.model || "model")}</span></div>
+        </button>`;
       }).join("");
+      panel.querySelectorAll(".signal-card").forEach((button, index) => {
+        const row = shown[index] || {};
+        const children = Array.isArray(row.children) ? row.children : [];
+        const body = children.map(child => `${child.label || child.kind}: ${child.meta || ""}\n${child.body || ""}`).join("\n\n");
+        button.addEventListener("click", () => showInspector(row.title || row.processor || "processor", [row.phase, row.status, row.meta].filter(Boolean).join(" | "), body || row.summary || ""));
+      });
     }
     function renderActivity(rows) {
       const panel = document.getElementById("activityStream");
       if (!rows.length) {
-        panel.innerHTML = `<div class="activity"><div class="activity-head"><div class="activity-title">Waiting for activity</div><div class="activity-status">idle</div></div><div class="activity-detail">Public model packets, tool calls, evidence and gates will stream here.</div></div>`;
+        panel.innerHTML = `<button class="signal-card"><div class="signal-head"><div class="signal-title">Waiting</div><span class="state-dot idle"></span></div><div class="signal-meta">no public event</div></button>`;
         return;
       }
-      panel.innerHTML = rows.slice(-14).reverse().map(row => `
-        <div class="activity">
-          <div class="activity-head"><div class="activity-title">${escapeHtml(row.title || row.kind)}</div><div class="activity-status">${escapeHtml(row.status || "")}</div></div>
-          <div class="activity-detail">${escapeHtml(row.detail || row.step_id || row.task_id || "")}</div>
-        </div>`).join("");
+      const shown = rows.slice(-14).reverse();
+      panel.innerHTML = shown.map(row => {
+        const statusClass = row.status === "failed" || row.status === "error" ? "failed" : row.status === "running" || row.status === "queued" ? "active" : "ok";
+        return `<button class="signal-card">
+          <div class="signal-head"><div class="signal-title">${escapeHtml(row.title || row.kind)}</div><span class="state-dot ${escapeHtml(statusClass)}"></span></div>
+          <div class="signal-meta">${escapeHtml(row.status || row.kind || "event")}</div>
+        </button>`;
+      }).join("");
+      panel.querySelectorAll(".signal-card").forEach((button, index) => {
+        const row = shown[index] || {};
+        button.addEventListener("click", () => showInspector(row.title || row.kind || "event", row.status || row.kind || "", row.detail || row.step_id || row.task_id || ""));
+      });
     }
     function renderIntel(rows) {
       document.getElementById("intel").innerHTML = rows.map(row => `
@@ -2533,6 +2829,7 @@ HTML = r"""<!doctype html>
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
     }
+    rememberThread(selected.consoleThread);
     refresh();
     setInterval(() => {
       if (!latestSpotlights.length) return;
