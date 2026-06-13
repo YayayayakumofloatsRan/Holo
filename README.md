@@ -133,7 +133,8 @@ dashboard is chat-first: the right side is the interactive Holo console, while
 the left side shows WSL workspace state, a graphical SVG agent topology with
 explicit arrows, compact processor/search/event signal cards, and a click-through
 inspector for details. It supports thread switching, new demo threads, local
-screen clearing, and stable hard finance prompts for recording. It also supports item-level demo
+screen clearing, model-routed Auto Chat, Finance Deep mode with larger finance
+retrieval/tool budgets, and stable hard finance prompts for recording. It also supports item-level demo
 selection; for recording, the stronger historical
 Activision trace is available with
 `run_prefix=run_financebench_doc_live10_capability_parallel_v2` and

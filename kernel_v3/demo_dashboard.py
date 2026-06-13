@@ -332,6 +332,7 @@ def _trim_command_runs(command_runs: dict[str, Json], *, limit: int = 12) -> Non
 
 def _run_dashboard_command(server: DashboardServer, run_id: str, message: str, thread_id: str, profile: str) -> None:
     _update_command_run(server, run_id, status="running", started_at=time.time())
+    mode = profile if profile in {"auto", "fast", "balanced", "quality", "finance_deep"} else "auto"
     cmd = [
         str(server.root / "holo-v3"),
         "chat",
@@ -352,21 +353,44 @@ def _run_dashboard_command(server: DashboardServer, run_id: str, message: str, t
         "--turn-router",
         "model",
         "--profile",
-        profile if profile in {"fast", "balanced", "quality"} else "quality",
-        "--reasoning-effort",
-        "high",
+        "quality" if mode == "finance_deep" else ("balanced" if mode == "auto" else mode),
         "--response-language",
         "english",
-        "--live-retrieval",
-        "--live-max-network-fetches",
-        "96",
-        "--research-depth",
-        "deep",
-        "--max-agent-steps",
-        "8",
-        "--max-agent-tool-calls",
-        "14",
+        "--generation-mode",
+        "auto",
     ]
+    if mode == "finance_deep":
+        cmd.extend(
+            [
+                "--reasoning-effort",
+                "high",
+                "--live-retrieval",
+                "--live-max-network-fetches",
+                "96",
+                "--research-depth",
+                "deep",
+                "--max-agent-steps",
+                "8",
+                "--max-agent-tool-calls",
+                "14",
+            ]
+        )
+    else:
+        cmd.extend(
+            [
+                "--reasoning-effort",
+                "medium",
+                "--latency-target",
+                "balanced",
+                "--max-output-tokens",
+                "1600",
+                "--max-agent-steps",
+                "4",
+                "--max-agent-tool-calls",
+                "4",
+                "--no-live-retrieval",
+            ]
+        )
     env = _dashboard_command_env()
     if not env.get("DEEPSEEK_API_KEY"):
         _update_command_run(
@@ -426,6 +450,7 @@ def _run_dashboard_command(server: DashboardServer, run_id: str, message: str, t
         returncode=proc.returncode,
         answer=clip(answer, 1600),
         error=clip(error, 1600),
+        effective_profile=mode,
     )
 
 
@@ -536,7 +561,7 @@ def build_state(
     result_records = read_jsonl(result_path, max_bytes=8_000_000, max_records=200)
     summary = read_json(summary_path)
     reasonable = read_json(reasonable_path)
-    journal_records = read_jsonl(journal, max_bytes=5_000_000, max_records=900)
+    journal_records = read_jsonl(journal, max_bytes=20_000_000, max_records=3_000)
     events = compact_events(journal_records, thread_prefix=thread_prefix)
     item_records = _records_for_item(result_records, item_id)
     display_records = item_records if item_records else result_records
@@ -584,6 +609,8 @@ def build_state(
 def console_state(records: list[Json], thread_id: str, command_runs: list[Json]) -> Json:
     thread_id = _safe_thread_id(thread_id)
     scoped = _records_for_thread_scope(records, thread_id)
+    turn_records = _latest_turn_records(scoped)
+    visible_turn = _records_until_terminal(turn_records)
     runs = [dict(item) for item in command_runs if str(item.get("thread_id") or "") == thread_id]
     runs.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
     active = next((item for item in runs if item.get("status") in {"queued", "running"}), runs[0] if runs else {})
@@ -591,18 +618,21 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
         "thread_id": thread_id,
         "job": active,
         "transcript": console_transcript(scoped, runs),
-        "topology": loop_topology_state(scoped),
-        "search_branches": search_branch_state(scoped),
-        "model_io": model_io_stream_state(scoped),
-        "activity": public_activity_state(scoped, active),
+        "topology": loop_topology_state(visible_turn),
+        "flow": loop_flow_state(visible_turn, active),
+        "search_branches": search_branch_state(visible_turn),
+        "model_io": model_io_stream_state(visible_turn),
+        "activity": public_activity_state(visible_turn, active),
         "stats": {
-            "records": len(scoped),
-            "actions": sum(1 for record in scoped if record.get("kind") == "action"),
-            "searches": sum(1 for record in scoped if record.get("kind") == "retrieval_search_attempt"),
-            "fetches": sum(1 for record in scoped if record.get("kind") in {"retrieval_fetch", "retrieval_fetch_attempt"}),
-            "evidence": sum(1 for record in scoped if record.get("kind") in {"retrieval_evidence", "claim_ledger", "slot_frame"}),
+            "records": len(visible_turn),
+            "thread_records": len(scoped),
+            "actions": sum(1 for record in visible_turn if record.get("kind") == "action"),
+            "searches": sum(1 for record in visible_turn if record.get("kind") == "retrieval_search_attempt"),
+            "fetches": sum(1 for record in visible_turn if record.get("kind") in {"retrieval_fetch", "retrieval_fetch_attempt"}),
+            "evidence": sum(1 for record in visible_turn if record.get("kind") in {"retrieval_evidence", "claim_ledger", "slot_frame"}),
+            "closed": _has_terminal_record(visible_turn),
         },
-        "notice": "Public execution trace only. Hidden chain-of-thought is not exposed.",
+        "notice": "Current turn only. Public trace; hidden chain-of-thought is not exposed.",
     }
 
 
@@ -634,6 +664,7 @@ def console_transcript(records: list[Json], runs: list[Json]) -> list[Json]:
     turns: list[Json] = []
     journal_user_texts: set[str] = set()
     journal_assistant_texts: set[str] = set()
+    has_terminal = _has_terminal_record(_latest_turn_records(records))
     for record in records:
         kind = record.get("kind")
         data = record.get("data") if isinstance(record.get("data"), dict) else {}
@@ -680,12 +711,21 @@ def console_transcript(records: list[Json], runs: list[Json]) -> list[Json]:
                     "at": int(float(run.get("started_at") or run.get("created_at") or 0) * 1000),
                 }
             )
-        elif answer and answer not in journal_assistant_texts:
+        elif answer and answer not in journal_assistant_texts and (has_terminal or not records):
             turns.append(
                 {
                     "role": "assistant",
                     "text": clip(answer, 1800),
                     "status": status,
+                    "at": int(float(run.get("finished_at") or 0) * 1000),
+                }
+            )
+        elif answer and answer not in journal_assistant_texts:
+            turns.append(
+                {
+                    "role": "assistant",
+                    "text": "Kernel process finished; synchronizing the final journal trace before displaying the answer.",
+                    "status": "finalizing",
                     "at": int(float(run.get("finished_at") or 0) * 1000),
                 }
             )
@@ -700,6 +740,34 @@ def console_transcript(records: list[Json], runs: list[Json]) -> list[Json]:
             )
     turns.sort(key=lambda item: int(item.get("at") or 0))
     return turns[-12:]
+
+
+def _latest_turn_records(records: list[Json]) -> list[Json]:
+    if not records:
+        return []
+    start = 0
+    for index, record in enumerate(records):
+        if record.get("kind") == "chat_turn":
+            start = index
+    return records[start:]
+
+
+def _records_until_terminal(records: list[Json]) -> list[Json]:
+    for index, record in enumerate(records):
+        if _is_terminal_record(record):
+            return records[: index + 1]
+    return records
+
+
+def _has_terminal_record(records: list[Json]) -> bool:
+    return any(_is_terminal_record(record) for record in records)
+
+
+def _is_terminal_record(record: Json) -> bool:
+    kind = record.get("kind")
+    if kind in {"agent_final_answer", "agent_failure_report", "chat_agent_result"}:
+        return True
+    return False
 
 
 def _chat_result_answer_text(data: Json) -> str:
@@ -728,6 +796,7 @@ def loop_topology_state(records: list[Json]) -> list[Json]:
         ("Answer", {"termination_decision", "feedback", "agent_final_answer", "agent_failure_report", "chat_agent_result"}, "reply or explain gap"),
     ]
     latest_kind = str(records[-1].get("kind") or "") if records else ""
+    terminal = _has_terminal_record(records)
     has_failure = any(
         record.get("kind") in {"agent_failure_report"}
         or (record.get("kind") == "chat_agent_result" and isinstance(record.get("data"), dict) and record["data"].get("failure_report"))
@@ -738,11 +807,91 @@ def loop_topology_state(records: list[Json]) -> list[Json]:
         count = sum(1 for record in records if record.get("kind") in kinds)
         state = "idle"
         if count:
-            state = "active" if latest_kind in kinds else "ok"
+            state = "active" if latest_kind in kinds and not terminal else "ok"
+        if terminal and label == "Answer" and count and not has_failure:
+            state = "closed"
         if has_failure and label in {"Verify", "Answer"} and count:
             state = "warn"
-        rows.append(stage(label, state, count, detail))
+        row = stage(label, state, count, detail)
+        row["last_at"] = max((int(record.get("recorded_at_ms") or 0) for record in records if record.get("kind") in kinds), default=0)
+        rows.append(row)
     return rows
+
+
+def loop_flow_state(records: list[Json], active_job: Json | None = None) -> list[Json]:
+    rows: list[Json] = []
+    if active_job and active_job.get("status") in {"queued", "running"} and not records:
+        rows.append(
+            {
+                "stage": "Run",
+                "title": "Start",
+                "kind": "dashboard_job",
+                "status": str(active_job.get("status") or "running"),
+                "detail": f"thread {active_job.get('thread_id')}",
+                "at": int(float(active_job.get("started_at") or active_job.get("created_at") or time.time()) * 1000),
+            }
+        )
+    for record in records:
+        kind = str(record.get("kind") or "")
+        if kind not in RELEVANT_EVENT_KINDS:
+            continue
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        title = _activity_title(kind, data)
+        if not title:
+            continue
+        rows.append(
+            {
+                "stage": _stage_for_kind(kind),
+                "title": _short_event_title(kind, data, title),
+                "kind": kind,
+                "status": _activity_status(kind, data) or ("request" if kind == "processor_request" else ""),
+                "detail": _activity_detail(kind, data),
+                "at": int(record.get("recorded_at_ms") or 0),
+                "step_id": record.get("step_id") or data.get("step_id") or "",
+                "task_id": record.get("task_id") or data.get("task_id") or "",
+            }
+        )
+    return rows[-36:]
+
+
+def _stage_for_kind(kind: str) -> str:
+    if kind in {"chat_turn", "chat_routing_decision", "semantic_intake", "compiled_task_program"}:
+        return "Intake"
+    if kind in {"processor_request", "processor_result", "action", "toolchain_step_proposed"}:
+        return "Plan"
+    if kind == "policy_decision":
+        return "Policy"
+    if kind in {"observation", "retrieval_fetch", "retrieval_fetch_attempt"}:
+        return "Tools"
+    if kind in {"retrieval_query_plan", "retrieval_search_attempt", "retrieval_workbench_decision"}:
+        return "Search"
+    if kind in {"retrieval_extraction", "retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame"}:
+        return "Evidence"
+    if kind in {"transform_plan", "finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}:
+        return "Verify"
+    if kind in {"termination_decision", "feedback", "agent_final_answer", "agent_failure_report", "chat_agent_result"}:
+        return "Answer"
+    return "Run"
+
+
+def _short_event_title(kind: str, data: Json, fallback: str) -> str:
+    if kind == "processor_request":
+        return f"LLM request: {data.get('task_type') or data.get('processor') or 'processor'}"
+    if kind == "processor_result":
+        return f"LLM result: {data.get('task_type') or 'processor'}"
+    if kind == "retrieval_search_attempt":
+        return "Search"
+    if kind in {"retrieval_fetch", "retrieval_fetch_attempt"}:
+        return "Fetch"
+    if kind in {"retrieval_extraction", "retrieval_evidence", "retrieval_citation"}:
+        return "Evidence"
+    if kind in {"claim_ledger", "slot_frame"}:
+        return "Ledger"
+    if kind in {"finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}:
+        return "Gate"
+    if kind in {"chat_agent_result", "agent_final_answer"}:
+        return "Answer"
+    return clip(fallback, 48)
 
 
 def search_branch_state(records: list[Json]) -> list[Json]:
@@ -1432,7 +1581,8 @@ def _thread_scoped_ids(records: list[Json], thread_prefix: str) -> tuple[set[str
                 task_ids.add(value)
         for value in (record.get("run_id"), data.get("run_id")):
             if isinstance(value, str) and value:
-                run_ids.add(value)
+                if value.startswith("chat-") or value.startswith("mission-") or thread_prefix in value:
+                    run_ids.add(value)
     return task_ids, run_ids
 
 
@@ -1448,9 +1598,11 @@ def _record_in_thread_scope(
     data = record.get("data") if isinstance(record.get("data"), dict) else {}
     task_id = record.get("task_id") or data.get("task_id")
     run_id = record.get("run_id") or data.get("run_id")
-    if isinstance(task_id, str) and task_id in allowed_task_ids:
-        return True
     if isinstance(run_id, str) and run_id in allowed_run_ids:
+        return True
+    if isinstance(run_id, str) and run_id:
+        return False
+    if isinstance(task_id, str) and task_id in allowed_task_ids:
         return True
     return False
 
@@ -1971,7 +2123,7 @@ HTML = r"""<!doctype html>
     .chat-panel .transcript { height: auto; overflow: auto; padding-right: 4px; align-content: start; }
     .thread-tools {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(0, 1fr) 140px auto auto;
       gap: 8px;
       align-items: center;
       padding: 8px;
@@ -2153,7 +2305,7 @@ HTML = r"""<!doctype html>
     }
     .topology-shell {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 220px;
+      grid-template-rows: minmax(0, 1fr) 112px;
       gap: 12px;
       height: calc(100% - 28px);
       min-height: 0;
@@ -2184,11 +2336,12 @@ HTML = r"""<!doctype html>
       opacity: .64;
     }
     .topology-edge.active { stroke: var(--blue); stroke-width: 3; opacity: .9; }
+    .topology-edge.hot { stroke: var(--teal); stroke-width: 4; opacity: 1; }
     .topology-edge.warn { stroke: var(--amber); stroke-width: 3; opacity: .95; }
     .topology-node {
       position: absolute;
-      width: 112px;
-      min-height: 68px;
+      width: 82px;
+      min-height: 62px;
       transform: translate(-50%, -50%);
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -2201,16 +2354,18 @@ HTML = r"""<!doctype html>
     .topology-node.ok { border-color: #9fd4b1; }
     .topology-node.warn { border-color: #e5c07b; box-shadow: 0 8px 18px rgba(180, 83, 9, .12); }
     .topology-node.active { border-color: #93b4f8; box-shadow: 0 8px 18px rgba(29, 78, 216, .13); }
+    .topology-node.closed { border-color: #7fc9bd; box-shadow: 0 8px 18px rgba(15, 118, 110, .13); }
     .topology-node.idle { opacity: .62; }
     .topology-node .node-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-    .topology-node .node-name { font-size: 14px; font-weight: 700; line-height: 1.05; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .topology-node .node-count { margin-top: 8px; font-size: 25px; font-weight: 700; line-height: 1; color: var(--ink); }
+    .topology-node .node-name { font-size: 12px; font-weight: 700; line-height: 1.05; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topology-node .node-count { margin-top: 7px; font-size: 22px; font-weight: 700; line-height: 1; color: var(--ink); }
     .topology-node .node-detail { margin-top: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
     .state-dot.ok { background: var(--green); }
     .state-dot.active { background: var(--blue); }
     .state-dot.warn { background: var(--amber); }
     .state-dot.failed { background: var(--red); }
+    .state-dot.closed { background: var(--teal); }
     .graph-inspector {
       min-width: 0;
       min-height: 0;
@@ -2248,6 +2403,7 @@ HTML = r"""<!doctype html>
     .signal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
     .signal-title { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .signal-meta { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .signal-stage { color: var(--blue); font-size: 10px; font-weight: 700; text-transform: uppercase; }
     .signal-badges { display: flex; gap: 5px; flex-wrap: wrap; }
     .signal-badges span {
       border: 1px solid #dfe5ee;
@@ -2332,6 +2488,11 @@ HTML = r"""<!doctype html>
         <div class="panel-title"><span>Chat with Holo Kernel v3</span><span class="status"><span id="consoleDot" class="dot"></span><span id="consoleStatus">ready</span></span></div>
         <div class="thread-tools">
           <select id="threadSelect" aria-label="Console thread"></select>
+          <select id="runMode" aria-label="Execution mode">
+            <option value="auto" selected>Auto Chat</option>
+            <option value="finance_deep">Finance Deep</option>
+            <option value="fast">Fast</option>
+          </select>
           <button id="newThread">New Thread</button>
           <button id="clearScreen">Clear Screen</button>
         </div>
@@ -2344,10 +2505,10 @@ HTML = r"""<!doctype html>
             <div class="thread" id="consoleThread">thread demo-ui-live</div>
           </div>
           <div class="quick-prompts">
-            <button data-prompt="What was Goldman Sachs' net revenues for fiscal year 2024? Use SEC or annual-report evidence and identify the exact line item.">Goldman net revenues</button>
-            <button data-prompt="Compute Activision Blizzard FY2019 fixed asset turnover using FY2019 revenue and average net PP&E from the 2019 10-K. Show the formula and evidence.">Activision FAT</button>
-            <button data-prompt="Assess whether 3M was capital intensive using filing evidence for sales and PP&E/assets, and compute the relevant ratio.">3M capital intensity</button>
-            <button data-prompt="What was NextEra Energy's operating revenues for fiscal year 2024? Use the exact operating revenue line item and cite evidence.">NextEra operating revenue</button>
+            <button data-mode="finance_deep" data-prompt="What was Goldman Sachs' net revenues for fiscal year 2024? Use SEC or annual-report evidence and identify the exact line item.">Goldman net revenues</button>
+            <button data-mode="finance_deep" data-prompt="Compute Activision Blizzard FY2019 fixed asset turnover using FY2019 revenue and average net PP&E from the 2019 10-K. Show the formula and evidence.">Activision FAT</button>
+            <button data-mode="finance_deep" data-prompt="Assess whether 3M was capital intensive using filing evidence for sales and PP&E/assets, and compute the relevant ratio.">3M capital intensity</button>
+            <button data-mode="finance_deep" data-prompt="What was NextEra Energy's operating revenues for fiscal year 2024? Use the exact operating revenue line item and cite evidence.">NextEra operating revenue</button>
           </div>
         </div>
       </div>
@@ -2368,14 +2529,14 @@ HTML = r"""<!doctype html>
     };
     const topologyLabels = ["Intake", "Plan", "Policy", "Tools", "Search", "Evidence", "Verify", "Answer"];
     const topologyLayout = {
-      Intake: [12, 20],
-      Plan: [32, 20],
-      Policy: [52, 20],
-      Tools: [72, 20],
-      Search: [88, 50],
-      Evidence: [72, 80],
-      Verify: [52, 80],
-      Answer: [32, 80]
+      Intake: [8, 50],
+      Plan: [20, 50],
+      Policy: [32, 50],
+      Tools: [44, 50],
+      Search: [56, 50],
+      Evidence: [68, 50],
+      Verify: [80, 50],
+      Answer: [92, 50]
     };
     const topologyEdges = [
       ["Intake", "Plan"],
@@ -2384,8 +2545,7 @@ HTML = r"""<!doctype html>
       ["Tools", "Search"],
       ["Search", "Evidence"],
       ["Evidence", "Verify"],
-      ["Verify", "Answer"],
-      ["Verify", "Plan"]
+      ["Verify", "Answer"]
     ];
     let latestSpotlights = [];
     let spotlightIndex = 0;
@@ -2451,7 +2611,10 @@ HTML = r"""<!doctype html>
     document.getElementById("runCommand").addEventListener("click", submitCommand);
     document.getElementById("clearCommand").addEventListener("click", () => { document.getElementById("commandInput").value = ""; });
     document.getElementById("threadSelect").addEventListener("change", event => switchThread(event.target.value));
-    document.getElementById("newThread").addEventListener("click", () => switchThread(newThreadId()));
+    document.getElementById("newThread").addEventListener("click", () => {
+      document.getElementById("runMode").value = "auto";
+      switchThread(newThreadId());
+    });
     document.getElementById("clearScreen").addEventListener("click", () => {
       setScreenCleared(true);
       renderTranscript([]);
@@ -2465,7 +2628,10 @@ HTML = r"""<!doctype html>
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submitCommand();
     });
     document.querySelectorAll("button[data-prompt]").forEach(button => {
-      button.addEventListener("click", () => { document.getElementById("commandInput").value = button.dataset.prompt || ""; });
+      button.addEventListener("click", () => {
+        document.getElementById("commandInput").value = button.dataset.prompt || "";
+        if (button.dataset.mode) document.getElementById("runMode").value = button.dataset.mode;
+      });
     });
     function stateUrl() {
       const query = new URLSearchParams();
@@ -2497,7 +2663,7 @@ HTML = r"""<!doctype html>
         const res = await fetch("/api/command", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, thread_id: selected.consoleThread, profile: "quality" })
+          body: JSON.stringify({ message, thread_id: selected.consoleThread, profile: document.getElementById("runMode").value || "auto" })
         });
         const payload = await res.json();
         if (payload.thread_id) {
@@ -2571,7 +2737,7 @@ HTML = r"""<!doctype html>
       renderPipeline(cleared ? [] : (consoleState.topology || []));
       renderModelIO(cleared ? [] : (consoleState.model_io || []));
       renderBranches(cleared ? [] : (consoleState.search_branches || []));
-      renderActivity(cleared ? [] : (consoleState.activity || []));
+      renderActivity(cleared ? [] : (consoleState.flow || consoleState.activity || []));
       if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
       renderIntel(data.intelligence || []);
       renderEvents(data.events || []);
@@ -2679,11 +2845,10 @@ HTML = r"""<!doctype html>
         const fromNode = nodeMap.get(from) || {};
         const toNode = nodeMap.get(to) || {};
         const active = Number(fromNode.value || 0) > 0 && Number(toNode.value || 0) > 0;
+        const hot = toNode.state === "active" || toNode.state === "closed";
         const warn = fromNode.state === "warn" || toNode.state === "warn";
-        const curve = from === "Verify" && to === "Plan"
-          ? `M ${a[0]} ${a[1]} C ${a[0] - 24} ${a[1] + 8}, ${b[0] - 20} ${b[1] + 20}, ${b[0]} ${b[1]}`
-          : `M ${a[0]} ${a[1]} L ${b[0]} ${b[1]}`;
-        return `<path class="topology-edge ${active ? "active" : ""} ${warn ? "warn" : ""}" d="${curve}" marker-end="url(#arrow)" />`;
+        const curve = `M ${a[0]} ${a[1]} L ${b[0]} ${b[1]}`;
+        return `<path class="topology-edge ${active ? "active" : ""} ${hot ? "hot" : ""} ${warn ? "warn" : ""}" d="${curve}" marker-end="url(#arrow)" />`;
       }).join("");
       const nodeHtml = nodes.map(row => {
         const pos = topologyLayout[row.label];
@@ -2800,9 +2965,10 @@ HTML = r"""<!doctype html>
       }
       const shown = rows.slice(-14).reverse();
       panel.innerHTML = shown.map(row => {
-        const statusClass = row.status === "failed" || row.status === "error" ? "failed" : row.status === "running" || row.status === "queued" ? "active" : "ok";
+        const statusClass = row.status === "failed" || row.status === "error" ? "failed" : row.status === "running" || row.status === "queued" || row.status === "request" ? "active" : "ok";
         return `<button class="signal-card">
           <div class="signal-head"><div class="signal-title">${escapeHtml(row.title || row.kind)}</div><span class="state-dot ${escapeHtml(statusClass)}"></span></div>
+          <div class="signal-stage">${escapeHtml(row.stage || "Run")}</div>
           <div class="signal-meta">${escapeHtml(row.status || row.kind || "event")}</div>
         </button>`;
       }).join("");
@@ -2836,7 +3002,7 @@ HTML = r"""<!doctype html>
       spotlightIndex = (spotlightIndex + 1) % latestSpotlights.length;
       renderSpotlight();
     }, 4500);
-    setInterval(refresh, 1000);
+    setInterval(refresh, 500);
   </script>
 </body>
 </html>
