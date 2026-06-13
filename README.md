@@ -128,8 +128,12 @@ turnover from the 2019 10-K source URL. The promoted live run
 `pass_rate=1.0`, `numeric_accuracy=1.0`, `overall_score=1.0`, `workflow_score=1.0`,
 245 finance facts, 245 claim-ledger records, a transform plan, citations, and a
 synthesis gate pass. The Windows-accessible dashboard defaults to this run at
-`http://localhost:8787/` when `kernel_v3.demo_dashboard` is running. It also
-supports item-level demo selection; for recording, the stronger historical
+`http://localhost:8787/` when `kernel_v3.demo_dashboard` is running. The current
+dashboard is chat-first: the right side is the interactive Holo console, while
+the left side shows WSL workspace state, a 2D agent-loop topology, structured
+LLM workflow nodes, console activity, and retrieval branches with wrapped or
+locally scrollable text for recording. It also supports item-level demo
+selection; for recording, the stronger historical
 Activision trace is available with
 `run_prefix=run_financebench_doc_live10_capability_parallel_v2` and
 `item_id=financebench_id_02987`, showing 15 calculator calls, 738 finance

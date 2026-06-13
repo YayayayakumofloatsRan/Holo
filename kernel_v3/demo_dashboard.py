@@ -593,6 +593,7 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
         "transcript": console_transcript(scoped, runs),
         "topology": loop_topology_state(scoped),
         "search_branches": search_branch_state(scoped),
+        "model_io": model_io_stream_state(scoped),
         "activity": public_activity_state(scoped, active),
         "stats": {
             "records": len(scoped),
@@ -782,6 +783,150 @@ def search_branch_state(records: list[Json]) -> list[Json]:
             }
         )
     return rows[-12:]
+
+
+def model_io_stream_state(records: list[Json]) -> list[Json]:
+    calls: list[Json] = []
+    by_request: dict[str, Json] = {}
+
+    def ensure_call(request_id: str, *, data: Json, record: Json) -> Json:
+        key = request_id or f"record-{record.get('record_id') or len(calls)}"
+        existing = by_request.get(key)
+        if existing is not None:
+            return existing
+        task_type = str(data.get("task_type") or data.get("processor") or "model.processor")
+        params = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
+        call = {
+            "request_id": request_id,
+            "phase": _processor_phase(task_type),
+            "title": task_type,
+            "processor": str(data.get("processor") or task_type),
+            "model": str(data.get("model") or params.get("model") or ""),
+            "provider": str(data.get("provider") or params.get("provider") or ""),
+            "status": "requested",
+            "meta": _processor_meta(data),
+            "task_id": record.get("task_id") or data.get("task_id") or "",
+            "step_id": record.get("step_id") or data.get("step_id") or "",
+            "children": [],
+        }
+        by_request[key] = call
+        calls.append(call)
+        return call
+
+    for record in records:
+        kind = record.get("kind")
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        if kind == "processor_request":
+            params = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
+            prompt = data.get("prompt") if isinstance(data.get("prompt"), dict) else {}
+            call = ensure_call(str(data.get("request_id") or ""), data=data, record=record)
+            call["model"] = str(data.get("model") or params.get("model") or call.get("model") or "")
+            call["provider"] = str(data.get("provider") or params.get("provider") or call.get("provider") or "")
+            call["meta"] = _processor_meta(data)
+            call["children"].append(
+                {
+                    "kind": "input",
+                    "label": "Input contract",
+                    "meta": f"{prompt.get('chars', 0)} chars | hash {str(prompt.get('hash') or '')[:10]}",
+                    "body": clip(prompt.get("preview") or data.get("prompt") or "", 620),
+                    "status": "request",
+                }
+            )
+        elif kind == "processor_result":
+            output = data.get("output") if isinstance(data.get("output"), dict) else {}
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            call = ensure_call(str(data.get("request_id") or ""), data=data, record=record)
+            call["status"] = str(data.get("status") or "result")
+            call["model"] = str(data.get("model") or output.get("model") or call.get("model") or "")
+            call["provider"] = str(data.get("provider") or output.get("provider") or call.get("provider") or "")
+            call["meta"] = _processor_meta(data, usage=usage)
+            call["children"].append(
+                {
+                    "kind": "output",
+                    "label": "Structured output",
+                    "meta": f"{data.get('duration_ms') or 0} ms | {usage.get('total_tokens', '-')} tokens",
+                    "body": _processor_output_body(output, data.get("error")),
+                    "status": str(data.get("status") or "result"),
+                }
+            )
+    for call in calls:
+        children = call.get("children") if isinstance(call.get("children"), list) else []
+        call["child_count"] = len(children)
+        call["summary"] = _processor_call_summary(call)
+    return calls[-9:]
+
+
+def _processor_phase(task_type: str) -> str:
+    task = task_type.lower()
+    if "route" in task or "semantic" in task or "intake" in task:
+        return "Intake"
+    if "retrieval" in task or "workbench" in task or "search" in task:
+        return "Search"
+    if "judge" in task or "verifier" in task or "gate" in task:
+        return "Verify"
+    if "synth" in task or "answer" in task or "final" in task:
+        return "Answer"
+    if "evaluator" in task or "assess" in task or "plan" in task:
+        return "Plan"
+    return "Model"
+
+
+def _processor_meta(data: Json, usage: Json | None = None) -> str:
+    params = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
+    parts = [
+        str(data.get("provider") or params.get("provider") or ""),
+        str(data.get("model") or params.get("model") or ""),
+    ]
+    if data.get("duration_ms") is not None:
+        parts.append(f"{data.get('duration_ms')} ms")
+    if usage:
+        parts.append(f"{usage.get('total_tokens', '-')} tokens")
+    if params.get("thinking"):
+        parts.append(f"thinking {params.get('thinking')}")
+    if params.get("latency_target"):
+        parts.append(f"latency {params.get('latency_target')}")
+    return " | ".join(part for part in parts if part)
+
+
+def _processor_output_body(output: Json, error: object) -> str:
+    if error:
+        message = output.get("error_message_preview") if isinstance(output, dict) else ""
+        return clip(f"error: {error}\n{message}", 900)
+    parsed = output.get("parsed") if isinstance(output, dict) else None
+    if isinstance(parsed, dict):
+        lines: list[str] = []
+        for key in (
+            "status",
+            "next_action",
+            "answer",
+            "missing_slots",
+            "filled_slots",
+            "missing_evidence",
+            "used_evidence",
+            "citation_refs",
+            "confidence",
+            "limitations",
+            "stop_reason",
+        ):
+            if key not in parsed or parsed.get(key) in (None, "", []):
+                continue
+            value = parsed.get(key)
+            if not isinstance(value, str):
+                value = json.dumps(value, ensure_ascii=True, sort_keys=True)
+            lines.append(f"{key}: {clip(value, 360)}")
+        if lines:
+            return clip("\n".join(lines), 1100)
+        return clip(json.dumps(parsed, ensure_ascii=True, sort_keys=True), 1100)
+    body = output.get("raw_output_preview") if isinstance(output, dict) else ""
+    if not isinstance(body, str):
+        body = json.dumps(body, ensure_ascii=True, sort_keys=True)
+    return clip(body, 900)
+
+
+def _processor_call_summary(call: Json) -> str:
+    children = call.get("children") if isinstance(call.get("children"), list) else []
+    labels = [str(child.get("label") or child.get("kind") or "") for child in children if isinstance(child, dict)]
+    return " -> ".join(label for label in labels if label) or str(call.get("title") or "")
 
 
 def public_activity_state(records: list[Json], active_job: Json | None = None) -> list[Json]:
@@ -1541,6 +1686,7 @@ HTML = r"""<!doctype html>
       width: 100%;
       min-height: 96px;
       resize: none;
+      overflow: auto;
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 12px;
@@ -1574,7 +1720,15 @@ HTML = r"""<!doctype html>
     .message.user { background: #f8fbff; border-color: #c8d8fb; }
     .message.assistant { background: #fbfcfd; }
     .message .role { color: var(--muted); font-size: 12px; text-transform: uppercase; font-weight: 700; margin-bottom: 4px; }
-    .message .body { color: var(--slate); font-size: 15px; line-height: 1.38; max-height: 94px; overflow: hidden; }
+    .message .body {
+      color: var(--slate);
+      font-size: 15px;
+      line-height: 1.38;
+      max-height: 240px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
     .hero-title {
       margin: 2px 0 8px;
       font-size: 22px;
@@ -1749,7 +1903,16 @@ HTML = r"""<!doctype html>
     .branch-head, .activity-head { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
     .branch-title, .activity-title { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .branch-status, .activity-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
-    .branch-detail, .activity-detail { margin-top: 5px; color: var(--muted); font-size: 13px; line-height: 1.32; max-height: 36px; overflow: hidden; }
+    .branch-detail, .activity-detail {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.32;
+      max-height: 76px;
+      overflow: auto;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
     .finance-view { grid-template-rows: 104px 1fr; gap: 12px; }
     .question {
       border: 1px solid var(--line);
@@ -1791,9 +1954,9 @@ HTML = r"""<!doctype html>
     .event .desc { color: var(--muted); }
     .footer-grid { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 10px; }
     .mono { font-family: "Times New Roman", Times, serif; }
-    .grid { grid-template-columns: minmax(460px, 42%) minmax(0, 1fr); }
-    .left { grid-template-rows: 132px minmax(0, 1fr); }
-    .right { grid-template-rows: 250px minmax(0, 1fr) 210px; }
+    .grid { grid-template-columns: minmax(0, 54%) minmax(520px, 46%); }
+    .left { grid-template-rows: 120px 292px minmax(0, 1fr); }
+    .right { grid-template-rows: minmax(0, 1fr); }
     .workspace-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 10px; height: calc(100% - 28px); }
     .workspace-card {
       border: 1px solid var(--line);
@@ -1803,12 +1966,12 @@ HTML = r"""<!doctype html>
       background: #fbfcfd;
     }
     .workspace-card strong { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .workspace-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .workspace-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 13px; overflow: auto; white-space: nowrap; text-overflow: ellipsis; }
     .chat-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; }
     .chat-panel .transcript { height: auto; overflow: auto; padding-right: 4px; align-content: start; }
     .composer { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
     .composer textarea.command-input { min-height: 92px; }
-    .live-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 12px; min-height: 0; height: calc(100% - 28px); }
+    .live-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) 154px; gap: 12px; min-height: 0; height: calc(100% - 28px); }
     .live-pane { min-height: 0; display: grid; grid-template-rows: 26px minmax(0, 1fr); gap: 8px; }
     .activity-list, .branch-list { overflow: auto; padding-right: 4px; }
     .activity, .branch { cursor: default; }
@@ -1818,11 +1981,163 @@ HTML = r"""<!doctype html>
     .demo-rail .run-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .answer-brief { min-height: 0; display: grid; grid-template-rows: 84px 1fr; gap: 8px; }
     .answer-brief .diag { grid-template-columns: 1fr; }
+    .topology-map { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); height: calc(100% - 70px); }
+    .topology-map .stage:not(:last-child)::after { display: none; }
+    .stage { overflow: hidden; }
+    .topology-map .stage { gap: 6px; overflow: auto; }
+    .topology-map .stage .name { line-height: 1.12; overflow-wrap: anywhere; }
+    .topology-map .stage .tiny { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.2; }
+    .message .body, .activity-detail, .branch-detail, .question-text, .diag-block p, .workspace-card span {
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+    .llm-list {
+      min-height: 0;
+      overflow: auto;
+      padding-right: 4px;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+    }
+    .workflow-node {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .workflow-root {
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      gap: 10px;
+      padding: 10px;
+      background: #fbfcfd;
+      border-bottom: 1px solid var(--line);
+    }
+    .workflow-phase {
+      align-self: start;
+      border: 1px solid #c8d8fb;
+      background: #f8fbff;
+      border-radius: 999px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+      padding: 4px 6px;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .workflow-main { min-width: 0; }
+    .workflow-head, .workflow-child-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      min-width: 0;
+    }
+    .workflow-title {
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.18;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .workflow-status {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .workflow-meta, .workflow-summary {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.28;
+      overflow-wrap: anywhere;
+    }
+    .workflow-children {
+      display: grid;
+      gap: 0;
+      padding: 0 10px 10px;
+    }
+    .workflow-child {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 8px;
+      padding-top: 10px;
+      min-width: 0;
+    }
+    .workflow-indent {
+      position: relative;
+      min-height: 100%;
+    }
+    .workflow-indent::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: -10px;
+      left: 11px;
+      border-left: 1px solid #d9e0ea;
+    }
+    .workflow-indent span::after {
+      content: "";
+      position: absolute;
+      top: 12px;
+      left: 11px;
+      width: 12px;
+      border-top: 1px solid #d9e0ea;
+    }
+    .workflow-child:last-child .workflow-indent::before { bottom: calc(100% - 13px); }
+    .workflow-child-label {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.2;
+      overflow-wrap: anywhere;
+    }
+    .workflow-body {
+      margin-top: 5px;
+      padding: 8px 9px;
+      border: 1px solid #edf0f4;
+      border-radius: 6px;
+      background: #fff;
+      color: var(--slate);
+      font-size: 13px;
+      line-height: 1.34;
+      max-height: 150px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .llm-card {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fff;
+      min-width: 0;
+    }
+    .llm-card.input { border-left: 3px solid var(--blue); }
+    .llm-card.output { border-left: 3px solid var(--teal); }
+    .llm-head { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+    .llm-title { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .llm-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .llm-meta { margin-top: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .llm-body {
+      margin-top: 6px;
+      color: var(--slate);
+      font-size: 13px;
+      line-height: 1.32;
+      max-height: 86px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .wide-pane { grid-column: 1 / span 2; }
     @media (max-width: 980px) {
       body { overflow: auto; height: auto; }
       .grid { height: auto; grid-template-columns: 1fr; }
       .left, .right { grid-template-rows: auto; }
       .pipeline, .cards, .run-cards, .diag, .intel-list, .footer-grid, .workspace-grid, .live-grid, .bottom-grid { grid-template-columns: 1fr; }
+      .wide-pane { grid-column: auto; }
       .stage:not(:last-child)::after { display: none; }
     }
   </style>
@@ -1853,8 +2168,32 @@ HTML = r"""<!doctype html>
           </div>
         </div>
       </div>
+      <div class="panel">
+        <div class="panel-title"><span>2D agent loop topology</span><span id="latestItem"></span></div>
+        <div class="workflow-statement" id="workflowStatement">Model input, planning, policy, tools, search, evidence, verification, and answer are shown as a live topology.</div>
+        <div class="pipeline topology-map" id="pipeline"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title"><span>Streaming console</span><span id="publicTraceNotice">public trace only</span></div>
+        <div class="live-grid">
+          <div class="live-pane">
+            <div class="column-title">Console stream</div>
+            <div class="activity-list" id="activityStream"></div>
+          </div>
+          <div class="live-pane">
+            <div class="column-title">Structured LLM workflow</div>
+            <div class="llm-list" id="modelIoStream"></div>
+          </div>
+          <div class="live-pane wide-pane">
+            <div class="column-title">Search branches</div>
+            <div class="branch-list" id="searchBranches"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="right">
       <div class="panel chat-panel">
-        <div class="panel-title"><span>Chat</span><span class="status"><span id="consoleDot" class="dot"></span><span id="consoleStatus">ready</span></span></div>
+        <div class="panel-title"><span>Chat with Holo Kernel v3</span><span class="status"><span id="consoleDot" class="dot"></span><span id="consoleStatus">ready</span></span></div>
         <div class="transcript" id="transcript"></div>
         <div class="composer">
           <textarea id="commandInput" class="command-input" placeholder="Ask Holo a finance question, or give it a research task. Example: What was Goldman Sachs' net revenues for fiscal year 2024?"></textarea>
@@ -1871,45 +2210,7 @@ HTML = r"""<!doctype html>
         </div>
       </div>
     </section>
-    <section class="right">
-      <div class="panel">
-        <div class="panel-title"><span>Live agent loop topology</span><span id="latestItem"></span></div>
-        <div class="workflow-statement" id="workflowStatement">Model planning, live retrieval, evidence ledger, calculator trace, verifier gate, and final synthesis are visible as one workflow.</div>
-        <div class="pipeline" id="pipeline"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-title"><span>Real-time public stream</span><span id="publicTraceNotice">public trace only</span></div>
-        <div class="live-grid">
-          <div class="live-pane">
-            <div class="column-title">Public activity stream</div>
-            <div class="activity-list" id="activityStream"></div>
-          </div>
-          <div class="live-pane">
-            <div class="column-title">Search branches</div>
-            <div class="branch-list" id="searchBranches"></div>
-          </div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-title"><span>Demo evidence and current item</span><span><span id="selectedRunLabel">live</span></span></div>
-        <div class="bottom-grid">
-          <div class="answer-brief">
-          <div class="question">
-            <div class="question-label">Current problem</div>
-            <div class="question-text" id="questionText"></div>
-          </div>
-          <div class="diag">
-            <div class="diag-block"><h3>Answer state</h3><p id="answerState"></p></div>
-            <div class="diag-block"><h3>Engineering diagnosis</h3><p id="diagnosis"></p></div>
-          </div>
-          </div>
-          <div class="demo-rail">
-            <div class="run-cards" id="demoRuns"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-    <div style="display:none"><span id="resultPath"></span><span id="summaryPath"></span><span id="refreshState"></span><span id="runStatus"></span><span id="heroTitle"></span><span id="heroCopy"></span><span id="runDot"></span><span id="passRate"></span><span id="verifierState"></span><span id="progressText"></span><span id="progressBar"></span><span id="heroCalc"></span><span id="heroFacts"></span><span id="heroCitations"></span><span id="spotlightStep"></span><span id="spotlightTitle"></span><span id="spotlightText"></span><span id="llmCalls"></span><span id="retrievalFetches"></span><span id="calcCalls"></span><span id="factCount"></span><span id="stablePasses"></span><div id="intel"></div><div id="events"></div></div>
+    <div style="display:none"><span id="selectedRunLabel"></span><div id="demoRuns"></div><span id="questionText"></span><span id="answerState"></span><span id="diagnosis"></span><span id="resultPath"></span><span id="summaryPath"></span><span id="refreshState"></span><span id="runStatus"></span><span id="heroTitle"></span><span id="heroCopy"></span><span id="runDot"></span><span id="passRate"></span><span id="verifierState"></span><span id="progressText"></span><span id="progressBar"></span><span id="heroCalc"></span><span id="heroFacts"></span><span id="heroCitations"></span><span id="spotlightStep"></span><span id="spotlightTitle"></span><span id="spotlightText"></span><span id="llmCalls"></span><span id="retrievalFetches"></span><span id="calcCalls"></span><span id="factCount"></span><span id="stablePasses"></span><div id="intel"></div><div id="events"></div></div>
   </main>
   <script>
     const fmtPct = v => (v === null || v === undefined || Number.isNaN(Number(v))) ? "-" : `${(Number(v) * 100).toFixed(1)}%`;
@@ -2042,6 +2343,7 @@ HTML = r"""<!doctype html>
       renderDemoRuns(data.demo_runs || [], (data.filters || {}).run_prefix || selected.runPrefix, (data.filters || {}).item_id || selected.itemId);
       renderTranscript(consoleState.transcript || []);
       renderPipeline((consoleState.topology && consoleState.topology.some(row => Number(row.value || 0) > 0)) ? consoleState.topology : (data.pipeline || []));
+      renderModelIO(consoleState.model_io || []);
       renderBranches(consoleState.search_branches || []);
       renderActivity(consoleState.activity || []);
       renderIntel(data.intelligence || []);
@@ -2162,6 +2464,44 @@ HTML = r"""<!doctype html>
           <div class="branch-head"><div class="branch-title">Branch ${row.index}: ${escapeHtml(row.query || "search")}</div><div class="branch-status">${escapeHtml(row.status || "ok")}</div></div>
           <div class="branch-detail">sources ${fmtNum(row.sources)} | accepted ${fmtNum(row.accepted)} | ${escapeHtml((row.providers || []).join(", ") || row.query_hash || "")}</div>
         </div>`).join("");
+    }
+    function renderModelIO(rows) {
+      const panel = document.getElementById("modelIoStream");
+      if (!panel) return;
+      if (!rows.length) {
+        panel.innerHTML = `<div class="workflow-node"><div class="workflow-root"><div class="workflow-phase">Model</div><div class="workflow-main"><div class="workflow-head"><div class="workflow-title">No processor node yet</div><div class="workflow-status">idle</div></div><div class="workflow-meta">structured workflow appears when Kernel v3 calls an LLM processor</div><div class="workflow-summary">The dashboard shows host-visible processor contracts, structured outputs, tool decisions, and verification status. Hidden chain-of-thought is not exposed.</div></div></div></div>`;
+        return;
+      }
+      panel.innerHTML = rows.slice(-7).reverse().map(row => {
+        const children = Array.isArray(row.children) ? row.children : [];
+        const childHtml = children.map(child => `
+          <div class="workflow-child ${escapeHtml(child.kind || "")}">
+            <div class="workflow-indent"><span></span></div>
+            <div class="workflow-main">
+              <div class="workflow-child-head">
+                <div class="workflow-child-label">${escapeHtml(child.label || child.kind || "node")}</div>
+                <div class="workflow-status">${escapeHtml(child.status || "")}</div>
+              </div>
+              <div class="workflow-meta">${escapeHtml(child.meta || "")}</div>
+              <div class="workflow-body">${escapeHtml(child.body || "")}</div>
+            </div>
+          </div>`).join("");
+        return `
+          <div class="workflow-node">
+            <div class="workflow-root">
+              <div class="workflow-phase">${escapeHtml(row.phase || "Model")}</div>
+              <div class="workflow-main">
+                <div class="workflow-head">
+                  <div class="workflow-title">${escapeHtml(row.title || row.processor || "model.processor")}</div>
+                  <div class="workflow-status">${escapeHtml(row.status || "")}</div>
+                </div>
+                <div class="workflow-meta">${escapeHtml([row.provider, row.model, row.meta].filter(Boolean).join(" | "))}</div>
+                <div class="workflow-summary">${escapeHtml(row.summary || "")}</div>
+              </div>
+            </div>
+            <div class="workflow-children">${childHtml}</div>
+          </div>`;
+      }).join("");
     }
     function renderActivity(rows) {
       const panel = document.getElementById("activityStream");
