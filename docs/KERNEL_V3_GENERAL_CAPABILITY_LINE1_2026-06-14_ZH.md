@@ -148,6 +148,8 @@ Observed issues from live smoke:
 - Regression coverage was added for both no-profile model-dynamic retrieval and long-mission explicit overrides. This prevents `max_steps=6/max_tool_calls=4` from being widened back to `2048/1024`.
 - Processor prompts now preserve stable-prefix ordering instead of alphabetical JSON ordering: `contract` is emitted before dynamic `context`, `observation`, `feedback`, and evidence sections. The JSON is also encoded compactly. This should improve DeepSeek cache friendliness and reduce prompt tokens without changing LLM decision ownership.
 - Verification: `.venv/bin/python -m pytest tests/test_kernel_v3_execution_profile.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_general_capability_gauntlet.py` passed 26/26; `.venv/bin/python -m pytest tests/test_kernel_v3_phase5_semantic_processors.py` passed 49/49; `.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/cli.py kernel_v3/processors/adapters.py` passed.
+- Post-fix low-cost live smoke: `bench general --live --online --category direct_chat --category system --max-agent-steps 4 --max-agent-tool-calls 2` passed 2/2. Summary: total tokens 60,616; prompt cache hit tokens 16,128; prompt cache miss tokens 43,784; cache hit ratio 26.9195%; tool coverage `system.time`; artifacts at `.state/kernel_v3/bench/general/live_cache_smoke_20260614.*`.
+- The smoke journal confirms explicit loop limits were enforced in host situation: both direct/system tasks show `max_steps=4` and `max_tool_calls=2`, not `2048/1024`; the direct chat task did not enter retrieval, while the system time task used `system.time`.
 
 ## 成功指标
 
