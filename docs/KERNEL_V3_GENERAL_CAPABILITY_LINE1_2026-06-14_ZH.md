@@ -150,6 +150,9 @@ Observed issues from live smoke:
 - Verification: `.venv/bin/python -m pytest tests/test_kernel_v3_execution_profile.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_general_capability_gauntlet.py` passed 26/26; `.venv/bin/python -m pytest tests/test_kernel_v3_phase5_semantic_processors.py` passed 49/49; `.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/cli.py kernel_v3/processors/adapters.py` passed.
 - Post-fix low-cost live smoke: `bench general --live --online --category direct_chat --category system --max-agent-steps 4 --max-agent-tool-calls 2` passed 2/2. Summary: total tokens 60,616; prompt cache hit tokens 16,128; prompt cache miss tokens 43,784; cache hit ratio 26.9195%; tool coverage `system.time`; artifacts at `.state/kernel_v3/bench/general/live_cache_smoke_20260614.*`.
 - The smoke journal confirms explicit loop limits were enforced in host situation: both direct/system tasks show `max_steps=4` and `max_tool_calls=2`, not `2048/1024`; the direct chat task did not enter retrieval, while the system time task used `system.time`.
+- Non-retrieval planner context now leaves retrieval-only workbench fields empty: `research_source_directory`, `retrieval_capability_state`, `agent_retrieval_plan_state`, and `agent_replan_hints`. This keeps direct/semantic/system turns from carrying stale finance/search state while preserving LLM decision ownership and the visible capability catalog.
+- Finance retrieval payload defaults now preserve per-payload `source_authority_requirement`. A mixed research plan can keep primary-source requirements for revenue/margin branches while allowing `secondary_or_better` for competitive-landscape branches.
+- Verification extension: `.venv/bin/python -m pytest tests/test_kernel_v3_phase87_research_profile_runtime.py tests/test_kernel_v3_phase94_capability_space_and_long_loop.py tests/test_kernel_v3_phase108_semantic_answer_state_space.py` passed 34/34.
 
 ## 成功指标
 

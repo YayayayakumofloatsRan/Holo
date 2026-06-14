@@ -3457,6 +3457,7 @@ class _AgentContextCompiler:
                 host_situation,
                 runtime_capabilities=self.runtime_capabilities,
             )
+        include_retrieval_context = self.recipe.mode == "retrieval_answer"
         state = redact_journal_data(
             {
                 "task_id": task.task_id,
@@ -3471,28 +3472,42 @@ class _AgentContextCompiler:
                 "semantic_state_space": _compact_semantic_state_space_for_prompt(semantic_state_space_catalog()),
                 "semantic_state_profiles": semantic_profiles,
                 "semantic_state_profile_summary": semantic_profile_summary,
-                "research_source_directory": _compact_research_source_directory_for_prompt(
-                    _research_source_directory_metadata(self.recipe)
+                "research_source_directory": (
+                    _compact_research_source_directory_for_prompt(_research_source_directory_metadata(self.recipe))
+                    if include_retrieval_context
+                    else []
                 ),
-                "retrieval_capability_state": _retrieval_capability_state(
-                    self.tool_manifests,
-                    recipe=self.recipe,
+                "retrieval_capability_state": (
+                    _retrieval_capability_state(
+                        self.tool_manifests,
+                        recipe=self.recipe,
+                    )
+                    if include_retrieval_context
+                    else {}
                 ),
                 "host_situation": host_situation,
                 "agent_runtime_directive": _compact_agent_runtime_directive_for_prompt(_planner_directive(self.recipe)),
                 "workmethod": _compact_workmethod_for_prompt(_workmethod_metadata(self.recipe)),
                 "semantic_goal": _semantic_goal_metadata(self.recipe),
-                "agent_retrieval_plan_state": _agent_retrieval_plan_state(
-                    journal,
-                    task_id=task.task_id,
-                    run_id=task.run_id,
-                    recipe=self.recipe,
+                "agent_retrieval_plan_state": (
+                    _agent_retrieval_plan_state(
+                        journal,
+                        task_id=task.task_id,
+                        run_id=task.run_id,
+                        recipe=self.recipe,
+                    )
+                    if include_retrieval_context
+                    else {}
                 ),
-                "agent_replan_hints": _agent_replan_hints(
-                    journal,
-                    task_id=task.task_id,
-                    run_id=task.run_id,
-                    recipe=self.recipe,
+                "agent_replan_hints": (
+                    _agent_replan_hints(
+                        journal,
+                        task_id=task.task_id,
+                        run_id=task.run_id,
+                        recipe=self.recipe,
+                    )
+                    if include_retrieval_context
+                    else {}
                 ),
                 "mission_context": mission_context,
                 "thread_working_context": _thread_working_context_metadata(self.recipe),
@@ -9927,7 +9942,7 @@ def _apply_finance_capability_defaults(payload: JsonObject, capabilities: set[st
     metadata.setdefault("research_profile", FINANCE_FUNDAMENTALS_PROFILE_ID)
     market_valuation = _finance_payload_needs_market_data(updated, metadata=metadata)
     if capabilities.intersection({"finance.market_news", "finance.market_data", "finance.competitive_landscape"}) or market_valuation:
-        metadata["source_authority_requirement"] = "secondary_or_better"
+        metadata.setdefault("source_authority_requirement", "secondary_or_better")
         if market_valuation:
             preferred = _string_list(metadata.get("preferred_source_families"))
             metadata["preferred_source_families"] = _ordered_unique(

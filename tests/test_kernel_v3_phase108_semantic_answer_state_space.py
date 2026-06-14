@@ -184,6 +184,10 @@ def test_phase108_planner_prompt_exposes_semantic_directive_to_model():
     assert state["agent_runtime_directive"]["mode"] == "semantic_answer"
     assert state["agent_runtime_directive"]["allowed_tools"] == []
     assert state["semantic_state_profile_summary"]["domains"] == ["conversation", "product"]
+    assert state["research_source_directory"] == []
+    assert state["retrieval_capability_state"] == {}
+    assert state["agent_retrieval_plan_state"] == {}
+    assert state["agent_replan_hints"] == {}
 
 
 def _action_names(journal: JournalStore, task_id: str) -> list[str]:
