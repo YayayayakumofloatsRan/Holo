@@ -34,7 +34,9 @@ from kernel_v3.bench import (
     render_finance_benchmark_report,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
+    run_general_capability_gauntlet,
     score_finance_prediction_file,
+    write_general_capability_gauntlet_outputs,
     write_finance_dev_annotations_from_dataset,
     write_finance_benchmark_outputs,
 )
@@ -633,6 +635,33 @@ def main(argv: list[str] | None = None) -> int:
 
     bench_parser = sub.add_parser("bench")
     bench_sub = bench_parser.add_subparsers(dest="bench_command", required=True)
+    general_bench = bench_sub.add_parser("general")
+    general_bench.add_argument("--output", default=".state/kernel_v3/bench/general/latest.json")
+    general_bench.add_argument("--summary-output", default=".state/kernel_v3/bench/general/latest.summary.json")
+    general_bench.add_argument("--jsonl-output", default=".state/kernel_v3/bench/general/latest.jsonl")
+    general_bench.add_argument("--thread-prefix", default="general-gauntlet")
+    general_bench.add_argument(
+        "--live",
+        action="store_true",
+        help="Run cases through the live chat runtime instead of the contract-only host capability gauntlet.",
+    )
+    general_bench.add_argument("--planner", choices=["fake", "model"], default="model")
+    general_bench.add_argument("--evaluator", choices=["fake", "model"], default="model")
+    general_bench.add_argument("--synthesizer", choices=["fake", "model"], default="model")
+    general_bench.add_argument("--semantic-intake", choices=["fake", "model"], default="model")
+    general_bench.add_argument("--turn-router", choices=["fake", "model"], default="model")
+    _add_online_model_arg(general_bench)
+    general_bench.add_argument("--model", default=None)
+    general_bench.add_argument("--profile", choices=["fast", "balanced", "quality"], default="balanced")
+    general_bench.add_argument("--thinking", choices=["auto", "enabled", "disabled"], default="auto")
+    general_bench.add_argument("--reasoning-effort", choices=["low", "medium", "high", "max"], default="medium")
+    _add_generation_args(general_bench)
+    _add_agent_loop_args(general_bench)
+    _add_context_budget_args(general_bench, default_profile=DEFAULT_LIVE_CONTEXT_PROFILE)
+    _add_response_language_arg(general_bench)
+    general_bench.add_argument("--research-profile", choices=RESEARCH_PROFILE_IDS, default=None)
+    general_bench.add_argument("--research-depth", choices=RESEARCH_DEPTHS, default=DEFAULT_RESEARCH_DEPTH)
+    _add_live_retrieval_args(general_bench)
     finance_fetch = bench_sub.add_parser("finance-fetch")
     finance_fetch.add_argument(
         "--benchmark",
@@ -2133,6 +2162,66 @@ def _resident_queue(args) -> ResidentQueue:
 
 def _bench_command(args, journal: JournalStore) -> dict[str, object]:
     command = str(getattr(args, "bench_command", "") or "")
+    if command == "general":
+        runtime = None
+        if getattr(args, "live", False):
+            live_block = _chat_live_model_block(args)
+            if live_block is not None:
+                return {
+                    **live_block,
+                    "benchmark": "general",
+                    "message": "General live gauntlet requires the model stack. Omit --live for the contract-only host capability gauntlet.",
+                }
+            live_retrieval = _live_retrieval_config_for_args(args)
+            if isinstance(live_retrieval, dict):
+                return live_retrieval
+            artifact_store = _runtime_artifact_store(args)
+            research_corpus_store = _runtime_corpus_store(args)
+            runtime = _chat_runtime(
+                journal,
+                artifact_store=artifact_store,
+                memory_store=_memory_store(args, create_default=True),
+                research_corpus_store=research_corpus_store,
+                retrieval_operator=_build_live_retrieval_operator(
+                    live_retrieval,
+                    artifact_store=artifact_store,
+                    corpus_store=research_corpus_store,
+                )
+                if live_retrieval is not None
+                else None,
+                thread_store=_thread_store(args, create_default=True),
+                live_model=_agent_uses_live_model(args),
+                model=args.model,
+                profile=args.profile,
+                thinking=_thinking_override(args.thinking),
+                reasoning_effort=args.reasoning_effort,
+                max_output_tokens=args.max_output_tokens,
+                temperature=args.temperature,
+                generation_mode=args.generation_mode,
+                latency_target=args.latency_target,
+                response_language=_response_language_for_args(args),
+                planner_mode=args.planner,
+                evaluator_mode=args.evaluator,
+                synthesizer_mode=args.synthesizer,
+                semantic_mode=args.semantic_intake,
+                turn_router_mode=args.turn_router,
+                default_mode="auto",
+                execution_metadata=_runtime_execution_metadata(args),
+                mission_enabled=False,
+            )
+        report = run_general_capability_gauntlet(runtime=runtime, thread_prefix=args.thread_prefix)
+        outputs = write_general_capability_gauntlet_outputs(
+            report,
+            output_path=args.output,
+            summary_path=args.summary_output,
+            jsonl_path=args.jsonl_output,
+        )
+        return {
+            "status": report["status"],
+            "mode": "live_holo" if runtime is not None else "contract_gauntlet",
+            "summary": report["summary"],
+            **outputs,
+        }
     if command == "finance-fetch":
         fetch_summary = fetch_public_finance_benchmark(
             benchmark=args.benchmark,

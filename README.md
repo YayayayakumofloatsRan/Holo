@@ -87,7 +87,8 @@ track and Q&A notes prepared for the recorded Windows browser demo, see
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in
-`docs/KERNEL_V3_GENERAL_CAPABILITY_LINE1_2026-06-14_ZH.md`.
+`docs/KERNEL_V3_GENERAL_CAPABILITY_LINE1_2026-06-14_ZH.md`. Kernel v3 now has
+a native general gauntlet entry at `python -m kernel_v3.cli bench general`.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

@@ -45,7 +45,11 @@ Date: 2026-06-14
 - 同步计算 `prompt_cache_hit_ratio`，用于后续批量测试和成本报告；
 - console 的 model result 行显示 `cache_hit`、`cache_miss` 和 `cache_ratio`；
 - Windows demo dashboard 的 processor 元信息显示 `cache xx%`；
-- 新增单元测试覆盖 usage 归一化和 console cache 摘要。
+- 新增单元测试覆盖 usage 归一化和 console cache 摘要；
+- 新增 `kernel_v3.bench.general`，形成 kernel v3 自己的一等通用能力 gauntlet；
+- 新增 CLI 入口：`python -m kernel_v3.cli bench general`；
+- general gauntlet 默认覆盖 9 类任务面：direct chat、roleplay/writing、technical docs research、academic research、workspace read、memory recall、system time、math/compute、resident reminder boundary；
+- general gauntlet 输出 report、summary 和 jsonl，summary 包含 mode/tool/domain 覆盖以及 live runs 的 token/cache hit 汇总。
 
 这一步很小，但必要。后续所有“更长上下文”“记忆摘要”“并行 loop”“长期常驻”的优化都必须能回答两个问题：能力是否提高，成本是否下降。
 
@@ -93,13 +97,23 @@ host 负责并行执行和 journal 合并，LLM 负责判断哪些分支必要�
 金融 benchmark 之外，需要固定一组通用能力测试：
 
 - direct chat：问候、简短解释、用户情绪压力下的稳态回答；
-- tool assembly：临时读文件、搜索、整理结果、生成文档；
-- research：开放式检索、来源比较、引用；
-- math/physics：可验证推理和计算；
-- coding：小修复、测试、commit hygiene；
-- memory：跨轮保留项目约束但不污染当前任务；
 - roleplay/writing：自然表达但不破坏边界；
+- technical research：官方文档/API/SDK 资料检索；
+- academic research：论文、前沿研究、综述和开放问题；
+- workspace read：临时读文件、搜索、整理结果；
+- memory：跨轮保留项目约束但不污染当前任务；
+- system：当前时间、环境状态等 host 工具；
+- math/compute：可验证推理和计算；
 - resident tasks：长任务持续推进、暂停恢复、事后汇报。
+
+当前 contract gauntlet 不是离线伪造 live 分数。它检查的是：当 LLM 提出某类语义 intent 时，host 是否给出正确 mode、工具面、domain/profile 和可观测指标。加 `--live` 后同一入口可以真实调用 chat runtime 与模型栈。
+
+命令：
+
+```text
+python -m kernel_v3.cli bench general
+python -m kernel_v3.cli bench general --live --online
+```
 
 ## 成功指标
 
@@ -114,6 +128,8 @@ host 负责并行执行和 journal 合并，LLM 负责判断哪些分支必要�
 - blocked reason distribution；
 - direct-chat latency；
 - long-task resume success rate。
+- general gauntlet pass rate；
+- general gauntlet tool/domain/mode coverage。
 
 中期目标不是只追单题高分，而是单位成本下的真实成功率：更少重复发包、更少无效检索、更高可解率、更稳定的最终答案。
 
@@ -128,6 +144,6 @@ host 负责并行执行和 journal 合并，LLM 负责判断哪些分支必要�
 
 1. 将 context compiler 接入 kernel v3 processor request，输出 stable/dynamic section metadata；
 2. 对 DeepSeek live runs 汇总 cache hit ratio，和 finance/general gauntlet 结果一起入报告；
-3. 建立通用能力 smoke 集，防止“hi”类简单任务被错误路由到重型 agent loop；
+3. 用 `bench general --live --online` 跑 DeepSeek live general smoke，记录 direct-chat latency、model calls、cache hit ratio 和失败样例；
 4. 在 finance workbench 中试点 LLM 提出的并行 branch plan；
 5. 把 memory digest 从“可读历史”升级成“可控工作上下文”。
