@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from kernel_v3 import cli
 from kernel_v3.bench.general import (
     GENERAL_CAPABILITY_GAUNTLET_SCHEMA,
     GeneralCapabilityResult,
     default_general_capability_cases,
+    evaluate_general_capability_case,
     run_general_capability_gauntlet,
     summarize_general_capability_results,
     write_general_capability_gauntlet_outputs,
@@ -45,6 +47,15 @@ def test_general_capability_gauntlet_preserves_expected_tool_surfaces() -> None:
     assert by_id["general-math-compute"]["observed_tools"] == ["calculator.compute"]
 
 
+def test_general_capability_gauntlet_can_filter_cases_and_categories() -> None:
+    by_case = run_general_capability_gauntlet(case_ids=["general-direct-chat"])
+    by_category = run_general_capability_gauntlet(categories=["system", "math_compute"])
+
+    assert [case["case_id"] for case in by_case["cases"]] == ["general-direct-chat"]
+    assert {case["category"] for case in by_category["cases"]} == {"system", "math_compute"}
+    assert by_category["summary"]["case_count"] == 2
+
+
 def test_general_capability_summary_accumulates_cache_usage() -> None:
     result = GeneralCapabilityResult(
         case_id="cache-case",
@@ -74,6 +85,27 @@ def test_general_capability_summary_accumulates_cache_usage() -> None:
     assert summary["prompt_cache_hit_tokens"] == 80
     assert summary["prompt_cache_miss_tokens"] == 20
     assert summary["prompt_cache_hit_ratio"] == 0.8
+
+
+def test_general_capability_live_pending_question_counts_as_output() -> None:
+    case = [item for item in default_general_capability_cases() if item.case_id == "general-resident-reminder"][0]
+    live_result = SimpleNamespace(
+        task_id="task-resident",
+        run_id="run-resident",
+        answer=None,
+        final_answer=None,
+        pending_question={"question": "When should I remind you?"},
+    )
+
+    report = run_general_capability_gauntlet(cases=[case], runtime=None)
+    direct_result = report["cases"][0]
+    assert direct_result["status"] == "passed"
+
+    live_scored = evaluate_general_capability_case(case, live_result=live_result)
+
+    assert live_scored.status == "passed"
+    assert live_scored.pending_question_present is True
+    assert live_scored.checks["live_output_present"] is True
 
 
 def test_general_capability_outputs_write_report_summary_and_jsonl(tmp_path: Path) -> None:

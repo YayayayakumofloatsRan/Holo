@@ -48,8 +48,10 @@ Date: 2026-06-14
 - 新增单元测试覆盖 usage 归一化和 console cache 摘要；
 - 新增 `kernel_v3.bench.general`，形成 kernel v3 自己的一等通用能力 gauntlet；
 - 新增 CLI 入口：`python -m kernel_v3.cli bench general`；
+- 新增 `--case-id` / `--category` 过滤，live 调试可以先跑小批次，避免一次全量任务在深研题上无界消耗；
 - general gauntlet 默认覆盖 9 类任务面：direct chat、roleplay/writing、technical docs research、academic research、workspace read、memory recall、system time、math/compute、resident reminder boundary；
 - general gauntlet 输出 report、summary 和 jsonl，summary 包含 mode/tool/domain 覆盖以及 live runs 的 token/cache hit 汇总。
+- live scoring 将 `pending_question` 视为 boundary/clarification 类任务的有效交互输出；例如 resident reminder 在 reminder tool 未配置时应进入 `needs_user_input`，而不是伪装成已设置提醒。
 
 这一步很小，但必要。后续所有“更长上下文”“记忆摘要”“并行 loop”“长期常驻”的优化都必须能回答两个问题：能力是否提高，成本是否下降。
 
@@ -113,7 +115,32 @@ host 负责并行执行和 journal 合并，LLM 负责判断哪些分支必要�
 ```text
 python -m kernel_v3.cli bench general
 python -m kernel_v3.cli bench general --live --online
+python -m kernel_v3.cli bench general --live --online --category direct_chat --category system
 ```
+
+2026-06-14 live smoke 已跑完 9 类覆盖，按小批次组合统计：
+
+- 9 / 9 passed；
+- categories：direct_chat、roleplay_writing、technical_research、academic_research、workspace_read、memory、system、math_compute、resident；
+- mode coverage：direct_answer 2、semantic_answer 3、retrieval_answer 2、workspace_answer 1、system_answer 1；
+- tool coverage：retrieval.run、workspace.search,file.read、memory.recall、system.time、calculator.compute；
+- combined total tokens：660,688；
+- combined prompt cache hit tokens：204,800；
+- combined prompt cache miss tokens：436,299；
+- combined prompt cache hit ratio：31.9451%。
+
+Artifacts:
+
+- `.state/kernel_v3/bench/general/live_direct_20260614.jsonl`
+- `.state/kernel_v3/bench/general/live_research_20260614.jsonl`
+- `.state/kernel_v3/bench/general/live_workspace_memory_resident_20260614.jsonl`
+- `.state/kernel_v3/bench/general/live_resident_20260614.jsonl`
+
+Observed issues from live smoke:
+
+- Academic frontier research can trigger `deepseek-v4-pro` and very large prompts. `execution_metadata.agent_loop` carried `max_steps=6/max_tool_calls=4`, but the retrieval recipe still showed `max_steps=2048/max_tool_calls=1024`, so recipe-level loop-budget propagation needs a fix.
+- Retrieval research costs are much higher than direct/system/math tasks. The current 2 research cases consumed 414,318 tokens; direct/system/math/roleplay consumed 136,363 tokens.
+- Technical docs research succeeded with live retrieval and citations, but answer redaction can over-redact API-auth examples as `[REDACTED:SECRET]`; redaction needs more precise handling for public documentation snippets.
 
 ## 成功指标
 

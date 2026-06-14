@@ -51,6 +51,7 @@ class GeneralCapabilityResult(Contract):
     run_id: str | None = None
     answer_present: bool = False
     final_answer_present: bool = False
+    pending_question_present: bool = False
     usage: JsonObject = field(default_factory=dict)
     metadata: JsonObject = field(default_factory=dict)
 
@@ -234,9 +235,15 @@ def run_general_capability_gauntlet(
     cases: list[GeneralCapabilityCase] | None = None,
     runtime: ChatRuntimeLike | None = None,
     thread_prefix: str = "general-gauntlet",
+    case_ids: list[str] | None = None,
+    categories: list[str] | None = None,
 ) -> JsonObject:
     started = int(time.time() * 1000)
-    selected_cases = list(cases or default_general_capability_cases())
+    selected_cases = _filter_cases(
+        list(cases or default_general_capability_cases()),
+        case_ids=case_ids,
+        categories=categories,
+    )
     results: list[GeneralCapabilityResult] = []
     for index, case in enumerate(selected_cases, start=1):
         live_result = None
@@ -277,7 +284,7 @@ def evaluate_general_capability_case(
     }
     usage = _live_usage(journal, task_id=live_result.task_id if live_result is not None else None)
     if live_result is not None:
-        checks["live_answer_present"] = bool(live_result.answer or live_result.final_answer)
+        checks["live_output_present"] = bool(live_result.answer or live_result.final_answer or live_result.pending_question)
     score = _score_checks(checks)
     return GeneralCapabilityResult(
         case_id=case.case_id,
@@ -298,6 +305,7 @@ def evaluate_general_capability_case(
         run_id=live_result.run_id if live_result is not None else None,
         answer_present=bool(live_result.answer) if live_result is not None else False,
         final_answer_present=bool(live_result.final_answer) if live_result is not None else False,
+        pending_question_present=bool(live_result.pending_question) if live_result is not None else False,
         usage=usage,
         metadata={
             "task_graph_status": validation.status,
@@ -359,6 +367,24 @@ def write_general_capability_gauntlet_outputs(
         path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         outputs["jsonl_output"] = str(path)
     return outputs
+
+
+def _filter_cases(
+    cases: list[GeneralCapabilityCase],
+    *,
+    case_ids: list[str] | None,
+    categories: list[str] | None,
+) -> list[GeneralCapabilityCase]:
+    wanted_ids = {item for item in (case_ids or []) if item}
+    wanted_categories = {item for item in (categories or []) if item}
+    if not wanted_ids and not wanted_categories:
+        return cases
+    return [
+        case
+        for case in cases
+        if (not wanted_ids or case.case_id in wanted_ids)
+        and (not wanted_categories or case.category in wanted_categories)
+    ]
 
 
 def _case(

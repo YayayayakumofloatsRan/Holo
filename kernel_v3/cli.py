@@ -640,6 +640,8 @@ def main(argv: list[str] | None = None) -> int:
     general_bench.add_argument("--summary-output", default=".state/kernel_v3/bench/general/latest.summary.json")
     general_bench.add_argument("--jsonl-output", default=".state/kernel_v3/bench/general/latest.jsonl")
     general_bench.add_argument("--thread-prefix", default="general-gauntlet")
+    general_bench.add_argument("--case-id", action="append", default=None, help="Run only selected general gauntlet case ids.")
+    general_bench.add_argument("--category", action="append", default=None, help="Run only selected general gauntlet categories.")
     general_bench.add_argument(
         "--live",
         action="store_true",
@@ -2209,7 +2211,12 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
                 execution_metadata=_runtime_execution_metadata(args),
                 mission_enabled=False,
             )
-        report = run_general_capability_gauntlet(runtime=runtime, thread_prefix=args.thread_prefix)
+        report = run_general_capability_gauntlet(
+            runtime=runtime,
+            thread_prefix=args.thread_prefix,
+            case_ids=_cli_csv_values(getattr(args, "case_id", None)),
+            categories=_cli_csv_values(getattr(args, "category", None)),
+        )
         outputs = write_general_capability_gauntlet_outputs(
             report,
             output_path=args.output,
