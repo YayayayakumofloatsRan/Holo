@@ -777,7 +777,7 @@ def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_b
     assert answer.status == "ok"
     assert raw not in provider.last_prompt
     assert "task_goal" in provider.last_prompt
-    assert '"response_language": "zh"' in provider.last_prompt
+    assert '"response_language":"zh"' in provider.last_prompt
     assert "旧 stage 是否还是施工对象" in provider.last_prompt
     assert "Answer every explicit question" in provider.last_prompt
     assert "$193.414 billion" in provider.last_prompt

@@ -5297,7 +5297,7 @@ def _with_runtime_loop_budget(recipe: TaskRecipe, *, planner_mode: str) -> TaskR
     loop = _agent_loop_metadata(recipe)
     profile = _execution_profile_metadata(recipe)
     profile_id = str(profile.get("profile_id") or "")
-    hard_cap_loop = bool(profile_id and profile_id != "long-mission")
+    hard_cap_loop = _agent_loop_budget_is_hard_cap(loop, profile_id=profile_id)
     model_dynamic = planner_mode == "model" and recipe.mode in {"retrieval_answer", "workspace_answer", "workspace_write"}
     max_steps = _positive_metadata_int(loop.get("max_steps"), default=0) if loop else 0
     max_tool_calls = _positive_metadata_int(loop.get("max_tool_calls"), default=0) if loop else 0
@@ -5325,6 +5325,17 @@ def _with_runtime_loop_budget(recipe: TaskRecipe, *, planner_mode: str) -> TaskR
         if max_artifact_bytes > 0
         else recipe.max_total_artifact_bytes,
     )
+
+
+def _agent_loop_budget_is_hard_cap(loop: JsonObject, *, profile_id: str) -> bool:
+    if not loop:
+        return False
+    if profile_id and profile_id != "long-mission":
+        return True
+    source = str(loop.get("source") or "").strip().lower()
+    if source in {"explicit_cli", "explicit_user", "runtime_override"}:
+        return True
+    return not profile_id
 
 
 def _expected_action_count(recipe: TaskRecipe) -> int:

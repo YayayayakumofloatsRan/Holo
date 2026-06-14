@@ -97,6 +97,7 @@ def test_benchmark_runtime_metadata_keeps_explicit_loop_overrides() -> None:
     assert metadata is not None
     assert metadata["agent_loop"]["max_steps"] == 9
     assert metadata["agent_loop"]["max_tool_calls"] == 7
+    assert metadata["agent_loop"]["source"] == "explicit_cli"
 
 
 def test_fast_execution_profile_loop_budget_is_hard_cap_for_model_planner() -> None:
@@ -157,6 +158,65 @@ def test_long_mission_without_profile_still_allows_dynamic_model_loop_budget() -
 
     assert bounded.max_steps == 2048
     assert bounded.max_tool_calls == 1024
+
+
+def test_explicit_loop_budget_caps_model_dynamic_budget_without_profile() -> None:
+    recipe = TaskRecipe(
+        recipe_id="recipe-retrieval-answer",
+        allowed_tools=["retrieval.run"],
+        max_steps=2048,
+        max_tool_calls=1024,
+        max_network_fetches=24,
+        max_total_artifact_bytes=4_000_000_000,
+        permission_profile="read_write",
+        citations_required=True,
+        finalizer="retrieval_synthesizer",
+        context_budget_mode="truncate",
+        mode="retrieval_answer",
+        metadata={
+            "execution_metadata": {
+                "agent_loop": {
+                    "max_steps": 6,
+                    "max_tool_calls": 4,
+                    "source": "explicit_cli",
+                }
+            }
+        },
+    )
+
+    bounded = _with_runtime_loop_budget(recipe, planner_mode="model")
+
+    assert bounded.max_steps == 6
+    assert bounded.max_tool_calls == 4
+
+
+def test_explicit_loop_budget_caps_long_mission_model_dynamic_budget() -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("long-mission"))
+    metadata["agent_loop"] = {
+        **metadata["agent_loop"],
+        "max_steps": 6,
+        "max_tool_calls": 4,
+        "source": "explicit_cli",
+    }
+    recipe = TaskRecipe(
+        recipe_id="recipe-retrieval-answer",
+        allowed_tools=["retrieval.run"],
+        max_steps=2048,
+        max_tool_calls=1024,
+        max_network_fetches=24,
+        max_total_artifact_bytes=4_000_000_000,
+        permission_profile="read_write",
+        citations_required=True,
+        finalizer="retrieval_synthesizer",
+        context_budget_mode="truncate",
+        mode="retrieval_answer",
+        metadata={"execution_metadata": metadata},
+    )
+
+    bounded = _with_runtime_loop_budget(recipe, planner_mode="model")
+
+    assert bounded.max_steps == 6
+    assert bounded.max_tool_calls == 4
 
 
 def test_processor_budget_blocks_oversized_prompt_before_provider_call() -> None:

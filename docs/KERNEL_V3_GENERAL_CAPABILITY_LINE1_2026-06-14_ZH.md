@@ -142,6 +142,13 @@ Observed issues from live smoke:
 - Retrieval research costs are much higher than direct/system/math tasks. The current 2 research cases consumed 414,318 tokens; direct/system/math/roleplay consumed 136,363 tokens.
 - Technical docs research succeeded with live retrieval and citations, but answer redaction can over-redact API-auth examples as `[REDACTED:SECRET]`; redaction needs more precise handling for public documentation snippets.
 
+2026-06-14 follow-up:
+
+- The recipe-level loop-budget propagation issue is fixed. CLI/runtime explicit `--max-agent-steps`, `--max-agent-tool-calls`, and artifact-byte overrides now carry `agent_loop.source=explicit_cli`, and runtime treats explicit loop budgets as hard caps even under model planner and `long-mission`.
+- Regression coverage was added for both no-profile model-dynamic retrieval and long-mission explicit overrides. This prevents `max_steps=6/max_tool_calls=4` from being widened back to `2048/1024`.
+- Processor prompts now preserve stable-prefix ordering instead of alphabetical JSON ordering: `contract` is emitted before dynamic `context`, `observation`, `feedback`, and evidence sections. The JSON is also encoded compactly. This should improve DeepSeek cache friendliness and reduce prompt tokens without changing LLM decision ownership.
+- Verification: `.venv/bin/python -m pytest tests/test_kernel_v3_execution_profile.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_general_capability_gauntlet.py` passed 26/26; `.venv/bin/python -m pytest tests/test_kernel_v3_phase5_semantic_processors.py` passed 49/49; `.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/cli.py kernel_v3/processors/adapters.py` passed.
+
 ## 成功指标
 
 短期应记录：

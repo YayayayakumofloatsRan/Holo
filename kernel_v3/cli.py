@@ -1557,7 +1557,7 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
     if loop_budget:
         current_loop = metadata.get("agent_loop")
         current_loop = dict(current_loop) if isinstance(current_loop, dict) else {}
-        metadata["agent_loop"] = {**current_loop, **loop_budget}
+        metadata["agent_loop"] = {**current_loop, **loop_budget, "source": "explicit_cli"}
     research_profile = getattr(args, "research_profile", None)
     if isinstance(research_profile, str) and research_profile:
         research_depth = _research_depth_for_args(args, execution)

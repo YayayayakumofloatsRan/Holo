@@ -243,7 +243,7 @@ def _planner_prompt(context: ContextBundle, feedback: Feedback | None) -> str:
         "context": _compact_context(context),
         "feedback": feedback.to_dict() if feedback is not None else None,
     }
-    return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, sort_keys=True)
+    return _prompt_json(payload)
 
 
 def _evaluator_prompt(context: ContextBundle, observation: Observation) -> str:
@@ -252,7 +252,7 @@ def _evaluator_prompt(context: ContextBundle, observation: Observation) -> str:
         "context": _compact_context(context),
         "observation": _compact_observation_for_provider(observation),
     }
-    return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, sort_keys=True)
+    return _prompt_json(payload)
 
 
 def _synthesizer_prompt(
@@ -312,7 +312,11 @@ def _synthesizer_prompt(
     }
     if retry_instruction:
         payload["retry_instruction"] = retry_instruction
-    return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, sort_keys=True)
+    return _prompt_json(payload)
+
+
+def _prompt_json(payload: JsonObject) -> str:
+    return json.dumps(_redacted_prompt_payload(payload), ensure_ascii=False, separators=(",", ":"))
 
 
 def _redacted_prompt_payload(payload: JsonObject) -> JsonObject:
