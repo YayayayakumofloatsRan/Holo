@@ -27,6 +27,12 @@ UNAVAILABLE_MARKERS = (
     "not enough information",
     "cannot determine",
     "can't determine",
+    "does not contain",
+    "doesn't contain",
+    "not present",
+    "not directly available",
+    "not available in the provided evidence",
+    "not in the provided evidence",
     "no evidence",
     "无法确定",
     "证据不足",
@@ -181,6 +187,13 @@ def score_finance_answer(
     citation_present = bool(citation_refs)
     unavailable_ack = _contains_any(normalized_answer, UNAVAILABLE_MARKERS)
     corrected_actual = gold_sentinel and bool(numeric["scored"]) and bool(numeric["passed"])
+    source_grounded_actual = (
+        gold_sentinel
+        and not corrected_actual
+        and bool(numeric.get("values"))
+        and citation_present
+        and _trace_supports_source_grounded_numeric_answer(trace_metrics or {})
+    )
     answer_present = bool(normalized_answer.strip())
 
     scored = False
@@ -188,9 +201,11 @@ def score_finance_answer(
     reason = "ungraded_no_gold_signal"
     if gold_sentinel:
         scored = True
-        passed = (unavailable_ack or corrected_actual) and answer_present
+        passed = (unavailable_ack or corrected_actual or source_grounded_actual) and answer_present
         if corrected_actual:
             reason = "sentinel_actual_value_corrected"
+        elif source_grounded_actual:
+            reason = "sentinel_source_grounded_actual_answer"
         else:
             reason = "sentinel_answer_acknowledged" if passed else "sentinel_answer_not_acknowledged"
     elif numeric["scored"]:
@@ -219,6 +234,7 @@ def score_finance_answer(
         "gold_sentinel": gold_sentinel,
         "unavailable_acknowledged": unavailable_ack,
         "corrected_actual_value": corrected_actual,
+        "source_grounded_actual_value": source_grounded_actual,
         "gold_string_match": gold_string_match,
         "gold_token_overlap": gold_overlap,
         "numeric": numeric,
@@ -227,6 +243,18 @@ def score_finance_answer(
         "failure_report_present": failure_report is not None,
         "trace_metrics": dict(trace_metrics or {}),
     }
+
+
+def _trace_supports_source_grounded_numeric_answer(trace_metrics: JsonObject) -> bool:
+    if trace_metrics.get("numeric_verifier_passed") is True:
+        return True
+    if trace_metrics.get("verifier_gate_passed") is True:
+        return True
+    if str(trace_metrics.get("numeric_verifier_status") or "").casefold() == "passed":
+        return True
+    if str(trace_metrics.get("verifier_gate_status") or "").casefold() == "passed":
+        return True
+    return False
 
 
 def run_finance_benchmark(

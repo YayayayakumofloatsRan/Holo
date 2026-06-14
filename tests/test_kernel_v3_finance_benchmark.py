@@ -149,6 +149,23 @@ def test_finance_benchmark_sentinel_scoring_rewards_honest_unavailable_answer() 
     assert score["unavailable_acknowledged"] is True
 
 
+def test_finance_benchmark_sentinel_scoring_accepts_missing_evidence_wording() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="adv-2",
+        question="What was the segment revenue?",
+        gold_answer="NOT_AVAILABLE in this excerpt",
+    )
+
+    score = score_finance_answer(
+        item,
+        answer="The provided evidence does not contain the requested annual segment revenue; the full annual figure is not present.",
+    )
+
+    assert score["status"] == "passed"
+    assert score["gold_sentinel"] is True
+    assert score["unavailable_acknowledged"] is True
+
+
 def test_finance_benchmark_sentinel_scoring_accepts_corrected_actual_value() -> None:
     item = FinanceBenchmarkItem(
         item_id="adv-actual-1",
@@ -162,6 +179,26 @@ def test_finance_benchmark_sentinel_scoring_accepts_corrected_actual_value() -> 
     assert score["gold_sentinel"] is True
     assert score["corrected_actual_value"] is True
     assert score["numeric"]["passed"] is True
+
+
+def test_finance_benchmark_sentinel_scoring_accepts_source_grounded_actual_value() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="adv-actual-2",
+        question="What was NVIDIA's Data Center segment revenue for fiscal year 2024?",
+        gold_answer="NOT_AVAILABLE in this excerpt — $60.9 billion is NVIDIA's total revenue, not Data Center revenue",
+    )
+
+    score = score_finance_answer(
+        item,
+        answer="NVIDIA's Data Center segment revenue for fiscal year 2024 was $47.5 billion.",
+        final_answer={"citation_refs": ["cite-1"]},
+        trace_metrics={"numeric_verifier_passed": True, "verifier_gate_passed": True},
+    )
+
+    assert score["status"] == "passed"
+    assert score["gold_sentinel"] is True
+    assert score["source_grounded_actual_value"] is True
+    assert score["reason"] == "sentinel_source_grounded_actual_answer"
 
 
 def test_finance_benchmark_gold_numeric_scoring_handles_approximate_text() -> None:

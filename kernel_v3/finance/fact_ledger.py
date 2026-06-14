@@ -19,6 +19,11 @@ SUPPORTED_FINANCE_METRICS = {
     "total revenues and other income",
     "sales and other operating revenues",
     "operating revenues",
+    "segment revenue",
+    "segment revenue from external customers",
+    "family of apps revenue",
+    "reality labs revenue",
+    "cloud and AI infrastructure investment",
     "net income",
     "net income loss",
     "cash and equivalents",
@@ -73,6 +78,7 @@ SUPPORTED_FINANCE_METRICS = {
     "assets",
     "liabilities",
     "shareholders equity",
+    "stockholders equity",
     "market cap",
     "market capitalization",
     "equity value",
@@ -100,6 +106,11 @@ KEY_PATTERN = re.compile(
 )
 HTML_TABLE_FACT_PATTERN = re.compile(
     r"html_table_fact_(?P<table_index>\d+)_(?P<row_index>\d+)_(?P<fy>20\d{2}|19\d{2}):\s*"
+    r"metric=(?P<metric>.*?)\s+fy=(?P=fy)\s+value=(?P<value>\([^)]+\)|[^\s]+)\s+scale=(?P<scale>[A-Za-z]+)",
+    re.IGNORECASE,
+)
+HTML_SENTENCE_FACT_PATTERN = re.compile(
+    r"html_sentence_fact_(?P<fact_index>\d+)_(?P<fy>20\d{2}|19\d{2}):\s*"
     r"metric=(?P<metric>.*?)\s+fy=(?P=fy)\s+value=(?P<value>\([^)]+\)|[^\s]+)\s+scale=(?P<scale>[A-Za-z]+)",
     re.IGNORECASE,
 )
@@ -185,6 +196,21 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("deduction", ("divestiture-related license income", "license income", "gain on sale", "gains")),
     ("cash and cash equivalents", ("cash and cash equivalents", "cash equivalents", "cash and equivalents", "total cash")),
     ("debt", ("total debt", "debt", "borrowings", "notes payable")),
+    (
+        "shareholders equity",
+        (
+            "shareholders equity",
+            "shareholders' equity",
+            "stockholders equity",
+            "stockholders' equity",
+            "total shareholders equity",
+            "total shareholders' equity",
+            "total stockholders equity",
+            "total stockholders' equity",
+            "total equity",
+        ),
+    ),
+    ("liabilities", ("total liabilities", "liabilities")),
     ("goodwill", ("goodwill",)),
     ("intangible assets", ("intangible assets", "developed technology", "customer relationships")),
 )
@@ -213,7 +239,7 @@ def _facts_from_text(item: EvidenceItem, citation: CitationItem | None) -> list[
     if not text:
         return []
     result: list[FinanceFact] = []
-    if "html_table_fact_" not in text:
+    if "html_table_fact_" not in text and "html_sentence_fact_" not in text:
         global_text, metric_segments = _metric_segments(text)
         global_values = _key_values(global_text)
         for segment in metric_segments:
@@ -225,6 +251,7 @@ def _facts_from_text(item: EvidenceItem, citation: CitationItem | None) -> list[
             fact = _fact_from_values(values, item=item, citation=citation, metric=metric, value=value)
             result.append(fact)
     result.extend(_html_table_facts_from_text(text, item=item, citation=citation))
+    result.extend(_html_sentence_facts_from_text(text, item=item, citation=citation))
     result.extend(_natural_facts_from_text(text, item=item, citation=citation))
     return result
 
@@ -266,6 +293,48 @@ def _html_table_facts_from_text(text: str, *, item: EvidenceItem, citation: Cita
                     "context": text[start:end],
                     "html_table_index": match.group("table_index"),
                     "html_table_row_index": match.group("row_index"),
+                    "raw_metric": raw_metric,
+                },
+            )
+        )
+    return facts
+
+
+def _html_sentence_facts_from_text(text: str, *, item: EvidenceItem, citation: CitationItem | None) -> list[FinanceFact]:
+    facts: list[FinanceFact] = []
+    for match in HTML_SENTENCE_FACT_PATTERN.finditer(str(text or "")):
+        raw_metric = match.group("metric").strip()
+        metric = _canonical_metric(raw_metric)
+        value = _clean_html_table_fact_value(match.group("value"))
+        if value is None or not metric or not _is_decimal(value):
+            continue
+        values = {
+            "metric": raw_metric,
+            "concept": f"html_sentence_fact_{match.group('fact_index')}",
+            "fy": match.group("fy"),
+            "period": f"FY{match.group('fy')}",
+            "value": value,
+            "scale": match.group("scale"),
+        }
+        fact = _fact_from_values(values, item=item, citation=citation, metric=metric, value=value)
+        start = max(0, match.start() - 240)
+        end = min(len(text), match.end() + 360)
+        facts.append(
+            replace(
+                fact,
+                fact_id="finfact-html-sentence-" + _short_hash(
+                    item.evidence_id,
+                    match.group("fact_index"),
+                    match.group("fy"),
+                    raw_metric,
+                    value,
+                ),
+                metadata={
+                    **fact.metadata,
+                    "source": "html_sentence_fact",
+                    "raw": match.group(0),
+                    "context": text[start:end],
+                    "html_sentence_fact_index": match.group("fact_index"),
                     "raw_metric": raw_metric,
                 },
             )
@@ -657,6 +726,18 @@ def _canonical_metric(value: str) -> str:
         "operatingrevenues": "operating revenues",
         "operating revenues": "operating revenues",
         "operating revenue": "operating revenues",
+        "segmentreportinginformationrevenue": "segment revenue",
+        "segment reporting information revenue": "segment revenue",
+        "segmentreportinginformationrevenuefromexternalcustomers": "segment revenue from external customers",
+        "segment reporting information revenue from external customers": "segment revenue from external customers",
+        "revenuesfromexternalcustomers": "segment revenue from external customers",
+        "revenues from external customers": "segment revenue from external customers",
+        "familyofappsrevenue": "family of apps revenue",
+        "family of apps revenue": "family of apps revenue",
+        "realitylabsrevenue": "reality labs revenue",
+        "reality labs revenue": "reality labs revenue",
+        "cloudandaiinfrastructureinvestment": "cloud and AI infrastructure investment",
+        "cloud and ai infrastructure investment": "cloud and AI infrastructure investment",
         "total revenues": "total revenues",
         "total revenue": "total revenues",
         "sales to customers": "total revenues",
@@ -732,6 +813,19 @@ def _canonical_metric(value: str) -> str:
         "net ppe": "property plant and equipment net",
         "net ppne": "property plant and equipment net",
         "ppne": "property plant and equipment net",
+        "stockholdersequity": "shareholders equity",
+        "stockholders equity": "shareholders equity",
+        "stockholders' equity": "shareholders equity",
+        "total stockholders equity": "shareholders equity",
+        "total stockholders' equity": "shareholders equity",
+        "shareholdersequity": "shareholders equity",
+        "shareholders equity": "shareholders equity",
+        "shareholders' equity": "shareholders equity",
+        "total shareholders equity": "shareholders equity",
+        "total shareholders' equity": "shareholders equity",
+        "total equity": "shareholders equity",
+        "liabilities": "liabilities",
+        "total liabilities": "liabilities",
         "free cash flow": "free cash flow",
         "marketcapitalization": "market cap",
         "market cap": "market cap",

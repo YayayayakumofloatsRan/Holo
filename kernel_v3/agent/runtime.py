@@ -1010,7 +1010,9 @@ class AgentRuntime:
             synthesizer_mode=synthesizer_mode,
             recipe=recipe,
         )
-        strict_llm_judgment = _llm_semantic_judgment_required(recipe)
+        strict_llm_judgment = _llm_semantic_judgment_required(recipe) or (
+            synthesizer_mode == "model" and _finance_numeric_verifier_required(recipe)
+        )
         if synthesized.status != "ok" or synthesized.answer is None:
             if strict_llm_judgment:
                 rescued_final = self._attempt_compact_llm_finance_synthesis_rescue(
@@ -2179,15 +2181,30 @@ class AgentRuntime:
                 },
             )
             return None
-        repaired = self._synthesize(
-            answer.task_id,
-            answer.run_id,
+        repair_report, repair_evidence, repair_citations = _compact_finance_synthesis_rescue_packet(
+            self.journal,
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            recipe=recipe,
             report=report,
             evidence=evidence,
             citations=citations,
+            synthesis_error=f"finance_numeric_judge_repair:{attempt}",
+        )
+        repaired = self._synthesize(
+            answer.task_id,
+            answer.run_id,
+            report=repair_report,
+            evidence=repair_evidence,
+            citations=repair_citations,
             synthesizer_mode=synthesizer_mode,
             recipe=recipe,
-            retry_instruction=repair_instruction,
+            retry_instruction=(
+                f"{repair_instruction}\n\n"
+                "Use this compact finance repair packet. It contains the ranked finance_fact_ledger, FormulaTrace values, "
+                "and the citation/evidence subset needed for the repair. Do not request more work when candidate_supported_values "
+                "and cited facts already answer the requested metric."
+            ),
         )
         if repaired.status != "ok" or repaired.answer is None:
             self.journal.append(
@@ -2216,8 +2233,8 @@ class AgentRuntime:
         repaired_verification = self._append_finance_numeric_verification(
             repaired_final,
             recipe=recipe,
-            evidence=evidence,
-            citations=citations,
+            evidence=repair_evidence,
+            citations=repair_citations,
         )
         self._append_synthesis_gate_result(
             repaired_final,
@@ -12607,7 +12624,12 @@ def _finance_fallback_fact_score(fact: FinanceFact, *, question: str) -> int:
     source_uri = str(fact.metadata.get("source_uri") or "").lower()
     source_title = str(fact.metadata.get("source_title") or "").lower()
     source_text = f"{source_uri} {source_title}"
-    if "data.sec.gov/api/xbrl/companyfacts/" in source_uri or "sec companyfacts" in source_text:
+    if (
+        "data.sec.gov/api/xbrl/companyfacts/" in source_uri
+        or "data.sec.gov/api/xbrl/companyconcept/" in source_uri
+        or "sec companyfacts" in source_text
+        or "sec companyconcept" in source_text
+    ):
         score += 80
     elif "sec.gov" in source_uri or " sec " in f" {source_title} ":
         score += 50
@@ -12928,13 +12950,27 @@ def _report_with_finance_fact_context(
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
         "host_role": "rank and expose candidate facts, concepts, labels, provenance, metric-intent diagnostics, and verification only",
-        "candidate_ordering": "facts are ordered for model review by target binding, metric intent score, source authority, and provenance completeness",
+        "candidate_ordering": (
+            "finance_fact_ledger is ordered as a semantic candidate list for model review: target binding first, "
+            "or, for fiscal-year/annual questions, annual 10-K/companyfacts period scope first; then metric intent score, "
+            "source authority, provenance completeness, and fiscal recency"
+        ),
         "instruction": (
             "When several source-backed facts share a broad metric such as revenue, compare the question's requested slot "
             "against each fact's metric, SEC concept, label, fiscal period, and source. Do not answer a consolidated metric "
             "with a component revenue line. If a narrower supported concept better matches the company's reported revenue "
-            "caption than a generic total, explain the chosen basis. If no fact matches the requested slot, say so as a "
-            "limitation or continue work instead of turning a nearby component into the answer."
+            "caption than a generic total, explain the chosen basis. When candidates conflict for the same entity, period, "
+            "and broad metric, inspect them in ledger order and prefer the highest-ranked or highest finance_metric_intent.score "
+            "candidate unless the source label/concept proves a lower-ranked candidate is the requested line item. If you choose "
+            "among revenue-like candidates, distinguish operating/sales revenue captions from totals that explicitly include other income; "
+            "for a plain total-revenues request, headline the operating/sales revenue line when available rather than a broader subtotal that includes other income, unless the user explicitly asked for total revenues and other income; "
+            "for fiscal-year or annual questions, do not headline a 10-Q or three-month value when an annual 10-K/companyfacts "
+            "candidate for the same broad metric and year is present; "
+            "the requested revenue line should follow the company's statement caption rather than a broader other-income subtotal. If you choose "
+            "a lower-ranked competitor, state the reason using concept, label, statement, or source evidence. Do not put a "
+            "lower-ranked competitor in the answer headline while merely mentioning a better-ranked supported candidate later. "
+            "If no fact matches the requested slot, say so as a limitation or continue work instead of turning a nearby component "
+            "into the answer."
         ),
     }
     diagnostics.setdefault(
@@ -12942,7 +12978,9 @@ def _report_with_finance_fact_context(
         (
             "The model owns final finance judgment. Use the provided finance_fact_ledger, FormulaTrace values, citations, "
             "and evidence to answer only the actual requested metric. Material finance numbers must be source-backed; "
-            "nearby component metrics are not substitutes for the requested consolidated line item."
+            "nearby component metrics are not substitutes for the requested consolidated line item. Treat finance_fact_ledger "
+            "ordering and finance_metric_intent diagnostics as the host's structured candidate map, then make the final "
+            "semantic choice yourself from the labels, concepts, periods, and citations."
         ),
     )
     diagnostics.setdefault(
@@ -12977,12 +13015,23 @@ def _compact_finance_synthesis_rescue_packet(
     ranked = [item for item in _source_grounded_ranked_evidence(evidence, recipe=recipe) if item.evidence_id in cited_evidence_ids]
     if not ranked:
         ranked = [item for item in evidence if item.evidence_id in cited_evidence_ids]
-    rescue_evidence = ranked[:24] if ranked else evidence[:24]
+    rescue_evidence = ranked[:8] if ranked else evidence[:8]
     rescue_evidence_ids = {item.evidence_id for item in rescue_evidence}
-    rescue_citations = [item for item in citations if item.evidence_id in rescue_evidence_ids][:24]
+    rescue_citations = [item for item in citations if item.evidence_id in rescue_evidence_ids][:8]
     if not rescue_citations:
-        rescue_citations = citations[:24]
-    diagnostics = dict(report.diagnostics)
+        rescue_citations = citations[:8]
+    original_diagnostics = report.diagnostics if isinstance(report.diagnostics, dict) else {}
+    diagnostics: JsonObject = {
+        key: original_diagnostics.get(key)
+        for key in (
+            "goal_query",
+            "task_goal",
+            "retrieval_status",
+            "terminal_reason",
+            "source_authority_requirement",
+        )
+        if original_diagnostics.get(key) is not None
+    }
     diagnostics["compact_llm_synthesis_rescue"] = {
         "enabled": True,
         "previous_synthesis_error": synthesis_error,
@@ -12990,9 +13039,27 @@ def _compact_finance_synthesis_rescue_packet(
         "host_role": "compact_context_builder_and_provenance_validator",
         "instruction": "write the best supported answer rather than a failure report when compact facts/traces/citations are enough",
     }
-    diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:96]]
+    diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:64]]
     diagnostics["finance_fact_ledger_count"] = len(facts)
     diagnostics["finance_metric_competing_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:12]]
+    diagnostics["finance_metric_disambiguation"] = {
+        "semantic_decision_owner": "model",
+        "host_role": "rank and expose compact candidate facts; the model chooses the answer",
+        "candidate_ordering": (
+            "compact finance_fact_ledger is ordered as a semantic candidate list by annual 10-K/companyfacts period scope "
+            "for fiscal-year questions, then target binding, metric intent score, source authority, provenance completeness, "
+            "and fiscal recency"
+        ),
+        "instruction": (
+            "For competing values with the same entity, period, and broad metric, inspect candidates in ledger order. "
+            "Prefer the highest-ranked or highest finance_metric_intent.score supported candidate unless concept, label, "
+            "statement, or cited source text proves another candidate is the requested line item. If you override the ordering, "
+            "explain why in the answer. For revenue-like candidates, distinguish operating/sales revenue captions from totals "
+            "that explicitly include other income; for a plain total-revenues request, headline operating/sales revenue when available unless the user explicitly asked for total revenues and other income. For fiscal-year or annual questions, do not headline a 10-Q or three-month "
+            "value when an annual 10-K/companyfacts candidate for the same broad metric and year is present. Do not headline "
+            "a lower-ranked competitor and relegate the better-ranked candidate to a note."
+        ),
+    }
     diagnostics["claim_ledger_present"] = bool(facts)
     diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in traces[:24]]
     diagnostics["finance_formula_trace_count"] = len(traces)
@@ -13000,6 +13067,7 @@ def _compact_finance_synthesis_rescue_packet(
         "finance_synthesis_directive",
         (
             "The model is responsible for final semantic judgment. Use compact ClaimLedger and FormulaTrace values when they support the task. "
+            "Use compact finance_fact_ledger ordering as the structured candidate map for competing line items. "
             "Do not write a failure report if a partial supported answer can be given. Label missing slots as limitations."
         ),
     )
@@ -13984,6 +14052,13 @@ def _finance_numeric_judge_prompt(
             "which numeric claims are incidental formatting/noise, and how the answer should be repaired. "
             "The host deterministic verifier diagnostics are advisory, not the semantic decision owner. "
             "Do not invent evidence, facts, citations, formulas, or values. Use only provided facts, formula traces, evidence, and citations. "
+            "The finance_facts array is ordered as a semantic candidate list by target binding, metric intent score, source authority, "
+            "provenance completeness, and fiscal recency. For competing facts with the same entity, period, and broad metric, prefer "
+            "the highest-ranked or highest finance_metric_intent.score candidate unless concept, label, statement, or cited source "
+            "text proves a lower-ranked value is the requested line item. If the answer headlines a lower-ranked competitor while a "
+            "better-ranked supported candidate answers the question, return repair_answer and tell synthesis which candidate to use. "
+            "For fiscal-year or annual questions, treat annual 10-K/companyfacts values as the period match over 10-Q or three-month values "
+            "unless the question explicitly asks for a quarter or interim period. "
             "If the answer contains unsupported non-core numbers, instruct synthesis to remove them. "
             "If supported facts or formula traces are enough to answer, provide a concrete repair_instruction that uses only those supported values. "
             "If more work is required, name the exact missing slots and the next tool action needed. "
@@ -14047,15 +14122,32 @@ def _finance_fact_with_metric_intent(fact: FinanceFact, *, question: str = "") -
     if not question:
         return fact
     diagnostics = finance_metric_intent_diagnostics(_finance_fact_intent_text(fact), query=question)
+    period_scope = _finance_question_period_scope(question)
     if not diagnostics.get("active"):
-        return fact
+        if not period_scope:
+            return fact
+        return replace(
+            fact,
+            metadata={
+                **dict(fact.metadata),
+                "finance_question_period_scope": period_scope,
+            },
+        )
     return replace(
         fact,
         metadata={
             **dict(fact.metadata),
             "finance_metric_intent": diagnostics,
+            **({"finance_question_period_scope": period_scope} if period_scope else {}),
         },
     )
+
+
+def _finance_question_period_scope(question: str) -> str | None:
+    text = str(question or "").lower()
+    if re.search(r"\b(?:fiscal\s+year|full\s+year|annual|fy\s*20\d{2}|fy20\d{2})\b", text):
+        return "annual"
+    return None
 
 
 def _finance_fact_intent_text(fact: FinanceFact) -> str:
@@ -14076,16 +14168,113 @@ def _finance_fact_intent_text(fact: FinanceFact) -> str:
     return " ".join(part for part in parts if part and not part.endswith("="))
 
 
-def _finance_fact_model_sort_key(fact: FinanceFact) -> tuple[int, float, float, int, int, int, str]:
+def _finance_fact_model_sort_key(fact: FinanceFact) -> tuple[int, int, int, int, float, float, int, int, int, str]:
     metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
     intent = metadata.get("finance_metric_intent")
     intent_score = _numeric_sort_value(intent.get("score") if isinstance(intent, dict) else None)
     binding_score = _numeric_sort_value(metadata.get("target_document_binding_score"))
     accepted = 1 if metadata.get("target_document_binding_accepted") is True else 0
+    target_year_match = _finance_fact_target_year_match(fact)
+    annual_rank = _finance_fact_annual_rank(fact)
+    line_item_rank = _finance_fact_line_item_rank(fact)
     source_rank = _finance_fact_source_rank(fact)
     citation_present = 1 if fact.citation_ref else 0
     year = int(fact.fiscal_year or 0)
-    return (-accepted, -intent_score, -binding_score, -source_rank, -citation_present, -year, fact.fact_id)
+    if metadata.get("finance_question_period_scope") == "annual":
+        return (
+            -annual_rank,
+            -target_year_match,
+            -accepted,
+            -line_item_rank,
+            -intent_score,
+            -binding_score,
+            -source_rank,
+            -citation_present,
+            -year,
+            fact.fact_id,
+        )
+    return (
+        -accepted,
+        -target_year_match,
+        -annual_rank,
+        -line_item_rank,
+        -intent_score,
+        -binding_score,
+        -source_rank,
+        -citation_present,
+        -year,
+        fact.fact_id,
+    )
+
+
+def _finance_fact_target_year_match(fact: FinanceFact) -> int:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    binding = metadata.get("target_document_binding")
+    if not isinstance(binding, dict):
+        return 0
+    target_year = _int_or_none(binding.get("doc_period"))
+    if target_year is None:
+        return 0
+    if fact.fiscal_year == target_year:
+        return 1
+    if str(target_year) in str(fact.period or ""):
+        return 1
+    return 0
+
+
+def _finance_fact_annual_rank(fact: FinanceFact) -> int:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    form = str(metadata.get("form") or "").upper().replace(" ", "")
+    source_uri = str(metadata.get("source_uri") or "").lower()
+    source_title = str(metadata.get("source_title") or "").lower()
+    period = str(fact.period or "").upper()
+    if form in {"10-K", "20-F", "40-F"} or "10-k" in source_title or "annual report" in source_title:
+        return 3
+    if period.startswith("FY"):
+        return 2
+    if form == "10-Q" or "10-q" in source_title or "quarter" in source_title or "q" in period:
+        return 1
+    if "data.sec.gov/api/xbrl/companyfacts" in source_uri or "data.sec.gov/api/xbrl/companyconcept" in source_uri:
+        return 2
+    return 0
+
+
+def _finance_fact_line_item_rank(fact: FinanceFact) -> int:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    concept = str(metadata.get("concept") or "").lower().replace(" ", "")
+    label = str(metadata.get("label") or "").lower()
+    metric = str(fact.metric or "").lower()
+    combined = f"{concept} {label} {metric}"
+    if any(
+        marker in combined
+        for marker in (
+            "contractwithcustomerliability",
+            "contract liability",
+            "deferred revenue",
+            "remaining performance obligation",
+            "revenuerecognized",
+        )
+    ):
+        return -10
+    if "totalrevenuesandotherincome" in combined or ("revenue" in combined and "other income" in combined):
+        return 2
+    if concept == "salesandotheroperatingrevenue" or metric == "sales and other operating revenues":
+        return 14
+    if concept == "operatingrevenues" or metric == "operating revenues":
+        return 12
+    if concept in {
+        "revenues",
+        "revenuefromcontractwithcustomerexcludingassessedtax",
+        "revenuefromcontractwithcustomerincludingassessedtax",
+        "salesrevenuenet",
+        "salesandotheroperatingrevenue",
+        "operatingrevenues",
+        "revenuesnetofinterestexpense",
+    }:
+        return 10
+    if metric in {"revenue", "revenues", "net revenues", "net sales", "sales and other operating revenues"}:
+        return 4
+    return 0
 
 
 def _finance_fact_source_rank(fact: FinanceFact) -> int:
@@ -14093,9 +14282,15 @@ def _finance_fact_source_rank(fact: FinanceFact) -> int:
     source_uri = str(metadata.get("source_uri") or "").lower()
     source_family = str(metadata.get("source_family") or "").lower()
     source_title = str(metadata.get("source_title") or "").lower()
-    if "sec.gov/archives" in source_uri or "10-k" in source_title or "10-k" in source_uri:
+    if "10-k" in source_title or "10-k" in source_uri or "annual report" in source_title:
+        return 5
+    if "sec.gov/archives" in source_uri:
         return 4
-    if "data.sec.gov/api/xbrl/companyfacts" in source_uri or "structured_regulatory_data" in source_family:
+    if (
+        "data.sec.gov/api/xbrl/companyfacts" in source_uri
+        or "data.sec.gov/api/xbrl/companyconcept" in source_uri
+        or "structured_regulatory_data" in source_family
+    ):
         return 3
     if "sec.gov" in source_uri:
         return 2

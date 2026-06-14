@@ -186,9 +186,13 @@ class HttpFetchProvider:
         snippet = str(source.snippet or "").lower()
         if (
             source_kind == "sec_companyfacts_json"
+            or source_kind == "sec_companyconcept_json"
             or "data.sec.gov/api/xbrl/companyfacts/" in uri
+            or "data.sec.gov/api/xbrl/companyconcept/" in uri
             or "sec companyfacts" in title
+            or "sec companyconcept" in title
             or "companyfacts" in snippet
+            or "companyconcept" in snippet
         ):
             return max(self.max_bytes, SEC_COMPANYFACTS_MAX_BYTES)
         return self.max_bytes

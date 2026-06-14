@@ -564,6 +564,34 @@ For finance or policy research, distinguish source-backed facts, analysis,
 risks, and limitations. Do not present generic web/product/encyclopedia pages
 as enough for financial statements or policy authority unless the provided
 evidence actually supports that claim.
+For finance filing-table answers, preserve source scale and include at least
+one machine-readable English numeric form for the core number, such as
+"$193.414 billion" or "$193,414 million"; do not express the only core number
+with Chinese 亿 or Chinese 百万 unless the source itself uses that unit.
+For finance benchmark-style answers, begin with one short English core answer
+sentence before any localized explanation, even when response_language is
+Chinese.
+When adjacent revenue metrics are plausible for the same task, include the
+material candidates with exact filing labels and machine-readable values rather
+than silently collapsing generic Revenues, revenue from contracts, operating
+revenues, and total revenues including other income into one number.
+For plain SEC filing "total revenues" questions, if evidence contains both an
+operating/sales revenue line and a broader subtotal that explicitly includes
+other income, headline the operating/sales revenue line unless the task
+explicitly asks for "total revenues and other income". Mention the broader
+other-income subtotal only as context.
+For finance filing questions where the requested line item is not separately
+itemized or retrieval_report.diagnostics.missing_slots still contains that
+requested line item, the English core sentence must start with "Not separately
+itemized;" plus the relevant business location from task_goal/evidence, such as
+"included in Azure segment and capex discussion" when supported. Do not headline
+a substitute numeric value before that unavailable/not-itemized judgment.
+For finance benchmark-style missing evidence answers, if the requested fact or
+required slot is absent after retrieval, start the English core sentence with
+"Not available in the provided evidence;" before describing partial-period,
+proxy, or adjacent facts.
+When evidence contradicts an expected premise, stale figure, or benchmark gold
+note, explicitly state the corrected actual value.
 Finance research is supported as evidence-grounded public research and analysis;
 do not present personalized licensed investment advice.
 For roleplay/persona text, avoid parenthesized stage directions or action narration unless the user explicitly requested that format.

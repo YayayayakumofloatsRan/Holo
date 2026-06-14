@@ -8,6 +8,104 @@ from kernel_v3.research.issuer_registry import builtin_issuers_for_text
 from kernel_v3.retrieval.contracts import QueryPlan, SearchGoal, SearchSource
 
 
+SEC_COMPANYCONCEPT_SPECS: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        "Liabilities",
+        "liabilities",
+        ("liabilities", "total liabilities", "debt-to-equity", "debt to equity", "debt/equity"),
+        ("liabilities", "debttoequity", "debtequity"),
+    ),
+    (
+        "StockholdersEquity",
+        "shareholders equity",
+        (
+            "shareholders equity",
+            "shareholders' equity",
+            "stockholders equity",
+            "stockholders' equity",
+            "total equity",
+            "debt-to-equity",
+            "debt to equity",
+            "debt/equity",
+        ),
+        ("shareholdersequity", "stockholdersequity", "totalequity", "debttoequity", "debtequity"),
+    ),
+    (
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        "shareholders equity including noncontrolling interest",
+        (
+            "shareholders equity including noncontrolling interest",
+            "stockholders equity including noncontrolling interest",
+            "total equity",
+        ),
+        ("stockholdersequityincludingportionattributabletononcontrollinginterest",),
+    ),
+    ("Assets", "assets", ("assets", "total assets"), ("assets", "totalassets")),
+    (
+        "DebtLongtermAndShorttermCombinedAmount",
+        "debt",
+        ("total debt", "debt", "debt-to-equity", "debt to equity", "debt/equity"),
+        ("debtlongtermandshorttermcombinedamount", "totaldebt", "debttoequity", "debtequity"),
+    ),
+    ("LongTermDebt", "long-term debt", ("long term debt", "long-term debt"), ("longtermdebt",)),
+    ("LongTermDebtCurrent", "current long-term debt", ("current long term debt", "current long-term debt"), ()),
+    ("DebtCurrent", "short-term debt", ("short term debt", "short-term debt", "current debt"), ("debtcurrent",)),
+    (
+        "Revenues",
+        "revenue",
+        ("revenue", "revenues", "total revenue", "total revenues"),
+        ("revenues", "revenue"),
+    ),
+    (
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "revenue",
+        ("revenue", "revenues"),
+        ("revenuefromcontractwithcustomerexcludingassessedtax",),
+    ),
+    ("SalesRevenueNet", "net sales", ("net sales",), ("salesrevenuenet", "netsales")),
+    ("NetIncomeLoss", "net income", ("net income", "net loss"), ("netincomeloss", "profitloss")),
+    ("GrossProfit", "gross profit", ("gross profit", "gross margin"), ("grossprofit", "grossmargin")),
+    ("OperatingIncomeLoss", "operating income", ("operating income", "operating margin"), ("operatingincomeloss",)),
+    (
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "capital expenditures",
+        ("capital expenditures", "capital expenditure", "capex", "purchases of property"),
+        ("paymentstoacquirepropertyplantandequipment", "capex"),
+    ),
+    (
+        "PropertyPlantAndEquipmentNet",
+        "property plant and equipment net",
+        ("property plant and equipment net", "property, plant and equipment, net", "net ppe", "net pp&e", "ppne"),
+        ("propertyplantandequipmentnet", "netppe", "netppne"),
+    ),
+    ("InventoryNet", "inventory", ("inventory", "inventories", "merchandise inventories"), ("inventorynet",)),
+    (
+        "CostOfRevenue",
+        "cost of revenue",
+        ("cost of revenue", "cost of sales", "cogs", "cost of goods sold"),
+        ("costofrevenue", "costofsales", "cogs"),
+    ),
+    (
+        "CostOfGoodsAndServicesSold",
+        "cost of goods sold",
+        ("cost of goods sold", "cost of sales", "cogs"),
+        ("costofgoodsandservicessold",),
+    ),
+    (
+        "NetCashProvidedByUsedInOperatingActivities",
+        "operating cash flow",
+        ("operating cash flow", "cash flow from operations", "net cash provided by operating activities"),
+        ("netcashprovidedbyusedinoperatingactivities", "operatingcashflow"),
+    ),
+    (
+        "CashAndCashEquivalentsAtCarryingValue",
+        "cash and cash equivalents",
+        ("cash and cash equivalents", "cash equivalents", "cash and equivalents"),
+        ("cashandcashequivalentsatcarryingvalue",),
+    ),
+)
+
+
 class SecEdgarSearchProvider:
     provider_id = "sec_edgar_structured_search"
     live_network = False
@@ -38,7 +136,12 @@ class SecEdgarSearchProvider:
         filing = _filing_metadata(goal.metadata)
         if identifiers.get("cik") is None and filing.get("sec_accession_compact"):
             identifiers["cik"] = _normalize_cik(str(filing["sec_accession_compact"])[:10])
-        sources = _sources_for_identifier_set(identities or [identifiers], max_sources=goal.max_sources, filing=filing)
+        sources = _sources_for_identifier_set(
+            identities or [identifiers],
+            max_sources=goal.max_sources,
+            filing=filing,
+            intent_text=_issuer_intent_text(query, goal.metadata),
+        )
         resolved_cik = identifiers.get("cik") or _first_source_cik(sources)
         self._last_search_diagnostics = {
             "status": "ok" if sources else "empty",
@@ -123,12 +226,18 @@ def _sources_for_identifier_set(
     *,
     max_sources: int,
     filing: JsonObject | None = None,
+    intent_text: str = "",
 ) -> list[SearchSource]:
     sources: list[SearchSource] = []
     seen_uris: set[str] = set()
     per_issuer_limit = max(5, int(max_sources))
     buckets = [
-        _sources_for_identifiers(identifiers, max_sources=per_issuer_limit, filing=filing)
+        _sources_for_identifiers(
+            identifiers,
+            max_sources=per_issuer_limit,
+            filing=filing,
+            intent_text=intent_text,
+        )
         for identifiers in identities
     ]
     for index in range(max((len(bucket) for bucket in buckets), default=0)):
@@ -150,6 +259,7 @@ def _sources_for_identifiers(
     *,
     max_sources: int,
     filing: JsonObject | None = None,
+    intent_text: str = "",
 ) -> list[SearchSource]:
     ticker = _string_or_none(identifiers.get("ticker"))
     cik = _normalize_cik(identifiers.get("cik"))
@@ -222,7 +332,51 @@ def _sources_for_identifiers(
             ticker=ticker,
             cik=cik,
         )
+    if cik:
+        _append_companyconcept_sources(sources, ticker=ticker, cik=cik, intent_text=intent_text)
     return sources[: max(0, int(max_sources))]
+
+
+def _append_companyconcept_sources(
+    sources: list[SearchSource],
+    *,
+    ticker: str | None,
+    cik: str,
+    intent_text: str,
+) -> None:
+    for concept, metric in _companyconcept_targets_for_intent(intent_text):
+        _append_source(
+            sources,
+            uri=f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/us-gaap/{concept}.json",
+            title=f"SEC companyconcept JSON for CIK {cik} concept {concept}",
+            snippet=(
+                "Official SEC XBRL companyconcept JSON for one reported financial concept; "
+                f"metric={metric}."
+            ),
+            source_family="structured_regulatory_data",
+            source_kind="sec_companyconcept_json",
+            ticker=ticker,
+            cik=cik,
+            extra_metadata={"sec_taxonomy": "us-gaap", "sec_concept": concept, "metric": metric},
+        )
+
+
+def _companyconcept_targets_for_intent(intent_text: str) -> list[tuple[str, str]]:
+    normalized = " ".join(str(intent_text or "").replace("_", " ").replace("-", " ").lower().split())
+    compact = "".join(ch for ch in normalized if ch.isalnum())
+    if not normalized:
+        return []
+    targets: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for concept, metric, phrases, compact_phrases in SEC_COMPANYCONCEPT_SPECS:
+        if any(phrase in normalized for phrase in phrases) or any(phrase in compact for phrase in compact_phrases):
+            if concept in seen:
+                continue
+            seen.add(concept)
+            targets.append((concept, metric))
+        if len(targets) >= 12:
+            break
+    return targets
 
 
 def _append_filing_document_sources(

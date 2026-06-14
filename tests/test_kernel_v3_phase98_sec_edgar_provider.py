@@ -1,11 +1,14 @@
 from kernel_v3.agent import AgentRuntime, FinalAnswer
 from kernel_v3.agent.runtime import task_recipe
 from kernel_v3.context import ArtifactStore
+from kernel_v3.finance.fact_ledger import build_finance_fact_ledger
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.research import FINANCE_FUNDAMENTALS_PROFILE_ID
 from kernel_v3.retrieval import (
     DirectUrlSearchProvider,
+    CitationItem,
+    EvidenceItem,
     FakeFetchProvider,
     FakeSearchProvider,
     FallbackSearchProvider,
@@ -88,6 +91,60 @@ def test_phase98_sec_companyfacts_ranks_before_submissions_for_finance_evidence(
     ranked_kinds = [item.metadata["source_kind"] for item in ranked]
 
     assert ranked_kinds.index("sec_companyfacts_json") < ranked_kinds.index("sec_submissions_json")
+
+
+def test_sec_edgar_provider_adds_targeted_companyconcept_sources_for_leverage_questions():
+    provider = SecEdgarSearchProvider()
+    goal = SearchGoal(
+        goal_id="goal-sec-companyconcept-debt-equity",
+        query="JPMorgan Chase debt-to-equity ratio 2024 liabilities stockholders equity SEC companyfacts",
+        max_sources=12,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "ticker": "JPM",
+            "sec_cik": "19617",
+        },
+    )
+
+    sources = provider.search(goal.query, goal=goal, plan=_plan())
+    concept_sources = [source for source in sources if source.metadata.get("source_kind") == "sec_companyconcept_json"]
+    concept_names = {source.metadata.get("sec_concept") for source in concept_sources}
+    uris = {source.uri for source in concept_sources}
+
+    assert "Liabilities" in concept_names
+    assert "StockholdersEquity" in concept_names
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000019617/us-gaap/Liabilities.json" in uris
+    assert (
+        "https://data.sec.gov/api/xbrl/companyconcept/CIK0000019617/us-gaap/StockholdersEquity.json"
+        in uris
+    )
+
+
+def test_sec_companyconcept_sources_are_kept_together_for_formula_inputs():
+    provider = SecEdgarSearchProvider()
+    goal = SearchGoal(
+        goal_id="goal-sec-companyconcept-rank",
+        query="JPMorgan Chase debt-to-equity ratio 2024 liabilities stockholders equity",
+        max_sources=12,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "ticker": "JPM",
+            "sec_cik": "19617",
+        },
+    )
+
+    ranked = rank_sources(goal, provider.search(goal.query, goal=goal, plan=_plan()))
+    ranked_concepts = [
+        source.metadata.get("sec_concept")
+        for source in ranked
+        if source.metadata.get("source_kind") == "sec_companyconcept_json"
+    ]
+
+    assert set(ranked_concepts[:3]) == {
+        "StockholdersEquity",
+        "Liabilities",
+        "DebtLongtermAndShorttermCombinedAmount",
+    }
 
 
 def test_sec_edgar_provider_uses_root_goal_for_issuer_candidates():
@@ -372,6 +429,39 @@ def test_sec_companyfacts_extracts_banking_interest_and_leverage_metrics():
     assert "value=344758000000" in text
 
 
+def test_sec_companyconcept_extracts_targeted_stockholders_equity_fact():
+    goal = SearchGoal(
+        goal_id="goal-sec-companyconcept-equity",
+        query="JPMorgan Chase debt-to-equity ratio 2024 stockholders equity",
+        max_spans_per_document=4,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-jpm-companyconcept-equity",
+        goal_id=goal.goal_id,
+        source_id="source-sec-jpm-companyconcept-equity",
+        uri="https://data.sec.gov/api/xbrl/companyconcept/CIK0000019617/us-gaap/StockholdersEquity.json",
+        title="SEC companyconcept JSON for CIK 0000019617 concept StockholdersEquity",
+        artifact_id="artifact-sec-jpm-companyconcept-equity",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyconcept_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_jpm_stockholders_equity_companyconcept_json())
+    text = " ".join(span.text for span in spans)
+
+    assert "SEC companyfacts official financial statement" in text
+    assert "concept=StockholdersEquity" in text
+    assert "metric=shareholders equity" in text
+    assert "value=344758000000" in text
+    assert "fy=2024" in text
+
+
 def test_sec_companyfacts_extracts_sector_specific_revenue_concepts():
     goal = SearchGoal(
         goal_id="goal-sec-sector-revenue-companyfacts",
@@ -439,6 +529,171 @@ def test_sec_companyfacts_prioritizes_revenue_contract_line_over_generic_total_r
     assert "concept=RevenueFromContractWithCustomerExcludingAssessedTax" in spans[0].text
     assert "value=193414000000" in spans[0].text
     assert "concept=Revenues" not in spans[0].text
+
+
+def test_sec_filing_html_extracts_annual_net_sales_sentence_fact():
+    goal = SearchGoal(
+        goal_id="goal-sec-costco-net-sales-html",
+        query="What was Costco's net sales for fiscal year 2024?",
+        max_spans_per_document=4,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-costco-10k-html",
+        goal_id=goal.goal_id,
+        source_id="source-sec-costco-10k-html",
+        uri="https://www.sec.gov/Archives/edgar/data/909832/000090983224000049/cost-20240901.htm",
+        title="SEC 10-K primary filing document reportDate=2024-09-01 filed=2024-10-09 description=10-K cost-20240901.htm",
+        artifact_id="artifact-sec-costco-10k-html",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_primary_filing_document"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_costco_10k_html_with_net_sales_sentence())
+    text = " ".join(span.text for span in spans)
+
+    assert "html_sentence_fact" in text
+    assert "metric=net sales" in text
+    assert "fy=2024" in text
+    assert "value=249,625" in text
+    assert "scale=millions" in text
+
+    evidence = [
+        EvidenceItem(
+            evidence_id="evidence-costco-net-sales",
+            goal_id=goal.goal_id,
+            span_id=spans[0].span_id,
+            document_id=document.document_id,
+            source_id=document.source_id,
+            artifact_id=document.artifact_id,
+            uri=document.uri,
+            title=document.title,
+            text=spans[0].text,
+            score=spans[0].score,
+            payload_hash=document.payload_hash,
+        )
+    ]
+    citations = [
+        CitationItem(
+            citation_id="cite-costco-net-sales",
+            goal_id=goal.goal_id,
+            evidence_id=evidence[0].evidence_id,
+            artifact_id=document.artifact_id,
+            uri=document.uri,
+            title=document.title,
+            quote=spans[0].text[:240],
+            span_start=0,
+            span_end=min(240, len(spans[0].text)),
+        )
+    ]
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+
+    assert any(fact.metric == "net sales" and fact.fiscal_year == 2024 and fact.value == "249625000000" for fact in facts)
+
+
+def test_sec_companyfacts_query_focus_exposes_rd_and_margin_inputs():
+    goal = SearchGoal(
+        goal_id="goal-sec-query-focus-margin",
+        query="AAPL FY2024 research and development expense and net profit margin",
+        max_spans_per_document=8,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-aapl-query-focus",
+        goal_id=goal.goal_id,
+        source_id="source-sec-aapl-query-focus",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+        title="SEC companyfacts JSON for CIK 0000320193",
+        artifact_id="artifact-sec-aapl-query-focus",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_apple_specialized_companyfacts_json())
+    text = " ".join(span.text for span in spans)
+
+    assert "metric=research and development expense" in text
+    assert "value=31370000000" in text
+    assert "metric=net income" in text
+    assert "value=93736000000" in text
+    assert "metric=revenue" in text
+    assert "value=391035000000" in text
+
+
+def test_sec_companyfacts_query_focus_exposes_segment_revenue_candidates():
+    goal = SearchGoal(
+        goal_id="goal-sec-meta-segment-query-focus",
+        query="What was Meta's Family of Apps segment revenue for fiscal year 2024?",
+        max_spans_per_document=6,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-meta-query-focus",
+        goal_id=goal.goal_id,
+        source_id="source-sec-meta-query-focus",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0001326801.json",
+        title="SEC companyfacts JSON for CIK 0001326801",
+        artifact_id="artifact-sec-meta-query-focus",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_meta_segment_companyfacts_json())
+    text = " ".join(span.text for span in spans)
+
+    assert "metric=family of apps revenue" in text
+    assert "value=164501000000" in text
+    assert "metric=reality labs revenue" in text
+    assert "value=2146000000" in text
+
+
+def test_sec_companyfacts_query_focus_exposes_gross_and_operating_margin_inputs():
+    goal = SearchGoal(
+        goal_id="goal-sec-nvidia-margin-query-focus",
+        query="Calculate NVIDIA gross margin and operating margin for fiscal year 2024 from SEC companyfacts.",
+        max_spans_per_document=8,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "research_task_kind": "finance_fundamentals",
+        },
+    )
+    document = FetchedDocument(
+        document_id="doc-sec-nvidia-query-focus",
+        goal_id=goal.goal_id,
+        source_id="source-sec-nvidia-query-focus",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json",
+        title="SEC companyfacts JSON for CIK 0001045810",
+        artifact_id="artifact-sec-nvidia-query-focus",
+        payload_hash="hash",
+        preview="",
+        size_bytes=1,
+        metadata={"source_metadata": {"source_kind": "sec_companyfacts_json"}},
+    )
+
+    spans = extract_spans(goal=goal, document=document, body=_nvidia_margin_companyfacts_json())
+    text = " ".join(span.text for span in spans)
+
+    assert "metric=gross profit" in text
+    assert "value=44301000000" in text
+    assert "metric=operating income" in text
+    assert "value=32972000000" in text
+    assert "metric=revenue" in text
+    assert "value=60922000000" in text
 
 
 def test_phase98_sec_companyfacts_compaction_selects_requested_income_metrics_over_newer_balance_sheet_noise():
@@ -1250,6 +1505,74 @@ def _apple_companyfacts_json() -> str:
     )
 
 
+def _apple_specialized_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"Apple Inc.",'
+        '"cik":320193,'
+        '"facts":{"us-gaap":{'
+        '"Revenues":{"label":"Revenues","units":{"USD":['
+        '{"val":383285000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2023-11-03","end":"2023-09-30","accn":"0000320193-23-000106"},'
+        '{"val":391035000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-11-01","end":"2024-09-28","accn":"0000320193-24-000123"}'
+        "]}},"
+        '"NetIncomeLoss":{"label":"Net income","units":{"USD":['
+        '{"val":96995000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2023-11-03","end":"2023-09-30","accn":"0000320193-23-000106"},'
+        '{"val":93736000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-11-01","end":"2024-09-28","accn":"0000320193-24-000123"}'
+        "]}},"
+        '"ResearchAndDevelopmentExpense":{"label":"Research and development expense","units":{"USD":['
+        '{"val":29915000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2023-11-03","end":"2023-09-30","accn":"0000320193-23-000106"},'
+        '{"val":31370000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-11-01","end":"2024-09-28","accn":"0000320193-24-000123"}'
+        "]}},"
+        '"Assets":{"label":"Assets","units":{"USD":['
+        '{"val":371082000000,"fy":2026,"fp":"Q2","form":"10-Q","filed":"2026-05-01","end":"2026-03-28","frame":"CY2026Q1I","accn":"0000320193-26-000013"}'
+        "]}}"
+        "}}}"
+    )
+
+
+def _meta_segment_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"Meta Platforms, Inc.",'
+        '"cik":1326801,'
+        '"facts":{"us-gaap":{'
+        '"FamilyOfAppsRevenue":{"label":"Family of Apps revenue","units":{"USD":['
+        '{"val":133010000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2024-02-02","end":"2023-12-31","accn":"0001326801-24-000012"},'
+        '{"val":164501000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-01-31","end":"2024-12-31","accn":"0001326801-25-000017"}'
+        "]}},"
+        '"RealityLabsRevenue":{"label":"Reality Labs revenue","units":{"USD":['
+        '{"val":1896000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2024-02-02","end":"2023-12-31","accn":"0001326801-24-000012"},'
+        '{"val":2146000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-01-31","end":"2024-12-31","accn":"0001326801-25-000017"}'
+        "]}},"
+        '"Revenues":{"label":"Revenues","units":{"USD":['
+        '{"val":164501000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-01-31","end":"2024-12-31","accn":"0001326801-25-000017"}'
+        "]}}"
+        "}}}"
+    )
+
+
+def _nvidia_margin_companyfacts_json() -> str:
+    return (
+        "{"
+        '"entityName":"NVIDIA CORP",'
+        '"cik":1045810,'
+        '"facts":{"us-gaap":{'
+        '"RevenueFromContractWithCustomerExcludingAssessedTax":{"label":"Revenue from Contract with Customer, Excluding Assessed Tax","units":{"USD":['
+        '{"val":26974000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2023-02-24","end":"2023-01-29","accn":"0001045810-23-000017"},'
+        '{"val":60922000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-02-21","end":"2024-01-28","accn":"0001045810-24-000029"}'
+        "]}},"
+        '"GrossProfit":{"label":"Gross profit","units":{"USD":['
+        '{"val":15356000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2023-02-24","end":"2023-01-29","accn":"0001045810-23-000017"},'
+        '{"val":44301000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-02-21","end":"2024-01-28","accn":"0001045810-24-000029"}'
+        "]}},"
+        '"OperatingIncomeLoss":{"label":"Operating income","units":{"USD":['
+        '{"val":4224000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2023-02-24","end":"2023-01-29","accn":"0001045810-23-000017"},'
+        '{"val":32972000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2024-02-21","end":"2024-01-28","accn":"0001045810-24-000029"}'
+        "]}}"
+        "}}}"
+    )
+
+
 def _retail_companyfacts_json() -> str:
     return (
         "{"
@@ -1344,6 +1667,23 @@ def _bank_companyfacts_json() -> str:
     )
 
 
+def _jpm_stockholders_equity_companyconcept_json() -> str:
+    return (
+        "{"
+        '"entityName":"JPMorgan Chase & Co.",'
+        '"cik":19617,'
+        '"taxonomy":"us-gaap",'
+        '"tag":"StockholdersEquity",'
+        '"label":"Stockholders equity",'
+        '"units":{"USD":['
+        '{"val":327878000000,"fy":2023,"fp":"FY","form":"10-K","filed":"2024-02-16","end":"2023-12-31","accn":"0000019617-24-000272"},'
+        '{"val":344758000000,"fy":2024,"fp":"FY","form":"10-K","filed":"2025-02-14","end":"2024-12-31","accn":"0000019617-25-000270"},'
+        '{"val":344758000000,"fy":2025,"fp":"FY","form":"10-K","filed":"2026-02-13","end":"2024-12-31","frame":"CY2024Q4I","accn":"0001628280-26-008131"}'
+        "]}"
+        "}"
+    )
+
+
 def _sector_revenue_companyfacts_json() -> str:
     return (
         "{"
@@ -1358,6 +1698,22 @@ def _sector_revenue_companyfacts_json() -> str:
         "]}}"
         "}}}"
     )
+
+
+def _costco_10k_html_with_net_sales_sentence() -> str:
+    return """
+    <html>
+      <body>
+        <div>Costco Wholesale Corporation 2024 Form 10-K</div>
+        <div>(amounts in millions, except per share, share, membership fee, and warehouse count data)</div>
+        <div>Fiscal 2024 highlights included the following:</div>
+        <div>
+          Net sales increased 5% to $249,625, driven by an increase in comparable sales
+          and sales at new warehouses opened in 2023 and 2024, partially offset by one less week of sales in 2024;
+        </div>
+      </body>
+    </html>
+    """
 
 
 def _chevron_companyfacts_json() -> str:

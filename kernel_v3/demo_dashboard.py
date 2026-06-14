@@ -724,6 +724,7 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
         "topology": loop_topology_state(visible_turn),
         "search_branches": search_branch_state(visible_turn),
         "runtime_console": runtime_console_state(visible_turn, active),
+        "latest_event": _public_flow_record(visible_turn[-1]) if visible_turn else {},
         "stats": _console_trace_stats(visible_turn, thread_records=len(scoped)),
         "notice": "Current turn runtime context: model packets, prompt/contract previews, structured outputs, tools, evidence, verifier gates, and answers.",
     }
@@ -1066,17 +1067,25 @@ def _chat_result_answer_text(data: Json) -> str:
 
 
 def loop_topology_state(records: list[Json]) -> list[Json]:
+    retrieval_tool_kinds = {
+        "retrieval_query_plan",
+        "retrieval_search_attempt",
+        "retrieval_workbench_decision",
+        "retrieval_fetch",
+        "retrieval_fetch_attempt",
+    }
     groups = [
         ("Intake", {"chat_turn", "chat_routing_decision", "semantic_intake", "compiled_task_program"}, "understand task"),
         ("Plan", {"processor_request", "processor_result", "action", "toolchain_step_proposed"}, "LLM proposes next move"),
         ("Policy", {"policy_decision"}, "host validates action"),
-        ("Tools", {"observation", "retrieval_fetch", "retrieval_fetch_attempt"}, "execute bounded tools"),
+        ("Tools", {"observation", *retrieval_tool_kinds}, "execute bounded tools"),
         ("Search", {"retrieval_query_plan", "retrieval_search_attempt", "retrieval_workbench_decision"}, "branch over sources"),
         ("Evidence", {"retrieval_extraction", "retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame"}, "build cited ledger"),
         ("Verify", {"transform_plan", "finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}, "check numbers and support"),
         ("Answer", {"termination_decision", "feedback", "agent_final_answer", "agent_failure_report", "chat_agent_result"}, "reply or explain gap"),
     ]
     latest_kind = str(records[-1].get("kind") or "") if records else ""
+    latest_label = _stage_for_kind(latest_kind)
     terminal = _has_terminal_record(records)
     has_failure = any(
         record.get("kind") in {"agent_failure_report"}
@@ -1088,13 +1097,14 @@ def loop_topology_state(records: list[Json]) -> list[Json]:
         count = sum(1 for record in records if record.get("kind") in kinds)
         state = "idle"
         if count:
-            state = "active" if latest_kind in kinds and not terminal else "ok"
+            state = "active" if label == latest_label and not terminal else "ok"
         if terminal and label == "Answer" and count and not has_failure:
             state = "closed"
         if has_failure and label in {"Verify", "Answer"} and count:
             state = "warn"
         row = stage(label, state, count, detail)
         row["last_at"] = max((int(record.get("recorded_at_ms") or 0) for record in records if record.get("kind") in kinds), default=0)
+        row["latest"] = bool(label == latest_label and count and not terminal)
         rows.append(row)
     return rows
 
@@ -2822,6 +2832,7 @@ HTML = r"""<!doctype html>
       stroke-dasharray: 6 5;
       opacity: .55;
     }
+    .topology-edge.visited { stroke: #aeb8c7; opacity: .68; }
     .topology-edge.loopback { stroke: #94a3b8; opacity: .62; }
     .topology-edge.active { stroke: #6f8ecf; stroke-width: 2.4; opacity: .9; }
     .topology-edge.hot { stroke: #76b7ad; stroke-width: 2.6; opacity: .92; }
@@ -3038,6 +3049,17 @@ HTML = r"""<!doctype html>
     const fmtNum = v => (v === null || v === undefined || v === "") ? "0" : Number(v).toLocaleString();
     const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value ?? ""; };
     const cls = (id, value) => { const el = document.getElementById(id); if (el) el.className = value; };
+    function eventCode(record) {
+      if (!record) return "waiting";
+      if (!record.record_id && !record.kind) return "waiting";
+      return record.record_id || record.kind || "event";
+    }
+    function eventNotice(record, fallback = "runtime context") {
+      if (!record) return fallback;
+      if (!record.record_id && !record.kind) return fallback;
+      const parts = [record.stage, record.title || record.kind, record.status].filter(Boolean);
+      return parts.length ? parts.join(" | ") : fallback;
+    }
     const params = new URLSearchParams(window.location.search);
     const selected = {
       runPrefix: params.get("run_prefix") || "",
@@ -3156,10 +3178,11 @@ HTML = r"""<!doctype html>
 	      lastPipelineSignature = "";
 	      lastBranchSignature = "";
 	      renderTranscript([]);
-      renderPipeline([]);
+	      renderPipeline([]);
 	      renderBranches([]);
 	      runtimeConsoleLines = [];
 	      renderRuntimeConsole([]);
+	      text("latestItem", "local");
 	      text("publicTraceNotice", "screen cleared locally | journal preserved");
 	      text("consoleStatus", "ready");
 	      cls("consoleDot", "dot ok");
@@ -3201,6 +3224,7 @@ HTML = r"""<!doctype html>
       renderRuntimeConsole([]);
       text("consoleThread", `thread ${selected.consoleThread}`);
       text("consoleStatus", "ready");
+      text("latestItem", "waiting");
       text("publicTraceNotice", "live stream starting");
       cls("consoleDot", "dot ok");
       showInspector("Waiting for events", selected.consoleThread, "This thread has no visible agent-loop events yet. Submit a task to stream model packets, tool calls, search branches, verifier gates, and the final answer.");
@@ -3267,7 +3291,8 @@ HTML = r"""<!doctype html>
       } else if (payload.record) {
         appendRuntimeConsoleRecord(payload.record);
       }
-      text("publicTraceNotice", `${closed ? "closed runtime context" : "live runtime context"} | ${fmtNum(stats.records)} records${kind ? " | last " + kind : ""}`);
+      text("latestItem", eventCode(payload.record));
+      text("publicTraceNotice", `${closed ? "closed runtime context" : "live runtime context"} | ${fmtNum(stats.records)} records | ${eventNotice(payload.record, kind || "event")}`);
       text("consoleStatus", closed ? "complete" : "running");
       cls("consoleDot", `dot ${closed ? "ok" : "running"}`);
       if (closed) {
@@ -3277,6 +3302,7 @@ HTML = r"""<!doctype html>
           topology: payload.topology || [],
           search_branches: payload.search_branches || [],
           runtime_console: runtimeConsoleLines.slice(),
+          latest_event: payload.record || {},
           stats,
           frozenAt: Date.now()
         };
@@ -3292,7 +3318,7 @@ HTML = r"""<!doctype html>
         { role: "user", text: message, status: "submitted", at: now },
         { role: "assistant", text: "Kernel v3 is running. Model packets, tool calls, retrieval branches, verifier gates, and the final answer will stream into the graph as journal events arrive.", status: "running", at: now + 1 }
       ]);
-      renderPipeline([]);
+      renderPipeline([{ label: "Intake", state: "active", value: 1, detail: "browser command submitted; waiting for WSL journal", latest: true, last_at: now }]);
       renderBranches([]);
       runtimeConsoleLines = [
         {
@@ -3304,6 +3330,8 @@ HTML = r"""<!doctype html>
         }
       ];
       renderRuntimeConsole(runtimeConsoleLines);
+      text("latestItem", "submit");
+      text("publicTraceNotice", "browser command accepted locally | waiting for first journal event");
       manualInspector = false;
       showInspector("Kernel process running", selected.consoleThread, "Waiting for the first journal event from the WSL runtime.");
     }
@@ -3378,7 +3406,6 @@ HTML = r"""<!doctype html>
       text("heroCalc", fmtNum(metrics.calculator_call_count));
       text("heroFacts", fmtNum(metrics.finance_fact_count || metrics.claim_count || metrics.evidence_count));
       text("heroCitations", fmtNum(metrics.citation_count || metrics.retrieval_citation_count));
-      text("latestItem", cur.latest_item_id || "waiting");
       text("questionText", cur.latest_question || "Waiting for the next scored item.");
       text("answerState", answerStateText(cur));
       const d = data.diagnosis || {};
@@ -3399,6 +3426,7 @@ HTML = r"""<!doctype html>
       const traceClosed = Boolean(consoleState.stats && consoleState.stats.closed);
       const effectiveJobStatus = traceClosed ? "complete" : jobStatus;
       const threadRecordCount = Number((consoleState.stats || {}).thread_records || 0);
+      const latestEvent = consoleState.latest_event || {};
       const pristineIdle = pristineThreadIds.has(selected.consoleThread)
         && threadRecordCount === 0
         && !["running", "queued"].includes(effectiveJobStatus);
@@ -3409,11 +3437,13 @@ HTML = r"""<!doctype html>
       const hasFrozenTrace = Boolean(frozenTrace && frozenTrace.threadId === selected.consoleThread && !cleared);
       const preserveLiveTrace = Boolean((hasFrozenTrace || (lastLiveAt && Date.now() - lastLiveAt < 2500)) && !cleared);
       if (pristineIdle) {
+        text("latestItem", "waiting");
         text("publicTraceNotice", "new thread idle | waiting for input");
         text("consoleStatus", "ready");
         cls("consoleDot", "dot ok");
 	      } else if (!preserveLiveTrace) {
-	        text("publicTraceNotice", cleared ? "screen cleared locally | journal preserved" : (consoleState.notice || "runtime context"));
+	        text("latestItem", cleared ? "local" : eventCode(latestEvent));
+	        text("publicTraceNotice", cleared ? "screen cleared locally | journal preserved" : eventNotice(latestEvent, consoleState.notice || "runtime context"));
         renderTranscript(cleared ? [] : (consoleState.transcript || []));
         renderPipeline(cleared ? [] : (consoleState.topology || []));
         renderBranches(cleared ? [] : (consoleState.search_branches || []));
@@ -3426,15 +3456,18 @@ HTML = r"""<!doctype html>
             topology: consoleState.topology || [],
             search_branches: consoleState.search_branches || [],
             runtime_console: runtimeConsoleLines.slice(),
+            latest_event: latestEvent,
             stats: consoleState.stats || {},
             frozenAt: Date.now()
           };
+          text("latestItem", eventCode(frozenTrace.latest_event));
           text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} records | frozen`);
           text("consoleStatus", "complete");
           cls("consoleDot", "dot ok");
         }
         if (cleared) showInspector("Screen cleared", selected.consoleThread, "Local view cleared. The durable journal is preserved.");
       } else if (hasFrozenTrace) {
+        text("latestItem", eventCode(frozenTrace.latest_event));
         text("publicTraceNotice", `closed runtime context | ${fmtNum((frozenTrace.stats || {}).records)} records | frozen`);
         text("consoleStatus", "complete");
         cls("consoleDot", "dot ok");
@@ -3539,10 +3572,12 @@ HTML = r"""<!doctype html>
           label,
           state: row.state || "idle",
           value: Number(row.value || 0),
-          detail: row.detail || idleDetail(label)
+          detail: row.detail || idleDetail(label),
+          last_at: Number(row.last_at || 0),
+          latest: Boolean(row.latest)
         };
       });
-      const signature = JSON.stringify(nodes.map(row => [row.label, row.state, row.value, row.detail]));
+      const signature = JSON.stringify(nodes.map(row => [row.label, row.state, row.value, row.detail, row.last_at, row.latest]));
       if (signature === lastPipelineSignature) {
         window.requestAnimationFrame(sizeTopologyFrame);
         return;
@@ -3554,11 +3589,12 @@ HTML = r"""<!doctype html>
         const b = topologyLayout[to];
         const fromNode = nodeMap.get(from) || {};
         const toNode = nodeMap.get(to) || {};
-        const active = Number(fromNode.value || 0) > 0 && Number(toNode.value || 0) > 0;
-        const hot = toNode.state === "active" || toNode.state === "closed";
+        const visited = edgeVisited(fromNode, toNode, kind);
+        const active = visited && Boolean(toNode.latest);
+        const hot = active && toNode.state === "active";
         const warn = fromNode.state === "warn" || toNode.state === "warn";
         const curve = topologyEdgePath(a, b, kind);
-        return `<path class="topology-edge ${kind === "loopback" ? "loopback feedback" : ""} ${active ? "active" : ""} ${hot ? "hot" : ""} ${warn ? "warn" : ""}" d="${curve}" />`;
+        return `<path class="topology-edge ${kind === "loopback" ? "loopback feedback" : ""} ${visited ? "visited" : ""} ${active ? "active" : ""} ${hot ? "hot" : ""} ${warn ? "warn" : ""}" d="${curve}" />`;
       }).join("");
       const nodeHtml = nodes.map(row => {
         const pos = topologyLayout[row.label];
@@ -3591,6 +3627,13 @@ HTML = r"""<!doctype html>
       if (!frame) return;
       frame.style.width = "100%";
       frame.style.height = "100%";
+    }
+    function edgeVisited(fromNode, toNode, kind) {
+      const fromAt = Number(fromNode.last_at || 0);
+      const toAt = Number(toNode.last_at || 0);
+      if (!fromAt || !toAt) return false;
+      if (kind === "loopback") return toAt > fromAt;
+      return fromAt <= toAt;
     }
     function topologyEdgePath(a, b, kind) {
       if (kind === "loopback") {
@@ -3649,10 +3692,9 @@ HTML = r"""<!doctype html>
         panel.innerHTML = `<div class="console-empty">$ waiting for model packets, tool calls, retrieval branches, evidence, verifier gates, and final answer...</div>`;
         return;
       }
-      const baseAt = firstConsoleAt(shown);
       panel.innerHTML = shown.map((row, index) => `
         <div class="console-line ${escapeHtml(row.level || "ok")}">
-          <div class="console-time">${escapeHtml(formatConsoleTime(row.at, baseAt, index))}</div>
+          <div class="console-time">${escapeHtml(formatConsoleStep(index))}</div>
           <div class="console-main">
             <div class="console-command">${escapeHtml(row.line || "")}</div>
             ${row.body ? `<div class="console-body">${escapeHtml(row.body)}</div>` : ""}
@@ -3660,24 +3702,9 @@ HTML = r"""<!doctype html>
         </div>`).join("");
       panel.scrollTop = panel.scrollHeight;
     }
-    function firstConsoleAt(rows) {
-      for (const row of rows || []) {
-        const n = Number(row.at || 0);
-        if (Number.isFinite(n) && n > 0) return n;
-      }
-      return 0;
+    function formatConsoleStep(index) {
+      return `#${String((index || 0) + 1).padStart(3, "0")}`;
     }
-	    function formatConsoleTime(value, base, index) {
-	      const n = Number(value || 0);
-	      const ordinal = `#${String((index || 0) + 1).padStart(3, "0")}`;
-	      if (!n) return ordinal;
-	      const start = Number(base || n);
-	      if (n < 10_000_000_000 || start < 10_000_000_000) return ordinal;
-	      const scale = 1000;
-	      const elapsed = (n - start) / scale;
-	      if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 3600) return ordinal;
-	      return `+${elapsed.toFixed(elapsed < 10 ? 1 : 0)}s`;
-	    }
     function renderTranscript(rows) {
       const panel = document.getElementById("transcript");
       if (!rows.length) {

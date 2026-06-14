@@ -780,6 +780,18 @@ def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_b
     assert '"response_language": "zh"' in provider.last_prompt
     assert "旧 stage 是否还是施工对象" in provider.last_prompt
     assert "Answer every explicit question" in provider.last_prompt
+    assert "$193.414 billion" in provider.last_prompt
+    assert "Chinese 百万" in provider.last_prompt
+    assert "begin with one short English core answer sentence" in provider.last_prompt
+    assert "adjacent revenue metrics" in provider.last_prompt
+    assert "RevenueFromContractWithCustomerExcludingAssessedTax" in provider.last_prompt
+    assert "broader subtotal that explicitly includes other income" in provider.last_prompt
+    assert "Not separately itemized" in provider.last_prompt
+    assert "must start with" in provider.last_prompt
+    assert "Not separately itemized;" in provider.last_prompt
+    assert "Do not headline a substitute numeric value" in provider.last_prompt
+    assert "Not available in the provided evidence;" in provider.last_prompt
+    assert "corrected actual value" in provider.last_prompt
     assert "text_preview" in provider.last_prompt
     assert "quote_preview" in provider.last_prompt
 

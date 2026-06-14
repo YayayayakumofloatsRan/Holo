@@ -79,6 +79,12 @@ normal thread-history surface.
 
 ## Current Capability Snapshot
 
+For the 2026-06-14 report-ready Kernel v3 project state, finance benchmark
+evidence, demo status, known gaps, and near-term roadmap, see
+`docs/KERNEL_V3_PROJECT_STATUS_2026-06-14_ZH.md`. For a compact Chinese talk
+track and Q&A notes prepared for the recorded Windows browser demo, see
+`docs/KERNEL_V3_DEMO_TALK_NOTES_2026-06-14_ZH.md`.
+
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,
 current local changes, gaps, and next priorities, see

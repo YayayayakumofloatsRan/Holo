@@ -33,7 +33,6 @@ def test_finance_metric_intent_prefers_energy_specific_total_revenue_concepts() 
         "fy=2024 period=annual metric=revenue concept=Revenues value=202792000000",
         query=chevron_query,
     )
-
     conoco_query = "What was ConocoPhillips' total revenues for fiscal year 2024?"
     assert finance_metric_intent_score(
         "fy=2024 period=annual metric=total revenues and other income "
@@ -41,6 +40,15 @@ def test_finance_metric_intent_prefers_energy_specific_total_revenue_concepts() 
         query=conoco_query,
     ) > finance_metric_intent_score(
         "fy=2024 period=annual metric=revenue concept=Revenues value=54745000000",
+        query=conoco_query,
+    )
+    assert finance_metric_intent_score(
+        "fy=2024 period=annual metric=total revenues and other income "
+        "concept=TotalRevenuesAndOtherIncome value=56953000000",
+        query=conoco_query,
+    ) > finance_metric_intent_score(
+        "fy=2024 period=annual metric=sales and other operating revenues "
+        "concept=SalesAndOtherOperatingRevenue value=54745000000",
         query=conoco_query,
     )
 

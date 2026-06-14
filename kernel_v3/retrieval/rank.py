@@ -86,17 +86,20 @@ def _is_finance_profile(research_profile: ResearchProfile | None) -> bool:
 def _prioritize_distinct_companyfacts(items: list[RankedSource]) -> list[RankedSource]:
     companyfacts: list[RankedSource] = []
     remainder: list[RankedSource] = []
-    seen_ciks: set[str] = set()
+    seen_keys: set[tuple[str, str, str]] = set()
     for item in items:
         metadata = item.metadata if isinstance(item.metadata, dict) else {}
-        if metadata.get("source_kind") == "sec_companyfacts_json":
+        source_kind = str(metadata.get("source_kind") or "")
+        if source_kind in {"sec_companyfacts_json", "sec_companyconcept_json"}:
             cik = str(metadata.get("sec_cik") or item.uri).strip()
-            if cik and cik not in seen_ciks:
-                seen_ciks.add(cik)
+            concept = str(metadata.get("sec_concept") or "").strip()
+            key = (source_kind, cik, concept)
+            if cik and key not in seen_keys:
+                seen_keys.add(key)
                 companyfacts.append(item)
                 continue
         remainder.append(item)
-    if len(companyfacts) < 2:
+    if not companyfacts:
         return items
     return [*companyfacts, *remainder]
 
@@ -164,6 +167,14 @@ def _source_kind_score_adjustment(metadata: dict[str, object], *, query: str = "
         if filing_text_intent:
             return -0.20
         return 0.50
+    if source_kind == "sec_companyconcept_json":
+        if submissions_intent:
+            return 0.40
+        if sec_companyfacts_intent:
+            return 1.24
+        if filing_text_intent:
+            return -0.18
+        return 0.54
     if source_kind == "sec_submissions_json":
         if filing_text_intent:
             return 1.35
@@ -232,6 +243,9 @@ def _sec_companyfacts_fact_intent(query_text: str) -> bool:
         for marker in (
             "companyfacts",
             "xbrl",
+            "debt to equity",
+            "debt/equity",
+            "debttoequity",
             "revenue",
             "revenues",
             "net sales",
@@ -242,6 +256,10 @@ def _sec_companyfacts_fact_intent(query_text: str) -> bool:
             "short term debt",
             "assets",
             "liabilities",
+            "shareholders equity",
+            "stockholders equity",
+            "shareholdersequity",
+            "stockholdersequity",
             "inventorynet",
             "costofrevenue",
             "costofgoodsandservicessold",

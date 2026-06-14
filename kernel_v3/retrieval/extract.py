@@ -378,6 +378,9 @@ def _dedupe_candidate_windows(candidates: list[dict]) -> list[dict]:
     for candidate in sorted(
         candidates,
         key=lambda item: (
+            0 if item.get("target_document_binding") or item.get("target_slot") or item.get("target_line_item") else 1,
+            -float(item.get("structured_summary_bonus") or 0.0),
+            -float(item.get("structured_finance_bonus") or 0.0),
             -float(item.get("score") or 0.0),
             int(item.get("start_offset") or 0),
             int(item.get("end_offset") or 0),
@@ -512,6 +515,7 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
                 matched = [candidate for candidate in terms if _term_in_text(snippet.lower(), candidate)]
                 if snippet and matched:
                     bonus = _transaction_amount_span_bonus(snippet, terms)
+                    structured_finance_bonus = _structured_finance_span_bonus(snippet)
                     candidates.append(
                         {
                             "start_offset": window_start,
@@ -519,11 +523,13 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
                             "text": snippet,
                             "matched_terms": matched,
                             "score": min(1.0, len(matched) / max(1, len(terms)) + bonus),
+                            "structured_finance_bonus": structured_finance_bonus,
                         }
                     )
     return sorted(
         candidates,
         key=lambda item: (
+            -float(item.get("structured_finance_bonus") or 0.0),
             -float(item["score"]),
             -len(item["matched_terms"]),
             int(item["start_offset"]),
@@ -1004,6 +1010,19 @@ def _transaction_amount_span_bonus(snippet: str, terms: list[str]) -> float:
     return 0.0
 
 
+def _structured_finance_span_bonus(snippet: str) -> float:
+    normalized = str(snippet or "").lower()
+    if "html_sentence_fact_" in normalized:
+        return 1.0
+    if "html_table_fact_" in normalized:
+        return 0.7
+    if "sec companyfacts official financial statement" in normalized:
+        return 0.7
+    if "sec companyfacts annual financial summary" in normalized:
+        return 0.6
+    return 0.0
+
+
 def _ranked_structured_line_candidates(
     text: str,
     terms: list[str],
@@ -1054,8 +1073,8 @@ def _ranked_structured_line_candidates(
     return sorted(
         candidates,
         key=lambda item: (
-            -float(item["score"]),
             -float(item.get("structured_summary_bonus") or 0.0),
+            -float(item["score"]),
             -float((item.get("finance_metric_intent") or {}).get("score") or 0.0),
             -len(item["matched_terms"]),
             int(item["start_offset"]),
@@ -1707,7 +1726,14 @@ def _strip_markup(value: str) -> str:
 def _looks_like_sec_companyfacts(body: str, *, document: FetchedDocument) -> bool:
     uri = document.uri.lower()
     title = document.title.lower()
-    if "data.sec.gov/api/xbrl/companyfacts/" in uri or "sec companyfacts" in title:
+    source_kind = _document_source_kind(document).lower()
+    if (
+        "data.sec.gov/api/xbrl/companyfacts/" in uri
+        or "data.sec.gov/api/xbrl/companyconcept/" in uri
+        or source_kind in {"sec_companyfacts_json", "sec_companyconcept_json"}
+        or "sec companyfacts" in title
+        or "sec companyconcept" in title
+    ):
         return True
     prefix = body[:4096]
     return '"facts"' in prefix and '"entityName"' in prefix and "us-gaap" in prefix
@@ -1720,6 +1746,8 @@ def _extract_sec_companyfacts_readable_text(body: str, *, goal: SearchGoal | Non
         return ""
     if not isinstance(payload, dict):
         return ""
+    if isinstance(payload.get("units"), dict) and payload.get("tag"):
+        return _extract_sec_companyconcept_readable_text(payload, goal=goal)
     facts = payload.get("facts")
     if not isinstance(facts, dict):
         return ""
@@ -1731,6 +1759,7 @@ def _extract_sec_companyfacts_readable_text(body: str, *, goal: SearchGoal | Non
         )
     ]
     lines.extend(_companyfacts_target_binding_lines(facts, entity_name=entity_name, cik=cik, goal=goal))
+    lines.extend(_companyfacts_query_focus_lines(facts, entity_name=entity_name, cik=cik, goal=goal))
     lines.extend(_companyfacts_annual_summary_lines(facts, entity_name=entity_name, cik=cik, goal=goal))
     for taxonomy_name in ("us-gaap", "ifrs-full", "dei"):
         taxonomy = facts.get(taxonomy_name)
@@ -1764,6 +1793,60 @@ def _extract_sec_companyfacts_readable_text(body: str, *, goal: SearchGoal | Non
                     )
                     if len(lines) >= STRUCTURED_LINE_LIMIT:
                         return "\n".join(lines)[:READABLE_TEXT_LIMIT]
+    return "\n".join(lines)[:READABLE_TEXT_LIMIT]
+
+
+def _extract_sec_companyconcept_readable_text(payload: dict, *, goal: SearchGoal | None = None) -> str:
+    concept = _structured_value(payload.get("tag") or "")
+    if not concept:
+        return ""
+    label = _structured_value(payload.get("label") or concept)
+    metric = _companyfacts_metric_for_concept(concept=concept, label=label)
+    if not metric:
+        return ""
+    entity_name = _structured_value(payload.get("entityName") or "")
+    cik = _structured_value(payload.get("cik") or "")
+    taxonomy_name = _structured_value(payload.get("taxonomy") or "us-gaap") or "us-gaap"
+    units = payload.get("units")
+    if not isinstance(units, dict):
+        return ""
+    intent_text = " ".join(
+        part
+        for part in (
+            goal.query if goal is not None else "",
+            _metadata_intent_text(goal.metadata) if goal is not None else "",
+        )
+        if part
+    )
+    target_years = _companyfacts_target_years(intent_text)
+    lines = [
+        _normalize_span(
+            f"SEC companyfacts official financial statements entityName={entity_name} cik={cik} source=SEC_XBRL_companyfacts"
+        )
+    ]
+    for unit, records in units.items():
+        if not isinstance(records, list):
+            continue
+        for record in _recent_companyfacts_records(records):
+            if not isinstance(record, dict):
+                continue
+            year = _companyfacts_year(record)
+            if target_years and year not in target_years:
+                continue
+            lines.append(
+                _companyfacts_record_line(
+                    entity_name=entity_name,
+                    cik=cik,
+                    taxonomy=taxonomy_name,
+                    concept=concept,
+                    metric=metric,
+                    label=label,
+                    unit=_structured_value(unit),
+                    record=record,
+                )
+            )
+            if len(lines) >= STRUCTURED_LINE_LIMIT:
+                return "\n".join(lines)[:READABLE_TEXT_LIMIT]
     return "\n".join(lines)[:READABLE_TEXT_LIMIT]
 
 
@@ -1869,6 +1952,96 @@ def _companyfacts_target_binding_lines(
     return [line for _priority, line in sorted(candidates, key=lambda item: item[0])[:24]]
 
 
+def _companyfacts_query_focus_lines(
+    facts: dict,
+    *,
+    entity_name: str,
+    cik: str,
+    goal: SearchGoal | None = None,
+) -> list[str]:
+    if goal is None:
+        return []
+    intent_text = " ".join(
+        part
+        for part in (
+            goal.query,
+            _metadata_intent_text(goal.metadata),
+        )
+        if part
+    )
+    target_metrics = _companyfacts_query_priority_metrics(intent_text)
+    if not target_metrics:
+        return []
+    target_years = _companyfacts_target_years(intent_text)
+    metric_order = {metric: index for index, metric in enumerate(target_metrics)}
+    candidates: list[tuple[tuple[int, int, float, int, int, int, str, str], str]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for taxonomy_name in ("us-gaap", "ifrs-full"):
+        taxonomy = facts.get(taxonomy_name)
+        if not isinstance(taxonomy, dict):
+            continue
+        for concept, metric in _companyfacts_concept_specs(taxonomy):
+            if metric not in metric_order:
+                continue
+            item = taxonomy.get(concept)
+            if not isinstance(item, dict):
+                continue
+            label = _structured_value(item.get("label") or concept)
+            units = item.get("units")
+            if not isinstance(units, dict):
+                continue
+            for unit, records in units.items():
+                if not isinstance(records, list):
+                    continue
+                emitted_for_concept = 0
+                for record in _recent_companyfacts_records(records):
+                    if not isinstance(record, dict) or _companyfacts_period_rank(record) < 3:
+                        continue
+                    year = _companyfacts_year(record)
+                    if target_years and year not in target_years:
+                        continue
+                    key = (
+                        taxonomy_name,
+                        concept,
+                        str(record.get("start") or ""),
+                        str(record.get("end") or ""),
+                        str(record.get("accn") or ""),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    line = _companyfacts_record_line(
+                        entity_name=entity_name,
+                        cik=cik,
+                        taxonomy=taxonomy_name,
+                        concept=concept,
+                        metric=metric,
+                        label=label,
+                        unit=_structured_value(unit),
+                        record=record,
+                    )
+                    intent_score = finance_metric_intent_score(line, query=intent_text)
+                    candidates.append(
+                        (
+                            (
+                                metric_order.get(metric, 999),
+                                0 if target_years and year in target_years else 1,
+                                -intent_score,
+                                -_companyfacts_period_rank(record),
+                                -_companyfacts_duration_days(record),
+                                -(year or 0),
+                                str(record.get("filed") or ""),
+                                concept.lower(),
+                            ),
+                            line,
+                        )
+                    )
+                    emitted_for_concept += 1
+                    if not target_years and emitted_for_concept >= 2:
+                        break
+    return [line for _priority, line in sorted(candidates, key=lambda item: item[0])[:36]]
+
+
 def _target_binding_accession(binding: JsonObject) -> str:
     doc_link = str(binding.get("doc_link") or "")
     match = re.search(r"/Archives/edgar/data/\d+/(\d{18})/", doc_link, flags=re.IGNORECASE)
@@ -1926,6 +2099,13 @@ def _companyfacts_concept_specs(taxonomy: dict) -> list[tuple[str, str]]:
     for _priority, concept, metric in dynamic[:96]:
         specs.append((concept, metric))
     return specs
+
+
+def _companyfacts_metric_for_concept(*, concept: str, label: str) -> str | None:
+    for known_concept, metric in SEC_COMPANYFACTS_CONCEPTS:
+        if concept == known_concept:
+            return metric
+    return _companyfacts_dynamic_metric(concept=concept, label=label)
 
 
 def _ordered_companyfacts_metrics(
@@ -1990,7 +2170,10 @@ def _companyfacts_dynamic_metric(*, concept: str, label: str) -> str | None:
         return "cloud and AI infrastructure investment"
     if "artificial intelligence" in lower and ("investment" in lower or "infrastructure" in lower):
         return "cloud and AI infrastructure investment"
-    if "revenue" in lower and any(marker in lower for marker in ("contract liability", "deferred revenue", "remaining performance obligation")):
+    if "revenue" in lower and (
+        any(marker in lower for marker in ("contract liability", "deferred revenue", "remaining performance obligation"))
+        or any(marker in compact for marker in ("contractwithcustomerliability", "remainingperformanceobligation"))
+    ):
         return None
     if "capitalexpenditure" in compact or ("capital" in lower and "expenditure" in lower):
         return "capital expenditures"
@@ -2019,6 +2202,10 @@ def _companyfacts_dynamic_metric(*, concept: str, label: str) -> str | None:
         return "revenue"
     if "earningspershare" in compact or "earnings per share" in lower:
         return "earnings per share"
+    if "taxespaid" in compact or "incometaxespaid" in compact:
+        return None
+    if "incometax" in compact or "income tax" in lower:
+        return "tax"
     if "netincomeloss" in compact or "net income" in lower:
         return "net income"
     if "operatingincomeloss" in compact or "operating income" in lower:
@@ -2255,6 +2442,27 @@ def _companyfacts_query_priority_metrics(query: str) -> tuple[str, ...]:
         add("operating cash flow")
     if "net interest income" in normalized:
         add("net interest income")
+    if "family of apps" in normalized or "foa" in normalized:
+        add("family of apps revenue")
+        add("segment revenue")
+        add("segment revenue from external customers")
+        add("revenue")
+    if "reality labs" in normalized:
+        add("reality labs revenue")
+        add("segment revenue")
+        add("segment revenue from external customers")
+        add("revenue")
+    if "segment revenue" in normalized or ("segment" in normalized and "revenue" in normalized):
+        add("segment revenue")
+        add("segment revenue from external customers")
+        add("revenue")
+    if (
+        ("cloud" in normalized or "ai" in normalized or "artificial intelligence" in normalized)
+        and ("infrastructure" in normalized or "investment" in normalized or "capex" in normalized)
+    ):
+        add("cloud and AI infrastructure investment")
+        add("capital expenditures")
+        add("property plant and equipment net")
     if (
         "research and development" in normalized
         or "r&d" in normalized
@@ -2270,6 +2478,9 @@ def _companyfacts_query_priority_metrics(query: str) -> tuple[str, ...]:
         add("revenue")
     if "operating margin" in normalized:
         add("operating income")
+        add("revenue")
+    if "net profit margin" in normalized or "net margin" in normalized:
+        add("net income")
         add("revenue")
     if any(alias in normalized for alias in ("total assets", "assets")):
         add("assets")
@@ -2868,6 +3079,14 @@ def _extract_html_readable_text_with_diagnostics(
     parser.close()
     parsed_text = parser.text()
     text_parts: list[str] = []
+    sentence_fact_lines = _extract_html_finance_sentence_fact_lines(
+        parsed_text,
+        body=body[:limit],
+        goal=goal,
+    )
+    if sentence_fact_lines:
+        text_parts.append("\nHTML financial sentence facts:\n")
+        text_parts.extend(f"{line}\n" for line in sentence_fact_lines)
     table_blocks = _extract_html_table_blocks(body[:limit], goal=goal, document=document)
     if table_blocks:
         text_parts.append("\nHTML table blocks:\n")
@@ -2885,6 +3104,7 @@ def _extract_html_readable_text_with_diagnostics(
     return text, {
         "parser_used": "html_readable_text",
         "chars_extracted": len(text),
+        "sentence_fact_blocks": len(sentence_fact_lines),
         "table_like_blocks": len(table_blocks),
         "market_visible_snippets": len(visible_market_snippets),
         "market_structured_snippets": len(market_snippets),
@@ -2937,6 +3157,181 @@ def _extract_html_table_blocks(
     for _rank, block in sorted(ranked, key=lambda item: item[0])[:HTML_TABLE_BLOCK_LIMIT]:
         result.extend(block)
     return result
+
+
+HTML_SENTENCE_FACT_METRICS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("net sales", ("net sales",)),
+)
+
+
+def _extract_html_finance_sentence_fact_lines(
+    parsed_text: str,
+    *,
+    body: str,
+    goal: SearchGoal | None = None,
+) -> list[str]:
+    goal_text = " ".join(
+        part
+        for part in (
+            goal.query if goal is not None else "",
+            _metadata_intent_text(goal.metadata) if goal is not None else "",
+        )
+        if part
+    )
+    focus_metrics = _html_sentence_focus_metrics(goal_text)
+    if not focus_metrics:
+        return []
+    text = _normalize_span(parsed_text)
+    if not text:
+        return []
+    lower = text.lower()
+    target_years = _companyfacts_target_years(goal_text)
+    document_scale = _html_table_scale(body) or _html_table_scale(text)
+    lines: list[str] = []
+    seen: set[tuple[str, int, str]] = set()
+    for metric, markers in HTML_SENTENCE_FACT_METRICS:
+        if metric not in focus_metrics:
+            continue
+        for marker in markers:
+            marker_lower = marker.lower()
+            for match in re.finditer(rf"(?<![a-z0-9]){re.escape(marker_lower)}(?![a-z0-9])", lower):
+                start = max(0, match.start() - 160)
+                end = min(len(text), match.end() + 360)
+                context = text[start:end]
+                if _html_sentence_fact_noise_context(context):
+                    continue
+                amount = _html_sentence_amount_after_marker(context, marker_offset=match.start() - start)
+                if amount is None:
+                    continue
+                raw_value, scale = amount
+                year = _html_sentence_fact_year(context, target_years=target_years)
+                if year is None:
+                    continue
+                fact_scale = scale or document_scale or "actual"
+                key = (metric, year, raw_value.replace(",", ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                sentence = _truncate_structured_line(context)
+                lines.append(
+                    _truncate_structured_line(
+                        f"html_sentence_fact_{len(lines) + 1}_{year}: "
+                        f"metric={metric} fy={year} value={raw_value} scale={fact_scale} sentence={sentence}"
+                    )
+                )
+                if len(lines) >= 24:
+                    return lines
+    return lines
+
+
+def _html_sentence_focus_metrics(goal_text: str) -> set[str]:
+    normalized = str(goal_text or "").lower()
+    focus: set[str] = set()
+    if "net sales" in normalized or ("net" in normalized and "sales" in normalized):
+        focus.add("net sales")
+    return focus
+
+
+def _html_sentence_amount_after_marker(context: str, *, marker_offset: int) -> tuple[str, str] | None:
+    tail = context[max(0, marker_offset):]
+    sentence_end = _html_sentence_boundary(tail)
+    if sentence_end > 0:
+        tail = tail[:sentence_end]
+    if re.search(r"\b(following table|summarizes|reportable segments|merchandise category|disaggregated revenue)\b", tail, re.IGNORECASE):
+        return None
+    if _html_sentence_fact_noise_context(tail):
+        return None
+    candidates: list[tuple[int, str, str]] = []
+    for match in re.finditer(
+        r"(?P<prefix>[$€£¥])?\s*(?P<number>\d[\d,]*(?:\.\d+)?)\s*"
+        r"(?P<unit>%|million|billion|trillion|thousand|mn|bn|m|b)?",
+        tail,
+        flags=re.IGNORECASE,
+    ):
+        raw_number = match.group("number") or ""
+        raw_unit = (match.group("unit") or "").lower()
+        prefix = match.group("prefix") or ""
+        if not raw_number or raw_unit == "%":
+            continue
+        if _candidate_year_from_column(raw_number) is not None and not prefix and not raw_unit:
+            continue
+        if not prefix and raw_unit in {"m", "b"} and match.end() < len(tail) and tail[match.end()].isalpha():
+            continue
+        if not prefix and not raw_unit and _looks_numeric_cell(raw_number) and float(raw_number.replace(",", "")) < 1000:
+            continue
+        scale = _html_sentence_unit_scale(raw_unit)
+        before = tail[max(0, match.start() - 24): match.start()].lower()
+        if not re.search(r"\b(to|were|was|totaled|amounted to|amounting to)\s*$", before):
+            continue
+        candidates.append((match.start(), raw_number, scale))
+    if not candidates:
+        return None
+    _rank, raw_number, scale = sorted(candidates, key=lambda item: item[0])[0]
+    return raw_number, scale
+
+
+def _html_sentence_fact_noise_context(text: str) -> bool:
+    normalized = str(text or "").lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "reclassified",
+            "aocl",
+            "hedge",
+            "designated hedges",
+            "net loss",
+            "gain (loss)",
+            "pro forma",
+            "supplemental pro forma",
+            "unaudited",
+            "acquisition",
+            "acquired assets",
+            "associated with the acquired assets",
+            "from the acquisition date",
+            "transaction-related costs",
+            "merger agreement",
+            "working interest",
+            "higher volumes",
+            "production and operating expenses",
+            "transportation costs",
+            "differentials",
+            "earnings decreases",
+            "earnings increased",
+            "basis points",
+        )
+    )
+
+
+def _html_sentence_boundary(text: str) -> int:
+    for match in re.finditer(r"[.;]", str(text or "")):
+        if match.start() >= 24:
+            return match.start() + 1
+    return 0
+
+
+def _html_sentence_unit_scale(unit: str) -> str:
+    normalized = str(unit or "").lower()
+    if normalized in {"thousand"}:
+        return "thousands"
+    if normalized in {"million", "mn", "m"}:
+        return "millions"
+    if normalized in {"billion", "bn", "b"}:
+        return "billions"
+    if normalized == "trillion":
+        return "trillions"
+    return ""
+
+
+def _html_sentence_fact_year(context: str, *, target_years: set[int]) -> int | None:
+    if len(target_years) == 1:
+        return next(iter(target_years))
+    years = [int(match.group(1)) for match in re.finditer(r"\b((?:19|20)\d{2})\b", context)]
+    if not years:
+        return None
+    for year in reversed(years):
+        if not target_years or year in target_years:
+            return year
+    return years[-1]
 
 
 def _html_table_extra_terms(goal_text: str) -> list[str]:
@@ -3123,8 +3518,8 @@ def _html_table_rows(fragment: str) -> list[list[str]]:
             _html_fragment_text(cell_match.group(1))
             for cell_match in re.finditer(r"<t[dh]\b[^>]*>(.*?)</t[dh]\s*>", row_html, flags=re.IGNORECASE | re.DOTALL)
         ]
-        cleaned = [_normalize_span(cell) for cell in cells if _normalize_span(cell)]
-        if cleaned:
+        cleaned = [_normalize_span(cell) for cell in cells]
+        if any(cleaned):
             rows.append(cleaned)
     return rows
 

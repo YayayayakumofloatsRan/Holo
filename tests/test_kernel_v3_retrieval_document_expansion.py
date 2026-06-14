@@ -1277,6 +1277,102 @@ def test_transaction_retrieval_reserves_fetch_budget_for_sec_document_expansion(
     assert report.diagnostics["document_expanded_source_count"] >= 1
 
 
+def test_financial_statement_line_item_reserves_budget_for_primary_10k_table_expansion():
+    submissions = SearchSource(
+        source_id="cost-submissions",
+        uri="https://data.sec.gov/submissions/CIK0000909832.json",
+        title="SEC submissions JSON for CIK 0000909832",
+        snippet="Official SEC submissions metadata and primary document chronology.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "structured_regulatory_data",
+            "authority_level": "primary",
+            "source_kind": "sec_submissions_json",
+            "sec_cik": "0000909832",
+        },
+    )
+    companyfacts = SearchSource(
+        source_id="cost-companyfacts",
+        uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000909832.json",
+        title="SEC companyfacts JSON for CIK 0000909832",
+        snippet="Official SEC XBRL companyfacts JSON.",
+        provider="sec_edgar_structured_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "structured_regulatory_data",
+            "authority_level": "primary",
+            "source_kind": "sec_companyfacts_json",
+            "sec_cik": "0000909832",
+        },
+    )
+    primary_url = "https://www.sec.gov/Archives/edgar/data/909832/000090983224000050/cost-20240901.htm"
+    query = "What was Costco's net sales for fiscal year 2024?"
+    journal = JournalStore.in_memory()
+
+    report = RetrievalOperator(
+        search_provider=FakeSearchProvider({query: [companyfacts, submissions]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                companyfacts.uri: "SEC companyfacts official financial statements entityName=Costco Wholesale Corp cik=0000909832",
+                submissions.uri: json.dumps(
+                    {
+                        "cik": "909832",
+                        "filings": {
+                            "recent": {
+                                "accessionNumber": ["0000909832-24-000050"],
+                                "form": ["10-K"],
+                                "primaryDocument": ["cost-20240901.htm"],
+                                "reportDate": ["2024-09-01"],
+                                "filingDate": ["2024-10-09"],
+                            }
+                        },
+                    }
+                ),
+                primary_url: """
+                <html><body>
+                  <h2>Consolidated Statements of Income</h2>
+                  <p>Dollars in millions.</p>
+                  <table>
+                    <tr><th></th><th>2024</th><th>2023</th><th>2022</th></tr>
+                    <tr><td>Net sales</td><td>249,625</td><td>237,710</td><td>222,730</td></tr>
+                    <tr><td>Membership fees</td><td>4,828</td><td>4,580</td><td>4,224</td></tr>
+                  </table>
+                </body></html>
+                """,
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-costco-net-sales",
+            query=query,
+            max_sources=5,
+            max_fetches=4,
+            max_spans_per_document=4,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "research_depth": "light",
+                "source_authority_requirement": "primary",
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-costco-net-sales",
+        run_id="run-1",
+    )
+
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-costco-net-sales", kind="retrieval_fetch_attempt")
+    ]
+    assert submissions.uri in fetch_uris
+    assert primary_url in fetch_uris
+    assert journal.records(task_id="task-costco-net-sales", kind="retrieval_document_expansion")
+    assert report.diagnostics["document_expanded_source_count"] >= 1
+    assert "html_table_fact" in report.preview
+    assert "metric=Net sales fy=2024 value=249,625" in report.preview
+
+
 def test_transaction_submission_prioritizes_merger_8k_over_earnings_8k():
     submissions = SearchSource(
         source_id="pfe-submissions",

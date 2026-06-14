@@ -12,6 +12,7 @@ from kernel_v3.chat.console import (
     apply_console_model_settings,
     handle_chat_line,
     handle_model_settings_command,
+    public_chat_result_payload,
     render_chat_activity,
     render_chat_result,
 )
@@ -1394,6 +1395,45 @@ def test_phase62_human_console_failure_report_renders_actionable_details():
     assert "missing: [sufficient_retrieval_evidence, retrieval_subgoal:goal-1]" in rendered
     assert "attempted: [retrieval.run, retrieval.run]" in rendered
     assert "next: refine_failed_retrieval_subgoals" in rendered
+
+
+def test_phase62_public_chat_json_compacts_large_failure_report():
+    payload = ChatRuntimeResult(
+        status="failed",
+        thread_id="thread-large-failure",
+        turn_id="turn-large-failure",
+        route="new_task",
+        task_id="task-large-failure",
+        run_id="run-1",
+        answer="short user-visible failure answer",
+        final_answer=None,
+        failure_report={
+            "reason": "model_planner_processor_failed",
+            "attempted_actions": ["retrieval.run"] * 20,
+            "attempted_sources": [f"https://example.test/source/{index}" for index in range(500)],
+            "missing_evidence": ["retrieval_evidence", "citation_refs", "sufficient_retrieval_evidence"],
+            "next_possible_action": "mission_exhausted_or_blocked",
+            "host_situation": {
+                "failure": {"diagnosis": "processor_or_planning_failure"},
+                "retrieval": {"documents": ["x" * 10000], "fetch_attempts": 500},
+            },
+        },
+        pending_question=None,
+        command_result=None,
+        summary=None,
+        trace_refs=[f"ledger-{index}" for index in range(100)],
+    )
+
+    public = public_chat_result_payload(payload)
+    encoded = json.dumps(public, ensure_ascii=False, sort_keys=True)
+
+    assert public["answer"] == "short user-visible failure answer"
+    assert public["failure_report"]["summary"]
+    assert public["failure_report"]["full_report_omitted"] is True
+    assert len(public["failure_report"]["attempted_actions"]) == 8
+    assert len(public["trace_refs"]) == 16
+    assert "source/499" not in encoded
+    assert len(encoded) < 5000
 
 
 def test_phase62_failed_agent_result_still_returns_user_visible_answer():

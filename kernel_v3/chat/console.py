@@ -98,7 +98,7 @@ def handle_chat_line(
     apply_console_model_settings(runtime, thread_id, settings_store=settings_store)
     if output_mode == "json":
         payload = runtime.receive(stripped, thread_id=thread_id)
-        print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
+        print(json.dumps(public_chat_result_payload(payload), ensure_ascii=False, sort_keys=True))
     else:
         print_chat_turn_human(runtime, stripped, thread_id=thread_id, start_index=start_index, color=color)
     sys.stdout.flush()
@@ -913,6 +913,128 @@ def chat_answer_text(data: JsonObject) -> str | None:
     return None
 
 
+def public_chat_result_payload(payload: object) -> JsonObject:
+    data = payload.to_dict() if hasattr(payload, "to_dict") else dict(payload or {})
+    answer = chat_answer_text(data) or ""
+    result: JsonObject = {
+        "status": data.get("status"),
+        "thread_id": data.get("thread_id"),
+        "turn_id": data.get("turn_id"),
+        "route": data.get("route"),
+        "task_id": data.get("task_id"),
+        "run_id": data.get("run_id"),
+        "answer": answer,
+        "pending_question": _compact_pending_question(data.get("pending_question")),
+        "final_answer": _compact_final_answer(data.get("final_answer")),
+        "failure_report": _compact_failure_report(data.get("failure_report")),
+        "command_result": _compact_command_result(data.get("command_result")),
+        "trace_refs": _string_values(data.get("trace_refs"))[:16],
+        "host_situation": _compact_public_host_situation(data.get("host_situation")),
+    }
+    return {key: value for key, value in result.items() if value not in (None, "", [], {})}
+
+
+def _compact_final_answer(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    answer = value.get("answer")
+    result: JsonObject = {
+        "answer": preview_history_text(str(answer), limit=4000) if isinstance(answer, str) and answer else None,
+        "citation_refs": _string_values(value.get("citation_refs"))[:24],
+        "confidence": value.get("confidence"),
+        "limitations": [preview_history_text(str(item), limit=360) for item in _string_values(value.get("limitations"))[:8]],
+    }
+    return {key: item for key, item in result.items() if item not in (None, "", [], {})}
+
+
+def _compact_failure_report(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    compact: JsonObject = {
+        "reason": value.get("reason"),
+        "status": value.get("status"),
+        "message": value.get("message"),
+        "summary": failure_answer_text(value),
+        "attempted_actions": _string_values(value.get("attempted_actions"))[:8],
+        "missing_evidence": _string_values(value.get("missing_evidence"))[:10],
+        "next_possible_action": value.get("next_possible_action"),
+        "user_help_needed": value.get("user_help_needed"),
+        "full_report_omitted": True,
+    }
+    return {key: item for key, item in compact.items() if item not in (None, "", [], {})}
+
+
+def _compact_pending_question(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        key: preview_history_text(str(item), limit=600) if isinstance(item, str) else item
+        for key, item in value.items()
+        if key in {"question", "source_ref", "pending_id"} and item not in (None, "", [], {})
+    }
+
+
+def _compact_command_result(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    compact: JsonObject = {}
+    for key in ("status", "reason", "message", "error"):
+        item = value.get(key)
+        if isinstance(item, str):
+            compact[key] = preview_history_text(item, limit=900)
+        elif item not in (None, "", [], {}):
+            compact[key] = item
+    return compact or None
+
+
+def _compact_public_host_situation(value: object) -> JsonObject | None:
+    if not isinstance(value, dict):
+        return None
+    compact: JsonObject = {}
+    allowed_keys = {
+        "task": {"mode", "citations_required", "complexity", "domain"},
+        "retrieval": {
+            "configured",
+            "live_search_available",
+            "live_fetch_available",
+            "network_budget_available",
+        },
+        "failure": {
+            "diagnosis",
+            "reason",
+            "next_possible_action",
+            "failure_is_permission_or_configuration_issue",
+            "failure_is_evidence_or_quality_issue",
+        },
+        "recent_activity": {
+            "retrieval_runs",
+            "search_attempts",
+            "fetch_attempts",
+            "processor_results",
+            "failed_processor_results",
+            "final_answer_records",
+            "failure_report_records",
+        },
+    }
+    for section_name, section_keys in allowed_keys.items():
+        section = value.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        compact_section: JsonObject = {}
+        for key, item in section.items():
+            if key not in section_keys:
+                continue
+            if isinstance(item, str):
+                compact_section[key] = preview_history_text(item, limit=360)
+            elif isinstance(item, list):
+                compact_section[key] = _string_values(item)[:4]
+            elif isinstance(item, (int, float, bool)) or item is None:
+                compact_section[key] = item
+        if compact_section:
+            compact[section_name] = compact_section
+    return compact or None
+
+
 def failure_answer_text(failure: JsonObject) -> str:
     reason = str(failure.get("reason") or "failed")
     attempted = failure.get("attempted_actions")
@@ -929,6 +1051,16 @@ def failure_answer_text(failure: JsonObject) -> str:
         lines.append(f"下一步：{next_action}。")
     lines.append("我不会把没有证据的内容编成答案。")
     return "\n".join(lines)
+
+
+def _string_values(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item not in (None, "")]
+    if isinstance(value, tuple):
+        return [str(item) for item in value if item not in (None, "")]
+    if isinstance(value, str) and value:
+        return [value]
+    return []
 
 
 def parse_history_limit(args: list[str], *, default: int) -> int | None:

@@ -738,7 +738,7 @@ def _finance_complementary_fact_source(*, goal: SearchGoal, evidence: EvidenceIt
     if not _finance_transaction_required_terms(goal):
         return False
     source_kind = evidence_source_kind(evidence)
-    if source_kind != "sec_companyfacts_json":
+    if source_kind not in {"sec_companyfacts_json", "sec_companyconcept_json"}:
         return False
     text = str(evidence.text or "").lower()
     if "sec_xbrl_companyfacts" not in text and "companyfacts" not in text:
@@ -767,7 +767,11 @@ def _finance_complementary_fact_source(*, goal: SearchGoal, evidence: EvidenceIt
 def _finance_target_bound_structured_fact_source(*, goal: SearchGoal, evidence: EvidenceItem) -> bool:
     source_kind = evidence_source_kind(evidence)
     uri = str(evidence.uri or "").lower()
-    if source_kind != "sec_companyfacts_json" and "data.sec.gov/api/xbrl/companyfacts/" not in uri:
+    if (
+        source_kind not in {"sec_companyfacts_json", "sec_companyconcept_json"}
+        and "data.sec.gov/api/xbrl/companyfacts/" not in uri
+        and "data.sec.gov/api/xbrl/companyconcept/" not in uri
+    ):
         return False
     text = str(evidence.text or "").lower()
     if "sec companyfacts official financial statement" not in text:

@@ -392,6 +392,83 @@ def test_finance_fact_context_ranks_metric_intent_competitors_for_model() -> Non
     assert "metric=sales and other operating revenues" in intent["matched_preferred"]
 
 
+def test_finance_fact_context_prefers_annual_fact_over_quarterly_exact_caption_for_fiscal_year() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="quarterly-net-revenues",
+            entity="Mastercard",
+            ticker="MA",
+            period="2024",
+            fiscal_year=2024,
+            metric="net revenues",
+            value="6348000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-10q",
+            evidence_ref="evidence-10q",
+            citation_ref="cite-10q",
+            metadata={
+                "source_title": "SEC 10-Q primary filing document reportDate=2024-03-31",
+                "target_document_binding_accepted": True,
+                "target_document_binding_score": 90,
+            },
+        ),
+        FinanceFact(
+            fact_id="annual-revenues",
+            entity="Mastercard",
+            ticker="MA",
+            period="annual",
+            fiscal_year=2024,
+            metric="revenue",
+            value="28167000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-companyfacts",
+            evidence_ref="evidence-companyfacts",
+            citation_ref="cite-companyfacts",
+            metadata={
+                "concept": "Revenues",
+                "label": "Revenues",
+                "form": "10-K",
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0001141391.json",
+                "target_document_binding_accepted": False,
+                "target_document_binding_score": 5,
+            },
+        ),
+        FinanceFact(
+            fact_id="annual-contract-liability-revenue",
+            entity="Mastercard",
+            ticker="MA",
+            period="annual",
+            fiscal_year=2024,
+            metric="revenue",
+            value="2800000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-companyfacts",
+            evidence_ref="evidence-contract-liability",
+            citation_ref="cite-contract-liability",
+            metadata={
+                "concept": "ContractWithCustomerLiabilityRevenueRecognized",
+                "label": "Contract with Customer, Liability, Revenue Recognized",
+                "form": "10-K",
+                "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0001141391.json",
+                "target_document_binding_accepted": False,
+                "target_document_binding_score": 5,
+            },
+        ),
+    ]
+
+    ranked = _rank_finance_facts_for_model(
+        facts,
+        question="What was Mastercard's net revenues for fiscal year 2024?",
+    )
+
+    assert ranked[0].fact_id == "annual-revenues"
+    assert ranked[0].metadata["finance_question_period_scope"] == "annual"
+    assert ranked[-1].fact_id == "quarterly-net-revenues"
+
+
 def test_companyfacts_readable_text_prioritizes_target_year_missing_slots() -> None:
     body = json.dumps(
         {
@@ -3088,8 +3165,48 @@ def test_finance_formula_planner_uses_net_income_for_net_profit_margin() -> None
     plan = plan_finance_formula(
         question="What was Apple's net profit margin for fiscal year 2024?",
         facts=[
-            _year_fact("revenue", "391035000000", 2024, fact_id="apple-revenue"),
-            _year_fact("net income", "93736000000", 2024, fact_id="apple-net-income"),
+            _year_fact(
+                "revenue",
+                "391035000000",
+                2024,
+                fact_id="apple-revenue",
+                metadata={"source": "sec_companyfacts", "form": "10-K", "fp": "FY", "end": "2024-09-28"},
+            ),
+            _year_fact(
+                "net income",
+                "36330000000",
+                2024,
+                fact_id="apple-net-income-quarterly-after-fy",
+                metadata={
+                    "source": "sec_companyfacts",
+                    "form": "10-Q",
+                    "fp": "Q1",
+                    "frame": "CY2024Q4",
+                    "end": "2024-12-28",
+                },
+            ),
+            _year_fact(
+                "net income",
+                "93736000000",
+                2024,
+                fact_id="apple-net-income",
+                metadata={"source": "sec_companyfacts", "form": "10-K", "fp": "FY", "end": "2024-09-28"},
+            ),
+            _year_fact(
+                "net income",
+                "26102000000",
+                2024,
+                fact_id="apple-income-taxes-paid-net-pollution",
+                metadata={
+                    "source": "sec_companyfacts",
+                    "concept": "IncomeTaxesPaidNet",
+                    "label": "Income Taxes Paid, Net",
+                    "form": "10-K",
+                    "fp": "FY",
+                    "end": "2024-09-28",
+                    "filed": "2025-10-31",
+                },
+            ),
             _year_fact("operating income", "123216000000", 2024, fact_id="apple-operating-income"),
         ],
     )

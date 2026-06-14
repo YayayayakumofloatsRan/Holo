@@ -45,6 +45,7 @@ from kernel_v3.chat.console import (
     chat_color_enabled,
     chat_output_mode,
     print_chat_turn_human,
+    public_chat_result_payload,
     render_chat_result,
     render_status_notice,
     run_chat_console,
@@ -1013,7 +1014,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 payload = runtime.receive(args.once, thread_id=args.thread)
-                print(json.dumps(payload.to_dict(), ensure_ascii=False, sort_keys=True))
+                print(json.dumps(public_chat_result_payload(payload), ensure_ascii=False, sort_keys=True))
             return 0 if payload.status not in {"failed", "blocked"} else 1
         return run_chat_console(
             runtime,

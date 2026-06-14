@@ -172,8 +172,10 @@ def _plan_cagr(facts: list[FinanceFact]) -> FinanceFormulaPlan:
 def _plan_yoy_growth(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
     normalized = " ".join(str(question or "").lower().split())
     markers = ("revenue", "net sales", "net income", "operating income", "ebitda")
+    predicate = None
     if "net income" in normalized or "net earnings" in normalized:
         markers = ("net income",)
+        predicate = _is_net_income_fact
     elif "operating income" in normalized:
         markers = ("operating income",)
     elif "ebitda" in normalized:
@@ -182,7 +184,7 @@ def _plan_yoy_growth(*, question: str, facts: list[FinanceFact]) -> FinanceFormu
         markers = ("net sales",)
     elif "revenue" in normalized or "revenues" in normalized:
         markers = ("revenue", "net sales", "net revenues")
-    pair = _first_metric_pair(facts, markers)
+    pair = _first_metric_pair(facts, markers, predicate=predicate)
     if pair is None:
         return _missing("yoy_growth", ["prior_period_value", "current_period_value"])
     prior, current = pair
@@ -226,7 +228,12 @@ def _plan_margin(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPl
         numerator = _latest_fact_for_year(facts, ("operating income",), target_year=target_year)
         missing_numerator = "operating_income_numerator"
     elif "net profit margin" in normalized or "net margin" in normalized or "profit margin" in normalized:
-        numerator = _latest_fact_for_year(facts, ("net income",), target_year=target_year)
+        numerator = _latest_fact_for_year(
+            facts,
+            ("net income",),
+            target_year=target_year,
+            predicate=_is_net_income_fact,
+        )
         missing_numerator = "net_income_numerator"
     else:
         numerator = _latest_fact_for_year(
@@ -297,7 +304,12 @@ def _plan_capital_intensity(*, question: str, facts: list[FinanceFact]) -> Finan
         target_year=target_year,
     )
     assets = _latest_fact_for_year(facts, ("assets", "total assets"), target_year=target_year)
-    net_income = _latest_fact_for_year(facts, ("net income",), target_year=target_year)
+    net_income = _latest_fact_for_year(
+        facts,
+        ("net income",),
+        target_year=target_year,
+        predicate=_is_net_income_fact,
+    )
     missing = []
     if capex is None:
         missing.append("capital_expenditures")
@@ -774,7 +786,7 @@ def _enterprise_value_inputs(facts: list[FinanceFact]) -> JsonObject:
 
 
 def _ebitda_component_inputs(facts: list[FinanceFact]) -> dict[str, FinanceFact]:
-    net_income = _latest_fact(facts, ("net income",))
+    net_income = _latest_fact(facts, ("net income",), predicate=_is_net_income_fact)
     interest = _latest_fact(facts, ("interest expense", "net interest income"))
     tax = _latest_fact(facts, ("tax", "income tax expense"))
     depreciation = _latest_fact(facts, ("depreciation and amortization", "d&a"))
@@ -1898,9 +1910,16 @@ def _missing(
     )
 
 
-def _first_metric_pair(facts: list[FinanceFact], markers: tuple[str, ...]) -> tuple[FinanceFact, FinanceFact] | None:
+def _first_metric_pair(
+    facts: list[FinanceFact],
+    markers: tuple[str, ...],
+    *,
+    predicate=None,
+) -> tuple[FinanceFact, FinanceFact] | None:
     by_metric: dict[str, list[FinanceFact]] = {}
     for fact in _facts_for_metric(facts, markers):
+        if predicate is not None and not predicate(fact):
+            continue
         by_metric.setdefault(_metric_key(fact), []).append(fact)
     for metric_facts in by_metric.values():
         ordered = _sort_facts(metric_facts)
@@ -1914,9 +1933,12 @@ def _latest_fact(
     markers: tuple[str, ...],
     *,
     exclude_fact_ids: set[str] | None = None,
+    predicate=None,
 ) -> FinanceFact | None:
     excluded = exclude_fact_ids or set()
     matches = [fact for fact in _facts_for_metric(facts, markers) if fact.fact_id not in excluded]
+    if predicate is not None:
+        matches = [fact for fact in matches if predicate(fact)]
     if not matches:
         return None
     return _sort_facts(matches)[-1]
@@ -1944,7 +1966,7 @@ def _latest_fact_for_year(
         ]
         if not target_matches:
             return None
-        return _sort_facts(target_matches)[-1]
+        return _sort_target_year_facts(target_matches)[-1]
     return _sort_facts(matches)[-1]
 
 
@@ -2001,10 +2023,45 @@ def _is_revenue_fact(fact: FinanceFact) -> bool:
     return any(text in exact for text in texts)
 
 
-def _revenue_fact_sort_key(fact: FinanceFact) -> tuple[int, int, Decimal, int, str, str, str]:
+def _is_net_income_fact(fact: FinanceFact) -> bool:
+    concept = _metric_text(str(fact.metadata.get("concept") or "")).replace(" ", "")
+    label = _metric_text(str(fact.metadata.get("label") or ""))
+    metric = _metric_text(fact.metric)
+    combined_compact = _metric_text(
+        f"{fact.metric} {fact.metadata.get('concept') or ''} {fact.metadata.get('label') or ''}"
+    ).replace(" ", "")
+    blocked = (
+        "incometax",
+        "incometaxes",
+        "taxexpense",
+        "taxespaid",
+        "taxpaid",
+        "deferredtax",
+        "provisionforincometaxes",
+        "beforeincometaxes",
+        "interestincome",
+        "operatingincome",
+        "noninterestincome",
+    )
+    if any(marker in combined_compact for marker in blocked):
+        return False
+    if concept in {
+        "netincomeloss",
+        "profitloss",
+        "netincomelossavailabletocommonstockholdersbasic",
+        "netincomelossattributabletoparent",
+    }:
+        return True
+    if any(marker in label for marker in ("net income", "net earnings", "net loss")):
+        return True
+    return metric in {"net income", "net earnings", "net loss"} and not concept and not label
+
+
+def _revenue_fact_sort_key(fact: FinanceFact) -> tuple[int, int, int, Decimal, int, str, str, str]:
     value = _decimal_or_none(fact.value) or Decimal(0)
     return (
         _revenue_concept_priority(fact),
+        _fact_period_priority(fact),
         _fact_source_priority(fact),
         abs(value),
         fact.fiscal_year or 0,
@@ -2026,17 +2083,21 @@ def _revenue_concept_priority(fact: FinanceFact) -> int:
         "tax",
         "segment",
     )
+    if "totalrevenuesandotherincome" in concept.replace(" ", "") or (
+        "revenue" in label and "other income" in label
+    ):
+        return 5
     if any(marker in label or marker in concept for marker in demoted_markers):
         return -10
     primary_concepts = {
+        "salesandotheroperatingrevenue": 104,
+        "operatingrevenues": 102,
         "revenues": 100,
         "revenuefromcontractwithcustomerexcludingassessedtax": 98,
         "revenuefromcontractwithcustomerincludingassessedtax": 96,
         "salesrevenuegoodsnet": 94,
         "salesrevenueservicesnet": 92,
         "salesrevenuenet": 90,
-        "salesandotheroperatingrevenue": 88,
-        "operatingrevenues": 86,
     }
     compact_concept = concept.replace(" ", "")
     if compact_concept in primary_concepts:
@@ -2175,6 +2236,43 @@ def _sort_unique_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
         if current is None or _fact_specificity(fact) >= _fact_specificity(current):
             selected[key] = fact
     return _sort_facts(list(selected.values()))
+
+
+def _sort_target_year_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
+    return sorted(
+        facts,
+        key=lambda fact: (
+            _fact_period_priority(fact),
+            _fact_source_priority(fact),
+            _fact_specificity(fact),
+            fact.fiscal_year or 0,
+            str(fact.metadata.get("end") or ""),
+            str(fact.metadata.get("filed") or ""),
+            str(fact.period or ""),
+            fact.fact_id,
+        ),
+    )
+
+
+def _fact_period_priority(fact: FinanceFact) -> int:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    form = str(metadata.get("form") or "").upper().replace(" ", "")
+    fp = str(metadata.get("fp") or "").upper().replace(" ", "")
+    frame = str(metadata.get("frame") or "").upper().replace(" ", "")
+    period = str(fact.period or metadata.get("period") or "").strip().lower()
+    if period in {"quarterly", "quarter", "qtr"} or form == "10-Q" or fp.startswith("Q") or re.search(r"CY\d{4}Q\d", frame):
+        return 1
+    if (
+        period in {"annual", "year", "yearly"}
+        or period.startswith("fy")
+        or re.fullmatch(r"(?:19|20)\d{2}", period)
+        or form in {"10-K", "20-F", "40-F"}
+        or fp == "FY"
+    ):
+        return 4
+    if period in {"ttm", "trailing twelve months", "ltm", "last twelve months"}:
+        return 3
+    return 2
 
 
 def _fact_specificity(fact: FinanceFact) -> int:
