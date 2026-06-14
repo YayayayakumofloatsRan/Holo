@@ -1010,9 +1010,7 @@ class AgentRuntime:
             synthesizer_mode=synthesizer_mode,
             recipe=recipe,
         )
-        strict_llm_judgment = _llm_semantic_judgment_required(recipe) or (
-            synthesizer_mode == "model" and _finance_numeric_verifier_required(recipe)
-        )
+        strict_llm_judgment = _llm_semantic_judgment_required(recipe)
         if synthesized.status != "ok" or synthesized.answer is None:
             if strict_llm_judgment:
                 rescued_final = self._attempt_compact_llm_finance_synthesis_rescue(

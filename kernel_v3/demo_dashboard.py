@@ -1321,11 +1321,31 @@ def _processor_meta(data: Json, usage: Json | None = None) -> str:
         parts.append(f"{data.get('duration_ms')} ms")
     if usage:
         parts.append(f"{usage.get('total_tokens', '-')} tokens")
+        cache = _processor_cache_meta(usage)
+        if cache:
+            parts.append(cache)
     if params.get("thinking"):
         parts.append(f"thinking {params.get('thinking')}")
     if params.get("latency_target"):
         parts.append(f"latency {params.get('latency_target')}")
     return " | ".join(part for part in parts if part)
+
+
+def _processor_cache_meta(usage: Json) -> str:
+    hit = _safe_int(usage.get("prompt_cache_hit_tokens"))
+    miss = _safe_int(usage.get("prompt_cache_miss_tokens"))
+    if "prompt_cache_hit_tokens" not in usage and "prompt_cache_miss_tokens" not in usage:
+        return ""
+    denom = hit + miss
+    ratio = f"{(hit / denom) * 100:.1f}%" if denom > 0 else "-"
+    return f"cache {ratio}"
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _processor_output_body(output: Json, error: object) -> str:

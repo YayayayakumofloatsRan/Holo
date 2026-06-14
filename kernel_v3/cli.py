@@ -3931,7 +3931,7 @@ def _chat_live_model_block(args) -> JsonObject | None:
     if str(os.environ.get("DEEPSEEK_API_KEY", "") or "").strip():
         return None
     if os.environ.get("HOLO_V3_LIVE_MODEL") == "1":
-        return {"status": "blocked", "reason": "missing_deepseek_api_key"}
+        return None
     return {"status": "blocked", "reason": "live_model_not_enabled"}
 
 

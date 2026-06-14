@@ -84,6 +84,10 @@ evidence, demo status, known gaps, and near-term roadmap, see
 `docs/KERNEL_V3_PROJECT_STATUS_2026-06-14_ZH.md`. For a compact Chinese talk
 track and Q&A notes prepared for the recorded Windows browser demo, see
 `docs/KERNEL_V3_DEMO_TALK_NOTES_2026-06-14_ZH.md`.
+The first 2026-06-14 general-capability line, covering DeepSeek cache
+discipline, stable context ordering, managed memory context, and general
+agent-gauntlet priorities, is tracked in
+`docs/KERNEL_V3_GENERAL_CAPABILITY_LINE1_2026-06-14_ZH.md`.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

@@ -61,7 +61,12 @@ def rank_sources(
             )
         )
     ordered = sorted(ranked, key=lambda item: (-item.score, item.source_id))
-    if _is_finance_profile(research_profile) and _sec_companyfacts_fact_intent(goal.query):
+    ranking_intent = _ranking_intent_text(goal)
+    if (
+        _is_finance_profile(research_profile)
+        and _sec_companyfacts_fact_intent(ranking_intent)
+        and not _sec_filing_text_intent(ranking_intent)
+    ):
         ordered = _prioritize_distinct_companyfacts(ordered)
     return [
         RankedSource(

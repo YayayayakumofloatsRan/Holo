@@ -868,9 +868,25 @@ def processor_usage_tail(usage: JsonObject) -> str:
     total = usage.get("total_tokens")
     prompt = usage.get("prompt_tokens")
     completion = usage.get("completion_tokens")
-    if total is None and prompt is None and completion is None:
+    cache_hit = usage.get("prompt_cache_hit_tokens")
+    cache_miss = usage.get("prompt_cache_miss_tokens")
+    if total is None and prompt is None and completion is None and cache_hit is None and cache_miss is None:
         return ""
-    return f" tokens={total or '-'} prompt={prompt or '-'} completion={completion or '-'}"
+    tail = f" tokens={total or '-'} prompt={prompt or '-'} completion={completion or '-'}"
+    if cache_hit is not None or cache_miss is not None:
+        hit = _safe_int(cache_hit)
+        miss = _safe_int(cache_miss)
+        denom = hit + miss
+        ratio = f"{(hit / denom) * 100:.1f}%" if denom > 0 else "-"
+        tail += f" cache_hit={hit} cache_miss={miss} cache_ratio={ratio}"
+    return tail
+
+
+def _safe_int(value: object) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def compact_list(value: object, *, limit: int = 3) -> str:
@@ -931,7 +947,7 @@ def public_chat_result_payload(payload: object) -> JsonObject:
         "trace_refs": _string_values(data.get("trace_refs"))[:16],
         "host_situation": _compact_public_host_situation(data.get("host_situation")),
     }
-    return {key: value for key, value in result.items() if value not in (None, "", [], {})}
+    return {key: value for key, value in result.items() if key == "pending_question" or value not in (None, "", [], {})}
 
 
 def _compact_final_answer(value: object) -> JsonObject | None:

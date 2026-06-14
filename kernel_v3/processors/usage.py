@@ -27,12 +27,25 @@ def coerce_usage(value: object, *, prompt: str = "", completion: str = "") -> Js
         total_tokens = _int(value.get("total_tokens"))
         if total_tokens <= 0:
             total_tokens = prompt_tokens + completion_tokens
-        return {
+        usage: JsonObject = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
             "estimated": bool(value.get("estimated", False)),
         }
+        cache_hit = _int(value.get("prompt_cache_hit_tokens"))
+        cache_miss = _int(value.get("prompt_cache_miss_tokens"))
+        if (
+            "prompt_cache_hit_tokens" in value
+            or "prompt_cache_miss_tokens" in value
+            or cache_hit > 0
+            or cache_miss > 0
+        ):
+            usage["prompt_cache_hit_tokens"] = cache_hit
+            usage["prompt_cache_miss_tokens"] = cache_miss
+            cache_total = cache_hit + cache_miss
+            usage["prompt_cache_hit_ratio"] = round(cache_hit / cache_total, 4) if cache_total > 0 else 0.0
+        return usage
     return usage_from_text(prompt=prompt, completion=completion)
 
 
