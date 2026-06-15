@@ -154,6 +154,14 @@ Observed issues from live smoke:
 - Finance retrieval payload defaults now preserve per-payload `source_authority_requirement`. A mixed research plan can keep primary-source requirements for revenue/margin branches while allowing `secondary_or_better` for competitive-landscape branches.
 - Verification extension: `.venv/bin/python -m pytest tests/test_kernel_v3_phase87_research_profile_runtime.py tests/test_kernel_v3_phase94_capability_space_and_long_loop.py tests/test_kernel_v3_phase108_semantic_answer_state_space.py` passed 34/34.
 
+2026-06-15 follow-up:
+
+- Provider-side direct/semantic/system context now uses a lightweight prompt view: full journal state remains available for trace/UI, while the model prompt omits retrieval-only workbench fields, full semantic state-space/profile payloads, duplicate answer/research/workmethod blocks, and long static capability/host-rule text.
+- Local prompt drill on direct chat showed planner prompt chars reduced from about 43k to 33k and evaluator prompt chars from about 24k to 14k, without changing the LLM-owned planner/evaluator loop.
+- Low-cost live smoke repeated with the same command family on DeepSeek: 2/2 passed, total tokens 47,412, prompt cache hit tokens 27,776, prompt cache miss tokens 18,955, cache hit ratio 59.4381%, tool coverage `system.time`; artifacts at `.state/kernel_v3/bench/general/live_cache_smoke_20260615_v2.*`.
+- Compared with the 2026-06-14 post-fix smoke, total tokens fell from 60,616 to 47,412 and cache hit ratio rose from 26.9195% to 59.4381%. Per-case prompt tokens fell from 29,614 to 23,287 for direct chat and from 30,298 to 23,444 for system time.
+- Verification extension: `.venv/bin/python -m pytest tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_phase108_semantic_answer_state_space.py tests/test_kernel_v3_phase120_host_situation.py` passed 66/66; `.venv/bin/python -m pytest tests/test_kernel_v3_phase87_research_profile_runtime.py tests/test_kernel_v3_phase94_capability_space_and_long_loop.py` passed 31/31; `.venv/bin/python -m pytest tests/test_kernel_v3_execution_profile.py tests/test_kernel_v3_general_capability_gauntlet.py` passed 23/23.
+
 ## 成功指标
 
 短期应记录：

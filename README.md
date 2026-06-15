@@ -89,6 +89,10 @@ discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in
 `docs/KERNEL_V3_GENERAL_CAPABILITY_LINE1_2026-06-14_ZH.md`. Kernel v3 now has
 a native general gauntlet entry at `python -m kernel_v3.cli bench general`.
+The 2026-06-15 prompt-economy follow-up keeps full journal trace state while
+using a lighter provider prompt for direct/semantic/system turns; the low-cost
+DeepSeek live smoke passed 2/2 with total tokens reduced from 60,616 to 47,412
+and cache hit ratio improved from 26.9195% to 59.4381%.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

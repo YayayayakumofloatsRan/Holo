@@ -356,6 +356,9 @@ def _compact_context_state_for_provider(state: JsonObject) -> JsonObject:
     full retrieval graph on every loop iteration.
     """
 
+    recipe = _json_object(state.get("agent_recipe"))
+    mode = str(recipe.get("mode") or "")
+    lightweight = mode in {"direct_answer", "semantic_answer", "system_answer", "clarify_first"}
     result: JsonObject = {}
     for key in (
         "task_id",
@@ -366,26 +369,33 @@ def _compact_context_state_for_provider(state: JsonObject) -> JsonObject:
     ):
         if key in state:
             result[key] = _compact_prompt_value(state[key])
-    result["host_situation"] = _compact_prompt_value(state.get("host_situation"))
-    result["agent_recipe"] = _compact_agent_recipe_for_provider(_json_object(state.get("agent_recipe")))
+    result["host_situation"] = _compact_host_situation_for_provider(
+        _json_object(state.get("host_situation")),
+        lightweight=lightweight,
+    )
+    result["agent_recipe"] = _compact_agent_recipe_for_provider(recipe, lightweight=lightweight)
     result["agent_runtime_directive"] = _compact_runtime_directive_for_provider(
-        _json_object(state.get("agent_runtime_directive"))
+        _json_object(state.get("agent_runtime_directive")),
+        lightweight=lightweight,
     )
     result["capability_catalog"] = _compact_capability_catalog_for_provider(
-        _json_object(state.get("capability_catalog"))
+        _json_object(state.get("capability_catalog")),
+        lightweight=lightweight,
     )
-    result["retrieval_capability_state"] = _compact_prompt_value(state.get("retrieval_capability_state"))
-    result["agent_retrieval_plan_state"] = _compact_prompt_value(state.get("agent_retrieval_plan_state"))
-    result["agent_replan_hints"] = _compact_replan_hints_for_provider(
-        _json_object(state.get("agent_replan_hints"))
-    )
+    if not lightweight:
+        result["retrieval_capability_state"] = _compact_prompt_value(state.get("retrieval_capability_state"))
+        result["agent_retrieval_plan_state"] = _compact_prompt_value(state.get("agent_retrieval_plan_state"))
+        result["agent_replan_hints"] = _compact_replan_hints_for_provider(
+            _json_object(state.get("agent_replan_hints"))
+        )
     result["mission_context"] = _compact_prompt_value(state.get("mission_context"))
     result["thread_working_context"] = _compact_prompt_value(state.get("thread_working_context"))
     result["thread_rag_context"] = _compact_prompt_value(state.get("thread_rag_context"))
     result["durable_memory_context"] = _compact_prompt_value(state.get("durable_memory_context"))
-    result["answer_profile"] = _compact_prompt_value(state.get("answer_profile"))
-    result["research_mission"] = _compact_prompt_value(state.get("research_mission"))
-    result["workmethod"] = _compact_prompt_value(state.get("workmethod"))
+    if not lightweight:
+        result["answer_profile"] = _compact_prompt_value(state.get("answer_profile"))
+        result["research_mission"] = _compact_prompt_value(state.get("research_mission"))
+        result["workmethod"] = _compact_prompt_value(state.get("workmethod"))
     result["sections"] = _compact_sections_for_provider(state.get("sections"))
     result["source_refs"] = _string_list(state.get("source_refs"))[-16:]
     result["memory_refs"] = _string_list(state.get("memory_refs"))[-16:]
@@ -394,23 +404,92 @@ def _compact_context_state_for_provider(state: JsonObject) -> JsonObject:
     result["semantic_state_profile_summary"] = _compact_prompt_value(
         state.get("semantic_state_profile_summary")
     )
-    result["semantic_state_profiles"] = _compact_list_for_provider(
-        state.get("semantic_state_profiles"),
-        limit=1,
-    )
-    result["semantic_state_space"] = _compact_state_space_for_provider(
-        _json_object(state.get("semantic_state_space"))
-    )
+    if not lightweight:
+        result["semantic_state_profiles"] = _compact_list_for_provider(
+            state.get("semantic_state_profiles"),
+            limit=1,
+        )
+        result["semantic_state_space"] = _compact_state_space_for_provider(
+            _json_object(state.get("semantic_state_space"))
+        )
     result["research_source_directory"] = _compact_research_source_directory_for_provider(
         state.get("research_source_directory")
     )
     return {key: value for key, value in result.items() if value not in ({}, [], None)}
 
 
-def _compact_agent_recipe_for_provider(recipe: JsonObject) -> JsonObject:
+def _compact_host_situation_for_provider(value: JsonObject, *, lightweight: bool) -> JsonObject:
+    if not lightweight:
+        return _compact_prompt_value(value)
+    permissions = _json_object(value.get("permissions"))
+    tools = _json_object(value.get("tools"))
+    retrieval = _json_object(value.get("retrieval"))
+    runtime = _json_object(value.get("runtime_capabilities"))
+    recent = _json_object(value.get("recent_activity"))
+    failure = _json_object(value.get("failure"))
+    holo_system = _json_object(value.get("holo_system"))
+    runtime_retrieval = _json_object(runtime.get("retrieval"))
+    return {
+        "schema": value.get("schema"),
+        "holo_system": {
+            "name": holo_system.get("name"),
+            "role": holo_system.get("role"),
+            "operating_principle": holo_system.get("operating_principle"),
+        },
+        "task": _compact_simple_dict(value.get("task"), limit=10),
+        "permissions": {
+            "allowed_tools": _string_list(permissions.get("allowed_tools"))[:8],
+            "allowed_permissions": _string_list(permissions.get("allowed_permissions"))[:8],
+            "limits": _compact_simple_dict(permissions.get("limits"), limit=8),
+            "permission_profile": permissions.get("permission_profile"),
+        },
+        "tools": {
+            "available_tool_names": _string_list(tools.get("available_tool_names"))[:8],
+            "network_tool_names": _string_list(tools.get("network_tool_names"))[:8],
+        },
+        "retrieval": {
+            "allowed_by_recipe": retrieval.get("allowed_by_recipe"),
+            "configured": retrieval.get("configured"),
+            "live_search_available": retrieval.get("live_search_available"),
+            "network_budget_available": retrieval.get("network_budget_available"),
+            "max_network_fetches": retrieval.get("max_network_fetches"),
+            "reason": retrieval.get("reason"),
+        },
+        "runtime_capabilities": {
+            "retrieval": {
+                "available_if_routed": runtime_retrieval.get("available_if_routed"),
+                "live_search_available": runtime_retrieval.get("live_search_available"),
+                "network_access": runtime_retrieval.get("network_access"),
+            },
+            "memory": _compact_simple_dict(runtime.get("memory"), limit=4),
+            "system": _compact_simple_dict(runtime.get("system"), limit=4),
+            "workspace": _compact_simple_dict(runtime.get("workspace"), limit=4),
+        },
+        "recent_activity": {
+            "attempted_actions": _string_list(recent.get("attempted_actions"))[-6:],
+            "latest_termination_decision": recent.get("latest_termination_decision"),
+            "latest_termination_reason": recent.get("latest_termination_reason"),
+            "latest_processor_error": recent.get("latest_processor_error"),
+            "retrieval_runs": recent.get("retrieval_runs"),
+            "tool_observations": _compact_list_for_provider(recent.get("tool_observations"), limit=4),
+        },
+        "failure": {
+            "diagnosis": failure.get("diagnosis"),
+            "reason": failure.get("reason"),
+            "retrieval_attempted": failure.get("retrieval_attempted"),
+            "missing_evidence": _string_list(failure.get("missing_evidence"))[:8],
+        },
+        "user_visible_rules": [
+            "Current recipe tools and runtime capabilities are different; tools require host routing and policy validation.",
+            "Do not claim retrieval is unavailable when runtime_capabilities.retrieval says it is available_if_routed.",
+        ],
+    }
+
+
+def _compact_agent_recipe_for_provider(recipe: JsonObject, *, lightweight: bool = False) -> JsonObject:
     metadata = _json_object(recipe.get("metadata"))
     execution = _json_object(metadata.get("execution_metadata"))
-    return {
+    data = {
         "recipe_id": recipe.get("recipe_id"),
         "mode": recipe.get("mode"),
         "allowed_tools": _string_list(recipe.get("allowed_tools"))[:16],
@@ -428,15 +507,17 @@ def _compact_agent_recipe_for_provider(recipe: JsonObject) -> JsonObject:
             "thread_id": metadata.get("thread_id"),
             "allowed_permissions": _string_list(execution.get("allowed_permissions"))[:16],
             "semantic_intake": _compact_prompt_value(metadata.get("semantic_intake")),
-            "task_execution_plan": _compact_prompt_value(metadata.get("task_execution_plan")),
-            "answer_profile": _compact_prompt_value(metadata.get("answer_profile")),
-            "research_mission": _compact_prompt_value(metadata.get("research_mission")),
         },
     }
+    if not lightweight:
+        data["metadata"]["task_execution_plan"] = _compact_prompt_value(metadata.get("task_execution_plan"))
+        data["metadata"]["answer_profile"] = _compact_prompt_value(metadata.get("answer_profile"))
+        data["metadata"]["research_mission"] = _compact_prompt_value(metadata.get("research_mission"))
+    return data
 
 
-def _compact_runtime_directive_for_provider(directive: JsonObject) -> JsonObject:
-    return {
+def _compact_runtime_directive_for_provider(directive: JsonObject, *, lightweight: bool = False) -> JsonObject:
+    data = {
         "mode": directive.get("mode"),
         "initial_action": _compact_prompt_value(directive.get("initial_action")),
         "required_first_action": _compact_prompt_value(directive.get("required_first_action")),
@@ -445,23 +526,25 @@ def _compact_runtime_directive_for_provider(directive: JsonObject) -> JsonObject
         "forbidden": _string_list(directive.get("forbidden"))[:16],
         "tool_selection": _compact_list_for_provider(
             directive.get("tool_selection"),
-            limit=6,
+            limit=2 if lightweight else 6,
         ),
         "allowed_non_tool_actions": _compact_list_for_provider(
             directive.get("allowed_non_tool_actions"),
-            limit=4,
+            limit=2 if lightweight else 4,
         ),
         "search_strategy_hint": _compact_prompt_value(directive.get("search_strategy_hint")),
-        "answer_profile": _compact_prompt_value(directive.get("answer_profile")),
         "final_answer_contract": _compact_prompt_value(directive.get("final_answer_contract")),
         "interaction_preferences": _compact_prompt_value(directive.get("interaction_preferences")),
-        "research_mission": _compact_prompt_value(directive.get("research_mission")),
         "active_memory": _compact_prompt_value(directive.get("active_memory")),
-        "workmethod": _compact_prompt_value(directive.get("workmethod")),
     }
+    if not lightweight:
+        data["answer_profile"] = _compact_prompt_value(directive.get("answer_profile"))
+        data["research_mission"] = _compact_prompt_value(directive.get("research_mission"))
+        data["workmethod"] = _compact_prompt_value(directive.get("workmethod"))
+    return data
 
 
-def _compact_capability_catalog_for_provider(catalog: JsonObject) -> JsonObject:
+def _compact_capability_catalog_for_provider(catalog: JsonObject, *, lightweight: bool = False) -> JsonObject:
     capabilities = catalog.get("capabilities") if isinstance(catalog.get("capabilities"), list) else []
     allowed = set(_string_list(catalog.get("allowed_tools")))
     relevant: list[JsonObject] = []
@@ -471,10 +554,14 @@ def _compact_capability_catalog_for_provider(catalog: JsonObject) -> JsonObject:
         status = str(item.get("status") or "")
         tool_name = str(item.get("tool_name") or "")
         capability_id = str(item.get("capability_id") or "")
-        if status == "enabled" or tool_name in allowed or any(
-            marker in capability_id
-            for marker in ("retrieval", "finance", "memory", "workspace", "system")
-        ):
+        if lightweight:
+            include = tool_name in allowed or (not tool_name and status == "enabled")
+        else:
+            include = status == "enabled" or tool_name in allowed or any(
+                marker in capability_id
+                for marker in ("retrieval", "finance", "memory", "workspace", "system")
+            )
+        if include:
             relevant.append(
                 {
                     "capability_id": capability_id,
@@ -485,7 +572,7 @@ def _compact_capability_catalog_for_provider(catalog: JsonObject) -> JsonObject:
                     "permissions_required": _string_list(item.get("permissions_required"))[:8],
                 }
             )
-        if len(relevant) >= 20:
+        if len(relevant) >= (8 if lightweight else 20):
             break
     return {
         "version": catalog.get("version"),
@@ -495,7 +582,11 @@ def _compact_capability_catalog_for_provider(catalog: JsonObject) -> JsonObject:
         "family_keys": list(_json_object(catalog.get("families")).keys())[:24],
         "capabilities": relevant,
         "capability_count": len(capabilities),
-        "host_rule": catalog.get("host_rule"),
+        "host_rule": (
+            "Only allowed_tools are executable in the current recipe; the host validates all tool use."
+            if lightweight
+            else catalog.get("host_rule")
+        ),
     }
 
 
@@ -602,6 +693,18 @@ def _compact_list_for_provider(value: object, *, limit: int) -> list[object]:
     if not isinstance(value, list):
         return []
     return [_compact_prompt_value(item) for item in value[: max(0, limit)]]
+
+
+def _compact_simple_dict(value: object, *, limit: int) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    compact: JsonObject = {}
+    for key, item in list(value.items())[: max(0, limit)]:
+        if isinstance(item, (dict, list)):
+            compact[str(key)] = _compact_prompt_value(item)
+        elif item not in (None, "", [], {}):
+            compact[str(key)] = item
+    return compact
 
 
 def _task_goal_from_report(report: RetrievalReport) -> str:
