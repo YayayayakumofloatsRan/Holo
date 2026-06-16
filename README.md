@@ -84,6 +84,12 @@ evidence, demo status, known gaps, and near-term roadmap, see
 `docs/KERNEL_V3_PROJECT_STATUS_2026-06-14_ZH.md`. For a compact Chinese talk
 track and Q&A notes prepared for the recorded Windows browser demo, see
 `docs/KERNEL_V3_DEMO_TALK_NOTES_2026-06-14_ZH.md`.
+For the current 2026-06-16 finance problem-solving scoreboard and the live
+rerun blocker, see
+`docs/KERNEL_V3_FINANCE_RESULTS_SNAPSHOT_2026-06-16.md`. It separates
+evidence-backed results, such as FinAgent full40 `38/40` live and `39/40`
+rescored, from FinanceBench held-out results that still require a fresh
+`test100` run after model credentials are available.
 The 2026-06-16 framework review is consolidated in
 `docs/KERNEL_V3_FRAMEWORK_LESSONS_FINAL_2026-06-16_ZH.md`; use it as the primary
 report and talk reference for what Holo should absorb from LangChain,
