@@ -2256,6 +2256,12 @@ Margin planning also accepts more statement-level revenue denominator variants
 already preserved by the fact ledger, including `sales and other operating
 revenues`, `operating revenues`, `net revenue`, and related SEC revenue
 concepts, while keeping deferred/contract-liability/segment pollution blocked.
+Incorrect-premise finance questions now get a weak `question_numeric_premise`
+hint path: question-embedded currency/scale/percent figures are compared against
+supported FinanceFact and FormulaTrace values and exposed to synthesis and
+`finance.numeric_judge`, so the LLM can state a corrected actual value when the
+evidence contradicts the premise. The host only carries the hint; it does not
+decide the semantic answer.
 
 ## Validation
 

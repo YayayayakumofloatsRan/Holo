@@ -14147,6 +14147,10 @@ def _report_with_finance_fact_context(
     if metric_intent_hints:
         diagnostics["finance_metric_intent_hints"] = metric_intent_hints
         diagnostics["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
+    premise_hints = _finance_question_numeric_premise_hints(question=question, facts=facts[:64], formula_traces=[])
+    if premise_hints:
+        diagnostics["finance_question_numeric_premise_hints"] = premise_hints
+        diagnostics["finance_question_numeric_premise_hint_policy"] = _finance_question_numeric_premise_hint_policy()
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
         "host_role": "expose raw candidate facts, concepts, labels, periods, provenance, and verification only",
@@ -14304,6 +14308,14 @@ def _compact_finance_synthesis_rescue_packet(
     if metric_intent_hints:
         diagnostics["finance_metric_intent_hints"] = metric_intent_hints
         diagnostics["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
+    premise_hints = _finance_question_numeric_premise_hints(
+        question=question,
+        facts=facts[:64],
+        formula_traces=synthesis_traces[:12],
+    )
+    if premise_hints:
+        diagnostics["finance_question_numeric_premise_hints"] = premise_hints
+        diagnostics["finance_question_numeric_premise_hint_policy"] = _finance_question_numeric_premise_hint_policy()
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
         "host_role": "expose compact raw candidate facts; the model chooses the answer",
@@ -15929,6 +15941,292 @@ def _finance_metric_intent_hints_from_diagnostics_or_facts(
     return _finance_metric_intent_hints_for_model(facts)
 
 
+_QUESTION_NUMERIC_PREMISE_PATTERN = re.compile(
+    r"(?P<prefix>[$€£¥])?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>%|bps|basis\s+points|usd\s+million|usd\s+millions|usd\s+billion|usd\s+billions|"
+    r"million|billion|trillion|thousand|mn|bn|m|b|x|亿|万)?",
+    re.IGNORECASE,
+)
+
+
+def _finance_question_numeric_premise_hint_policy() -> JsonObject:
+    return {
+        "semantic_decision_owner": "model",
+        "host_role": "weak_attention_hint_carrier_only",
+        "candidate_ordering": "question_order",
+        "instruction": (
+            "Use finance_question_numeric_premise_hints only to notice numeric claims embedded in the question that may be "
+            "supported, stale, wrong, or irrelevant. The hint compares question numbers with nearby supported fact/formula values; "
+            "it does not decide the answer. If evidence contradicts a premise, state the corrected actual value with citations."
+        ),
+    }
+
+
+def _finance_question_numeric_premise_hints_from_diagnostics_or_facts(
+    diagnostics: JsonObject,
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    formula_traces: list[FormulaTrace],
+) -> list[JsonObject]:
+    diagnostic_hints = [
+        dict(item)
+        for item in list(diagnostics.get("finance_question_numeric_premise_hints") or [])
+        if isinstance(item, dict)
+    ][:12]
+    if diagnostic_hints:
+        return diagnostic_hints
+    return _finance_question_numeric_premise_hints(question=question, facts=facts, formula_traces=formula_traces)
+
+
+def _finance_question_numeric_premise_hints(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    formula_traces: list[FormulaTrace],
+    limit: int = 12,
+) -> list[JsonObject]:
+    candidates = _finance_question_numeric_premise_candidates(question)
+    if not candidates:
+        return []
+    support_values = _finance_premise_support_values(facts=facts, formula_traces=formula_traces)
+    if not support_values:
+        return []
+    hints: list[JsonObject] = []
+    for candidate in candidates:
+        closest = _finance_closest_premise_support(candidate, support_values)
+        if not closest or closest.get("relation") == "exact_match":
+            continue
+        hints.append(
+            {
+                "question_number": candidate.get("raw"),
+                "raw": candidate.get("raw"),
+                "value": candidate.get("value"),
+                "unit": candidate.get("unit"),
+                "context": candidate.get("context"),
+                "relation_to_supported_values": closest.get("relation"),
+                "closest_supported_value": closest.get("support"),
+                "host_role": "advisory_question_numeric_attention_only",
+            }
+        )
+        if len(hints) >= limit:
+            break
+    return hints
+
+
+def _finance_question_numeric_premise_candidates(question: str) -> list[JsonObject]:
+    text = str(question or "")
+    result: list[JsonObject] = []
+    for match in _QUESTION_NUMERIC_PREMISE_PATTERN.finditer(text):
+        raw_number = str(match.group("number") or "")
+        raw_unit = str(match.group("unit") or "")
+        prefix = str(match.group("prefix") or "")
+        unit = _finance_premise_normalized_unit(raw_unit or prefix)
+        if _finance_premise_ambiguous_compact_unit(text, match, raw=raw_number, unit=raw_unit, prefix=prefix):
+            continue
+        value = _finance_premise_scaled_decimal(raw_number, raw_unit or prefix)
+        if value is None or _finance_premise_looks_like_year(value):
+            continue
+        if not _finance_premise_material_number(text, match.start("number"), match.end("number"), value=value, unit=unit, prefix=prefix):
+            continue
+        result.append(
+            {
+                "raw": match.group(0).strip(),
+                "value": _decimal_string_runtime(value),
+                "unit": unit,
+                "context": _text_preview(
+                    text[max(0, match.start("number") - 80) : min(len(text), match.end("number") + 80)],
+                    limit=180,
+                ),
+            }
+        )
+    return result[:24]
+
+
+def _finance_premise_support_values(
+    *,
+    facts: list[FinanceFact],
+    formula_traces: list[FormulaTrace],
+) -> list[JsonObject]:
+    values: list[JsonObject] = []
+    for fact in facts[:96]:
+        value = _decimal_or_none_runtime(fact.value)
+        if value is None:
+            continue
+        base = {
+            "kind": "finance_fact",
+            "ref": fact.fact_id,
+            "metric": fact.metric,
+            "unit": _finance_premise_normalized_unit(fact.unit or ""),
+            "fiscal_year": fact.fiscal_year,
+            "citation_ref": fact.citation_ref,
+        }
+        values.extend(_finance_premise_display_values(value, base))
+    for trace in formula_traces[:24]:
+        value = _decimal_or_none_runtime(trace.result_value)
+        if value is None:
+            continue
+        diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+        base = {
+            "kind": "formula_trace",
+            "ref": trace.formula_id,
+            "formula_name": trace.formula_name,
+            "unit": _finance_premise_normalized_unit(trace.unit or ""),
+            "formatted_value": diagnostics.get("formatted_value"),
+        }
+        values.extend(_finance_premise_display_values(value, base))
+    return values[:512]
+
+
+def _finance_premise_display_values(value: Decimal, base: JsonObject) -> list[JsonObject]:
+    values: list[JsonObject] = [{**base, "value": _decimal_string_runtime(value)}]
+    abs_value = abs(value)
+    for unit, divisor in (
+        ("thousand", Decimal(1_000)),
+        ("million", Decimal(1_000_000)),
+        ("billion", Decimal(1_000_000_000)),
+        ("trillion", Decimal(1_000_000_000_000)),
+        ("hundred_million", Decimal(100_000_000)),
+        ("ten_thousand", Decimal(10_000)),
+    ):
+        if abs_value >= divisor:
+            values.append({**base, "value": _decimal_string_runtime(value / divisor), "unit": unit})
+    if _finance_premise_normalized_unit(str(base.get("unit") or "")) == "percent" and Decimal("-1") < value < Decimal("1"):
+        values.append({**base, "value": _decimal_string_runtime(value * Decimal(100)), "unit": "percent"})
+    return values
+
+
+def _finance_closest_premise_support(candidate: JsonObject, support_values: list[JsonObject]) -> JsonObject:
+    candidate_value = _decimal_or_none_runtime(candidate.get("value"))
+    if candidate_value is None:
+        return {}
+    same_unit = [
+        value
+        for value in support_values
+        if not candidate.get("unit") or value.get("unit") == candidate.get("unit")
+    ]
+    candidates = same_unit or support_values
+    closest: JsonObject | None = None
+    closest_delta: Decimal | None = None
+    for support in candidates:
+        support_value = _decimal_or_none_runtime(support.get("value"))
+        if support_value is None:
+            continue
+        delta = abs(candidate_value - support_value)
+        if closest_delta is None or delta < closest_delta:
+            closest_delta = delta
+            closest = support
+    if closest is None or closest_delta is None:
+        return {}
+    support_value = _decimal_or_none_runtime(closest.get("value")) or Decimal(0)
+    exact_tolerance = max(abs(support_value) * Decimal("0.005"), Decimal("0.000001"))
+    near_tolerance = max(abs(support_value) * Decimal("0.05"), Decimal("0.000001"))
+    if closest_delta <= exact_tolerance:
+        relation = "exact_match"
+    elif closest_delta <= near_tolerance:
+        relation = "near_supported_value"
+    else:
+        relation = "different_from_supported_values"
+    return {
+        "relation": relation,
+        "support": {
+            key: value
+            for key, value in closest.items()
+            if key in {"kind", "ref", "metric", "formula_name", "value", "unit", "fiscal_year", "citation_ref", "formatted_value"}
+            and value not in (None, "", [], {})
+        },
+    }
+
+
+def _finance_premise_scaled_decimal(raw: str, unit: str) -> Decimal | None:
+    value = _decimal_or_none_runtime(str(raw).replace(",", ""))
+    if value is None:
+        return None
+    normalized = _finance_premise_normalized_unit(unit)
+    if normalized == "thousand":
+        return value * Decimal(1_000)
+    if normalized == "million":
+        return value * Decimal(1_000_000)
+    if normalized == "billion":
+        return value * Decimal(1_000_000_000)
+    if normalized == "trillion":
+        return value * Decimal(1_000_000_000_000)
+    if normalized == "hundred_million":
+        return value * Decimal(100_000_000)
+    if normalized == "ten_thousand":
+        return value * Decimal(10_000)
+    return value
+
+
+def _finance_premise_normalized_unit(unit: str) -> str:
+    text = " ".join(str(unit or "").strip().lower().replace("us$", "usd").split())
+    if "$" in text or text in {"usd"}:
+        return "usd"
+    if "usd" in text and "million" in text:
+        return "million"
+    if "usd" in text and "billion" in text:
+        return "billion"
+    if text in {"%", "percent", "percentage"}:
+        return "percent"
+    if text in {"bps", "bp", "basis point", "basis points"}:
+        return "bps"
+    if text in {"m", "mn", "million"}:
+        return "million"
+    if text in {"b", "bn", "billion"}:
+        return "billion"
+    if text == "trillion":
+        return "trillion"
+    if text == "thousand":
+        return "thousand"
+    if text == "亿":
+        return "hundred_million"
+    if text == "万":
+        return "ten_thousand"
+    if text in {"€", "eur"}:
+        return "eur"
+    if text in {"£", "gbp"}:
+        return "gbp"
+    if text in {"¥", "cny", "rmb"}:
+        return "cny"
+    return text
+
+
+def _finance_premise_looks_like_year(value: Decimal) -> bool:
+    return value == value.to_integral_value() and Decimal(1900) <= value <= Decimal(2099)
+
+
+def _finance_premise_ambiguous_compact_unit(
+    text: str,
+    match: re.Match[str],
+    *,
+    raw: str,
+    unit: str,
+    prefix: str,
+) -> bool:
+    normalized = _finance_premise_normalized_unit(unit)
+    if normalized not in {"million", "billion"} or str(unit or "").lower() not in {"m", "b"} or prefix:
+        return False
+    separator = text[match.end("number") : match.start("unit")] if match.start("unit") >= 0 else ""
+    return not separator and "." not in raw
+
+
+def _finance_premise_material_number(
+    text: str,
+    start: int,
+    end: int,
+    *,
+    value: Decimal,
+    unit: str,
+    prefix: str,
+) -> bool:
+    if unit or prefix:
+        return True
+    if abs(value) >= Decimal(1_000):
+        return True
+    window = text[max(0, start - 80) : min(len(text), end + 80)].lower()
+    return any(marker in window for marker in ("revenue", "income", "margin", "ratio", "multiple", "ebitda", "cash", "debt", "assets", "liabilities", "inventory", "capex", "profit"))
+
+
 def _finance_slot_bind_max_tokens(*, facts: list[FinanceFact], compiled_program: JsonObject) -> int:
     transform_count = len(_dict_items(compiled_program.get("transform_specs")))
     evidence_count = len(_dict_items(compiled_program.get("evidence_specs")))
@@ -16534,6 +16832,7 @@ FINANCE_NUMERIC_JUDGE_CONTRACT = (
     "Use only the provided answer excerpt, facts, formula traces, evidence, citations, and host diagnostics. "
     "If judge_packet.competing_fact_clusters is present, treat it as host-built attention grouping only: candidate order is source order, not semantic ranking, and you must inspect raw fields yourself. "
     "If judge_packet.metric_intent_hints is present, treat it as weak retrieval/extraction diagnostics only: it may help notice line-item matches or demotions, but it is not host answer selection. "
+    "If judge_packet.question_numeric_premise_hints is present, treat it as an advisory index of numeric claims embedded in the question and nearby supported fact/trace values; decide yourself whether the premise is wrong, stale, irrelevant, or supported. "
     "Use formula_trace_support to connect FormulaTrace outputs to their input facts, evidence refs, and citation refs when deciding whether a numeric claim is supported. "
     "If FormulaTrace model_context is present, treat model_outputs as calculator-supported derived values and assumptions/defaulted_assumptions as explicit modeling assumptions that must be labeled in the final answer. "
     "Do not invent facts, citations, formulas, values, source ids, or unsupported calculations. "
@@ -16584,6 +16883,12 @@ def _finance_numeric_judge_prompt(
         report_diagnostics,
         facts[:FINANCE_NUMERIC_JUDGE_FACT_LIMIT],
     )
+    question_numeric_premise_hints = _finance_question_numeric_premise_hints_from_diagnostics_or_facts(
+        report_diagnostics,
+        question=question,
+        facts=facts[:FINANCE_NUMERIC_JUDGE_FACT_LIMIT],
+        formula_traces=synthesis_traces[:12],
+    )
     payload = {
         "contract": FINANCE_NUMERIC_JUDGE_CONTRACT,
         "output_schema": FINANCE_NUMERIC_JUDGE_OUTPUT_SCHEMA,
@@ -16614,6 +16919,11 @@ def _finance_numeric_judge_prompt(
             "metric_intent_hint_policy": (
                 _json_object(report_diagnostics.get("finance_metric_intent_hint_policy"))
                 or (_finance_metric_intent_hint_policy() if metric_intent_hints else {})
+            ),
+            "question_numeric_premise_hints": question_numeric_premise_hints,
+            "question_numeric_premise_hint_policy": (
+                _json_object(report_diagnostics.get("finance_question_numeric_premise_hint_policy"))
+                or (_finance_question_numeric_premise_hint_policy() if question_numeric_premise_hints else {})
             ),
             "formula_trace_count": len(formula_traces),
             "formula_trace_ordering": "finance_slot_bind_model traces are listed first when present; prefer them over earlier exploratory calculator traces on conflicts.",
@@ -16649,6 +16959,12 @@ def _legacy_finance_numeric_judge_prompt(
     slot_bind_state = _json_object(report_diagnostics.get("finance_slot_bind_state"))
     competing_clusters = _finance_competing_fact_clusters_from_diagnostics_or_facts(report_diagnostics, facts[:160])
     metric_intent_hints = _finance_metric_intent_hints_from_diagnostics_or_facts(report_diagnostics, facts[:160])
+    question_numeric_premise_hints = _finance_question_numeric_premise_hints_from_diagnostics_or_facts(
+        report_diagnostics,
+        question=question,
+        facts=facts[:160],
+        formula_traces=synthesis_traces[:12],
+    )
     packet = {
         "schema": "holo.kernel_v3.finance_numeric_judge_input.v1",
         "instruction": (
@@ -16660,6 +16976,7 @@ def _legacy_finance_numeric_judge_prompt(
             "The finance_facts array is raw candidate evidence in source extraction order, not a semantic ranking. "
             "If competing_fact_clusters is present, treat it as an attention index built from raw facts only, not as host ranking or answer selection. "
             "If metric_intent_hints is present, treat it as weak extraction diagnostics only, not as host ranking or answer selection. "
+            "If question_numeric_premise_hints is present, treat it as advisory attention over question-embedded numbers and supported values; decide whether the premise is wrong from the raw facts and evidence. "
             "For competing facts with the same entity, period, and broad metric, inspect raw fields such as concept, label, statement, "
             "form, fp, period dates, source URI, and cited source text, then make the period and line-item judgment yourself. "
             "If the answer uses a value that the raw fields do not support for the requested slot, return repair_answer and name the supported value or missing slot. "
@@ -16711,6 +17028,11 @@ def _legacy_finance_numeric_judge_prompt(
         "metric_intent_hint_policy": (
             _json_object(report_diagnostics.get("finance_metric_intent_hint_policy"))
             or (_finance_metric_intent_hint_policy() if metric_intent_hints else {})
+        ),
+        "question_numeric_premise_hints": question_numeric_premise_hints,
+        "question_numeric_premise_hint_policy": (
+            _json_object(report_diagnostics.get("finance_question_numeric_premise_hint_policy"))
+            or (_finance_question_numeric_premise_hint_policy() if question_numeric_premise_hints else {})
         ),
         "formula_trace_ordering": "finance_slot_bind_model traces are listed first when present; prefer them over earlier exploratory calculator traces on conflicts.",
         "formula_trace_synthesis_policy": trace_policy,

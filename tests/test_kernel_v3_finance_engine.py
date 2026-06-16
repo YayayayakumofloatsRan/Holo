@@ -608,6 +608,42 @@ def test_compact_finance_synthesis_rescue_packet_exposes_numeric_repair_context_
     assert binding_context["rejected_candidates"][0]["fact_id"] == "secondary-revenue"
 
 
+def test_finance_fact_context_exposes_question_numeric_premise_hints_to_synthesizer_prompt() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-actual-revenue",
+            text=(
+                "SEC filing statement entityName=ExampleCo concept=Revenues label=Revenues "
+                "metric=revenue unit=USD period=annual fy=2024 form=10-K value=193414000000"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-actual-revenue")]
+    report = _retrieval_report(evidence=evidence, citations=citations)
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"goal": "ExampleCo FY2024 revenue was $999 billion; what was the actual filing revenue?"},
+    )
+
+    enriched = _report_with_finance_fact_context(
+        report,
+        recipe=recipe,
+        evidence=evidence,
+        citations=citations,
+    )
+    prompt_payload = json.loads(_synthesizer_prompt(enriched, evidence, citations))
+    diagnostics = prompt_payload["retrieval_report"]["diagnostics"]
+    hints = diagnostics["finance_question_numeric_premise_hints"]
+
+    assert hints[0]["question_number"] == "$999 billion"
+    assert hints[0]["relation_to_supported_values"] == "different_from_supported_values"
+    assert hints[0]["closest_supported_value"]["value"] == "193.414"
+    assert hints[0]["closest_supported_value"]["unit"] == "billion"
+    assert hints[0]["closest_supported_value"]["metric"] == "revenue"
+    assert diagnostics["finance_question_numeric_premise_hint_policy"]["semantic_decision_owner"] == "model"
+    assert "question-embedded numbers" in " ".join(prompt_payload["answer_requirements"])
+
+
 def test_calculator_rejects_unsafe_expressions() -> None:
     registry = register_finance_tools(ToolRegistry.with_builtin_respond())
 
@@ -9447,6 +9483,61 @@ def test_finance_numeric_judge_prompt_exposes_metric_intent_hints_without_pollut
     ]
     assert "finance_metric_intent" not in packet["finance_facts"][0]["metadata"]
     assert "finance_metric_intent" not in packet["finance_facts"][1]["metadata"]
+
+
+def test_finance_numeric_judge_prompt_exposes_question_numeric_premise_hints() -> None:
+    question = "ExampleCo FY2024 revenue was $999 billion; what was the actual filing revenue?"
+    facts = [
+        FinanceFact(
+            fact_id="example-revenue",
+            entity="ExampleCo",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="193414000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-filing",
+            evidence_ref="evidence-revenue",
+            citation_ref="cite-revenue",
+            metadata={"concept": "Revenues", "label": "Revenues", "form": "10-K", "fp": "FY"},
+        )
+    ]
+    final = FinalAnswer(
+        answer="ExampleCo FY2024 filing revenue was $193.414 billion.",
+        citation_refs=["cite-revenue"],
+        used_evidence=["evidence-revenue"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-premise",
+        run_id="run-judge-premise",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(answer=final.answer, facts=facts, question=question)
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    payload = json.loads(prompt)
+    packet = payload["judge_packet"]
+    hints = packet["question_numeric_premise_hints"]
+
+    assert "question_numeric_premise_hints" in payload["contract"]
+    assert packet["question_numeric_premise_hint_policy"]["semantic_decision_owner"] == "model"
+    assert hints[0]["raw"] == "$999 billion"
+    assert hints[0]["relation_to_supported_values"] == "different_from_supported_values"
+    assert hints[0]["closest_supported_value"]["value"] == "193.414"
+    assert hints[0]["closest_supported_value"]["unit"] == "billion"
+    assert hints[0]["closest_supported_value"]["ref"] == "example-revenue"
 
 
 def test_finance_numeric_judge_prompt_exposes_unit_mismatch_examples() -> None:

@@ -3616,3 +3616,58 @@ missing.
 5 passed, 222 deselected in 0.85s
 324 passed in 2.96s
 ```
+
+---
+
+## 59. 追加落地：Question Numeric Premise Hints
+
+Incorrect-premise finance questions need the final model to say that the
+premise is wrong when cited evidence contradicts a numeric figure in the
+question. Before this pass, the synthesizer only had a general text instruction
+to state corrected actual values. It did not have a compact data-plane hint
+showing which question-embedded numbers differed from supported filing facts or
+FormulaTrace values.
+
+变更：
+
+- runtime now builds `finance_question_numeric_premise_hints` from the root
+  question, FinanceFact ledger, and available FormulaTrace values;
+- hints are conservative: years, 10-K-style identifiers, and compact ticker-like
+  tokens such as `3M` are ignored, while explicit currency/scale/percent numbers
+  and large finance numbers are compared against supported values;
+- each hint carries:
+  - the question number;
+  - normalized value/unit;
+  - short question context;
+  - relation to supported values (`near_supported_value` or
+    `different_from_supported_values`);
+  - closest supported fact/trace value;
+- `_report_with_finance_fact_context()` and
+  `_compact_finance_synthesis_rescue_packet()` expose the hints and policy to
+  synthesis;
+- modern and legacy `finance.numeric_judge` packets receive the same hints;
+- provider adapter forwards the hints to the synthesizer prompt and tells the
+  model to state corrected actual values when evidence contradicts a numeric
+  premise.
+
+边界：
+
+- hints are advisory attention indexes only;
+- host does not decide whether the premise is semantically wrong, stale,
+  irrelevant, or supported;
+- final premise judgment remains with the LLM, using raw facts, citations,
+  evidence text, FormulaTrace support, and the question wording.
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "question_numeric_premise_hints"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+2 passed, 227 deselected in 1.21s
+326 passed in 4.56s
+```

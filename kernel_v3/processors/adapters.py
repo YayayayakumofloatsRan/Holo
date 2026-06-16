@@ -335,6 +335,7 @@ def _synthesizer_prompt(
             "When adjacent revenue metrics are plausible for the same task_goal, include each material candidate with its exact filing label and machine-readable value, for example both 'Sales and other operating revenues = $193.414 billion' and 'Total revenues and other income = $202.792 billion'.",
             "For SEC filing revenue questions, prefer exact filing statement captions over generic XBRL labels; do not silently collapse RevenueFromContractWithCustomerExcludingAssessedTax, Sales and other operating revenues, generic Revenues, and Total revenues and other income into one metric.",
             "For a plain SEC filing 'total revenues' question, if evidence contains both an operating/sales revenue line and a broader subtotal that explicitly includes other income, headline the operating/sales revenue line unless the task explicitly asks for 'total revenues and other income'. Mention the broader other-income subtotal only as context.",
+            "For finance answers, if retrieval_report.diagnostics.finance_question_numeric_premise_hints is present, inspect those question-embedded numbers against the supported facts/traces; if the evidence contradicts a numeric premise, state the corrected actual value rather than selecting a nearby fact as if the premise were true.",
             "For finance filing questions where the requested line item is not separately itemized or retrieval_report.diagnostics.missing_slots still contains that requested line item, the English core sentence must start with 'Not separately itemized;' plus the relevant business location from task_goal/evidence, such as 'included in Azure segment and capex discussion' when supported. Do not headline a substitute numeric value before that unavailable/not-itemized judgment.",
             "For finance benchmark-style missing evidence answers, if the requested fact or required slot is absent after retrieval, start the English core sentence with 'Not available in the provided evidence;' before describing partial-period, proxy, or adjacent facts.",
             "If the provided or retrieved finance evidence contradicts an expected premise, stale figure, or benchmark gold note, explicitly state the corrected actual value using wording such as 'actual' or 'corrected value'.",
@@ -860,6 +861,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
     finance_competing_fact_clusters = diagnostics.get("finance_competing_fact_clusters")
     finance_numeric_repair_context = diagnostics.get("finance_numeric_repair_context")
     finance_metric_intent_hints = diagnostics.get("finance_metric_intent_hints")
+    finance_question_numeric_premise_hints = diagnostics.get("finance_question_numeric_premise_hints")
     return {
         "report_id": report.report_id,
         "goal_id": report.goal_id,
@@ -911,6 +913,13 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             "finance_competing_fact_cluster_policy": _json_object(diagnostics.get("finance_competing_fact_cluster_policy")),
             "finance_metric_intent_hints": _compact_list_for_provider(finance_metric_intent_hints, limit=32),
             "finance_metric_intent_hint_policy": _json_object(diagnostics.get("finance_metric_intent_hint_policy")),
+            "finance_question_numeric_premise_hints": _compact_list_for_provider(
+                finance_question_numeric_premise_hints,
+                limit=12,
+            ),
+            "finance_question_numeric_premise_hint_policy": _json_object(
+                diagnostics.get("finance_question_numeric_premise_hint_policy")
+            ),
             "finance_slot_bind_state": _compact_prompt_value(finance_slot_bind_state),
             "finance_slot_bind_basis_policy": _json_object(diagnostics.get("finance_slot_bind_basis_policy")),
             "finance_numeric_repair_context": _compact_finance_numeric_repair_context_for_provider(
