@@ -26,6 +26,7 @@ from kernel_v3.bench import (
     PUBLIC_FINANCE_BENCHMARK_SPECS,
     FinanceBenchmarkItem,
     FinanceBenchmarkResult,
+    FINANCE_BENCHMARK_SPLITS,
     build_finance_benchmark_report_from_path,
     convert_public_finance_benchmark,
     fetch_public_finance_benchmark,
@@ -34,6 +35,7 @@ from kernel_v3.bench import (
     render_finance_benchmark_report,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
+    resolve_finance_benchmark_split,
     run_general_capability_gauntlet,
     score_finance_prediction_file,
     write_general_capability_gauntlet_outputs,
@@ -745,6 +747,15 @@ def main(argv: list[str] | None = None) -> int:
     finance_progress.add_argument("--limit-events", type=int, default=24)
     finance_bench = bench_sub.add_parser("finance")
     finance_bench.add_argument("--dataset", required=True)
+    finance_bench.add_argument(
+        "--split",
+        choices=sorted(FINANCE_BENCHMARK_SPLITS),
+        default=None,
+        help=(
+            "Named benchmark split. FinanceBench uses debug50 (rows 0-49) for tuning "
+            "and test100/holdout100 (rows 50-149) for held-out evaluation."
+        ),
+    )
     finance_bench.add_argument("--predictions", default=None)
     finance_bench.add_argument("--output", default=".state/kernel_v3/bench/finance/latest.jsonl")
     finance_bench.add_argument("--summary-output", default=".state/kernel_v3/bench/finance/latest.summary.json")
@@ -2364,19 +2375,36 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         return {"status": "failed", "reason": "unknown_benchmark", "benchmark": command}
     output_path = Path(args.output) if args.output else None
     summary_path = Path(args.summary_output) if args.summary_output else None
+    try:
+        benchmark_split = resolve_finance_benchmark_split(getattr(args, "split", None))
+    except ValueError as exc:
+        return {"status": "failed", "reason": "invalid_finance_benchmark_split", "message": str(exc)}
+    if benchmark_split is not None and (args.limit is not None or int(args.offset or 0) != 0):
+        return {
+            "status": "failed",
+            "reason": "split_conflicts_with_offset_or_limit",
+            "message": "--split owns offset/limit. Do not combine it with --offset or --limit.",
+            "split": benchmark_split.to_dict(),
+            "offset": args.offset,
+            "limit": args.limit,
+        }
+    effective_offset = benchmark_split.offset if benchmark_split is not None else args.offset
+    effective_limit = benchmark_split.limit if benchmark_split is not None else args.limit
     if getattr(args, "predictions", None):
         results = score_finance_prediction_file(
             dataset_path=args.dataset,
             predictions_path=args.predictions,
-            limit=args.limit,
-            offset=args.offset,
+            limit=effective_limit,
+            offset=effective_offset,
         )
+        results = _tag_finance_results_with_split(results, benchmark_split)
         summary = write_finance_benchmark_outputs(
             results,
             output_path=output_path,
             summary_path=summary_path,
             annotation_path=args.dev_gold,
             journal=journal,
+            benchmark_split=benchmark_split,
         )
         return {
             "status": "ok",
@@ -2384,6 +2412,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             "summary": summary.to_dict(),
             "output": str(output_path) if output_path is not None else None,
             "summary_output": str(summary_path) if summary_path is not None else None,
+            "split": benchmark_split.to_dict() if benchmark_split is not None else None,
         }
 
     live_block = _chat_live_model_block(args)
@@ -2398,7 +2427,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         return live_retrieval
     artifact_store = _runtime_artifact_store(args)
     research_corpus_store = _runtime_corpus_store(args)
-    items = load_finance_benchmark_items(args.dataset, limit=args.limit, offset=args.offset)
+    items = load_finance_benchmark_items(args.dataset, limit=effective_limit, offset=effective_offset)
     execution = _execution_profile_for_args(args)
     mission_enabled = _mission_enabled_for_args(args, execution)
     progress_callback = _finance_benchmark_progress_callback(output_path=output_path, total=len(items))
@@ -2461,12 +2490,14 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             result_callback=progress_callback,
         )
         worker_state_root = None
+    results = _tag_finance_results_with_split(results, benchmark_split)
     summary = write_finance_benchmark_outputs(
         results,
         output_path=output_path,
         summary_path=summary_path,
         annotation_path=args.dev_gold,
         journal=journal,
+        benchmark_split=benchmark_split,
     )
     return {
         "status": "ok",
@@ -2478,7 +2509,20 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         "worker_state_root": worker_state_root,
         "execution_profile": execution.profile_id if execution is not None else None,
         "mission_enabled": mission_enabled,
+        "split": benchmark_split.to_dict() if benchmark_split is not None else None,
     }
+
+
+def _tag_finance_results_with_split(results: list[FinanceBenchmarkResult], split_spec) -> list[FinanceBenchmarkResult]:
+    if split_spec is None:
+        return results
+    split_payload = split_spec.to_dict()
+    tagged: list[FinanceBenchmarkResult] = []
+    for result in results:
+        metadata = dict(result.metadata)
+        metadata["benchmark_split"] = split_payload
+        tagged.append(replace(result, metadata=metadata))
+    return tagged
 
 
 def _finance_progress_command(args, journal: JournalStore) -> dict[str, object]:

@@ -3,15 +3,18 @@ from pathlib import Path
 
 from kernel_v3 import cli
 from kernel_v3.bench import (
+    FINANCE_BENCHMARK_SPLITS,
     FinanceBenchmarkItem,
     FinanceBenchmarkResult,
     convert_public_finance_benchmark,
     fetch_public_finance_benchmark,
     load_finance_benchmark_items,
+    resolve_finance_benchmark_split,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
     score_finance_dev_annotations,
     score_finance_answer,
+    write_finance_benchmark_outputs,
     write_finance_dev_annotations_from_dataset,
 )
 from kernel_v3.bench.finance import _append_benchmark_provided_context_trace, summarize_finance_benchmark, trace_metrics
@@ -48,6 +51,86 @@ def test_finance_benchmark_loads_common_jsonl_fields(tmp_path: Path) -> None:
     assert items[0].numeric_value == 10_000_000
     assert items[0].required_tools == ["edgar_search", "calculator"]
     assert items[0].category == "numerical_reasoning"
+
+
+def test_financebench_named_splits_have_strict_offsets_and_counts() -> None:
+    debug = resolve_finance_benchmark_split("debug50")
+    test = resolve_finance_benchmark_split("test100")
+    holdout = resolve_finance_benchmark_split("holdout100")
+
+    assert debug is not None
+    assert test is not None
+    assert holdout is not None
+    assert debug.split_id == "financebench_debug50"
+    assert debug.offset == 0
+    assert debug.limit == 50
+    assert debug.expected_count == 50
+    assert test.split_id == "financebench_test100"
+    assert test.offset == 50
+    assert test.limit == 100
+    assert test.expected_count == 100
+    assert holdout is test
+    assert FINANCE_BENCHMARK_SPLITS["fb_holdout100"] is test
+
+
+def test_financebench_debug50_and_test100_load_non_overlapping_rows(tmp_path: Path) -> None:
+    dataset = tmp_path / "financebench_doc_retrieval.jsonl"
+    dataset.write_text(
+        "\n".join(
+            json.dumps({"id": f"fb-{index:03d}", "question": f"Question {index}?", "answer": f"{index}"})
+            for index in range(150)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    debug = resolve_finance_benchmark_split("debug50")
+    test = resolve_finance_benchmark_split("test100")
+    assert debug is not None
+    assert test is not None
+
+    debug_items = load_finance_benchmark_items(dataset, offset=debug.offset, limit=debug.limit)
+    test_items = load_finance_benchmark_items(dataset, offset=test.offset, limit=test.limit)
+
+    assert len(debug_items) == 50
+    assert len(test_items) == 100
+    assert debug_items[0].item_id == "fb-000"
+    assert debug_items[-1].item_id == "fb-049"
+    assert test_items[0].item_id == "fb-050"
+    assert test_items[-1].item_id == "fb-149"
+    assert {item.item_id for item in debug_items}.isdisjoint({item.item_id for item in test_items})
+
+
+def test_finance_benchmark_outputs_record_split_metadata(tmp_path: Path) -> None:
+    output = tmp_path / "results.jsonl"
+    summary_path = tmp_path / "summary.json"
+    split = resolve_finance_benchmark_split("test100")
+    assert split is not None
+    result = FinanceBenchmarkResult(
+        item_id="fb-050",
+        status="passed",
+        question="What was revenue?",
+        answer="Revenue was $10 million.",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        scorecard={"status": "passed", "scored": True, "citation_present": True},
+        trace_metrics={},
+        trace_refs=[],
+        final_answer={"citation_refs": ["cite-1"]},
+        failure_report=None,
+    )
+
+    summary = write_finance_benchmark_outputs(
+        [result],
+        output_path=output,
+        summary_path=summary_path,
+        benchmark_split=split,
+    )
+
+    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary.benchmark_split["split_id"] == "financebench_test100"
+    assert summary_payload["benchmark_split"]["offset"] == 50
+    assert summary_payload["benchmark_split"]["limit"] == 100
 
 
 def test_finance_benchmark_loads_workflow_annotations(tmp_path: Path) -> None:
@@ -1268,6 +1351,96 @@ def test_finance_benchmark_cli_imports_financebench_mode(tmp_path: Path) -> None
     annotation_payload = json.loads(annotation.read_text(encoding="utf-8").strip())
     assert annotation_payload["item_id"] == "fb-cli-001"
     assert annotation_payload["expected_numeric"][0]["value"] == 10_000_000
+
+
+def test_finance_benchmark_cli_scores_named_test100_split(tmp_path: Path) -> None:
+    dataset = tmp_path / "financebench_doc_retrieval.jsonl"
+    predictions = tmp_path / "predictions.jsonl"
+    output = tmp_path / "results.jsonl"
+    summary_path = tmp_path / "summary.json"
+    dataset.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "id": f"fb-{index:03d}",
+                    "question": f"What was metric {index}?",
+                    "answer": f"{index}",
+                    "numeric_value": index,
+                    "tolerance": 0.0,
+                }
+            )
+            for index in range(150)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    predictions.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "id": f"fb-{index:03d}",
+                    "answer": f"{index}",
+                    "final_answer": {"citation_refs": [f"cite-{index}"]},
+                }
+            )
+            for index in range(150)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    code = cli.main(
+        [
+            "bench",
+            "finance",
+            "--dataset",
+            str(dataset),
+            "--predictions",
+            str(predictions),
+            "--split",
+            "test100",
+            "--output",
+            str(output),
+            "--summary-output",
+            str(summary_path),
+        ]
+    )
+
+    assert code == 0
+    result_records = _records(output)
+    summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert len(result_records) == 100
+    assert result_records[0]["item_id"] == "fb-050"
+    assert result_records[-1]["item_id"] == "fb-149"
+    assert result_records[0]["metadata"]["benchmark_split"]["split_id"] == "financebench_test100"
+    assert summary_payload["benchmark_split"]["split_id"] == "financebench_test100"
+    assert summary_payload["benchmark_split"]["offset"] == 50
+    assert summary_payload["benchmark_split"]["limit"] == 100
+    assert summary_payload["item_count"] == 100
+
+
+def test_finance_benchmark_cli_rejects_split_with_manual_offset_or_limit(tmp_path: Path) -> None:
+    dataset = tmp_path / "financebench_doc_retrieval.jsonl"
+    predictions = tmp_path / "predictions.jsonl"
+    dataset.write_text(json.dumps({"id": "fb-000", "question": "Question?", "answer": "1"}) + "\n", encoding="utf-8")
+    predictions.write_text(json.dumps({"id": "fb-000", "answer": "1"}) + "\n", encoding="utf-8")
+
+    code = cli.main(
+        [
+            "bench",
+            "finance",
+            "--dataset",
+            str(dataset),
+            "--predictions",
+            str(predictions),
+            "--split",
+            "debug50",
+            "--limit",
+            "1",
+        ]
+    )
+
+    assert code == 1
 
 
 def test_financebench_annotation_export_preserves_required_source_urls(tmp_path: Path) -> None:

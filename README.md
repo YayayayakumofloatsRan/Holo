@@ -1544,14 +1544,18 @@ become structured facts, and the formula planner prefers those filing table-row
 facts over noisy narrative values.
 
 FinanceBench `doc_retrieval` is now treated as a split evaluation program, not
-one monolithic tuning set. The first ten rows (`live10`) are the development
-and failure-taxonomy slice used to inspect traces and improve generic workflow
-mechanisms. Later rows should be used as validation/holdout slices: run them for
-accuracy and failure distribution, but do not tune against individual hidden
-rows. This keeps the project narrative honest: Holo uses a small public
-debugging slice to improve source acquisition, document reading, fact binding,
-toolchain use, and synthesis gates, then checks those mechanisms on unseen
-FinanceBench rows.
+one monolithic tuning set. The 150 public rows are divided into
+`financebench_debug50` / `debug50` at offsets `0-49` and
+`financebench_test100` / `test100` / `holdout100` at offsets `50-149`. The
+debug50 slice is the only FinanceBench public slice used to inspect traces,
+build failure taxonomy, and improve generic workflow mechanisms. The test100
+slice is reserved for held-out accuracy after the system configuration is
+frozen. Do not tune against item-level failures from test100 and then reuse that
+same run as the held-out score. This keeps the project narrative honest: Holo
+uses a bounded public debugging slice to improve source acquisition, document
+reading, fact binding, toolchain use, and synthesis gates, then checks those
+mechanisms on unseen FinanceBench rows with a separate 100-question accuracy
+report.
 
 The `live10` development slice also exposed a source-acquisition boundary that
 looked like an agent-loop failure but was actually a missing host handoff. In

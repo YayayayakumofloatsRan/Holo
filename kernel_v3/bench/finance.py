@@ -72,6 +72,17 @@ class FinanceBenchmarkItem(Contract):
 
 
 @dataclass(frozen=True, kw_only=True)
+class FinanceBenchmarkSplitSpec(Contract):
+    split_id: str
+    benchmark: str
+    purpose: str
+    offset: int
+    limit: int | None
+    expected_count: int | None
+    description: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class FinanceBenchmarkResult(Contract):
     item_id: str
     status: str
@@ -143,9 +154,67 @@ class FinanceBenchmarkSummary(Contract):
     status_counts: JsonObject
     output_path: str | None = None
     dev_annotation_score: JsonObject | None = None
+    benchmark_split: JsonObject = field(default_factory=dict)
 
 
 FinanceBenchmarkResultCallback = Callable[[int, FinanceBenchmarkItem, FinanceBenchmarkResult], None]
+
+
+FINANCEBENCH_DEBUG50_SPLIT = FinanceBenchmarkSplitSpec(
+    split_id="financebench_debug50",
+    benchmark="financebench",
+    purpose="system_tuning_only",
+    offset=0,
+    limit=50,
+    expected_count=50,
+    description="FinanceBench public rows 0-49. Use only for system debugging and tuning.",
+)
+FINANCEBENCH_TEST100_SPLIT = FinanceBenchmarkSplitSpec(
+    split_id="financebench_test100",
+    benchmark="financebench",
+    purpose="heldout_evaluation",
+    offset=50,
+    limit=100,
+    expected_count=100,
+    description="FinanceBench public rows 50-149. Use for held-out accuracy after the system is frozen.",
+)
+FINANCEBENCH_ALL150_SPLIT = FinanceBenchmarkSplitSpec(
+    split_id="financebench_all150",
+    benchmark="financebench",
+    purpose="full_public_accounting",
+    offset=0,
+    limit=150,
+    expected_count=150,
+    description="All public FinanceBench rows. Report debug50 and test100 separately when using this for accounting.",
+)
+
+FINANCE_BENCHMARK_SPLITS: dict[str, FinanceBenchmarkSplitSpec] = {
+    "financebench_debug50": FINANCEBENCH_DEBUG50_SPLIT,
+    "fb_debug50": FINANCEBENCH_DEBUG50_SPLIT,
+    "debug50": FINANCEBENCH_DEBUG50_SPLIT,
+    "financebench_test100": FINANCEBENCH_TEST100_SPLIT,
+    "financebench_holdout100": FINANCEBENCH_TEST100_SPLIT,
+    "fb_test100": FINANCEBENCH_TEST100_SPLIT,
+    "fb_holdout100": FINANCEBENCH_TEST100_SPLIT,
+    "test100": FINANCEBENCH_TEST100_SPLIT,
+    "holdout100": FINANCEBENCH_TEST100_SPLIT,
+    "financebench_all150": FINANCEBENCH_ALL150_SPLIT,
+    "fb_all150": FINANCEBENCH_ALL150_SPLIT,
+    "all150": FINANCEBENCH_ALL150_SPLIT,
+}
+
+
+def resolve_finance_benchmark_split(split: str | None) -> FinanceBenchmarkSplitSpec | None:
+    if split is None:
+        return None
+    normalized = str(split).strip().lower().replace("-", "_")
+    if not normalized:
+        return None
+    spec = FINANCE_BENCHMARK_SPLITS.get(normalized)
+    if spec is None:
+        valid = ", ".join(sorted(FINANCE_BENCHMARK_SPLITS))
+        raise ValueError(f"unknown finance benchmark split {split!r}; expected one of: {valid}")
+    return spec
 
 
 def load_finance_benchmark_items(path: Path | str, *, limit: int | None = None, offset: int = 0) -> list[FinanceBenchmarkItem]:
@@ -440,6 +509,7 @@ def summarize_finance_benchmark(
     *,
     output_path: Path | None = None,
     annotation_path: Path | str | None = None,
+    benchmark_split: FinanceBenchmarkSplitSpec | JsonObject | None = None,
 ) -> FinanceBenchmarkSummary:
     status_counts = Counter(result.status for result in results)
     scored = [result for result in results if bool(result.scorecard.get("scored"))]
@@ -592,6 +662,7 @@ def summarize_finance_benchmark(
         dev_annotation_score=score_finance_dev_annotations(results, annotation_path=annotation_path)
         if annotation_path is not None
         else None,
+        benchmark_split=_benchmark_split_payload(benchmark_split),
     )
 
 
@@ -602,6 +673,7 @@ def write_finance_benchmark_outputs(
     summary_path: Path | str | None = None,
     annotation_path: Path | str | None = None,
     journal: JournalStore | None = None,
+    benchmark_split: FinanceBenchmarkSplitSpec | JsonObject | None = None,
 ) -> FinanceBenchmarkSummary:
     output = Path(output_path) if output_path is not None else None
     if output is not None:
@@ -610,7 +682,12 @@ def write_finance_benchmark_outputs(
             "\n".join(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True) for result in results) + "\n",
             encoding="utf-8",
         )
-    summary = summarize_finance_benchmark(results, output_path=output, annotation_path=annotation_path)
+    summary = summarize_finance_benchmark(
+        results,
+        output_path=output,
+        annotation_path=annotation_path,
+        benchmark_split=benchmark_split,
+    )
     if summary_path is not None:
         path = Path(summary_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1626,6 +1703,16 @@ def _repeatability_summary(results: list[FinanceBenchmarkResult]) -> tuple[int, 
         ]
         scores.append(_rate(sum(1 for item in components if item), len(components)))
     return len(repeated), _average(scores)
+
+
+def _benchmark_split_payload(split: FinanceBenchmarkSplitSpec | JsonObject | None) -> JsonObject:
+    if split is None:
+        return {}
+    if isinstance(split, FinanceBenchmarkSplitSpec):
+        return split.to_dict()
+    if isinstance(split, dict):
+        return dict(split)
+    return {}
 
 
 def _load_records(path: Path) -> list[JsonObject]:
