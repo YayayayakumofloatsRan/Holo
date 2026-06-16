@@ -3126,3 +3126,49 @@ index 贯通到最终综合和 numeric judge。
 py_compile passed
 247 passed in 2.86s
 ```
+
+---
+
+## 49. 追加落地：Synthesizer Unknown Reference Repair
+
+本地 debug 输出显示，部分金融题并非事实或公式失败，而是 synthesis 已经形成可用答案后，
+输出了不存在的 `used_evidence` / `citation_refs`，例如
+`unknown_evidence_refs:evidence-span-...`，最终被降级成 failure report。此前系统只会修复
+`missing_citation_refs`，不会修复 unknown reference。
+
+本节增加一次模型驱动的引用修复：
+
+- `_final_answer_from_json()` 仍然严格拒绝 unknown citation/evidence id；
+- `Synthesizer.synthesize()` 在收到：
+  - `unknown_citation_refs:*`
+  - `unknown_evidence_refs:*`
+  时，触发一次 `context_id=...-reference-repair` 的 model retry；
+- repair prompt 明确列出：
+  - `required_citation_refs`
+  - `required_evidence_refs`
+  - `repair_feedback.unknown_*`
+- 模型必须重新输出 JSON，引用只能来自 allowed lists；
+- host 不自动映射、不自动替换、不根据字符串相似度修正引用。
+
+边界：
+
+- 这是格式/引用合法性修复，不是 benchmark answer repair；
+- 如果第二次仍输出 unknown refs，系统继续拒绝；
+- 不允许模型在修复 citation 时引入新的事实、公式、source id 或 unsupported numeric claims；
+- 语义答案是否成立仍由后续 finance verifier / synthesis gate 判断。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_phase5_semantic_processors.py -q -k "synthesizer_only_uses_known_citation_refs or synthesizer_repairs_missing_citation_refs or synthesizer_repairs_unknown_evidence_refs or synthesizer_retries_invalid_json"
+.venv/bin/python -m py_compile kernel_v3/processors/adapters.py tests/test_kernel_v3_phase5_semantic_processors.py
+.venv/bin/python -m pytest tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+4 passed, 54 deselected in 0.34s
+py_compile passed
+305 passed in 3.17s
+```

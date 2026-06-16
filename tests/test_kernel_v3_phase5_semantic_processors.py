@@ -544,6 +544,58 @@ def test_phase5_synthesizer_repairs_missing_citation_refs_with_known_refs():
     assert len(journal.records(task_id="task-synth-repair", kind="processor_request")) == 2
 
 
+def test_phase5_synthesizer_repairs_unknown_evidence_refs_with_known_refs():
+    report, evidence, citation = _retrieval_contracts()
+    provider = CapturingFakeJsonProvider(
+        {
+            "synthesizer.answer": [
+                {
+                    "answer": "Kernel v3 cites evidence.",
+                    "citation_refs": ["cite-1"],
+                    "confidence": 0.2,
+                    "limitations": [],
+                    "used_evidence": ["ev-missing"],
+                },
+                {
+                    "answer": "Kernel v3 cites evidence.",
+                    "citation_refs": ["cite-1"],
+                    "confidence": 0.82,
+                    "limitations": [],
+                    "used_evidence": ["ev-1"],
+                },
+            ]
+        }
+    )
+    journal = JournalStore.in_memory()
+
+    answer = Synthesizer(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    ).synthesize(
+        task_id="task-synth-ref-repair",
+        run_id="run-synth-ref-repair",
+        context_id="ctx-synth-ref-repair",
+        report=report,
+        evidence=[evidence],
+        citations=[citation],
+    )
+
+    retry_prompt = json.loads(provider.prompts[-1])
+    assert answer.status == "ok"
+    assert answer.citation_refs == ["cite-1"]
+    assert answer.used_evidence == ["ev-1"]
+    assert len(provider.prompts) == 2
+    assert retry_prompt["required_citation_refs"] == ["cite-1"]
+    assert retry_prompt["required_evidence_refs"] == ["ev-1"]
+    assert retry_prompt["repair_feedback"]["category"] == "unknown_evidence_refs"
+    assert retry_prompt["repair_feedback"]["unknown_evidence_refs"] == ["ev-missing"]
+    assert "used citation_refs or used_evidence ids" in retry_prompt["retry_instruction"]
+    assert len(journal.records(task_id="task-synth-ref-repair", kind="processor_request")) == 2
+
+
 def test_phase5_synthesizer_retries_invalid_json_once():
     report, evidence, citation = _retrieval_contracts()
     provider = MalformedThenJsonProvider(

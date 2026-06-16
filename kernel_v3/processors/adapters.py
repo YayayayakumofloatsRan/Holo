@@ -210,6 +210,39 @@ class Synthesizer:
                 error="processor_failed",
             )
         answer = _final_answer_from_json(outcome.parsed, citations=citations, evidence=evidence)
+        if _is_unknown_reference_error(answer.error) and (citations or evidence):
+            repair_feedback = _synthesizer_repair_feedback(answer.error or "unknown_reference")
+            retry = self.fabric.run_json(
+                task_type="synthesizer.answer",
+                task_id=task_id,
+                run_id=run_id,
+                context_id=f"{context_id}-reference-repair",
+                prompt=_synthesizer_prompt(
+                    report,
+                    evidence,
+                    citations,
+                    retry_instruction=(
+                        "Previous synthesizer output used citation_refs or used_evidence ids that are not in the allowed lists. "
+                        "Return a corrected JSON object. Keep the supported answer semantics, but choose citation_refs only from "
+                        "required_citation_refs and used_evidence only from required_evidence_refs. Do not invent ids, source ids, "
+                        "facts, formulas, or unsupported numeric claims."
+                    ),
+                    repair_feedback=repair_feedback,
+                ),
+                schema=SYNTHESIZER_SCHEMA,
+                provider=self.provider,
+                model=self.model,
+                parameters={
+                    "adapter": "Synthesizer",
+                    "retrieval_report_id": report.report_id,
+                    "repair_reason": "unknown_references",
+                    "repair_feedback_schema": repair_feedback.get("schema"),
+                    "repair_feedback_category": repair_feedback.get("category"),
+                    **budget_parameters,
+                },
+            )
+            if retry.parsed is not None:
+                return _final_answer_from_json(retry.parsed, citations=citations, evidence=evidence)
         if answer.error == "missing_citation_refs" and citations:
             retry = self.fabric.run_json(
                 task_type="synthesizer.answer",
@@ -369,10 +402,30 @@ def _synthesizer_repair_feedback(error: str) -> JsonObject:
     elif "JSONDecodeError" in code or "json_invalid" in code or "Expecting" in code:
         feedback["category"] = "malformed_json"
         checklist.insert(1, "Fix JSON syntax: close arrays/objects, quote keys and strings, and remove trailing prose.")
+    elif code.startswith("unknown_citation_refs:"):
+        refs = _split_error_refs(code)
+        feedback["category"] = "unknown_citation_refs"
+        feedback["unknown_citation_refs"] = refs
+        checklist.insert(1, "Replace unknown citation_refs with ids from required_citation_refs that support the answer.")
+    elif code.startswith("unknown_evidence_refs:"):
+        refs = _split_error_refs(code)
+        feedback["category"] = "unknown_evidence_refs"
+        feedback["unknown_evidence_refs"] = refs
+        checklist.insert(1, "Replace unknown used_evidence ids with ids from required_evidence_refs that support the answer.")
     else:
         feedback["category"] = "schema_or_parse_error"
     feedback["repair_checklist"] = checklist
     return feedback
+
+
+def _is_unknown_reference_error(error: str | None) -> bool:
+    code = str(error or "")
+    return code.startswith("unknown_citation_refs:") or code.startswith("unknown_evidence_refs:")
+
+
+def _split_error_refs(error: str) -> list[str]:
+    _prefix, _sep, tail = str(error or "").partition(":")
+    return [item for item in (part.strip() for part in tail.split(",")) if item][:16]
 
 
 def _prompt_json(payload: JsonObject) -> str:
