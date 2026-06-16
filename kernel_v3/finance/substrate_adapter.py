@@ -95,6 +95,24 @@ def finance_slot_frame(
         resolved_formula = _infer_formula_name(question)
     task_type = _task_type_for_formula(resolved_formula, question)
     required = _slot_specs_for_formula(resolved_formula)
+    if resolved_formula == "metric_lookup":
+        dynamic_slots: list[str] = []
+        if missing_slots is not None:
+            dynamic_slots.extend(str(item) for item in missing_slots if str(item))
+        elif plan is not None and plan.missing_facts:
+            dynamic_slots.extend(str(item) for item in plan.missing_facts if str(item))
+        elif plan is not None and isinstance(plan.payload, dict):
+            variables = plan.payload.get("variables") if isinstance(plan.payload.get("variables"), dict) else {}
+            dynamic_slots.extend(str(item) for item in variables.keys() if str(item))
+        required = [
+            SlotSpec(
+                name=name,
+                requirement="required",
+                accepted_attributes=_accepted_attributes_for_slot(name),
+                source_requirements=["finance_fact_ledger"],
+            )
+            for name in _ordered_unique(dynamic_slots)
+        ]
     claims = finance_facts_to_claims(facts)
     fills = _slot_fills(required, claims)
     if missing_slots is not None:
@@ -565,6 +583,11 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "premium revenue",
         ],
         "assets": ["assets", "total assets"],
+        "gain_on_separation": ["gain on separation", "gain", "separation"],
+        "cash_proceeds": ["cash proceeds", "proceeds"],
+        "market_risk_var": ["value at risk", "var", "market risk"],
+        "credit_facility": ["revolving credit agreement", "credit facility", "borrowings"],
+        "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],
         "ranked_category_metric_table": [
             "category",
             "segment revenue",
@@ -587,6 +610,8 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         return "reconcile"
     if formula_name in {"dcf", "lbo"}:
         return "model"
+    if formula_name == "metric_lookup":
+        return "filing_metric_lookup"
     if formula_name in {
         "dio",
         "dpo",

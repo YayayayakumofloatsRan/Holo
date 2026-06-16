@@ -71,13 +71,24 @@ task compiler now add generic evidence/slot/transform scaffolds for:
   worst metric. The host only prepares a ranked-category evidence slot and
   calculator-visible `max`/`min` transform over cited numeric rows; the LLM
   maps the extreme value back to the category, resolves ties or wording, and
-  explains the final answer from filing evidence.
+  explains the final answer from filing evidence;
+- `metric_lookup`: a generic filing-metric identity transform for direct
+  line-item extraction questions. It covers requested single facts such as
+  capital expenditures, net PP&E, accounts receivable/payable, inventories,
+  COGS, net income, adjusted EBITDA, operating cash flow, dividends paid,
+  restructuring costs, total assets/current assets/current liabilities, VaR,
+  credit facilities, transaction proceeds/gains, and expected benefit payments.
+  The host binds the metric slot and optional calculator trace; the LLM still
+  verifies the statement, period, unit, sign convention, and any explicit
+  absence condition from cited evidence.
 
 The fact ledger also now canonicalizes investing cash flow, financing cash
 flow, store-count, segment-income, EBITDAR, debt-securities, marketable-
-securities, derivative-instrument, and notional-value metrics, and splits
-inline `metric=... ; metric=...` fact segments even when the text does not
-include a `facts=` wrapper.
+securities, derivative-instrument, notional-value, accounts receivable/payable,
+current-assets, dividends-paid, restructuring-cost, transaction-gain/proceeds,
+VaR, credit-facility, and expected-benefit-payment metrics, and splits inline
+`metric=... ; metric=...` fact segments even when the text does not include a
+`facts=` wrapper.
 
 This continues the 2026-06-16 DPO and multi-year average capex/revenue scaffold
 work. The host supplies auditable formulas, EvidenceSpec line-item targets, and
@@ -89,12 +100,12 @@ Current static question-only FinanceBench formula coverage:
 
 | Slice | Recognized formula rows | Rows with TransformSpec |
 | --- | ---: | ---: |
-| `debug50` | `29/50` | `29/50` |
-| `test100` | `55/100` | `55/100` |
-| `all150` | `84/150` | `84/150` |
+| `debug50` | `36/50` | `36/50` |
+| `test100` | `66/100` | `66/100` |
+| `all150` | `102/150` | `102/150` |
 
 Compared with the 2026-06-16 common-formula baseline, all150 recognized formula
-coverage moved from `38/150` to `84/150`. This is only code-regression evidence
+coverage moved from `38/150` to `102/150`. This is only code-regression evidence
 for the next live run, not a live benchmark score.
 
 ## Verification
@@ -111,9 +122,10 @@ git diff --check
 ```
 
 Latest result: py_compile passed; targeted category-rank slice
-`2 passed, 270 deselected in 1.57s`; full finance engine
-`272 passed in 5.34s`; FinanceBench harness/report regression
-`59 passed in 399.94s`; `git diff --check` passed.
+`2 passed, 270 deselected in 1.57s`; targeted metric-lookup / regression slice
+`4 passed, 269 deselected in 1.55s`; full finance engine
+`273 passed in 3.56s`; FinanceBench harness/report regression
+`59 passed in 393.15s`; `git diff --check` passed.
 
 ## Next Honest Benchmark Step
 

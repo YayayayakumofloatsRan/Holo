@@ -1673,6 +1673,30 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 },
             )
         ]
+    if name == "metric_lookup":
+        payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        required_slots = list(variables.keys()) if variables else list(formula_plan.missing_facts or frame_missing_slots)
+        output_attribute = required_slots[0] if len(required_slots) == 1 else "metric_value"
+        expression = _string(payload.get("expression")) or None
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, ",".join(required_slots), expression or ""),
+                domain="finance",
+                name="metric_lookup",
+                required_slots=required_slots,
+                expression=expression,
+                output_unit=_string(payload.get("unit")) or "metric_value",
+                output_attribute=output_attribute,
+                diagnostics={
+                    "source": "finance_task_compiler",
+                    "formula_status": formula_plan.status,
+                    "semantic_decision_policy": (
+                        "LLM verifies statement, period, unit, sign convention, and explicit absence conditions from cited evidence."
+                    ),
+                },
+            )
+        ]
     if name == "category_metric_rank":
         payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
         variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
@@ -2116,6 +2140,8 @@ def _source_role(*, binding: JsonObject, source_families: list[str]) -> str | No
 
 
 def _statement_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
+    if formula_name == "metric_lookup":
+        return _statement_for_slot(slot_name)
     if formula_name == "category_metric_rank" and slot_name == "ranked_category_metric_table":
         return _category_rank_statement(question)
     if formula_name == "yoy_growth" and slot_name in {"prior_period_value", "current_period_value"}:
@@ -2192,6 +2218,14 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "business_or_properties"
     if slot_name == "ranked_category_metric_table":
         return "md&a_or_note_table"
+    if slot_name in {"gain_on_separation", "cash_proceeds"}:
+        return "cash_flow_statement_or_transaction_note"
+    if slot_name == "market_risk_var":
+        return "market_risk_disclosures"
+    if slot_name == "credit_facility":
+        return "debt_or_liquidity_note"
+    if slot_name == "pension_postretirement_payments":
+        return "pension_and_postretirement_note"
     if slot_name in {
         "revenue",
         "net_income",
@@ -2213,6 +2247,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
 
 
 def _line_item_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
+    if formula_name == "metric_lookup":
+        return _line_item_for_slot(slot_name)
     if formula_name == "category_metric_rank" and slot_name == "ranked_category_metric_table":
         return _category_rank_line_item(question)
     if formula_name == "yoy_growth" and slot_name in {"prior_period_value", "current_period_value"}:
@@ -2282,6 +2318,11 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "dividends_paid": "dividends paid",
         "cash_flow_activity_totals": "net cash provided by operating investing financing activities",
         "restructuring_costs": "restructuring costs",
+        "gain_on_separation": "gain on separation",
+        "cash_proceeds": "cash proceeds",
+        "market_risk_var": "value at risk",
+        "credit_facility": "revolving credit agreement",
+        "pension_postretirement_payments": "expected benefit payments",
         "store_count": "stores",
         "store_count_prior": "stores",
         "store_count_current": "stores",

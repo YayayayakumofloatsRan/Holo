@@ -3926,15 +3926,20 @@ def test_finance_task_compiler_emits_direct_metric_evidence_for_capex_lookup() -
         facts=[],
     )
 
-    assert program.task_spec.task_type == "lookup"
-    assert program.transform_specs == []
+    assert program.task_spec.task_type == "filing_metric_lookup"
+    assert program.task_spec.diagnostics["formula_name"] == "metric_lookup"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["capital_expenditures"]
+    assert program.transform_specs[0].name == "metric_lookup"
+    assert program.transform_specs[0].required_slots == ["capital_expenditures"]
+    assert program.transform_specs[0].expression is None
     assert program.evidence_specs
     spec = program.evidence_specs[0]
     assert spec.slot_name == "capital_expenditures"
     assert spec.statement == "cash_flow_statement"
     assert spec.line_item == "capital expenditures"
     assert "capex" in spec.accepted_attributes
-    assert spec.diagnostics["from_direct_question_scaffold"] is True
+    assert spec.diagnostics["source"] == "finance_task_compiler"
     assert program.diagnostics["tool_chain_plan"]["next_action_candidates"][0]["tool"] == "retrieval.run"
 
 
@@ -4753,6 +4758,50 @@ def test_finance_formula_planner_computes_category_metric_rank_formulas() -> Non
     assert growth_plan.payload["diagnostics"]["rank_mode"] == "growth_rate"
     category_map = growth_plan.payload["diagnostics"]["variable_category_map"]
     assert {item["category"] for item in category_map.values()} == {"Data Center", "Gaming"}
+
+
+def test_finance_formula_planner_computes_direct_metric_lookup_formulas() -> None:
+    missing_plan = plan_finance_formula(
+        question="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        facts=[],
+        existing_traces=[],
+    )
+
+    assert missing_plan.status == "missing_facts"
+    assert missing_plan.formula_name == "metric_lookup"
+    assert missing_plan.missing_facts == ["capital_expenditures"]
+
+    ready_plan = plan_finance_formula(
+        question="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        facts=[
+            _year_fact(
+                "capital expenditures",
+                "-1577",
+                2018,
+                fact_id="capex-2018",
+                metadata={"label": "Purchases of property, plant and equipment"},
+            )
+        ],
+        existing_traces=[],
+    )
+
+    assert ready_plan.status == "ready"
+    assert ready_plan.formula_name == "metric_lookup"
+    assert ready_plan.payload["expression"] == "capital_expenditures"
+    assert ready_plan.payload["variables"] == {"capital_expenditures": "1577"}
+    assert ready_plan.payload["diagnostics"]["bound_line_item"]["label"] == "Purchases of property, plant and equipment"
+
+    net_income_plan = plan_finance_formula(
+        question="What is Amazon's FY2019 net income attributable to shareholders in USD millions?",
+        facts=[
+            _year_fact("income tax expense", "100", 2019, fact_id="tax-2019"),
+            _year_fact("net income", "11588", 2019, fact_id="net-income-2019"),
+        ],
+        existing_traces=[],
+    )
+
+    assert net_income_plan.status == "ready"
+    assert net_income_plan.payload["variables"] == {"net_income": "11588"}
 
 
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:
@@ -10595,7 +10644,7 @@ def test_retrieval_fallback_prefers_fact_ledger_and_suppresses_accession_numbers
     assert "$9.1 billion" not in final.answer
     assert "000470" not in final.answer
     assert "1577" in final.answer
-    assert "已由证据账本支持的关键数值" in final.answer
+    assert "已由证据账本支持的关键数值" in final.answer or "已完成的确定性计算" in final.answer
     assert final.citation_refs == ["cite-mmm"]
     synthesis_gates = journal.records(task_id="task-mmm-capex", kind="synthesis_gate_result")
     assert synthesis_gates[0].data["status"] == "failed"

@@ -152,12 +152,17 @@ category-metric ranking scaffold for segment, region, product category,
 short-term investment type, liability-line, and derivative notional questions.
 The host prepares evidence slots and calculator-visible `max`/`min` transforms;
 the LLM still maps the extreme value to the cited category and explains the
-answer. In question-only static coverage, recognized FinanceBench formula plans
-moved from `38/150` to `84/150`; this is code-regression evidence for the next
-live run, not a benchmark accuracy score. A fresh live attempt on 2026-06-17
-again found only `DEEPSEEK_API_KEY` in Windows environment variables, and the
-minimal model call returned HTTP `402`, so no new live FinanceBench accuracy
-score is reported.
+answer. The same line now includes a generic `metric_lookup` identity transform
+for direct filing line-item extraction such as capex, net PP&E, AR/AP,
+inventories, COGS, net income, adjusted EBITDA, operating cash flow, dividends,
+restructuring costs, assets/current assets/current liabilities, VaR, credit
+facilities, transaction proceeds/gains, and expected benefit payments. In
+question-only static coverage, recognized FinanceBench formula plans moved from
+`38/150` to `102/150`; this is code-regression evidence for the next live run,
+not a benchmark accuracy score. A fresh live attempt on 2026-06-17 again found
+only `DEEPSEEK_API_KEY` in Windows environment variables, and the minimal model
+call returned HTTP `402`, so no new live FinanceBench accuracy score is
+reported.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

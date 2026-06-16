@@ -123,6 +123,8 @@ def plan_finance_formula(
         return _plan_margin_series(question=question, facts=usable, formula_name="margin_consistency_range", mode="range")
     if formula == "category_metric_rank":
         return _plan_category_metric_rank(question=question, facts=usable)
+    if formula == "metric_lookup":
+        return _plan_metric_lookup(question=question, facts=usable)
     if formula == "yoy_growth":
         return _plan_yoy_growth(question=question, facts=usable)
     if formula == "debt_to_equity":
@@ -265,6 +267,8 @@ def _detect_formula(question: str) -> str | None:
         return "bridge_subtotal"
     if _looks_like_category_metric_rank(text):
         return "category_metric_rank"
+    if _looks_like_metric_lookup(text):
+        return "metric_lookup"
     if "yoy" in text or "year-over-year" in text or "year over year" in text:
         return "yoy_growth"
     if _source_grounded_explanation_intent(text) and not _explicit_calculation_intent(text):
@@ -404,6 +408,31 @@ def _looks_like_category_metric_rank(text: str) -> bool:
         "ebitdar",
     )
     return any(marker in text for marker in category_markers)
+
+
+def _looks_like_metric_lookup(text: str) -> bool:
+    if _metric_lookup_spec(text) is None:
+        return False
+    if any(marker in text for marker in ("ratio", "turnover", "margin", "growth", "as a percent", "as a percentage", "as %")):
+        return False
+    lookup_markers = (
+        "what is",
+        "what was",
+        "how much",
+        "how many",
+        "quantity",
+        "amount",
+        "total amount",
+        "year end",
+        "at the end",
+        "generated in cash flow",
+        "pay out",
+        "paid out",
+        "expected to pay",
+        "state answer",
+        "answer in",
+    )
+    return any(marker in text for marker in lookup_markers)
 
 
 def _looks_like_margin_consistency(text: str) -> bool:
@@ -1133,6 +1162,73 @@ def _absolute_decimal_string(value: object) -> str:
     if decimal is None:
         return str(value)
     return str(abs(decimal))
+
+
+def _metric_lookup_spec(question: str) -> JsonObject | None:
+    text = _metric_text(question)
+    compact = text.replace(" ", "")
+    if "capital expenditure" in text or "capital expenditures" in text or "capex" in text:
+        return _lookup_spec("capital_expenditures", ("capital expenditures", "capex"), unit="currency")
+    if any(marker in text for marker in ("net ppne", "net pp&e", "net ppe", "net property plant and equipment")) or (
+        "property plant and equipment" in text and "net" in text
+    ):
+        return _lookup_spec("property_plant_and_equipment_net", _PPE_NET_METRICS, unit="currency")
+    if "accounts receivable" in text or "net ar" in text or "net accounts receivable" in text:
+        return _lookup_spec("accounts_receivable", ("accounts receivable", "net accounts receivable", "receivables"), unit="currency")
+    if "accounts payable" in text:
+        return _lookup_spec("accounts_payable", ("accounts payable", "trade accounts payable", "payables"), unit="currency")
+    if "total current liabilities" in text or "current liabilities" in text or "liabilitiescurrent" in compact:
+        return _lookup_spec("total_current_liabilities", ("total current liabilities", "current liabilities", "liabilities current"), unit="currency")
+    if "total current assets" in text or "current assets" in text or "assetscurrent" in compact:
+        return _lookup_spec("total_current_assets", ("total current assets", "current assets", "assets current"), unit="currency")
+    if "total assets" in text:
+        return _lookup_spec("assets", ("assets", "total assets"), unit="currency")
+    if "inventor" in text:
+        return _lookup_spec("inventory", ("inventory", "inventories", "merchandise inventories"), unit="currency")
+    if "cost of goods sold" in text or "cost of sales" in text or "cost of revenue" in text or "cogs" in text:
+        return _lookup_spec("cogs", ("cogs", "cost of sales", "cost of revenue", "cost of goods sold"), unit="currency")
+    if "adjusted non gaap ebitda" in text or "adjusted ebitda" in text or "non gaap ebitda" in text:
+        return _lookup_spec("adjusted_ebitda", ("adjusted ebitda", "non-gaap ebitda", "non gaap ebitda"), unit="currency")
+    if "net income" in text or "net earnings" in text:
+        return _lookup_spec("net_income", ("net income", "net earnings"), unit="currency", predicate="net_income")
+    if any(marker in text for marker in ("cash flow from operating activities", "cash from operations", "operating cash flow")):
+        return _lookup_spec(
+            "operating_cash_flow",
+            ("operating cash flow", "cash flow from operations", "net cash provided by operating activities"),
+            unit="currency",
+        )
+    if "cash dividends" in text or "dividends paid" in text or "paid dividends" in text or "pay out in cash dividends" in text:
+        return _lookup_spec("dividends_paid", ("dividends paid", "cash dividends paid", "dividends to shareholders"), unit="currency")
+    if "restructuring cost" in text or "restructuring costs" in text or "restructuring expense" in text or "restructuring expenses" in text:
+        return _lookup_spec(
+            "restructuring_costs",
+            ("restructuring costs", "restructuring expenses", "restructuring charges"),
+            unit="currency",
+        )
+    if "gain accruing" in text or "gain on separation" in text:
+        return _lookup_spec("gain_on_separation", ("gain on separation", "gain", "separation"), unit="currency")
+    if "cash proceeds" in text or ("proceeds" in text and ("separation" in text or "kenvue" in text or "consumer health" in text)):
+        return _lookup_spec("cash_proceeds", ("cash proceeds", "proceeds"), unit="currency")
+    if "value at risk" in text or re.search(r"\bvar\b", text):
+        return _lookup_spec("market_risk_var", ("value at risk", "var", "market risk"), unit="currency")
+    if "revolving credit" in text or "credit agreement" in text:
+        return _lookup_spec("credit_facility", ("revolving credit agreement", "credit facility", "borrowings"), unit="currency")
+    if "retirees" in text or "pension" in text or "postretirement" in text:
+        return _lookup_spec(
+            "pension_postretirement_payments",
+            ("expected benefit payments", "retirees", "pension", "postretirement"),
+            unit="currency",
+        )
+    return None
+
+
+def _lookup_spec(slot_name: str, markers: tuple[str, ...], *, unit: str, predicate: str | None = None) -> JsonObject:
+    return {
+        "slot_name": slot_name,
+        "markers": list(markers),
+        "unit": unit,
+        "predicate": predicate,
+    }
 
 
 def _category_rank_direction(question: str) -> str:
@@ -3158,6 +3254,54 @@ def _plan_cash_flow_activity_comparison(*, question: str, facts: list[FinanceFac
             "comparison_policy": "LLM maps the maximum signed amount to the activity name and explains most cash brought in or least cash lost.",
         },
     )
+
+
+def _plan_metric_lookup(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    spec = _metric_lookup_spec(question)
+    if spec is None:
+        return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "no_metric_lookup_spec"})
+    slot_name = str(spec["slot_name"])
+    markers = tuple(str(item) for item in spec.get("markers", []))
+    target_year = _target_fiscal_year(question)
+    predicate = _metric_lookup_predicate(str(spec.get("predicate") or ""))
+    fact = _latest_fact_for_year(facts, markers, target_year=target_year, predicate=predicate)
+    diagnostics: JsonObject = {
+        "target_fiscal_year": target_year,
+        "slot_name": slot_name,
+        "formula_definition": "direct metric lookup from the cited filing line item",
+        "semantic_decision_policy": (
+            "The host only binds the requested metric slot. The LLM must verify the statement, period, unit, "
+            "sign convention, and any explicit absence condition from cited evidence before finalizing."
+        ),
+    }
+    if fact is None:
+        return _missing("metric_lookup", [slot_name], diagnostics=diagnostics)
+    value = _metric_lookup_value_for_formula(slot_name, fact.value)
+    return _ready(
+        "metric_lookup",
+        slot_name,
+        {slot_name: value},
+        unit=fact.unit or str(spec.get("unit") or ""),
+        facts=[fact],
+        diagnostics={
+            **diagnostics,
+            "bound_line_item": _formula_bound_line_item(fact),
+            "cash_flow_outflow_magnitude_policy": slot_name
+            in {"capital_expenditures", "dividends_paid", "cogs", "restructuring_costs"},
+        },
+    )
+
+
+def _metric_lookup_predicate(name: str):
+    if name == "net_income":
+        return _is_net_income_fact
+    return None
+
+
+def _metric_lookup_value_for_formula(slot_name: str, value: object) -> str:
+    if slot_name in {"capital_expenditures", "dividends_paid", "cogs", "restructuring_costs"}:
+        return _absolute_decimal_string(value)
+    return str(value)
 
 
 def _plan_category_metric_rank(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
