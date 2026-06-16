@@ -2546,6 +2546,8 @@ class AgentRuntime:
                     "decision": parsed.get("decision") if parsed else None,
                     "reason_summary": parsed.get("reason_summary") if parsed else None,
                     "slot_bindings": parsed.get("slot_bindings") if parsed else [],
+                    "period_basis": _finance_slot_bind_semantic_basis(parsed, key="period_basis") if parsed else [],
+                    "line_item_basis": _finance_slot_bind_semantic_basis(parsed, key="line_item_basis") if parsed else [],
                     "formula_request_count": len(parsed.get("formula_requests", [])) if parsed else 0,
                     "accepted_formula_plan_count": len(plans),
                     "missing_slots": parsed.get("missing_slots") if parsed else [],
@@ -15378,7 +15380,9 @@ FINANCE_SLOT_BIND_CONTRACT = (
     "If raw_fields include target_document_binding hints, treat them as provenance hints only; still inspect raw/context before selecting a fact_id. "
     "When the task names a specific target filing or source document, compare raw_fields.accn, filed, form, source_uri, target_document_binding_accepted, and target_document_binding_score. "
     "For competing facts with the same company, fiscal year, metric, and period, a fact from the target filing accession or with target_document_binding_accepted=true is usually the better candidate than a later-filed restatement or spin-off-era filing; "
-    "if you choose a later-filed value instead, explicitly state why in reason_summary. "
+    "if you choose a later-filed value instead, explicitly state why in reason_summary and period_basis. "
+    "When SEC period evidence matters, include compact period_basis entries naming slot_name, fact_id, selected_period, rejected_alternatives when useful, raw_fields_used, and reason. "
+    "When line-item evidence matters, include compact line_item_basis entries naming slot_name, fact_id, selected_line_item, raw_fields_used, and reason. "
     "For revenue/net sales slots, do not bind a later-filed or restated revenue fact when target-filing revenue or net sales is available and better matches the requested document. "
     "Do not confuse cash-flow purchases of property, plant and equipment with balance-sheet property, plant and equipment net: purchases/capex fills capital_expenditures, while PP&E net must come from a balance-sheet asset row or a SEC concept/label explicitly indicating net property, plant and equipment. "
     "Respect the question's requested financial statement: if it asks to use the balance sheet, do not bind a cash-flow capital spending or purchases row as a balance-sheet asset balance. "
@@ -15392,7 +15396,7 @@ FINANCE_SLOT_BIND_CONTRACT = (
     "If any required slot is still missing, return decision=needs_more_evidence, leave formula_requests empty for formulas depending on that slot, and put the next retrieval/tool action in next_action. "
     "For a direct numeric lookup with no compiled transform_spec, still emit one identity formula_request for the final answer value so the host can execute and journal a FormulaTrace. "
     "A formula variable may reference a prior formula by string formula_name or {\"formula_ref\":\"name\"}; otherwise bind variables to fact_ids or numeric literals. "
-    "For DIO, explicitly decide whether the task requires conventional 365 days or a raw fiscal-year duration, state that choice in reason_summary, and make final DIO/difference formulas calculator-visible. "
+    "For DIO, explicitly decide whether the task requires conventional 365 days or a raw fiscal-year duration, state that choice in reason_summary and period_basis, and make final DIO/difference formulas calculator-visible. "
     "If not sufficient, return needs_more_evidence with missing_slots and next_action. "
     "Host will only validate fact_id existence, numeric parseability, and calculator execution; host will not make the semantic period or line-item decision for you. "
     "Keep JSON compact: slot_bindings<=64, formula_requests<=12, missing_slots<=24, every per-binding reason<=80 chars, reason_summary<=180 chars, no markdown, no prose outside JSON."
@@ -15423,6 +15427,24 @@ FINANCE_SLOT_BIND_OUTPUT_SCHEMA: JsonObject = {
     ],
     "missing_slots": ["slots that cannot be bound"],
     "next_action": {"tool": "retrieval.run|respond", "reason": "why"},
+    "period_basis": [
+        {
+            "slot_name": "slot affected by fiscal/period judgment",
+            "fact_id": "selected fact id",
+            "selected_period": "FY2024|period description",
+            "raw_fields_used": ["form", "fp", "start", "end", "duration_days", "frame", "accn"],
+            "reason": "compact basis for this period choice",
+        }
+    ],
+    "line_item_basis": [
+        {
+            "slot_name": "slot affected by line-item judgment",
+            "fact_id": "selected fact id",
+            "selected_line_item": "line item/concept chosen",
+            "raw_fields_used": ["concept", "label", "statement", "context", "raw", "source_uri"],
+            "reason": "compact basis for this line-item choice",
+        }
+    ],
     "reason_summary": "short rationale",
     "confidence": 0.0,
 }
@@ -15745,6 +15767,17 @@ def _raw_fact_summary_for_slot_bind(fact: FinanceFact) -> JsonObject:
     }
 
 
+def _finance_slot_bind_semantic_basis(parsed: JsonObject | None, *, key: str) -> list[JsonObject]:
+    if not isinstance(parsed, dict):
+        return []
+    result: list[JsonObject] = []
+    for item in _dict_items(parsed.get(key))[:24]:
+        compact = _compact_model_dict(item, limit=12)
+        if compact:
+            result.append(compact)
+    return result
+
+
 def _finance_slot_bind_plans_from_model(
     parsed: JsonObject | None,
     *,
@@ -15755,6 +15788,8 @@ def _finance_slot_bind_plans_from_model(
         return [], [{"reason": "slot_bind_model_output_missing"}]
     fact_by_id = {fact.fact_id: fact for fact in facts if fact.fact_id}
     bindings = _slot_bindings_by_variable(parsed.get("slot_bindings"), fact_by_id=fact_by_id)
+    period_basis = _finance_slot_bind_semantic_basis(parsed, key="period_basis")
+    line_item_basis = _finance_slot_bind_semantic_basis(parsed, key="line_item_basis")
     plans: list[FinanceFormulaPlan] = []
     rejected: list[JsonObject] = []
     for index, request in enumerate(_dict_items(parsed.get("formula_requests"))[:12], start=1):
@@ -15799,12 +15834,16 @@ def _finance_slot_bind_plans_from_model(
                         "source": "finance_slot_bind_model",
                         "ledger_ref": ledger_ref,
                         "model_reason_summary": parsed.get("reason_summary"),
+                        "model_period_basis": period_basis,
+                        "model_line_item_basis": line_item_basis,
                     },
                 },
                 diagnostics={
                     "source": "finance_slot_bind_model",
                     "decision": parsed.get("decision"),
                     "ledger_ref": ledger_ref,
+                    "model_period_basis": period_basis,
+                    "model_line_item_basis": line_item_basis,
                 },
             )
         )

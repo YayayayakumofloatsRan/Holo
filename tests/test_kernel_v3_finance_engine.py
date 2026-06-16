@@ -8992,6 +8992,69 @@ def test_finance_slot_bind_plans_use_model_selected_fact_ids_only() -> None:
     assert plans[0].payload["input_fact_ids"] == ["fact-inv-begin", "fact-inv-end", "fact-cogs"]
 
 
+def test_finance_slot_bind_plans_preserve_model_period_and_line_item_basis() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="fact-fy-revenue",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="1200",
+            unit="USD",
+            scale="actual",
+            source_ref="source-1",
+            evidence_ref="evidence-1",
+            citation_ref="cite-1",
+            metadata={"form": "10-K", "fp": "FY", "start": "2024-02-01", "end": "2025-01-31"},
+        )
+    ]
+    parsed = {
+        "decision": "ready",
+        "slot_bindings": [
+            {"slot_name": "revenue", "variable_name": "revenue", "fact_id": "fact-fy-revenue"},
+        ],
+        "formula_requests": [
+            {
+                "formula_name": "revenue",
+                "expression": "revenue",
+                "variables": {"revenue": {"fact_id": "fact-fy-revenue"}},
+                "unit": "USD",
+            }
+        ],
+        "period_basis": [
+            {
+                "slot_name": "revenue",
+                "fact_id": "fact-fy-revenue",
+                "selected_period": "FY2024",
+                "raw_fields_used": ["form", "fp", "start", "end"],
+                "reason": "10-K FY duration matches requested fiscal year.",
+            }
+        ],
+        "line_item_basis": [
+            {
+                "slot_name": "revenue",
+                "fact_id": "fact-fy-revenue",
+                "selected_line_item": "Revenue",
+                "raw_fields_used": ["concept", "label"],
+                "reason": "Revenue concept directly matches requested line item.",
+            }
+        ],
+        "reason_summary": "Model selected the FY revenue line using SEC period and line-item fields.",
+    }
+
+    plans, rejected = _finance_slot_bind_plans_from_model(parsed, facts=facts, ledger_ref="ledger-1")
+
+    assert rejected == []
+    assert len(plans) == 1
+    assert plans[0].payload is not None
+    diagnostics = plans[0].payload["diagnostics"]
+    assert diagnostics["model_period_basis"][0]["selected_period"] == "FY2024"
+    assert diagnostics["model_line_item_basis"][0]["selected_line_item"] == "Revenue"
+    assert plans[0].diagnostics["model_period_basis"] == diagnostics["model_period_basis"]
+
+
 def test_finance_slot_bind_plans_accept_model_selected_imperfect_metric_identity_formula() -> None:
     facts = [
         FinanceFact(

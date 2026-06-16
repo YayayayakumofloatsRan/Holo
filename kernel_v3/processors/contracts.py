@@ -118,6 +118,8 @@ FINANCE_SLOT_BIND_SCHEMA = JsonSchema(
     optional={
         "missing_slots": "list",
         "next_action": "dict",
+        "period_basis": "list",
+        "line_item_basis": "list",
         "confidence": "number",
     },
 )

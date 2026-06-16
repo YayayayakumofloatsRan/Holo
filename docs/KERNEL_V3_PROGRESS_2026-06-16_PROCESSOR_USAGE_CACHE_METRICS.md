@@ -2845,3 +2845,61 @@ py_compile passed
 py_compile passed
 3 passed in 0.07s
 ```
+
+---
+
+## 44. 追加落地：Model-Owned Slot-Bind Period/Line-Item Basis
+
+本节继续推进金融做题能力，但不把语义判断转移给 host。目标是让模型在
+`finance.slot_bind` 阶段不仅给出 fact_id 和 formula request，还把自己选择
+期间和行项目的依据结构化写出来，方便后续 numeric judge、synthesizer、报告和
+错题分析复用。
+
+问题：
+
+- SEC companyfacts / filing evidence 中经常同时出现 FY、季度、TTM、期末余额、
+  duration flow、later-filed restatement、target filing accession 等候选；
+- 旧的 `reason_summary` 太短，无法稳定表达每个 slot 为什么选这个 period /
+  line item；
+- host 不能用规则替模型选事实，但应该完整记录模型做出 period/line-item 判断时
+  参考了哪些 raw fields。
+
+变更：
+
+- `finance.slot_bind` schema 新增可选字段：
+  - `period_basis`
+  - `line_item_basis`
+- slot-bind prompt 要求模型在 period/line-item 有竞争时输出 compact basis：
+  - `slot_name`
+  - `fact_id`
+  - `selected_period` / `selected_line_item`
+  - `raw_fields_used`
+  - `reason`
+- runtime 只做 schema/compact 转存：
+  - journal `finance_slot_bind` 记录保留 `period_basis` / `line_item_basis`；
+  - `FinanceFormulaPlan.payload.diagnostics` 保留 `model_period_basis` /
+    `model_line_item_basis`；
+  - `FinanceFormulaPlan.diagnostics` 同步保留这些字段。
+
+边界：
+
+- host 不根据这些 basis 重新选择 fact；
+- host 不用这些 basis 生成答案；
+- 它们是模型语义判断的 provenance，而不是规则 fallback；
+- 老模型不输出这些字段也不会被 schema 拒绝。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_slot_bind_plans_use_model_selected_fact_ids_only tests/test_kernel_v3_finance_engine.py::test_finance_slot_bind_plans_preserve_model_period_and_line_item_basis tests/test_kernel_v3_finance_engine.py::test_finance_slot_bind_plans_accept_model_selected_imperfect_metric_identity_formula tests/test_kernel_v3_finance_engine.py::test_model_finance_slot_bind_repairs_malformed_json_without_host_semantic_binding -q
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/processors/contracts.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+4 passed in 0.80s
+py_compile passed
+243 passed in 2.46s
+```
