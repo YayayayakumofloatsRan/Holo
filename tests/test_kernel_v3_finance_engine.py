@@ -4274,6 +4274,12 @@ def test_finance_task_compiler_emits_period_change_and_cash_flow_activity_progra
             "cash_and_equivalents_current - cash_and_equivalents_prior",
         ),
         (
+            "Looking at VaR, did the risk that JPM faced in the second fiscal quarter of 2023 decrease compared to the same period in the prior year?",
+            "market_risk_var_change",
+            ["market_risk_var_prior", "market_risk_var_current"],
+            "market_risk_var_current - market_risk_var_prior",
+        ),
+        (
             "Did Pfizer grow its PPNE between FY20 and FY21?",
             "property_plant_and_equipment_change",
             ["property_plant_and_equipment_net_prior", "property_plant_and_equipment_net_current"],
@@ -4296,7 +4302,8 @@ def test_finance_task_compiler_emits_period_change_and_cash_flow_activity_progra
     for question, formula_name, missing_slots, expression in cases:
         program = compile_finance_task_program(question=question, facts=[])
 
-        assert program.task_spec.task_type == "compute"
+        expected_task_type = "compare_compute" if formula_name == "market_risk_var_change" else "compute"
+        assert program.task_spec.task_type == expected_task_type
         assert program.task_spec.diagnostics["formula_name"] == formula_name
         assert program.slot_frame is not None
         assert program.slot_frame.missing_slots == missing_slots
@@ -4717,6 +4724,22 @@ def test_finance_formula_planner_computes_period_change_and_cash_flow_activity_f
     assert ppe_plan.payload["variables"] == {
         "property_plant_and_equipment_net_prior": "100",
         "property_plant_and_equipment_net_current": "125",
+    }
+
+    var_plan = plan_finance_formula(
+        question="Looking at VaR, did the risk faced in Q2 2023 decrease compared to the same period in the prior year?",
+        facts=[
+            _year_fact("value at risk", "90", 2022, fact_id="var-2022", metadata={"fp": "Q2"}),
+            _year_fact("value at risk", "75", 2023, fact_id="var-2023", metadata={"fp": "Q2"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert var_plan.status == "ready"
+    assert var_plan.formula_name == "market_risk_var_change"
+    assert var_plan.payload["variables"] == {
+        "market_risk_var_prior": "90",
+        "market_risk_var_current": "75",
     }
 
     activity_plan = plan_finance_formula(

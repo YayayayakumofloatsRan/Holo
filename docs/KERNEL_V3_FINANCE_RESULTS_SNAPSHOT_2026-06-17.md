@@ -74,6 +74,10 @@ task compiler now add generic evidence/slot/transform scaffolds for:
   `max`/`min` transform over cited numeric rows; the LLM maps the extreme value
   back to the category, resolves ties or wording, and explains the final answer
   from filing evidence;
+- `market_risk_var_change`: a period-change scaffold for VaR questions that
+  ask whether risk increased/decreased compared with a prior period. The host
+  binds prior/current value-at-risk evidence and computes the signed difference;
+  the LLM interprets the result in the filing's market-risk context;
 - `metric_lookup`: a generic filing-metric identity transform for direct
   line-item extraction questions. It covers requested single facts such as
   capital expenditures, net PP&E, accounts receivable/payable, inventories,
@@ -93,9 +97,9 @@ task compiler now add generic evidence/slot/transform scaffolds for:
   legal proceedings, dividends, governance/proxy items, shareholder voting,
   guidance, separations/discontinued operations, nonrecurring events, revenue
   and inventory drivers, expense ratio explanations, growth-profile evidence,
-  restructuring liabilities, and market-risk VaR comparison disclosures. The
-  host prepares the EvidenceSpec and task type; the LLM reads cited evidence and
-  owns the semantic conclusion.
+  restructuring liabilities, and remaining market-risk disclosures. The host
+  prepares the EvidenceSpec and task type; the LLM reads cited evidence and owns
+  the semantic conclusion.
 
 The fact ledger also now canonicalizes investing cash flow, financing cash
 flow, store-count, segment-income, EBITDAR, debt-securities, marketable-
@@ -136,6 +140,14 @@ transform and `geographic revenue` evidence target. It also moved Pfizer/Upjohn
 note evidence. These changes improve live task structure; they are not answer
 tables.
 
+The next no-gold structural pass moved JPM's "did VaR decrease compared with
+the same quarter in the prior year?" row from broad market-risk disclosure to
+`market_risk_var_change`, with `market_risk_var_prior` and
+`market_risk_var_current` evidence slots and a
+`market_risk_var_current - market_risk_var_prior` transform. This gives the LLM
+a signed numeric trace for the yes/no decrease judgment while leaving source
+binding and interpretation model-owned.
+
 ## Verification
 
 The following checks were run as code regression only:
@@ -145,6 +157,7 @@ The following checks were run as code regression only:
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "category_metric_rank"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "margin_profile_and_consistency"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "disclosure_lookup or direct_disclosure or metric_lookup or requested_metric_for_growth"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "period_change or cash_flow_activity or market_risk_var_change"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py tests/test_kernel_v3_finance_benchmark_report.py -q
 git diff --check
@@ -154,9 +167,10 @@ Latest result: py_compile passed; targeted category-rank slice
 `2 passed, 270 deselected in 1.57s`; targeted metric-lookup / regression slice
 `4 passed, 269 deselected in 1.55s`; targeted disclosure/metric regression
 slice `5 passed, 270 deselected in 1.68s`; latest targeted
-category/metric-lookup slice `5 passed, 271 deselected in 1.76s`; full finance
-engine `276 passed in 3.85s`; FinanceBench harness/report regression
-`59 passed in 406.37s`.
+category/metric-lookup slice `5 passed, 271 deselected in 1.76s`; targeted
+period-change/VaR slice `3 passed, 273 deselected in 1.57s`; full finance
+engine `276 passed in 5.13s`; FinanceBench harness/report regression
+`59 passed in 397.74s`.
 
 The live model smoke was also attempted with the Windows `DEEPSEEK_API_KEY`
 injected into the WSL process and `HOLO_V3_LIVE_MODEL=1`. It reached the

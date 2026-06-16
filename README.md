@@ -154,7 +154,9 @@ The host prepares evidence slots and calculator-visible `max`/`min` transforms;
 the LLM still maps the extreme value to the cited category and explains the
 answer. The newest follow-up also routes "biggest drop"/decline-by-region
 questions through that ranking scaffold instead of treating them as plain
-geography disclosure. The same line now includes a generic `metric_lookup`
+geography disclosure, and upgrades VaR prior-year comparison questions to a
+`market_risk_var_change` period-change scaffold with prior/current VaR
+evidence slots. The same line now includes a generic `metric_lookup`
 identity transform for direct filing line-item extraction such as capex, net
 PP&E, AR/AP, inventories, COGS, net income, adjusted EBITDA, operating cash
 flow, dividends, restructuring costs, assets/current assets/current
@@ -166,7 +168,7 @@ registered securities, dividend history, 8-K summaries, acquisitions,
 industries, products/services, customers/geographies, legal proceedings,
 governance/proxy/vote items, guidance, separations/discontinued operations,
 nonrecurring events, revenue/inventory/expense drivers, restructuring
-liabilities, and market-risk VaR comparison disclosures. In question-only
+liabilities, and remaining market-risk disclosures. In question-only
 static coverage, recognized FinanceBench formula plans and EvidenceSpec rows
 now reach `150/150`; this is code-regression evidence for the next live run,
 not a benchmark accuracy score. A fresh live attempt on 2026-06-17 again found

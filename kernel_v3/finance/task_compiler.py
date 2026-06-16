@@ -1857,6 +1857,12 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
             "currency",
             "cash_and_equivalents_change",
         ),
+        "market_risk_var_change": (
+            ["market_risk_var_prior", "market_risk_var_current"],
+            "market_risk_var_current - market_risk_var_prior",
+            "currency",
+            "market_risk_var_change",
+        ),
         "property_plant_and_equipment_change": (
             ["property_plant_and_equipment_net_prior", "property_plant_and_equipment_net_current"],
             "property_plant_and_equipment_net_current - property_plant_and_equipment_net_prior",
@@ -2231,6 +2237,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "transaction_or_separation_note"
     if slot_name == "market_risk_var":
         return "market_risk_disclosures"
+    if slot_name in {"market_risk_var_prior", "market_risk_var_current"}:
+        return "market_risk_disclosures"
     if slot_name == "organic_sales_change":
         return "md&a_or_segment_note"
     if slot_name == "credit_facility":
@@ -2369,6 +2377,8 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "cash_proceeds": "cash proceeds",
         "separation_payment": "expected separation payment",
         "market_risk_var": "value at risk",
+        "market_risk_var_prior": "value at risk",
+        "market_risk_var_current": "value at risk",
         "organic_sales_change": "organic sales change",
         "credit_facility": "revolving credit agreement",
         "pension_postretirement_payments": "expected benefit payments",
@@ -2686,6 +2696,8 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "separation_payment": ["expected payment", "expect to pay", "spin-off payment", "separation payment", "upjohn"],
         "segment_results": ["segment revenue", "segment income", "reportable segments", "business segments"],
         "market_risk_var": ["value at risk", "var", "market risk"],
+        "market_risk_var_prior": ["value at risk", "var", "market risk", "prior year"],
+        "market_risk_var_current": ["value at risk", "var", "market risk", "current period"],
         "organic_sales_change": ["organic sales change", "real change in sales", "sales change excluding fx", "foreign exchange"],
         "derivative_instruments": ["derivative instruments", "notional value", "foreign currency derivatives", "interest rate derivatives"],
         "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],

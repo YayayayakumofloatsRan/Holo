@@ -97,6 +97,17 @@ def plan_finance_formula(
             unit="currency",
             formula_definition="current cash and cash equivalents less prior cash and cash equivalents",
         )
+    if formula == "market_risk_var_change":
+        return _plan_period_change(
+            question=question,
+            facts=usable,
+            formula_name="market_risk_var_change",
+            markers=("value at risk", "var", "market risk"),
+            prior_slot="market_risk_var_prior",
+            current_slot="market_risk_var_current",
+            unit="currency",
+            formula_definition="current value at risk less prior-period value at risk",
+        )
     if formula == "property_plant_and_equipment_change":
         return _plan_period_change(
             question=question,
@@ -201,6 +212,8 @@ def _detect_formula(question: str) -> str | None:
         return "component_percent_of_total"
     if _looks_like_cash_and_equivalents_change(text):
         return "cash_and_equivalents_change"
+    if _looks_like_market_risk_var_change(text):
+        return "market_risk_var_change"
     if _looks_like_property_plant_and_equipment_change(text):
         return "property_plant_and_equipment_change"
     if _looks_like_store_count_change(text):
@@ -354,6 +367,12 @@ def _looks_like_cash_and_equivalents_change(text: str) -> bool:
     if not any(marker in text for marker in ("cash and cash equivalents", "cash & cash equivalents", "cash equivalents")):
         return False
     return any(marker in text for marker in ("drop", "dropped", "increase", "increased", "decrease", "decreased", "change", "changed", "between"))
+
+
+def _looks_like_market_risk_var_change(text: str) -> bool:
+    if not ("value at risk" in text or re.search(r"\bvar\b", text)):
+        return False
+    return any(marker in text for marker in ("decrease", "decreased", "increase", "increased", "compared", "prior year", "year over year", "year-over-year"))
 
 
 def _looks_like_property_plant_and_equipment_change(text: str) -> bool:
