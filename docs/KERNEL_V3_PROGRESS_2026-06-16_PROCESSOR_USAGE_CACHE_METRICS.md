@@ -3564,3 +3564,55 @@ balance-sheet line item the planner bound into the numerator and denominator.
 3 passed, 229 deselected in 1.01s
 322 passed in 3.06s
 ```
+
+---
+
+## 58. 追加落地：Revenue Denominator Variant Coverage
+
+Margin tasks still had a generic denominator-acquisition gap. The fact ledger
+already preserves statement-level revenue captions such as `sales and other
+operating revenues`, `operating revenues`, `net revenue`, and
+`total net revenues`, but `_is_revenue_fact()` accepted a narrower set of
+denominator labels. That meant a valid filing revenue line could be present in
+the ledger while the formula planner still reported `revenue_denominator`
+missing.
+
+变更：
+
+- `_is_revenue_fact()` now accepts additional statement revenue variants:
+  - `net revenue`
+  - `total net revenues`
+  - `operating revenues`
+  - `sales and other operating revenues`
+  - `SalesAndOtherOperatingRevenue`
+  - `OperatingRevenues`
+  - contract-revenue concepts such as
+    `RevenueFromContractWithCustomerExcludingAssessedTax`
+- `_revenue_concept_priority()` now recognizes these normalized metric labels
+  after the filtering gate, so better operating/sales revenue lines can outrank
+  broader `total revenues and other income` rows when both are available;
+- existing pollution guards remain in place for contract liability revenue
+  recognized, deferred revenue, remaining performance obligations, segment
+  rows, taxes, and other non-denominator line items.
+
+边界：
+
+- no benchmark-specific company or answer logic was added;
+- the formula planner only broadens source-compatible revenue denominator
+  recognition;
+- if several valid revenue candidates are present, sorting still relies on
+  source/form/period/concept priority rather than a hard-coded answer table.
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "revenue_denominator or gross_margin or net_profit_margin or statement_revenue_denominator or operating_revenues_concept"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+5 passed, 222 deselected in 0.85s
+324 passed in 2.96s
+```

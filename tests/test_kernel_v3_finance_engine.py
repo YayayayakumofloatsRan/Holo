@@ -5375,6 +5375,63 @@ def test_finance_formula_planner_uses_gross_profit_for_gross_margin() -> None:
     assert plan.input_fact_ids == ["nvda-gross-profit", "nvda-revenue"]
 
 
+def test_finance_formula_planner_accepts_statement_revenue_denominator_variants() -> None:
+    plan = plan_finance_formula(
+        question="Calculate FY2024 net margin for Chevron.",
+        facts=[
+            _year_fact(
+                "sales and other operating revenues",
+                "193414000000",
+                2024,
+                fact_id="cvx-sales-other-operating",
+                metadata={
+                    "concept": "SalesAndOtherOperatingRevenue",
+                    "label": "Sales and Other Operating Revenues",
+                    "form": "10-K",
+                    "fp": "FY",
+                },
+            ),
+            _year_fact(
+                "total revenues and other income",
+                "202792000000",
+                2024,
+                fact_id="cvx-total-revenues-other-income",
+                metadata={
+                    "concept": "TotalRevenuesAndOtherIncome",
+                    "label": "Total Revenues and Other Income",
+                    "form": "10-K",
+                    "fp": "FY",
+                },
+            ),
+            _year_fact("net income", "17661000000", 2024, fact_id="cvx-net-income"),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload["variables"] == {"numerator": "17661000000", "denominator": "193414000000"}
+    assert plan.input_fact_ids == ["cvx-net-income", "cvx-sales-other-operating"]
+
+
+def test_finance_formula_planner_accepts_operating_revenues_concept_as_denominator() -> None:
+    plan = plan_finance_formula(
+        question="Calculate FY2024 operating margin for UtilityCo.",
+        facts=[
+            _year_fact("operating income", "1200000000", 2024, fact_id="utility-operating-income"),
+            _year_fact(
+                "operating revenues",
+                "6400000000",
+                2024,
+                fact_id="utility-operating-revenues",
+                metadata={"concept": "OperatingRevenues", "label": "Operating revenues", "form": "10-K", "fp": "FY"},
+            ),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload["variables"] == {"numerator": "1200000000", "denominator": "6400000000"}
+    assert plan.input_fact_ids == ["utility-operating-income", "utility-operating-revenues"]
+
+
 def test_finance_formula_planner_uses_requested_metric_for_growth() -> None:
     plan = plan_finance_formula(
         question="What was Meta's net income growth from fiscal year 2023 to 2024?",

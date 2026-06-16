@@ -2057,15 +2057,34 @@ def _is_revenue_fact(fact: FinanceFact) -> bool:
     exact = {
         "revenue",
         "revenues",
+        "net revenue",
         "net sales",
         "net revenues",
+        "total net revenues",
         "total revenue",
         "total revenues",
+        "total revenues and other income",
         "sales",
+        "operating revenue",
+        "operating revenues",
+        "sales and other operating revenue",
+        "sales and other operating revenues",
         "sales revenue net",
+        "sales revenue goods net",
         "sales revenue services net",
     }
-    return any(text in exact for text in texts)
+    compact_exact = {
+        "revenuefromcontractwithcustomerexcludingassessedtax",
+        "revenuefromcontractwithcustomerincludingassessedtax",
+        "salesandotheroperatingrevenue",
+        "operatingrevenues",
+        "salesrevenuegoodsnet",
+        "salesrevenueservicesnet",
+        "salesrevenuenet",
+        "revenuesnetofinterestexpense",
+        "totalrevenuesandotherincome",
+    }
+    return any(text in exact or text.replace(" ", "") in compact_exact for text in texts)
 
 
 def _is_net_income_fact(fact: FinanceFact) -> bool:
@@ -2147,7 +2166,21 @@ def _revenue_concept_priority(fact: FinanceFact) -> int:
     compact_concept = concept.replace(" ", "")
     if compact_concept in primary_concepts:
         return primary_concepts[compact_concept]
-    if metric in {"revenue", "revenues", "total revenue", "total revenues", "net sales", "net revenues", "sales"}:
+    if metric in {
+        "revenue",
+        "revenues",
+        "total revenue",
+        "total revenues",
+        "net revenue",
+        "net sales",
+        "net revenues",
+        "total net revenues",
+        "sales",
+        "operating revenue",
+        "operating revenues",
+        "sales and other operating revenue",
+        "sales and other operating revenues",
+    }:
         return 10
     return 0
 

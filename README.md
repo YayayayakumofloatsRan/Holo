@@ -2252,6 +2252,10 @@ without adding answer tables or host-side semantic selection.
 Debt-to-equity traces now also carry selected numerator/denominator line-item
 semantics, so a ratio computed with total liabilities can be stated as such
 instead of being silently rewritten as debt-only.
+Margin planning also accepts more statement-level revenue denominator variants
+already preserved by the fact ledger, including `sales and other operating
+revenues`, `operating revenues`, `net revenue`, and related SEC revenue
+concepts, while keeping deferred/contract-liability/segment pollution blocked.
 
 ## Validation
 
