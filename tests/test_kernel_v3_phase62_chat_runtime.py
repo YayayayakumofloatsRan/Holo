@@ -1436,6 +1436,28 @@ def test_phase62_public_chat_json_compacts_large_failure_report():
     assert len(encoded) < 5000
 
 
+def test_phase62_public_chat_json_prefers_structured_final_answer_text():
+    payload = ChatRuntimeResult(
+        status="completed",
+        thread_id="thread-final-preferred",
+        turn_id="turn-final-preferred",
+        route="new_task",
+        task_id="task-final-preferred",
+        run_id="run-1",
+        answer="BROKEN TOP LEVEL ANSWER",
+        final_answer={"answer": "Structured final answer is authoritative.", "citation_refs": ["cite-1"]},
+        failure_report=None,
+        pending_question=None,
+        command_result=None,
+        summary=None,
+        trace_refs=["ledger-1"],
+    )
+
+    public = public_chat_result_payload(payload)
+
+    assert public["answer"] == "Structured final answer is authoritative."
+
+
 def test_phase62_failed_agent_result_still_returns_user_visible_answer():
     class FailedAgent:
         def __init__(self) -> None:

@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Pattern
 
-from kernel_v3.capabilities import SAFE_SEMANTIC_CAPABILITIES, semantic_capability_catalog
+from kernel_v3.capabilities import SAFE_SEMANTIC_CAPABILITIES, compact_semantic_capability_catalog
 from kernel_v3.agent.contracts import SemanticIntake, TaskIntent
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import JsonObject
@@ -161,73 +161,32 @@ def _semantic_prompt(
         "runtime_context": _compact_runtime_context(runtime_context),
         "interaction_preferences": preferences,
         "response_language": preferences["response_language"],
-        "host_capability_catalog": semantic_capability_catalog(),
-        "host_rules": [
-            "Split compound requests into ordered intents.",
-            "Do not set requires_clarification merely because a task is compound.",
-            "For safe read-only compound tasks with clear tool arguments, set requires_clarification=false and keep the executable mode.",
-            "Ask the user only when critical scope/tool arguments are missing, a capability is blocked, or the user explicitly requests interruption/confirmation.",
-            "Use response_language as the default language for user-visible clarification text when the user's requested language is unclear or mixed.",
-            "Use broad semantic judgment instead of sample-specific phrase matching.",
-            (
-                "Use open semantic labels when useful; required_capabilities "
-                "are the executable tool contract the host validates."
-            ),
-            (
-                "For API documentation, developer docs, SDK docs, endpoint, "
-                "authentication, parameter, schema, rate-limit, or pricing "
-                "research, use technical.api_documentation or "
-                "technical.documentation_research so the host can select the "
-                "technical_documentation research profile."
-            ),
-            (
-                "For scholarly, academic, mathematical, scientific, frontier, "
-                "paper, preprint, survey, literature-review, or open-problem "
-                "research, use academic.research, academic.frontier_research, "
-                "academic.literature_review, or academic.paper_search so the "
-                "host can select the academic_research profile. Do not reduce "
-                "academic frontier research to dictionary lookup."
-            ),
-            (
-                "Place structured tool arguments in intent.metadata.capability_args "
-                "keyed by capability name."
-            ),
-            (
-                "For finance-capability tasks with named entities, tickers, periods, filings, "
-                "deals, metrics, or public data needs, prefer retrieval_answer with "
-                "retrieval.run/finance.* capabilities. Do not require clarification merely "
-                "because source URLs, CIKs, or formula inputs must be retrieved."
-            ),
-            (
-                "When useful, place broad state hints in intent.metadata.domain, "
-                "activity, resource, and execution_surface; these are state "
-                "coordinates, not permissions."
-            ),
-            "Classify role/persona requests as roleplay scoped to the current thread.",
-            "Classify transport/account/client control as transport_control and blocked.",
-            "Classify unavailable tool, device, account, or execution requests as blocked capabilities instead of pretending they ran.",
-            "Classify requests for hidden/private reasoning as private_reasoning and do not expose chain-of-thought.",
-            "Classify local writing/report generation as workspace_write. Use status=ready when path and text can be proposed safely; use needs_user_input only when critical write target or content is missing.",
-            "If a compound task includes blocked capabilities, ask for confirmation or scope reduction before execution.",
-            (
-                "When runtime_context.thread_working_context.route is answer_pending_question, "
-                "interpret user_goal as an answer to the pending question and original task, "
-                "not as a standalone vague request."
-            ),
-            (
-                "Use runtime_context.thread_working_context.original_task, pending_question, "
-                "recent_turns, and recent_task_trace to preserve thread-local working memory."
-            ),
-            (
-                "If the user accepts a fallback or limitation proposed by the previous assistant turn, "
-                "continue the original task under that limitation instead of asking a new generic clarification."
-            ),
-            "If unsure, preserve uncertainty in clarification_question instead of forcing a keyword-style class.",
-        ],
+        "host_capability_catalog": compact_semantic_capability_catalog(),
+        "host_rules": _semantic_host_rules(runtime_context),
     }
     redacted, _markers = Redactor().redact(payload)
     safe = redacted if isinstance(redacted, dict) else {"user_goal": "[REDACTED:SECRET]"}
     return json.dumps(safe, ensure_ascii=False, sort_keys=True)
+
+
+def _semantic_host_rules(runtime_context: JsonObject | None) -> list[str]:
+    rules = [
+        "The model classifies intent and proposes capability structure; the host validates policy, tools, memory, execution, and stop.",
+        "Use broad semantic judgment, not phrase matching or a fixed sample table.",
+        "Use open intent labels when useful, but put host-visible executable needs in required_capabilities and metadata.capability_args.",
+        "Do not ask for clarification when a safe finance/research task has named entities, periods, filings, metrics, or public evidence targets that can be retrieved.",
+        "For finance calculations, include retrieval.run/finance.* for evidence and calculator.compute when the task requires derived numeric work.",
+        "For academic, technical, workspace, memory, and system tasks, choose the matching capability family from the compact catalog and expose missing boundaries honestly.",
+        "Classify hidden/private reasoning requests as private_reasoning; expose concise reasons, evidence, and trace summaries, not private chain-of-thought.",
+        "If unsure, preserve uncertainty in clarification_question instead of forcing a brittle class.",
+    ]
+    context = runtime_context if isinstance(runtime_context, dict) else {}
+    working = _compact_prompt_value(context.get("thread_working_context"))
+    if working:
+        rules.append(
+            "Use runtime_context.thread_working_context to preserve pending questions, original tasks, recent turns, and fallback acceptances."
+        )
+    return rules
 
 
 def _compact_runtime_context(value: JsonObject | None) -> JsonObject:

@@ -159,6 +159,7 @@ class Synthesizer:
             },
         )
         if outcome.parsed is None:
+            repair_feedback = _synthesizer_repair_feedback(outcome.result.error or "synthesizer_json_invalid")
             retry = self.fabric.run_json(
                 task_type="synthesizer.answer",
                 task_id=task_id,
@@ -175,6 +176,7 @@ class Synthesizer:
                         "Keep answer concise enough to avoid truncation while preserving required evidence, "
                         "calculator results, caveats, citation_refs, and used_evidence."
                     ),
+                    repair_feedback=repair_feedback,
                 ),
                 schema=SYNTHESIZER_SCHEMA,
                 provider=self.provider,
@@ -183,6 +185,8 @@ class Synthesizer:
                     "adapter": "Synthesizer",
                     "retrieval_report_id": report.report_id,
                     "repair_reason": "invalid_json",
+                    "repair_feedback_schema": repair_feedback.get("schema"),
+                    "repair_feedback_category": repair_feedback.get("category"),
                     **budget_parameters,
                 },
             )
@@ -261,6 +265,7 @@ def _synthesizer_prompt(
     citations: list[CitationItem],
     *,
     retry_instruction: str | None = None,
+    repair_feedback: JsonObject | None = None,
 ) -> str:
     preferences = _interaction_preferences_from_report(report)
     evidence_preview_chars = _positive_int(
@@ -271,17 +276,7 @@ def _synthesizer_prompt(
         report.diagnostics.get("synthesis_citation_preview_chars") if isinstance(report.diagnostics, dict) else None,
         default=SYNTHESIS_CITATION_PREVIEW_CHARS,
     )
-    payload = {
-        "contract": SYNTHESIZER_PROMPT_CONTRACT,
-        "task_goal": _task_goal_from_report(report),
-        "interaction_preferences": preferences,
-        "response_language": preferences.get("response_language"),
-        "answer_profile": _json_object(report.diagnostics.get("answer_profile")) if isinstance(report.diagnostics, dict) else {},
-        "research_mission": _json_object(report.diagnostics.get("research_mission")) if isinstance(report.diagnostics, dict) else {},
-        "host_situation": _json_object(report.diagnostics.get("host_situation")) if isinstance(report.diagnostics, dict) else {},
-        "required_citation_refs": [item.citation_id for item in citations],
-        "required_evidence_refs": [item.evidence_id for item in evidence],
-        "answer_requirements": [
+    answer_requirements = [
             "Answer every explicit question or subtask in task_goal when supported by provided evidence.",
             "If any part is unsupported, include it in limitations.",
             "Use only provided citation_refs and evidence ids.",
@@ -291,10 +286,14 @@ def _synthesizer_prompt(
             "If the evidence does not support a required section, include that section with a clear limitation instead of collapsing the whole answer into a short summary.",
             "For finance research, distinguish facts, source-backed metrics, analysis, risks, and limitations; do not rely on generic product or encyclopedia pages as if they were financial statements.",
             "For finance calculations, if retrieval_report.diagnostics.finance_formula_traces is present, use those host calculator results as authoritative computed values and do not recompute them mentally.",
+            "For finance calculations, if retrieval_report.diagnostics.finance_formula_trace_support is present, use it to connect FormulaTrace results to input facts, evidence refs, and citation refs.",
             "For finance answers, every material numeric claim must be supported by retrieval_report.diagnostics.finance_formula_traces, finance fact or claim ledger evidence, or an explicit assumption label. Omit unsupported numbers or move them into limitations; do not invent bridging figures, multiples, growth rates, margins, or dates.",
+            "For finance benchmark-style answers, do not introduce generic industry thresholds, comparison cutoffs, benchmark percentages, multiples, ranges, or rule-of-thumb numbers unless those exact numbers are present in provided facts, evidence, citations, or FormulaTrace values.",
+            "For qualitative finance classifications such as capital intensity, use the supported FormulaTrace lenses and values directly; when no source-backed threshold is provided, state the qualitative judgment in words instead of adding unsupported threshold percentages.",
             "For finance filing tables, preserve the filing's displayed scale and numeric form when possible, such as USD millions and table values like 923 or 5,603; do not convert supported filing numbers into different display units such as Chinese 亿 or Chinese 百万 unless the source itself uses that unit.",
             "For finance benchmark-style answers, begin with one short English core answer sentence before any localized explanation, even when response_language is Chinese.",
             "For finance benchmark-style numeric answers, include at least one machine-readable English numeric form for the core answer, e.g. '$193.414 billion' or '$193,414 million', even when the surrounding prose is Chinese.",
+            "If task_goal requests a unit such as USD millions, USD billions, or USD thousands, make the first core numeric answer use that requested unit directly, e.g. '1,577 (USD millions)' or '8.7 (USD billions)'.",
             "If the evidence exposes multiple adjacent revenue metrics, answer with the supported line item that most directly matches task_goal; mention broader/narrower metrics only as context, not as the leading answer.",
             "When adjacent revenue metrics are plausible for the same task_goal, include each material candidate with its exact filing label and machine-readable value, for example both 'Sales and other operating revenues = $193.414 billion' and 'Total revenues and other income = $202.792 billion'.",
             "For SEC filing revenue questions, prefer exact filing statement captions over generic XBRL labels; do not silently collapse RevenueFromContractWithCustomerExcludingAssessedTax, Sales and other operating revenues, generic Revenues, and Total revenues and other income into one metric.",
@@ -305,14 +304,73 @@ def _synthesizer_prompt(
             "Use host_situation as the source of truth for whether live retrieval, tools, permissions, and finance research are available.",
             "Do not say live retrieval, network access, or finance research is unavailable unless host_situation.retrieval or host_situation.failure says so.",
             "If host_situation says retrieval was attempted but evidence is insufficient, describe the real failure as search/fetch/extraction/citation/coverage quality instead of a permission problem.",
-        ],
+    ]
+    payload = {
+        "contract": SYNTHESIZER_PROMPT_CONTRACT,
+        "answer_requirements": answer_requirements,
+        "task_goal": _task_goal_from_report(report),
+        "interaction_preferences": preferences,
+        "response_language": preferences.get("response_language"),
+        "answer_profile": _json_object(report.diagnostics.get("answer_profile")) if isinstance(report.diagnostics, dict) else {},
+        "research_mission": _json_object(report.diagnostics.get("research_mission")) if isinstance(report.diagnostics, dict) else {},
+        "host_situation": _json_object(report.diagnostics.get("host_situation")) if isinstance(report.diagnostics, dict) else {},
+        "required_citation_refs": [item.citation_id for item in citations],
+        "required_evidence_refs": [item.evidence_id for item in evidence],
         "retrieval_report": _compact_retrieval_report_for_provider(report),
         "evidence": [_compact_evidence_for_provider(item, preview_chars=evidence_preview_chars) for item in evidence],
         "citations": [_compact_citation_for_provider(item, preview_chars=citation_preview_chars) for item in citations],
     }
     if retry_instruction:
         payload["retry_instruction"] = retry_instruction
+    if repair_feedback:
+        payload["repair_feedback"] = dict(repair_feedback)
     return _prompt_json(payload)
+
+
+def _synthesizer_repair_feedback(error: str) -> JsonObject:
+    code = str(error or "unknown").strip() or "unknown"
+    feedback: JsonObject = {
+        "schema": "holo.kernel_v3.synthesizer_repair_feedback.v1",
+        "error_code": _preview(code, 240),
+        "required_fields": list(SYNTHESIZER_SCHEMA.required.keys()),
+        "optional_fields": list(SYNTHESIZER_SCHEMA.optional.keys()),
+        "host_role": "schema_parse_validation_only",
+        "model_role": "repair_answer_json_shape_without_changing_supported_semantics",
+    }
+    checklist = [
+        "Return exactly one JSON object with no markdown or prose outside JSON.",
+        "Include answer, citation_refs, confidence, limitations, and used_evidence.",
+        "Keep citation_refs as an array of ids from required_citation_refs.",
+        "Keep used_evidence as an array of ids from required_evidence_refs.",
+        "Keep confidence as a number between 0 and 1.",
+        "Do not invent citations, evidence ids, source ids, facts, or unsupported numeric claims.",
+    ]
+    if code.startswith("missing_required_field:"):
+        field = code.split(":", 1)[1].strip()
+        feedback["category"] = "missing_required_field"
+        feedback["field"] = field
+        checklist.insert(1, f"Add required field `{field}` with the schema type shown in contract.")
+    elif code.startswith("invalid_field_type:"):
+        parts = code.split(":")
+        field = parts[1].strip() if len(parts) > 1 else ""
+        expected = parts[2].strip() if len(parts) > 2 else ""
+        feedback["category"] = "invalid_field_type"
+        if field:
+            feedback["field"] = field
+        if expected:
+            feedback["expected_type"] = expected
+        if field and expected:
+            checklist.insert(1, f"Rewrite `{field}` as type `{expected}`.")
+    elif "json_root_not_object" in code:
+        feedback["category"] = "json_root_not_object"
+        checklist.insert(1, "The root must be a JSON object, not an array, string, or scalar.")
+    elif "JSONDecodeError" in code or "json_invalid" in code or "Expecting" in code:
+        feedback["category"] = "malformed_json"
+        checklist.insert(1, "Fix JSON syntax: close arrays/objects, quote keys and strings, and remove trailing prose.")
+    else:
+        feedback["category"] = "schema_or_parse_error"
+    feedback["repair_checklist"] = checklist
+    return feedback
 
 
 def _prompt_json(payload: JsonObject) -> str:
@@ -391,6 +449,8 @@ def _compact_context_state_for_provider(state: JsonObject) -> JsonObject:
     result["mission_context"] = _compact_prompt_value(state.get("mission_context"))
     result["thread_working_context"] = _compact_prompt_value(state.get("thread_working_context"))
     result["thread_rag_context"] = _compact_prompt_value(state.get("thread_rag_context"))
+    result["toolchain_state"] = _compact_prompt_value(state.get("toolchain_state"))
+    result["finance_working_state"] = _compact_prompt_value(state.get("finance_working_state"))
     result["durable_memory_context"] = _compact_prompt_value(state.get("durable_memory_context"))
     if not lightweight:
         result["answer_profile"] = _compact_prompt_value(state.get("answer_profile"))
@@ -736,6 +796,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
     research_mission = _json_object(diagnostics.get("research_mission"))
     host_situation = _json_object(diagnostics.get("host_situation"))
     finance_formula_traces = diagnostics.get("finance_formula_traces")
+    finance_formula_trace_support = diagnostics.get("finance_formula_trace_support")
     finance_fact_ledger = diagnostics.get("finance_fact_ledger")
     return {
         "report_id": report.report_id,
@@ -785,6 +846,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             "finance_numeric_claim_policy": _json_object(diagnostics.get("finance_numeric_claim_policy")),
             "finance_metric_disambiguation": _json_object(diagnostics.get("finance_metric_disambiguation")),
             "finance_formula_traces": _compact_list_for_provider(finance_formula_traces, limit=16),
+            "finance_formula_trace_support": _compact_list_for_provider(finance_formula_trace_support, limit=24),
             "finance_fact_ledger": _compact_list_for_provider(finance_fact_ledger, limit=96),
             "finance_fact_ledger_count": diagnostics.get("finance_fact_ledger_count"),
             "claim_ledger_present": diagnostics.get("claim_ledger_present"),

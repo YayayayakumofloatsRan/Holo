@@ -910,14 +910,14 @@ def render_status_notice(payload: JsonObject, *, color: bool) -> str:
 
 
 def chat_answer_text(data: JsonObject) -> str | None:
-    answer = data.get("answer")
-    if isinstance(answer, str) and answer:
-        return answer
     final_answer = data.get("final_answer")
     if isinstance(final_answer, dict):
         final_text = final_answer.get("answer")
         if isinstance(final_text, str) and final_text:
             return final_text
+    answer = data.get("answer")
+    if isinstance(answer, str) and answer:
+        return answer
     summary = data.get("summary")
     if isinstance(summary, dict):
         preview = summary.get("last_answer_preview")

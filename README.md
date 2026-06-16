@@ -84,11 +84,38 @@ evidence, demo status, known gaps, and near-term roadmap, see
 `docs/KERNEL_V3_PROJECT_STATUS_2026-06-14_ZH.md`. For a compact Chinese talk
 track and Q&A notes prepared for the recorded Windows browser demo, see
 `docs/KERNEL_V3_DEMO_TALK_NOTES_2026-06-14_ZH.md`.
+The 2026-06-16 framework review is consolidated in
+`docs/KERNEL_V3_FRAMEWORK_LESSONS_FINAL_2026-06-16_ZH.md`; use it as the primary
+report and talk reference for what Holo should absorb from LangChain,
+LangGraph, Semantic Kernel / Microsoft Agent Framework, Hermes Function
+Calling, HERMES Math Agent, and provider cache guidance. It ties those lessons
+back to Kernel v3's development history, current architecture, finance pack,
+AgentGraph roadmap, benchmark discipline, and the forbidden anti-patterns under
+the LLM-owned semantic decision invariant. For a shorter talk-ready version, use
+`docs/KERNEL_V3_FRAMEWORK_REFERENCE_BRIEF_2026-06-16_ZH.md`; the source-backed
+landing memo and implementation dossier remain in
+`docs/KERNEL_V3_FRAMEWORK_REFERENCE_LANDING_2026-06-16_ZH.md` and
+`docs/KERNEL_V3_FRAMEWORK_REFERENCE_IMPLEMENTATION_DOSSIER_2026-06-16_ZH.md`.
+For the latest decision-oriented report draft, use
+`docs/KERNEL_V3_FRAMEWORK_REFERENCE_DECISION_2026-06-16_ZH.md`; it reviews the
+external framework references and Kernel v3 development record, then converts
+the lessons into concrete Kernel v3.1 architecture decisions, forbidden
+anti-patterns, and the next execution checklist.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in
 `docs/KERNEL_V3_GENERAL_CAPABILITY_LINE1_2026-06-14_ZH.md`. Kernel v3 now has
 a native general gauntlet entry at `python -m kernel_v3.cli bench general`.
+The 2026-06-15 finance slot-binding/cache pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-15_FINANCE_SLOT_BIND_CACHE.md`; it moves strict
+finance preflight closer to the intended LLM-owned task.compile -> slot_bind ->
+calculator trace loop, fixes a live `finance.slot_bind` schema failure, adds
+model-planned chained calculator execution, and records the remaining HD/LOW DIO
+numeric mismatch and synthesis-packet size bottleneck.
+The multi-question finance ability snapshot is tracked in
+`docs/KERNEL_V3_FINANCE_ABILITY_METRICS_2026-06-15.md`; it separates true live
+accuracy evidence, workflow/substrate health checks, no-gold public sets, and
+single-item debugging runs.
 The 2026-06-15 prompt-economy follow-up keeps full journal trace state while
 using a lighter provider prompt for direct/semantic/system turns; the low-cost
 DeepSeek live smoke passed 2/2 with total tokens reduced from 60,616 to 47,412
@@ -2061,8 +2088,10 @@ The task graph is journal-derived and links model requests/results, actions,
 retrieval queries, sources, fetches, artifacts, documents, evidence, citations,
 feedback, and final answers or failure reports. The benchmark graph summarizes
 many result rows by status, category, score reason, failure mode, citation
-coverage, token use, retrieval runs, fetches, repetition, and answer length. Both
-views store previews, refs, hashes, and diagnostics rather than raw fetched
+coverage, FormulaTrace fact/citation/evidence provenance, processor task/error
+clusters, cache hit ratio, token use, retrieval runs, fetches, repetition, and
+answer length. Both views store previews, refs, hashes, and diagnostics rather
+than raw fetched
 bodies. The benchmark report renders the same result file into Markdown, HTML,
 or JSON for project reports and review meetings.
 `workflow-view` is the presentation/debugging view for a single run. It scans the

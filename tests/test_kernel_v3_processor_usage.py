@@ -1,9 +1,13 @@
 import json
 
 from kernel_v3.chat.console import processor_usage_tail
-from kernel_v3.contracts import ContextBundle
-from kernel_v3.processors.adapters import _planner_prompt
-from kernel_v3.processors.usage import coerce_usage
+from kernel_v3.contracts import ContextBundle, Observation
+from kernel_v3.agent.semantics import _semantic_prompt
+from kernel_v3.capabilities import compact_semantic_capability_catalog
+from kernel_v3.processors.adapters import _evaluator_prompt, _planner_prompt
+from kernel_v3.processors.contracts import FINANCE_SLOT_BIND_SCHEMA
+from kernel_v3.processors.fabric import _normalize_processor_json_for_schema, validate_json_schema
+from kernel_v3.processors.usage import aggregate_processor_usage_by_task_type, coerce_usage, summarize_processor_usage
 
 
 def test_coerce_usage_preserves_deepseek_prompt_cache_counters() -> None:
@@ -26,6 +30,36 @@ def test_coerce_usage_preserves_deepseek_prompt_cache_counters() -> None:
     assert usage["prompt_cache_hit_ratio"] == 0.64
 
 
+def test_coerce_usage_normalizes_openai_style_cached_prompt_tokens() -> None:
+    usage = coerce_usage(
+        {
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "total_tokens": 1050,
+            "prompt_tokens_details": {"cached_tokens": 768},
+        }
+    )
+
+    assert usage["prompt_cache_hit_tokens"] == 768
+    assert usage["prompt_cache_miss_tokens"] == 232
+    assert usage["prompt_cache_hit_ratio"] == 0.768
+
+
+def test_coerce_usage_normalizes_compatible_input_token_cache_read() -> None:
+    usage = coerce_usage(
+        {
+            "prompt_tokens": 400,
+            "completion_tokens": 25,
+            "input_token_details": {"cache_read": 300},
+        }
+    )
+
+    assert usage["total_tokens"] == 425
+    assert usage["prompt_cache_hit_tokens"] == 300
+    assert usage["prompt_cache_miss_tokens"] == 100
+    assert usage["prompt_cache_hit_ratio"] == 0.75
+
+
 def test_processor_usage_tail_shows_prompt_cache_ratio() -> None:
     tail = processor_usage_tail(
         {
@@ -41,6 +75,124 @@ def test_processor_usage_tail_shows_prompt_cache_ratio() -> None:
     assert "cache_hit=64" in tail
     assert "cache_miss=36" in tail
     assert "cache_ratio=64.0%" in tail
+
+
+def test_processor_usage_summary_groups_cache_by_task_type_and_provider_model() -> None:
+    summary = summarize_processor_usage(
+        [
+            {
+                "task_type": "task.compile",
+                "provider": "deepseek",
+                "model": "deepseek-reasoner",
+                "status": "ok",
+                "duration_ms": 1200,
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                    "prompt_cache_hit_tokens": 80,
+                    "prompt_cache_miss_tokens": 20,
+                },
+            },
+            {
+                "task_type": "finance.slot_bind",
+                "provider": "deepseek",
+                "model": "deepseek-reasoner",
+                "status": "failed",
+                "error": "missing_required_field:formula_requests",
+                "duration_ms": 800,
+                "usage": {
+                    "prompt_tokens": 50,
+                    "completion_tokens": 10,
+                    "prompt_cache_hit_tokens": 20,
+                    "prompt_cache_miss_tokens": 30,
+                },
+            },
+        ]
+    )
+
+    assert summary["call_count"] == 2
+    assert summary["ok_count"] == 1
+    assert summary["failed_count"] == 1
+    assert summary["total_tokens"] == 180
+    assert summary["prompt_cache_hit_tokens"] == 100
+    assert summary["prompt_cache_miss_tokens"] == 50
+    assert summary["prompt_cache_hit_ratio"] == 0.666667
+    assert summary["duration_ms"] == 2000
+    assert summary["average_duration_ms"] == 1000
+    assert summary["by_task_type"]["finance.slot_bind"]["failed_count"] == 1
+    assert summary["by_task_type"]["finance.slot_bind"]["error_counts"] == {
+        "missing_required_field:formula_requests": 1
+    }
+    assert summary["by_provider_model"]["deepseek/deepseek-reasoner"]["call_count"] == 2
+
+
+def test_aggregate_processor_usage_by_task_type_merges_cache_buckets() -> None:
+    merged = aggregate_processor_usage_by_task_type(
+        [
+            {
+                "processor_usage_by_task_type": {
+                    "task.compile": {
+                        "call_count": 1,
+                        "ok_count": 1,
+                        "prompt_cache_hit_tokens": 80,
+                        "prompt_cache_miss_tokens": 20,
+                        "total_tokens": 120,
+                    }
+                }
+            },
+            {
+                "processor_usage_by_task_type": {
+                    "task.compile": {
+                        "call_count": 1,
+                        "failed_count": 1,
+                        "prompt_cache_hit_tokens": 20,
+                        "prompt_cache_miss_tokens": 80,
+                        "total_tokens": 140,
+                        "error_counts": {"json_invalid": 1},
+                    },
+                    "synthesizer.answer": {
+                        "call_count": 1,
+                        "ok_count": 1,
+                        "prompt_cache_hit_tokens": 90,
+                        "prompt_cache_miss_tokens": 10,
+                        "total_tokens": 130,
+                    },
+                }
+            },
+        ]
+    )
+
+    assert merged["task.compile"]["call_count"] == 2
+    assert merged["task.compile"]["ok_count"] == 1
+    assert merged["task.compile"]["failed_count"] == 1
+    assert merged["task.compile"]["prompt_cache_hit_tokens"] == 100
+    assert merged["task.compile"]["prompt_cache_miss_tokens"] == 100
+    assert merged["task.compile"]["prompt_cache_hit_ratio"] == 0.5
+    assert merged["task.compile"]["error_counts"] == {"json_invalid": 1}
+    assert merged["synthesizer.answer"]["prompt_cache_hit_ratio"] == 0.9
+
+
+def test_finance_slot_bind_schema_normalizes_model_interface_variants() -> None:
+    parsed = _normalize_processor_json_for_schema(
+        {
+            "decision": "ready",
+            "slot_bindings": [{"slot_name": "hd_cogs", "fact_id": "fact-1"}],
+            "calculations": [
+                {
+                    "formula_name": "dio_hd",
+                    "expression": "(inventory_begin + inventory_end) / 2 / cogs * fiscal_days",
+                    "variables": {"cogs": {"fact_id": "fact-1"}},
+                }
+            ],
+            "next_action": "respond",
+        },
+        FINANCE_SLOT_BIND_SCHEMA,
+    )
+
+    assert validate_json_schema(parsed, FINANCE_SLOT_BIND_SCHEMA) is None
+    assert parsed["formula_requests"][0]["formula_name"] == "dio_hd"
+    assert parsed["next_action"] == {"tool": "respond", "reason": ""}
 
 
 def test_processor_prompt_keeps_stable_contract_before_dynamic_context() -> None:
@@ -63,6 +215,62 @@ def test_processor_prompt_keeps_stable_contract_before_dynamic_context() -> None
     assert ',"context":' in prompt
     payload = json.loads(prompt)
     assert payload["context"]["context_id"] == "ctx-dynamic-1"
+
+
+def test_evaluator_prompt_keeps_stable_contract_before_dynamic_observation() -> None:
+    context = ContextBundle(
+        context_id="ctx-eval-cache",
+        thread_key="thread-eval-cache",
+        event_ids=["evt-eval-cache"],
+        memory_refs=[],
+        state={"task_id": "task-eval-cache", "run_id": "run-eval-cache", "input_text": "Use observation."},
+        token_budget=4096,
+    )
+    observation = Observation(
+        observation_id="obs-eval-cache",
+        run_id="run-eval-cache",
+        kind="tool_result",
+        status="ok",
+        source="tool:retrieval.run",
+        content={"text": "dynamic observation payload"},
+        observed_at_ms=0,
+        action_id="act-eval-cache",
+        tool_call_id=None,
+    )
+
+    prompt = _evaluator_prompt(context, observation)
+
+    assert prompt.index('"contract"') < prompt.index('"context"')
+    assert prompt.index('"contract"') < prompt.index('"observation"')
+    payload = json.loads(prompt)
+    assert payload["observation"]["observation_id"] == "obs-eval-cache"
+
+
+def test_semantic_intake_prompt_uses_compact_capability_catalog_for_cache() -> None:
+    prompt = _semantic_prompt(
+        "Compare Apple's FY2024 gross margin with Microsoft's FY2024 gross margin.",
+        response_language="en",
+        runtime_context={},
+    )
+    payload = json.loads(prompt)
+    catalog = payload["host_capability_catalog"]
+
+    assert len(prompt) < 19000
+    assert len(json.dumps(catalog, ensure_ascii=False, sort_keys=True)) < 7500
+    assert "semantic_slots" not in catalog
+    assert "task_domains" not in catalog
+    assert "finance.fundamentals_research" in catalog["families"]["finance"]
+    assert "finance.verify_numeric" in catalog["families"]["data"]
+    assert "retrieval.run" in catalog["families"]["retrieval"]
+    assert "calculator.compute" in catalog["families"]["data"]
+    assert "system.time" in catalog["families"]["system"]
+    assert catalog["executable_tools_by_recipe"]["retrieval_answer"] == [
+        "retrieval.run",
+        "calculator.compute",
+    ]
+    assert "domain_profile" in catalog["state_dimensions"]
+    assert compact_semantic_capability_catalog()["families"]["finance"] == catalog["families"]["finance"]
+    assert prompt.index('"contract"') < prompt.index('"user_goal"')
 
 
 def test_direct_processor_prompt_uses_lightweight_provider_context() -> None:

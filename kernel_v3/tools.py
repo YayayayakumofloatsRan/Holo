@@ -659,6 +659,14 @@ def _coerce_schema_value(key: str, value: object, spec: JsonObject) -> tuple[obj
         if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
             return value, f"invalid_field_type:{key}:list[str]"
         return value, None
+    if expected.startswith("list[") and expected.endswith("]"):
+        if not isinstance(value, list):
+            return value, f"invalid_field_type:{key}:list"
+        item_type = expected.removeprefix("list[").removesuffix("]")
+        if item_type and item_type not in {"Any", "any", "object", "dict"}:
+            if any(not isinstance(item, dict) for item in value):
+                return value, f"invalid_field_type:{key}:list[object]"
+        return value, None
     if expected == "list":
         if not isinstance(value, list):
             return value, f"invalid_field_type:{key}:list"

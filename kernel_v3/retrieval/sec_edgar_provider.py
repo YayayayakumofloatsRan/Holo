@@ -368,12 +368,29 @@ def _companyconcept_targets_for_intent(intent_text: str) -> list[tuple[str, str]
         return []
     targets: list[tuple[str, str]] = []
     seen: set[str] = set()
+
+    def add_target(concept: str, metric: str) -> None:
+        if concept in seen:
+            return
+        seen.add(concept)
+        targets.append((concept, metric))
+
+    if any(marker in normalized for marker in ("capital intensive", "capital intensity")):
+        for concept, metric in (
+            ("Revenues", "revenue"),
+            ("PaymentsToAcquirePropertyPlantAndEquipment", "capital expenditures"),
+            ("NetCashProvidedByUsedInOperatingActivities", "operating cash flow"),
+            ("PropertyPlantAndEquipmentNet", "property plant and equipment net"),
+            ("Assets", "assets"),
+            ("NetIncomeLoss", "net income"),
+            ("RevenueFromContractWithCustomerExcludingAssessedTax", "revenue"),
+            ("SalesRevenueNet", "net sales"),
+        ):
+            add_target(concept, metric)
+
     for concept, metric, phrases, compact_phrases in SEC_COMPANYCONCEPT_SPECS:
         if any(phrase in normalized for phrase in phrases) or any(phrase in compact for phrase in compact_phrases):
-            if concept in seen:
-                continue
-            seen.add(concept)
-            targets.append((concept, metric))
+            add_target(concept, metric)
         if len(targets) >= 12:
             break
     return targets

@@ -107,6 +107,21 @@ TASK_COMPILE_SCHEMA = JsonSchema(
     },
 )
 
+FINANCE_SLOT_BIND_SCHEMA = JsonSchema(
+    name="finance.slot_bind",
+    required={
+        "decision": "str",
+        "slot_bindings": "list",
+        "formula_requests": "list",
+        "reason_summary": "str",
+    },
+    optional={
+        "missing_slots": "list",
+        "next_action": "dict",
+        "confidence": "number",
+    },
+)
+
 FINANCE_NUMERIC_JUDGE_SCHEMA = JsonSchema(
     name="finance.numeric_judge",
     required={
@@ -388,6 +403,8 @@ Example finance retrieval proposal:
 {"action_id":"act-finance-retrieval-1","kind":"tool","name":"retrieval.run","description":"collect primary finance evidence for model-owned analysis","payload":{"query":"Pfizer Seagen acquisition enterprise value Seagen annual revenue SEC 8-K 10-K","queries":["Pfizer Seagen acquisition enterprise value SEC 8-K Exhibit 99.1","Seagen annual revenue 2022 10-K SEC companyfacts"],"max_queries":8,"max_fetches":24,"metadata":{"research_profile":"finance_fundamentals","search_strategy":"aggregate","retrieval_strategy":{"strategy_id":"model-finance-1","task_understanding":"Calculate transaction EV / revenue using public deal disclosure and target company revenue.","target_entities":["Pfizer","Seagen"],"target_periods":["pre-acquisition latest annual/TTM period"],"evidence_slots":[{"slot":"transaction_value","source_family":"transaction_disclosure"},{"slot":"target_revenue","source_family":"sec_filing_or_companyfacts"}],"query_plan":[{"query":"Pfizer Seagen acquisition enterprise value SEC 8-K Exhibit 99.1","purpose":"deal value"},{"query":"Seagen annual revenue 2022 10-K SEC companyfacts","purpose":"target revenue"}],"evidence_criteria":["primary SEC filing or official transaction disclosure","revenue period clearly tied to Seagen"],"stop_when":["transaction value and target revenue are both supported"]}}},"score":0.93,"reasons":["finance facts require live primary evidence"],"side_effect_class":"network"}
 Example finance calculator proposal:
 {"action_id":"act-finance-calc-1","kind":"tool","name":"calculator.compute","description":"compute EV / revenue from supported inputs","payload":{"expression":"enterprise_value / revenue","variables":{"enterprise_value":"43000000000","revenue":"1962412000"},"unit":"multiple","formula_name":"ev_revenue","input_fact_ids":["fact-transaction-value","fact-target-revenue"],"diagnostics":{"semantic_decision_owner":"model","formula_explanation":"transaction EV divided by target company revenue"}},"score":0.94,"reasons":["supported inputs are available and arithmetic is required"],"side_effect_class":"read"}
+Example finance verifier proposal:
+{"action_id":"act-finance-verify-1","kind":"tool","name":"finance.verify_numeric","description":"verify draft finance answer numeric support","payload":{"answer":"The EV / revenue multiple is 21.91x based on $43.0B enterprise value divided by $1.962B revenue.","facts":[],"formula_traces":[{"formula_id":"formula-ev-revenue","formula_name":"ev_revenue","expression":"enterprise_value / revenue","input_fact_ids":["fact-transaction-value","fact-target-revenue"],"result_value":"21.913","unit":"x","diagnostics":{}}],"citations":[],"evidence":[],"question":"What EV / revenue multiple did the transaction imply?"},"score":0.91,"reasons":["a draft answer exists and numeric support should be checked before finalizing"],"side_effect_class":"read"}
 For user-visible respond/ask_user payload text, match the user's language when it is clear.
 If a response_language preference is present in context, use it as the default for user-visible text when the user's requested language is unclear or mixed.
 For user-visible respond/ask_user payload text, never begin with generic
@@ -399,6 +416,33 @@ Treat compound user requests as multiple subrequests. If the context contains a 
 When context.state.agent_retrieval_plan_state contains planned_subgoals, choose a retrieval.run goal_id from that list, usually next_recommended_goal_id, and preserve that goal_id in the payload so host coverage can track progress.
 When feedback.status is continue, inspect feedback.missing_evidence and the latest observations, then propose a materially new next action when one is available. Avoid repeating the same action payload unless the context shows new progress or the host explicitly asks for a retry.
 When context.state.agent_replan_hints.status is needs_replan, use its retrieval gaps, suggested_query_hints, suggested_search_strategies, do_not_finalize_until, and avoid_repeating fields to propose one materially different safe action. Do not answer as final while any do_not_finalize_until rule is unmet.
+When context.state.toolchain_state is present, treat it as the host-compiled
+compact state of prior tool actions and observations. Inspect toolchain_presence,
+failed_tools, recent_tool_observations, repeated_tool_names,
+repeated_action_fingerprints, repeated_action_groups, and
+post_final_record_count before choosing the next move. recent_tool_actions may
+include compact payload_summary fields such as query previews, calculator
+formula names, variable names, input fact ids, expression fingerprints, and
+tool counts. Use them to avoid repeating an identical tool payload without new
+evidence, to decide whether existing retrieval/calculator/verifier observations
+are enough, and to keep post-final diagnostics separate from the active turn.
+recent_tool_observations may include observation_diagnostics such as verifier
+status, issue_codes, repair_options, compact missing_value_examples, and tool
+errors. Treat these as tool-returned diagnostic hints for repair/retry/finalize
+decisions, not as host-selected semantic answers.
+This packet is observational only: it does not force a tool choice, and the
+model still owns the semantic next-action decision.
+When context.state.finance_working_state is present, treat it as the compact
+finance workbench state for the current run. Inspect slot_frame, missing_slots,
+facts, formula_traces, formula_trace_support, transform_plan, and
+numeric_verification before deciding whether to retrieve more evidence,
+calculate, verify, answer, or state a limitation. numeric_verification may
+include repair_options and missing_value_examples derived from host verifier
+issues; treat them as diagnostic hints, not as an answer selector. This packet
+only summarizes already observed finance facts, calculator FormulaTrace
+outputs, and verifier feedback; it does not select the metric, period, formula,
+or final answer for you. The model still owns finance semantic binding and
+final judgment.
 When context.state.mission_context is present, treat mission_context.mission_state.root_goal as the global objective for the whole task, not merely as commentary. Use mission_context.directive and context.state.thread_rag_context to understand previous attempts, evidence, failures, and conversation continuity. If the previous run failed but the mission directive says continue, propose a materially different safe action instead of giving up or asking the user by default.
 When context.state.thread_rag_context.task_continuity is present, treat it as
 the host-compiled working note for this task: preserve current_objective, cover
@@ -519,6 +563,29 @@ If context.state.thread_rag_context.task_continuity is present, use its
 current_objective, open_requirements, evidence_refs, citation_refs, and recent
 actions to decide whether the latest observation actually reduced the task gap
 or only repeated prior work.
+If context.state.toolchain_state is present, compare the latest observation
+against failed_tools, recent_tool_observations, repeated_tool_names,
+repeated_action_fingerprints, repeated_action_groups, toolchain_presence, and
+post_final_record_count. recent_tool_actions may include compact
+payload_summary fields; repeated_action_groups identifies repeated tool
+payloads and the latest observation status without exposing raw tool bodies.
+Treat repeated identical tool payloads without new evidence as weak progress,
+successful calculator/verifier observations as meaningful progress for numeric
+finance tasks, and post-final records as diagnostics rather than active work.
+If recent_tool_observations expose observation_diagnostics, inspect verifier
+status, issue_codes, repair_options, compact missing_value_examples, and tool
+errors to decide whether the latest observation supports continue, repair,
+final_answer_ready, or blocked. These diagnostics are observation summaries, not
+host-selected semantic answers.
+If context.state.finance_working_state is present, use its slot_frame,
+missing_slots, facts, formula_traces, formula_trace_support, transform_plan,
+and numeric_verification to judge whether the latest observation closed a
+finance gap, introduced usable calculator/verifier support, or still leaves
+source/metric/period/unit evidence missing. numeric_verification repair_options
+are verifier-derived diagnostic hints only; do not treat them as host-selected
+answers. Treat this packet as observational: the evaluator judges progress, but
+the model remains responsible for semantic finance binding and whether more
+work or a final answer is appropriate.
 For open-ended research, judge whether remaining gaps are hard blockers or soft
 limitations. If the available citations/evidence cover the user's root objective
 and the remaining gaps are language, source-breadth, or auxiliary-angle gaps,
@@ -568,6 +635,11 @@ For finance filing-table answers, preserve source scale and include at least
 one machine-readable English numeric form for the core number, such as
 "$193.414 billion" or "$193,414 million"; do not express the only core number
 with Chinese 亿 or Chinese 百万 unless the source itself uses that unit.
+If task_goal explicitly asks for a reporting unit such as "in USD millions",
+"answer in USD billions", or "in USD thousands", make the first core numeric
+answer use that requested unit directly, for example "1,577 (USD millions)"
+or "8.7 (USD billions)". Do not make "$1,577 million" the only core numeric
+form when the requested answer unit is USD millions.
 For finance benchmark-style answers, begin with one short English core answer
 sentence before any localized explanation, even when response_language is
 Chinese.

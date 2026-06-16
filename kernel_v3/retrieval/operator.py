@@ -46,6 +46,7 @@ from kernel_v3.retrieval.extract import extract_spans, readable_document_text_wi
 from kernel_v3.retrieval.providers import FetchProvider, FetchResponse, SearchProvider, provider_capability
 from kernel_v3.retrieval.query_campaign import build_query_campaign
 from kernel_v3.retrieval.rank import rank_sources
+from kernel_v3.retrieval.url_utils import expanded_url_targets
 from kernel_v3.retrieval.workbench import RetrievalWorkbenchResult, run_retrieval_workbench
 from kernel_v3.tools import ToolRegistry, ToolResult
 
@@ -1774,8 +1775,9 @@ DIRECT_URL_METADATA_KEYS = (
 
 
 def _explicit_direct_url_sources(goal: SearchGoal, *, existing_sources: list[SearchSource]) -> list[SearchSource]:
-    urls = _ordered_unique([*_explicit_direct_url_values(goal.metadata), *_urls_from_text(goal.query)])
-    if not urls:
+    raw_urls = _ordered_unique([*_explicit_direct_url_values(goal.metadata), *_urls_from_text(goal.query)])
+    url_targets = _expanded_direct_url_targets(raw_urls)
+    if not url_targets:
         return []
     existing_direct_uris = {
         source.uri
@@ -1786,13 +1788,15 @@ def _explicit_direct_url_sources(goal: SearchGoal, *, existing_sources: list[Sea
     }
     result: list[SearchSource] = []
     binding = _dict_or_empty(goal.metadata.get("target_document_binding"))
-    for index, url in enumerate(urls, start=1):
+    for index, (url, unwrapped_from) in enumerate(url_targets, start=1):
         if url in existing_direct_uris:
             continue
         parsed = urllib.parse.urlparse(url)
         host = (parsed.hostname or "").lower()
         if not host:
             continue
+        source_urls = _ordered_unique([item for item in (unwrapped_from, url) if item])
+        source_binding = _direct_url_source_binding(binding, url=url, unwrapped_from=unwrapped_from)
         metadata: JsonObject = {
             "rank": index,
             "source_kind": "direct_url",
@@ -1802,19 +1806,24 @@ def _explicit_direct_url_sources(goal: SearchGoal, *, existing_sources: list[Sea
             "authority_level": "primary",
             "explicit_acquisition_target": True,
         }
-        if binding:
-            metadata["target_document_binding"] = binding
-            if binding.get("doc_type"):
-                metadata["doc_type"] = binding["doc_type"]
-            if binding.get("doc_period"):
-                metadata["doc_period"] = binding["doc_period"]
-            if binding.get("doc_name"):
-                metadata["doc_name"] = binding["doc_name"]
+        if source_urls:
+            metadata["source_urls"] = source_urls
+        if unwrapped_from:
+            metadata["unwrapped_from_url"] = unwrapped_from
+            metadata["original_source_url"] = unwrapped_from
+        if source_binding:
+            metadata["target_document_binding"] = source_binding
+            if source_binding.get("doc_type"):
+                metadata["doc_type"] = source_binding["doc_type"]
+            if source_binding.get("doc_period"):
+                metadata["doc_period"] = source_binding["doc_period"]
+            if source_binding.get("doc_name"):
+                metadata["doc_name"] = source_binding["doc_name"]
         result.append(
             SearchSource(
                 source_id=f"direct-url-{_stable_hash(url)[:12]}-{index}",
                 uri=url,
-                title=_direct_url_title(url, binding=binding),
+                title=_direct_url_title(url, binding=source_binding or binding),
                 snippet="Explicit source URL supplied by the task metadata; fetch this document before broad search results.",
                 provider="direct_url_search",
                 metadata=metadata,
@@ -1822,6 +1831,31 @@ def _explicit_direct_url_sources(goal: SearchGoal, *, existing_sources: list[Sea
         )
         existing_direct_uris.add(url)
     return result
+
+
+def _expanded_direct_url_targets(urls: list[str]) -> list[tuple[str, str | None]]:
+    result: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for url in urls:
+        for candidate, unwrapped_from in expanded_url_targets(url, prefer_unwrapped=True):
+            key = candidate.rstrip("/")
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append((candidate, unwrapped_from))
+    return result
+
+
+def _direct_url_source_binding(binding: JsonObject, *, url: str, unwrapped_from: str | None) -> JsonObject:
+    if not binding:
+        return {}
+    source_binding = dict(binding)
+    if unwrapped_from:
+        source_binding.setdefault("doc_link", unwrapped_from)
+        source_binding["unwrapped_doc_link"] = url
+        source_binding["original_doc_link"] = unwrapped_from
+        source_binding["source_urls"] = _ordered_unique([unwrapped_from, url])
+    return source_binding
 
 
 def _explicit_direct_url_values(metadata: JsonObject) -> list[str]:
@@ -2054,7 +2088,7 @@ def _priority_sec_companyfacts_sources(goal: SearchGoal, sources: list[RankedSou
     result = [
         source
         for source in sources
-        if _ranked_source_kind(source) == "sec_companyfacts_json"
+        if _ranked_source_kind(source) in {"sec_companyfacts_json", "sec_companyconcept_json"}
     ]
     result.sort(key=lambda source: source.rank)
     return result[:4]
@@ -2198,11 +2232,21 @@ def _wants_companyfacts_fact_sources(goal: SearchGoal) -> bool:
         "assets",
         "liabilities",
         "shares outstanding",
+        "capital intensive",
+        "capital intensity",
+        "capital expenditures",
+        "capex",
+        "operating cash flow",
+        "property plant",
+        "pp&e",
     )
     compact_markers = (
         "companyfacts",
         "netincomeloss",
         "revenuefromcontract",
+        "paymentstoacquirepropertyplantandequipment",
+        "netcashprovidedbyusedinoperatingactivities",
+        "propertyplantandequipmentnet",
         "cashandcashequivalents",
         "longtermdebt",
         "sharesoutstanding",

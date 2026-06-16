@@ -37,6 +37,7 @@ from kernel_v3.retrieval.contracts import (
     SearchGoal,
 )
 from kernel_v3.retrieval.targeting import assess_target_entity_coverage, target_entity_diagnostics
+from kernel_v3.retrieval.url_utils import unwrap_url_candidates, url_equivalent_or_unwrapped
 
 
 TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{[^{}]{1,120}\}\}|\$\{[^{}]{1,120}\}|<%[^%]{1,120}%>")
@@ -855,16 +856,17 @@ def _source_grounded_target_document_urls(metadata: dict[str, object]) -> list[s
     seen: set[str] = set()
     for item in raw:
         url = str(item or "").strip()
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        urls.append(url)
+        for candidate in [url, *unwrap_url_candidates(url)]:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            urls.append(candidate)
     return urls
 
 
 def _uri_matches_any_target_document(uri: str, target_urls: list[str]) -> bool:
     for target_url in target_urls:
-        if _same_url_or_prefix(uri, target_url) or _same_url_or_prefix(target_url, uri):
+        if url_equivalent_or_unwrapped(uri, target_url) or _same_url_or_prefix(uri, target_url) or _same_url_or_prefix(target_url, uri):
             return True
         accession = _accession_number(uri)
         target_accession = _accession_number(target_url)

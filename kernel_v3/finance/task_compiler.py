@@ -15,6 +15,62 @@ from kernel_v3.substrate import CompiledTaskProgram, EvidencePolicy, EvidenceSpe
 
 
 TASK_COMPILE_TASK_TYPE = "task.compile"
+TASK_COMPILE_FACT_LIMIT = 24
+TASK_COMPILE_PROMPT_CONTRACT = (
+    "You are task.compile for Holo Kernel v3. Return only one JSON object. "
+    "The model owns semantic task decomposition; the host only validates schema, executes tools, journals provenance, and verifies arithmetic. "
+    "Compile the objective into task_spec, evidence_specs, transform_specs, slot_frame, and tool_chain_plan. "
+    "Use the host fallback only as a scaffold: keep useful executable slots/transforms, correct wrong semantics, and remove unrelated slots. "
+    "Evidence specs describe information to acquire; they are not evidence and must not invent source ids, citation ids, fact ids, URLs, values, or final answers. "
+    "Transform specs are only for deterministic calculations whose inputs can be filled from evidence or stated assumptions. "
+    "For numeric finance work, include calculator.compute in tool_chain_plan after supported inputs exist; do not ask synthesis to do mental arithmetic. "
+    "For capital-intensity or capital-intensive-business analysis, consider executable ratios such as capex/revenue, capex/operating cash flow, PP&E/assets, and return on assets when the objective asks for an overall assessment. "
+    "If you include return on assets, include net_income and assets slots and a calculator-visible net_income / assets transform. "
+    "Keep required slots minimal and executable: include fields needed by the objective and transform expressions, and do not add financial statement lines that are not requested and not transform inputs. "
+    "If current facts already support a slot, list it as filled; if not, list it in missing_slots with a precise retrieval/tool next step. "
+    "Return compact JSON: evidence_specs<=12, transform_specs<=8, required_slots<=16, reason_summary<=240 chars, no markdown."
+)
+TASK_COMPILE_OUTPUT_SCHEMA: JsonObject = {
+    "task_spec": {
+        "task_type": "filing_metric_lookup|compute|compare_compute|reconciliation|transaction_multiple|valuation_multiple|disclosure_analysis|modeling_lite|other",
+        "objective": "root task",
+        "target_entities": ["issuers/targets/tickers"],
+        "target_periods": ["periods"],
+        "success_criteria": ["auditable completion criteria"],
+    },
+    "evidence_specs": [
+        {
+            "slot_name": "input/info slot",
+            "accepted_attributes": ["metric aliases"],
+            "source_role": "primary_filing|annual_report|earnings_release|transaction_disclosure|market_data|benchmark_context|other",
+            "required_source_families": ["source families"],
+            "target_period": "period|null",
+            "statement": "statement/table/section|null",
+            "line_item": "line item|null",
+            "required": True,
+        }
+    ],
+    "transform_specs": [
+        {
+            "name": "transform name",
+            "required_slots": ["slot names"],
+            "expression": "calculator expression|null",
+            "output_unit": "unit|null",
+            "output_attribute": "output attribute",
+        }
+    ],
+    "slot_frame": {
+        "task_type": "same as task_spec",
+        "required_slots": [{"name": "slot", "accepted_attributes": ["aliases"], "source_requirements": ["source role/family"]}],
+        "filled_slots": [{"slot_name": "slot", "fact_id": "fact id if present", "confidence": 0.0}],
+        "missing_slots": ["unfilled required slots"],
+    },
+    "tool_chain_plan": {
+        "decision_owner": "model",
+        "recommended_steps": [{"tool": "retrieval.run|calculator.compute|workspace.search|file.read|script.exec|respond", "reason": "why now"}],
+    },
+    "reason_summary": "short semantic rationale",
+}
 
 
 def compile_finance_task_program_model_first(
@@ -62,6 +118,10 @@ def compile_finance_task_program_model_first(
     }
     if processor_budget:
         parameters["processor_budget"] = processor_budget
+    parameters["max_tokens"] = max(
+        int(parameters.get("max_tokens") or 0),
+        _task_compile_max_tokens(facts=facts, fallback=fallback),
+    )
     outcome = processor_fabric.run_json(
         task_type=TASK_COMPILE_TASK_TYPE,
         run_id=run_id,
@@ -78,6 +138,27 @@ def compile_finance_task_program_model_first(
         timeout_seconds=120,
         parameters=parameters,
     )
+    if outcome.result.status != "ok" or not isinstance(outcome.parsed, dict):
+        retry_outcome = processor_fabric.run_json(
+            task_type=TASK_COMPILE_TASK_TYPE,
+            run_id=run_id,
+            context_id=(context_id or "ctx-task-compile-" + _short_hash(question)) + "-retry",
+            prompt=_model_task_compile_retry_prompt(
+                question=question,
+                facts=facts,
+                target_binding=target_binding,
+                fallback=fallback,
+                previous_error=outcome.result.error or "task_compile_processor_failed",
+                previous_raw_output=outcome.raw_text,
+            ),
+            schema=TASK_COMPILE_SCHEMA,
+            task_id=task_id,
+            step_id=f"{step_id or 'task-compile'}-retry",
+            timeout_seconds=120,
+            parameters=parameters,
+        )
+        if retry_outcome.result.status == "ok" and isinstance(retry_outcome.parsed, dict):
+            outcome = retry_outcome
     if outcome.result.status != "ok" or not isinstance(outcome.parsed, dict):
         if llm_judgment_required:
             return _model_unavailable_program(
@@ -195,71 +276,123 @@ def _model_task_compile_prompt(
     target_binding: JsonObject | None,
     fallback: CompiledTaskProgram,
 ) -> str:
-    packet = {
-        "schema": "holo.kernel_v3.task_compile_input.v1",
-        "objective": question,
-        "domain": "finance",
-        "instruction": (
-            "You are task.compile for Holo Kernel v3. Produce the work program a capable analyst would use: "
-            "TaskSpec, EvidenceSpec, TransformSpec, and SlotFrame. Decide semantically; do not follow fixed query templates. "
-            "The host fallback is a scaffold, not a constraint. Correct it when the question implies better slots, source roles, "
-            "line items, periods, transforms, or tool-chain moves. Do not invent facts, evidence ids, citations, source ids, "
-            "numeric values, formulas with unsupported inputs, or final answers. If the fallback inferred a formula from broad "
-            "language, verify that the user is actually asking for that calculation; explanation, attribution, disclosure, or "
-            "source-grounded lookup tasks should receive evidence slots and no calculator transform unless a deterministic "
-            "formula is truly required. If the fallback contains an explicit deterministic transform from the user's own formula "
-            "definition and it is not listed as risky, keep that transform or provide a semantically equivalent executable transform. "
-            "Host will validate and execute tools."
+    payload = {
+        "contract": TASK_COMPILE_PROMPT_CONTRACT,
+        "output_schema": TASK_COMPILE_OUTPUT_SCHEMA,
+        "task_packet": _task_compile_dynamic_packet(
+            question=question,
+            facts=facts,
+            target_binding=target_binding,
+            fallback=fallback,
         ),
-        "target_binding": target_binding or {},
-        "fact_ledger": [_fact_summary(fact) for fact in facts[:96]],
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _task_compile_max_tokens(*, facts: list[FinanceFact], fallback: CompiledTaskProgram) -> int:
+    evidence_count = len(fallback.evidence_specs)
+    transform_count = len(fallback.transform_specs)
+    slot_count = len(fallback.slot_frame.required_slots) if fallback.slot_frame is not None else 0
+    if len(facts) >= TASK_COMPILE_FACT_LIMIT or evidence_count + transform_count + slot_count > 24:
+        return 8192
+    if len(facts) >= 10 or evidence_count + transform_count + slot_count > 12:
+        return 6144
+    return 4096
+
+
+def _model_task_compile_retry_prompt(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    target_binding: JsonObject | None,
+    fallback: CompiledTaskProgram,
+    previous_error: str,
+    previous_raw_output: str | None,
+) -> str:
+    payload = {
+        "contract": (
+            TASK_COMPILE_PROMPT_CONTRACT
+            + " Previous output was rejected by host JSON/schema validation. Recompile from the task packet; do not repair by adding prose."
+        ),
+        "output_schema": TASK_COMPILE_OUTPUT_SCHEMA,
+        "previous_failure": {
+            "error": str(previous_error or "")[:240],
+            "raw_output_preview": _text_preview(previous_raw_output or "", 900),
+            "structured_feedback": _task_compile_repair_feedback(previous_error),
+        },
+        "task_packet": _task_compile_dynamic_packet(
+            question=question,
+            facts=facts,
+            target_binding=target_binding,
+            fallback=fallback,
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _task_compile_repair_feedback(error: str) -> JsonObject:
+    code = str(error or "unknown").strip() or "unknown"
+    feedback: JsonObject = {
+        "schema": "holo.kernel_v3.task_compile_repair_feedback.v1",
+        "error_code": _text_preview(code, 240),
+        "required_fields": list(TASK_COMPILE_SCHEMA.required.keys()),
+        "optional_fields": list(TASK_COMPILE_SCHEMA.optional.keys()),
+        "host_role": "schema_parse_validation_only",
+        "model_role": "recompile_task_semantics_from_task_packet",
+    }
+    checklist = [
+        "Return exactly one JSON object with no markdown or prose outside JSON.",
+        "Include task_spec, evidence_specs, and transform_specs.",
+        "Keep evidence_specs as an array, even when empty.",
+        "Keep transform_specs as an array, even when empty.",
+        "Do not invent facts, citation ids, evidence ids, source ids, values, or final answers.",
+        "Use host_fallback_program only as a scaffold; correct its semantics when the objective requires it.",
+    ]
+    if code.startswith("missing_required_field:"):
+        field = code.split(":", 1)[1].strip()
+        feedback["category"] = "missing_required_field"
+        feedback["field"] = field
+        checklist.insert(1, f"Add required field `{field}` with the schema type shown in output_schema.")
+    elif code.startswith("invalid_field_type:"):
+        parts = code.split(":")
+        field = parts[1].strip() if len(parts) > 1 else ""
+        expected = parts[2].strip() if len(parts) > 2 else ""
+        feedback["category"] = "invalid_field_type"
+        if field:
+            feedback["field"] = field
+        if expected:
+            feedback["expected_type"] = expected
+        if field and expected:
+            checklist.insert(1, f"Rewrite `{field}` as type `{expected}`.")
+    elif "json_root_not_object" in code:
+        feedback["category"] = "json_root_not_object"
+        checklist.insert(1, "The root must be a JSON object, not an array, string, or scalar.")
+    elif "JSONDecodeError" in code or "json_invalid" in code or "Expecting" in code:
+        feedback["category"] = "malformed_json"
+        checklist.insert(1, "Fix JSON syntax: close arrays/objects, quote keys and strings, and remove trailing prose.")
+    else:
+        feedback["category"] = "schema_or_parse_error"
+    feedback["repair_checklist"] = checklist
+    return feedback
+
+
+def _task_compile_dynamic_packet(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    target_binding: JsonObject | None,
+    fallback: CompiledTaskProgram,
+) -> JsonObject:
+    return {
+        "schema": "holo.kernel_v3.task_compile_input.v1",
+        "domain": "finance",
+        "fact_ledger_count": len(facts),
+        "fact_ledger": _compact_fact_summaries(facts),
+        "objective": question,
+        "target_binding": _compact_target_binding(target_binding),
         "host_fallback_program": _compact_program_for_model(fallback),
         "host_fallback_risks": _host_fallback_risks(fallback),
-        "output_contract": {
-            "task_spec": {
-                "task_type": "semantic work type such as filing_qa, compute, compare_compute, reconciliation, transaction_multiple, valuation_multiple, disclosure_analysis, modeling_lite",
-                "objective": "the task objective",
-                "target_entities": ["company/ticker/entities if known"],
-                "target_periods": ["periods if known"],
-                "success_criteria": ["what must be true before synthesis"],
-            },
-            "evidence_specs": [
-                {
-                    "slot_name": "required information slot",
-                    "accepted_attributes": ["metric aliases or line-item names"],
-                    "source_role": "primary_filing | annual_report | earnings_release | transaction_disclosure | market_data | benchmark_context | other",
-                    "required_source_families": ["source families if constrained"],
-                    "target_period": "period or null",
-                    "statement": "financial statement/table/section if applicable",
-                    "line_item": "line item if applicable",
-                    "required": True,
-                }
-            ],
-            "transform_specs": [
-                {
-                    "name": "transform name",
-                    "required_slots": ["slot names needed before calculator/synthesis"],
-                    "expression": "calculator expression if deterministic and supported, else null",
-                    "output_unit": "unit or null",
-                    "output_attribute": "output attribute name",
-                }
-            ],
-            "slot_frame": {
-                "task_type": "same work type",
-                "required_slots": [{"name": "slot", "accepted_attributes": ["aliases"], "source_requirements": ["source role/family"]}],
-                "missing_slots": ["slots not supported by current fact_ledger"],
-            },
-            "tool_chain_plan": {
-                "decision_owner": "model",
-                "recommended_steps": ["plain JSON objects describing the next tool-chain moves"],
-            },
-        },
     }
-    return (
-        "Return exactly one JSON object matching task.compile. "
-        "Prefer the model's semantic judgment over the host fallback when they differ, but keep every required slot executable and auditable.\n\n"
-        f"Packet:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
-    )
 
 
 def _host_fallback_risks(fallback: CompiledTaskProgram) -> list[JsonObject]:
@@ -277,6 +410,18 @@ def _host_fallback_risks(fallback: CompiledTaskProgram) -> list[JsonObject]:
                 ),
             }
         )
+    if formula_name == "capital_intensity":
+        risks.append(
+            {
+                "risk": "capital_intensity_needs_complete_ratio_lens",
+                "decision_owner": "model",
+                "instruction": (
+                    "For an overall capital-intensive-business assessment, decide whether to keep the fallback's executable "
+                    "capex/revenue, capex/operating cash flow, PP&E/assets, and ROA transforms. If you omit ROA/net_income, "
+                    "explain why the objective does not require profitability/asset-return context."
+                ),
+            }
+        )
     return risks
 
 
@@ -287,15 +432,35 @@ def _compiled_program_from_model_output(
     fallback: CompiledTaskProgram,
 ) -> CompiledTaskProgram:
     task_spec = _model_task_spec(parsed.get("task_spec"), question=question, fallback=fallback.task_spec)
-    preserve_formula_contract = False
+    preserve_formula_contract = _model_scaffold_formula_contract_required(task_spec=task_spec, fallback=fallback)
+    task_spec = _preserve_fallback_task_contract(
+        task_spec,
+        fallback=fallback,
+        preserve_formula_contract=preserve_formula_contract,
+    )
     evidence_specs = _model_evidence_specs(parsed.get("evidence_specs"), fallback=fallback.evidence_specs, task_type=task_spec.task_type)
+    evidence_specs = _preserve_fallback_evidence_contract(
+        evidence_specs,
+        fallback=fallback,
+        preserve_formula_contract=preserve_formula_contract,
+    )
     transform_specs = _model_transform_specs(parsed.get("transform_specs"), fallback=fallback.transform_specs)
+    transform_specs = _preserve_fallback_transform_contract(
+        transform_specs,
+        fallback=fallback,
+        preserve_formula_contract=preserve_formula_contract,
+    )
     slot_frame = _model_slot_frame(
         parsed.get("slot_frame"),
         parsed=parsed,
         fallback=fallback.slot_frame,
         task_spec=task_spec,
         evidence_specs=evidence_specs,
+    )
+    slot_frame = _preserve_fallback_slot_contract(
+        slot_frame,
+        fallback=fallback,
+        preserve_formula_contract=preserve_formula_contract,
     )
     diagnostics = {
         **dict(fallback.diagnostics),
@@ -321,6 +486,16 @@ def _compiled_program_from_model_output(
         transform_plan=fallback.transform_plan,
         diagnostics=diagnostics,
     )
+
+
+def _model_scaffold_formula_contract_required(*, task_spec: TaskSpec, fallback: CompiledTaskProgram) -> bool:
+    fallback_formula = _string(fallback.task_spec.diagnostics.get("formula_name"))
+    if fallback_formula != "capital_intensity":
+        return False
+    if task_spec.task_type not in {"compute", "compare_compute", "modeling_lite"}:
+        return False
+    model_formula = _string(task_spec.diagnostics.get("formula_name"))
+    return model_formula in {"", fallback_formula}
 
 
 def _fallback_formula_contract_required(fallback: CompiledTaskProgram) -> bool:
@@ -762,41 +937,230 @@ def _model_tool_chain_plan(
 
 
 def _compact_program_for_model(program: CompiledTaskProgram) -> JsonObject:
+    tool_chain = _json_object(program.diagnostics.get("tool_chain_plan"))
+    task_diagnostics = dict(program.task_spec.diagnostics)
     return {
         "program_id": program.program_id,
         "domain": program.domain,
-        "task_spec": program.task_spec.to_dict(),
-        "evidence_specs": [spec.to_dict() for spec in program.evidence_specs[:16]],
-        "transform_specs": [spec.to_dict() for spec in program.transform_specs[:12]],
-        "slot_frame": program.slot_frame.to_dict() if program.slot_frame is not None else None,
+        "task_spec": {
+            "task_type": program.task_spec.task_type,
+            "objective": program.task_spec.objective,
+            "target_entities": list(program.task_spec.target_entities)[:8],
+            "target_periods": list(program.task_spec.target_periods)[:8],
+            "success_criteria": list(program.task_spec.success_criteria)[:6],
+            "diagnostics": {
+                key: task_diagnostics.get(key)
+                for key in ("source", "formula_name", "formula_status", "fact_count")
+                if task_diagnostics.get(key) is not None
+            },
+        },
+        "evidence_specs": [_compact_evidence_spec_for_model(spec) for spec in program.evidence_specs[:12]],
+        "transform_specs": [_compact_transform_spec_for_model(spec) for spec in program.transform_specs[:8]],
+        "slot_frame": _compact_slot_frame_for_model(program.slot_frame),
+        "tool_chain_plan": _compact_tool_chain_for_model(tool_chain),
         "diagnostics": {
             key: value
             for key, value in dict(program.diagnostics).items()
-            if key in {"source", "evidence_spec_count", "transform_spec_count", "missing_slots", "tool_chain_plan"}
+            if key in {"source", "evidence_spec_count", "transform_spec_count", "missing_slots"}
         },
     }
+
+
+def _compact_evidence_spec_for_model(spec: EvidenceSpec) -> JsonObject:
+    return {
+        "slot_name": spec.slot_name,
+        "accepted_attributes": list(spec.accepted_attributes)[:6],
+        "source_role": spec.source_role,
+        "required_source_families": list(spec.required_source_families)[:6],
+        "target_period": spec.target_period,
+        "statement": spec.statement,
+        "line_item": spec.line_item,
+        "required": spec.required,
+    }
+
+
+def _compact_transform_spec_for_model(spec: TransformSpec) -> JsonObject:
+    return {
+        "name": spec.name,
+        "required_slots": list(spec.required_slots)[:10],
+        "expression": spec.expression,
+        "output_unit": spec.output_unit,
+        "output_attribute": spec.output_attribute,
+    }
+
+
+def _compact_slot_frame_for_model(frame: SlotFrame | None) -> JsonObject | None:
+    if frame is None:
+        return None
+    return {
+        "task_type": frame.task_type,
+        "required_slots": [
+            {
+                "name": slot.name,
+                "accepted_attributes": list(slot.accepted_attributes)[:6],
+                "source_requirements": list(slot.source_requirements)[:4],
+            }
+            for slot in frame.required_slots[:16]
+        ],
+        "filled_slots": [
+            {
+                "slot_name": fill.slot_name,
+                "claim_id": fill.claim_id,
+                "source_ref": fill.source_ref,
+                "confidence": fill.confidence,
+            }
+            for fill in frame.filled_slots[:16]
+        ],
+        "missing_slots": list(frame.missing_slots)[:16],
+    }
+
+
+def _compact_tool_chain_for_model(plan: JsonObject) -> JsonObject:
+    if not plan:
+        return {}
+    return {
+        "decision_owner": plan.get("decision_owner") or "model",
+        "task_type": plan.get("task_type"),
+        "formula_status": plan.get("formula_status"),
+        "formula_name": plan.get("formula_name"),
+        "missing_slots": _string_list(plan.get("missing_slots"))[:16],
+        "available_tools": [
+            item
+            for item in (
+                {"name": "retrieval.run", "use_for": "evidence/source acquisition"},
+                {"name": "calculator.compute", "use_for": "deterministic arithmetic after inputs are supported"},
+                {"name": "workspace.search", "use_for": "local/cached document discovery"},
+                {"name": "file.read", "use_for": "known local artifact inspection"},
+                {"name": "script.exec", "use_for": "audited parser/calculation helper when exposed"},
+            )
+        ],
+        "recommended_steps": [
+            _compact_tool_step(item)
+            for item in _json_list(plan.get("recommended_steps"))[:5]
+        ],
+        "next_action_candidates": [
+            _compact_tool_step(item)
+            for item in _json_list(plan.get("next_action_candidates"))[:5]
+        ],
+    }
+
+
+def _compact_tool_step(item: JsonObject) -> JsonObject:
+    return {
+        key: value
+        for key, value in {
+            "step": item.get("step"),
+            "tool": item.get("tool"),
+            "reason": item.get("reason"),
+            "when": _text_preview(_string(item.get("when")), 180),
+            "missing_slots": _string_list(item.get("missing_slots"))[:10],
+            "formula_name": item.get("formula_name"),
+            "payload_available": item.get("payload_available"),
+            "transform_specs": item.get("transform_specs") if isinstance(item.get("transform_specs"), list) else None,
+        }.items()
+        if not _empty_model_value(value)
+    }
+
+
+def _compact_target_binding(value: JsonObject | None) -> JsonObject:
+    data = dict(value) if isinstance(value, dict) else {}
+    keep = (
+        "company",
+        "issuer",
+        "ticker",
+        "cik",
+        "doc_period",
+        "report_date",
+        "doc_type",
+        "accession",
+        "primary_source_required",
+        "required_statement",
+        "required_line_item",
+    )
+    return {str(key): data.get(key) for key in keep if not _empty_model_value(data.get(key))}
+
+
+def _compact_fact_summaries(facts: list[FinanceFact]) -> list[JsonObject]:
+    summaries: list[JsonObject] = []
+    seen: set[str] = set()
+    for fact in facts:
+        key = fact.fact_id or "|".join([
+            str(fact.entity or ""),
+            str(fact.ticker or ""),
+            str(fact.period or fact.fiscal_year or ""),
+            str(fact.metric or ""),
+            str(fact.value or ""),
+        ])
+        if key in seen:
+            continue
+        seen.add(key)
+        summaries.append(_fact_summary(fact))
+        if len(summaries) >= TASK_COMPILE_FACT_LIMIT:
+            break
+    return summaries
 
 
 def _fact_summary(fact: FinanceFact) -> JsonObject:
+    metadata = dict(fact.metadata)
     return {
-        "fact_id": fact.fact_id,
-        "entity": fact.entity,
-        "ticker": fact.ticker,
-        "period": fact.period,
+        "fact_id": _compact_fact_text(fact.fact_id, 96),
+        "entity": _compact_fact_text(fact.entity, 96),
+        "ticker": _compact_fact_text(fact.ticker, 24),
+        "period": _compact_fact_text(fact.period, 64),
         "fiscal_year": fact.fiscal_year,
-        "metric": fact.metric,
-        "value": fact.value,
-        "unit": fact.unit,
-        "scale": fact.scale,
-        "source_ref": fact.source_ref,
-        "evidence_ref": fact.evidence_ref,
-        "citation_ref": fact.citation_ref,
+        "metric": _compact_fact_text(fact.metric, 120),
+        "value": _compact_fact_text(fact.value, 80),
+        "unit": _compact_fact_text(fact.unit, 40),
+        "scale": _compact_fact_text(fact.scale, 40),
+        "source_ref": _compact_fact_text(fact.source_ref, 120),
+        "evidence_ref": _compact_fact_text(fact.evidence_ref, 120),
+        "citation_ref": _compact_fact_text(fact.citation_ref, 80),
         "metadata": {
-            key: value
-            for key, value in dict(fact.metadata).items()
-            if key in {"form", "filed", "accession", "concept", "statement", "line_item"}
+            key: _compact_fact_text(value, 120)
+            for key, value in metadata.items()
+            if key in {
+                "form",
+                "fp",
+                "duration_days",
+                "filed",
+                "start",
+                "end",
+                "frame",
+                "accn",
+                "accession",
+                "concept",
+                "label",
+                "statement",
+                "line_item",
+                "source_family",
+                "target_document_binding_accepted",
+                "target_document_binding_score",
+            }
         },
     }
+
+
+def _text_preview(text: str, limit: int = 240) -> str:
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)] + "..."
+
+
+def _compact_fact_text(value: object, limit: int) -> str | int | float | bool | None:
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    return _text_preview(str(value), limit)
+
+
+def _empty_model_value(value: object) -> bool:
+    if value is None:
+        return True
+    if value == "":
+        return True
+    if isinstance(value, (list, dict)) and not value:
+        return True
+    return False
 
 
 def _evidence_specs(*, frame, binding: JsonObject, target_period: str | None) -> list[EvidenceSpec]:

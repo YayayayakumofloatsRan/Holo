@@ -164,6 +164,84 @@ def test_explicit_source_url_metadata_is_injected_and_fetched_before_search_nois
     assert fetch_uris[:1] == [direct_url]
 
 
+def test_adobe_pdf_target_wrapper_is_unwrapped_before_search_noise():
+    query = "Adobe FY2015 revenue from the annual report"
+    wrapper_url = (
+        "https://www.adobe.com/pdf-page.html?pdfTarget="
+        "aHR0cHM6Ly93d3cuYWRvYmUuY29tL2NvbnRlbnQvZGFtL2NjL2VuL2ludmVzdG9yLXJlbGF0aW9ucy9wZGZzL0FEQkUtMTBLLUZZMTUtRklOQUwucGRm"
+    )
+    pdf_url = "https://www.adobe.com/content/dam/cc/en/investor-relations/pdfs/ADBE-10K-FY15-FINAL.pdf"
+    noisy_search = SearchSource(
+        source_id="sec-search-noise",
+        uri="https://www.sec.gov/edgar/search/",
+        title="SEC EDGAR search",
+        snippet="Search filings, not the target document.",
+        provider="research_source_directory_search",
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "source_family": "regulatory_filing",
+            "authority_level": "primary",
+            "source_kind": "source_directory_entry",
+        },
+    )
+    journal = JournalStore.in_memory()
+
+    RetrievalOperator(
+        search_provider=FakeSearchProvider({query: [noisy_search]}),
+        fetch_provider=FakeFetchProvider(
+            {
+                pdf_url: "Adobe FY2015 Form 10-K annual report. Total revenue was $4.8 billion.",
+                noisy_search.uri: "Generic SEC search page.",
+            }
+        ),
+    ).run(
+        SearchGoal(
+            goal_id="goal-adobe-wrapper-source-url",
+            query=query,
+            max_sources=3,
+            max_fetches=1,
+            max_spans_per_document=2,
+            metadata={
+                "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+                "source_authority_requirement": "primary",
+                "source_url": wrapper_url,
+                "target_document_binding": {
+                    "company": "Adobe",
+                    "doc_name": "ADBE_2015_10K",
+                    "doc_type": "10k",
+                    "doc_period": "2015",
+                    "doc_link": wrapper_url,
+                    "primary_source_required": True,
+                },
+            },
+        ),
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-adobe-wrapper-source-url",
+        run_id="run-1",
+    )
+
+    direct_target_records = list(
+        journal.records(task_id="task-adobe-wrapper-source-url", kind="retrieval_direct_url_targets")
+    )
+    assert direct_target_records
+    first_source = direct_target_records[0].data["sources"][0]
+    assert first_source["uri"] == pdf_url
+    assert first_source["metadata"]["unwrapped_from_url"].startswith("https://www.adobe.com/pdf-page.html?pdfTarget=")
+    assert first_source["metadata"]["target_document_binding"]["doc_link"].startswith(
+        "https://www.adobe.com/pdf-page.html?pdfTarget="
+    )
+    assert first_source["metadata"]["target_document_binding"]["unwrapped_doc_link"] == pdf_url
+    binding_urls = first_source["metadata"]["target_document_binding"]["source_urls"]
+    assert binding_urls[0].startswith("https://www.adobe.com/pdf-page.html?pdfTarget=")
+    assert binding_urls[1] == pdf_url
+    fetch_uris = [
+        record.data["uri"]
+        for record in journal.records(task_id="task-adobe-wrapper-source-url", kind="retrieval_fetch_attempt")
+    ]
+    assert fetch_uris[:1] == [pdf_url]
+
+
 def test_target_document_binding_doc_link_is_fetched_before_search_noise():
     query = "3M FY2018 capital expenditure cash flow statement"
     direct_url = "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"

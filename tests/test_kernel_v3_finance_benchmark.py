@@ -20,6 +20,7 @@ from kernel_v3.bench import (
 from kernel_v3.bench.finance import _append_benchmark_provided_context_trace, summarize_finance_benchmark, trace_metrics
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.journal import JournalStore
+from kernel_v3.agent.answer_profile import infer_answer_profile
 from kernel_v3.agent.runtime import _benchmark_doc_retrieval_payload
 
 
@@ -216,6 +217,57 @@ def test_finance_benchmark_numeric_scoring_uses_tolerance() -> None:
     assert score["status"] == "passed"
     assert score["numeric"]["passed"] is True
     assert score["citation_present"] is True
+
+
+def test_finance_benchmark_numeric_scoring_respects_requested_reporting_unit() -> None:
+    item = FinanceBenchmarkItem(
+        item_id="num-usd-millions",
+        question="What is the FY2018 capital expenditure amount (in USD millions) for 3M?",
+        gold_answer="$1577.00",
+        numeric_value=1577.0,
+        tolerance=1.0,
+    )
+
+    verbose = score_finance_answer(item, answer="The FY2018 capital expenditure was $1,577 million.")
+    compact = score_finance_answer(item, answer="The FY2018 capital expenditure was 1,577 (USD millions).")
+
+    assert verbose["status"] == "passed"
+    assert compact["status"] == "passed"
+    assert 1577.0 in verbose["numeric"]["values"]
+    assert 0.002018 not in verbose["numeric"]["values"]
+
+
+def test_finance_dev_annotation_numeric_scoring_respects_requested_reporting_unit(tmp_path: Path) -> None:
+    annotation = tmp_path / "dev_gold.jsonl"
+    annotation.write_text(
+        json.dumps(
+            {
+                "item_id": "num-usd-millions",
+                "expected_numeric": [{"name": "capex", "value": 1577.0, "tolerance": 1.0}],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    result = FinanceBenchmarkResult(
+        item_id="num-usd-millions",
+        status="ungraded",
+        question="What is the FY2018 capital expenditure amount (in USD millions) for 3M?",
+        answer="The FY2018 capital expenditure was $1,577 million.",
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        scorecard={"status": "ungraded"},
+        trace_metrics={},
+        trace_refs=["ledger-1"],
+        final_answer=None,
+        failure_report=None,
+    )
+
+    score = score_finance_dev_annotations([result], annotation_path=annotation)
+
+    assert score["numeric_score"] == 1.0
 
 
 def test_finance_benchmark_sentinel_scoring_rewards_honest_unavailable_answer() -> None:
@@ -613,6 +665,15 @@ def test_financebench_doc_retrieval_prompt_compiles_to_structured_payload(tmp_pa
     assert any(spec["slot_name"] == "capital_expenditures" for spec in hint["evidence_specs"])
     assert any(spec["statement"] == "cash_flow_statement" for spec in hint["evidence_specs"])
     assert "scoring-only evidence" not in runtime.seen_prompts[0]
+    assert "script.exec" not in runtime.seen_prompts[0]
+    assert "shell.exec" not in runtime.seen_prompts[0]
+    assert "Tool availability is a harness interface detail" in runtime.seen_prompts[0]
+    assert "Return only the requested answer" in runtime.seen_prompts[0]
+    assert "document-analysis" not in runtime.seen_prompts[0]
+    profile = infer_answer_profile(runtime.seen_prompts[0], response_language="en")
+    assert profile.format == "answer"
+    assert profile.detail_level == "normal"
+    assert profile.target_sections == ["answer", "limitations"]
 
 
 def test_financebench_doc_retrieval_payload_parses_inline_prompt_labels() -> None:
@@ -1082,12 +1143,57 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
     journal.append(
         task_id="task-fin",
         run_id="run-1",
+        step_id="step-retrieve",
+        kind="action",
+        data={"kind": "tool", "name": "retrieval.run", "action_id": "act-retrieve"},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-calc",
+        kind="action",
+        data={"kind": "tool", "name": "calculator.compute", "action_id": "act-calc"},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-calc-repeat",
+        kind="action",
+        data={"kind": "tool", "name": "calculator.compute", "action_id": "act-calc-repeat"},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-respond",
+        kind="action",
+        data={"kind": "respond", "name": None, "action_id": "act-respond"},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-retrieve",
+        kind="observation",
+        data={
+            "source": "tool:retrieval.run",
+            "status": "failed",
+            "content": {"reason": "network_failed"},
+        },
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
         step_id=None,
         kind="observation",
         data={
             "source": "tool:calculator.compute",
             "status": "ok",
-            "content": {"formula_trace": {"formula_id": "formula-1", "result_value": "77.6"}},
+            "content": {
+                "formula_trace": {
+                    "formula_id": "formula-1",
+                    "result_value": "77.6",
+                    "input_fact_ids": ["fact-capex", "fact-revenue"],
+                }
+            },
         },
     )
     journal.append(
@@ -1097,7 +1203,20 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
         kind="finance_fact_ledger",
         data={
             "fact_count": 4,
-            "facts": [{"metadata": {"form": "10-K"}}],
+            "facts": [
+                {
+                    "fact_id": "fact-capex",
+                    "evidence_ref": "evidence-capex",
+                    "citation_ref": "cite-capex",
+                    "metadata": {"form": "10-K"},
+                },
+                {
+                    "fact_id": "fact-revenue",
+                    "evidence_ref": "evidence-revenue",
+                    "citation_ref": "cite-revenue",
+                    "metadata": {"form": "10-K"},
+                },
+            ],
             "primary_source_numeric_binding": {
                 "status": "selected",
                 "selected_fact_ids": ["target-1577m"],
@@ -1169,11 +1288,188 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
         kind="synthesis_gate_result",
         data={"status": "passed", "issues": [], "diagnostics": {"attempt": "fallback"}},
     )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-1",
+        kind="context",
+        data={
+            "context_id": "ctx-1",
+            "state": {
+                "toolchain_state": {},
+                "finance_working_state": {},
+            },
+        },
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-2",
+        kind="context",
+        data={
+            "context_id": "ctx-2",
+            "state": {
+                "toolchain_state": {"action_count": 1, "toolchain_presence": {"retrieval": True}},
+                "finance_working_state": {},
+            },
+        },
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-3",
+        kind="context",
+        data={
+            "context_id": "ctx-3",
+            "state": {
+                "toolchain_state": {
+                    "action_count": 2,
+                    "toolchain_presence": {"calculator": True},
+                    "recent_tool_observations": [
+                        {
+                            "source": "tool:finance.verify_numeric",
+                            "observation_diagnostics": {
+                                "issue_codes": ["unsupported_answer_number"],
+                                "repair_options": ["ask synthesis to remove unsupported numbers"],
+                            },
+                        }
+                    ],
+                },
+                "finance_working_state": {"ledger_count": 1, "fact_count": 4},
+            },
+        },
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="processor_result",
+        data={
+            "task_type": "task.compile",
+            "provider": "deepseek",
+            "model": "deepseek-reasoner",
+            "status": "ok",
+            "duration_ms": 100,
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "prompt_cache_hit_tokens": 90,
+                "prompt_cache_miss_tokens": 10,
+            },
+        },
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id=None,
+        kind="processor_result",
+        data={
+            "task_type": "finance.slot_bind",
+            "provider": "deepseek",
+            "model": "deepseek-reasoner",
+            "status": "failed",
+            "error": "json_invalid",
+            "duration_ms": 200,
+            "usage": {
+                "prompt_tokens": 80,
+                "completion_tokens": 10,
+                "total_tokens": 90,
+                "prompt_cache_hit_tokens": 30,
+                "prompt_cache_miss_tokens": 50,
+            },
+        },
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-final",
+        kind="agent_final_answer",
+        data={"answer": "Final answer."},
+    )
+    journal.append(
+        task_id="task-fin",
+        run_id="run-1",
+        step_id="step-post",
+        kind="memory_proposal",
+        data={"status": "pending"},
+    )
 
     metrics = trace_metrics(journal, task_id="task-fin")
 
+    assert metrics["processor_call_count"] == 2
+    assert metrics["processor_error_count"] == 1
+    assert metrics["total_tokens"] == 210
+    assert metrics["processor_duration_ms"] == 300
+    assert metrics["processor_prompt_cache_hit_tokens"] == 120
+    assert metrics["processor_prompt_cache_miss_tokens"] == 60
+    assert metrics["processor_prompt_cache_hit_ratio"] == 0.666667
+    assert metrics["context_record_count"] == 3
+    assert metrics["context_dynamic_state_present_count"] == 2
+    assert metrics["context_dynamic_state_present_rate"] == 0.6667
+    assert metrics["context_toolchain_state_present_count"] == 2
+    assert metrics["context_toolchain_state_empty_count"] == 1
+    assert metrics["context_toolchain_state_prompt_eligible_rate"] == 0.6667
+    assert metrics["context_toolchain_observation_diagnostics_present_count"] == 1
+    assert metrics["context_toolchain_observation_diagnostics_prompt_eligible_rate"] == 0.3333
+    assert metrics["context_finance_working_state_present_count"] == 1
+    assert metrics["context_finance_working_state_empty_count"] == 2
+    assert metrics["context_finance_working_state_prompt_eligible_rate"] == 0.3333
+    assert metrics["latest_context_toolchain_state_present"] is True
+    assert metrics["latest_context_toolchain_observation_diagnostics_present"] is True
+    assert metrics["latest_context_finance_working_state_present"] is True
+    assert metrics["processor_usage_by_task_type"]["task.compile"]["call_count"] == 1
+    assert metrics["processor_usage_by_task_type"]["finance.slot_bind"]["failed_count"] == 1
+    assert metrics["processor_error_counts"] == {"json_invalid": 1}
+    assert metrics["agent_loop_stage_counts"]["Plan"] == 6
+    assert metrics["agent_loop_stage_counts"]["Tools"] == 2
+    assert metrics["agent_loop_stage_counts"]["Evidence"] == 4
+    assert metrics["agent_loop_stage_counts"]["Verify"] == 6
+    assert metrics["agent_loop_stage_counts"]["Answer"] == 1
+    assert metrics["agent_loop_visited_stage_count"] == 5
+    assert metrics["agent_loop_stage_total_count"] == 8
+    assert metrics["agent_loop_stage_coverage_rate"] == 0.625
+    assert metrics["agent_loop_terminal"] is True
+    assert metrics["agent_loop_delta_count"] == 19
+    assert metrics["agent_loop_transition_count"] == 7
+    assert metrics["agent_loop_tool_stage_present"] is True
+    assert metrics["agent_loop_search_stage_present"] is False
+    assert metrics["agent_loop_verify_stage_present"] is True
+    assert metrics["post_final_record_count"] == 1
+    assert metrics["post_final_record_kind_counts"] == {"memory_proposal": 1}
+    assert metrics["post_final_clean"] is False
+    assert metrics["tool_action_count"] == 3
+    assert metrics["tool_action_unique_count"] == 2
+    assert metrics["tool_action_repeated_count"] == 1
+    assert metrics["tool_action_repetition_rate"] == 0.3333
+    assert metrics["tool_action_payload_unique_count"] == 2
+    assert metrics["tool_action_payload_repeated_count"] == 1
+    assert metrics["tool_action_payload_repetition_rate"] == 0.3333
+    assert metrics["tool_action_payload_repeated_group_count"] == 1
+    assert metrics["tool_action_payload_max_repeat_count"] == 2
+    assert metrics["tool_action_payload_repeated_tool_counts"] == {"calculator.compute": 1}
+    assert metrics["tool_observation_count"] == 2
+    assert metrics["tool_observation_source_counts"] == {
+        "tool:calculator.compute": 1,
+        "tool:retrieval.run": 1,
+    }
+    assert metrics["tool_observation_error_count"] == 1
+    assert metrics["tool_observation_error_rate"] == 0.5
+    assert metrics["toolchain_depth"] == 2
+    assert metrics["retrieval_tool_present"] is True
+    assert metrics["calculator_tool_present"] is True
+    assert metrics["finance_verify_tool_present"] is False
+    assert metrics["retrieval_calculator_verifier_chain_present"] is False
     assert metrics["calculator_call_count"] == 1
     assert metrics["formula_trace_count"] == 1
+    assert metrics["formula_trace_support_count"] == 1
+    assert metrics["formula_trace_fact_linked_count"] == 1
+    assert metrics["formula_trace_citation_linked_count"] == 1
+    assert metrics["formula_trace_evidence_linked_count"] == 1
+    assert metrics["formula_trace_fact_link_rate"] == 1.0
+    assert metrics["formula_trace_citation_link_rate"] == 1.0
+    assert metrics["formula_trace_evidence_link_rate"] == 1.0
+    assert metrics["formula_trace_input_fact_missing_count"] == 0
     assert metrics["finance_fact_count"] == 4
     assert metrics["numeric_verifier_status"] == "passed"
     assert metrics["answer_numeric_support_rate"] == 1.0
@@ -1201,6 +1497,128 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
     assert metrics["synthesis_gate_repaired"] is True
 
 
+def test_finance_trace_metrics_include_verify_numeric_tool_observation() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-verify-tool",
+        run_id="run-1",
+        step_id="step-verify",
+        kind="observation",
+        data={
+            "observation_id": "obs-verify-1",
+            "kind": "finance_numeric_verification",
+            "status": "ok",
+            "source": "tool:finance.verify_numeric",
+            "content": {
+                "verifier_status": "passed",
+                "issue_count": 1,
+                "verification": {
+                    "status": "passed",
+                    "issues": [{"code": "unsupported_answer_number"}],
+                    "matched_values": [{"value": "10000000"}],
+                    "missing_values": [],
+                    "formula_traces": [],
+                    "diagnostics": {"answer_numeric_count": 1},
+                },
+                "repair_guidance": {
+                    "schema": "holo.kernel_v3.finance_numeric_repair_guidance.v1",
+                    "issue_codes": ["unsupported_answer_number"],
+                    "repair_options": ["ask synthesis to remove unsupported answer numbers"],
+                    "missing_value_examples": [],
+                },
+            },
+            "action_id": "act-verify",
+            "tool_call_id": None,
+        },
+    )
+    journal.append(
+        task_id="task-verify-tool",
+        run_id="run-1",
+        step_id="step-verify-error",
+        kind="observation",
+        data={
+            "observation_id": "obs-verify-2",
+            "kind": "finance_numeric_verification",
+            "status": "failed",
+            "source": "tool:finance.verify_numeric",
+            "content": {"error": "invalid_tool_payload"},
+            "action_id": "act-verify-bad",
+            "tool_call_id": None,
+        },
+    )
+
+    metrics = trace_metrics(journal, task_id="task-verify-tool")
+
+    assert metrics["finance_verify_numeric_tool_call_count"] == 2
+    assert metrics["finance_verify_numeric_tool_error_count"] == 1
+    assert metrics["tool_observation_diagnostics_count"] == 2
+    assert metrics["tool_observation_repair_guidance_count"] == 1
+    assert metrics["tool_observation_diagnostics_rate"] == 1.0
+    assert metrics["tool_observation_repair_guidance_rate"] == 0.5
+    assert metrics["tool_observation_diagnostic_issue_code_counts"] == {"unsupported_answer_number": 1}
+    assert metrics["numeric_verifier_status"] == "passed"
+    assert metrics["numeric_verifier_passed"] is True
+    assert metrics["answer_numeric_support_rate"] == 1.0
+    assert metrics["finance_numeric_failure_reasons"] == ["unsupported_answer_number"]
+
+
+def test_finance_trace_metrics_include_structured_repair_recovery() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-repair",
+        run_id="run-1",
+        step_id="task-compile-retry",
+        kind="processor_result",
+        data={"task_type": "task.compile", "status": "ok", "usage": {}},
+    )
+    journal.append(
+        task_id="task-repair",
+        run_id="run-1",
+        step_id=None,
+        kind="processor_request",
+        data={
+            "request_id": "req-synth-json-repair",
+            "task_type": "synthesizer.answer",
+            "context_id": "ctx-synth-json-repair",
+            "parameters": {
+                "repair_reason": "invalid_json",
+                "repair_feedback_schema": "holo.kernel_v3.synthesizer_repair_feedback.v1",
+            },
+        },
+    )
+    journal.append(
+        task_id="task-repair",
+        run_id="run-1",
+        step_id=None,
+        kind="processor_result",
+        data={"request_id": "req-synth-json-repair", "task_type": "synthesizer.answer", "status": "ok", "usage": {}},
+    )
+    journal.append(
+        task_id="task-repair",
+        run_id="run-1",
+        step_id=None,
+        kind="finance_slot_bind",
+        data={
+            "status": "ready",
+            "repair_attempted": True,
+            "repair_processor_status": "ok",
+            "repair_feedback": {"category": "malformed_json"},
+        },
+    )
+
+    metrics = trace_metrics(journal, task_id="task-repair")
+
+    assert metrics["task_compile_retry_count"] == 1
+    assert metrics["task_compile_retry_success_count"] == 1
+    assert metrics["finance_slot_bind_repair_attempt_count"] == 1
+    assert metrics["finance_slot_bind_repair_success_count"] == 1
+    assert metrics["synthesizer_json_repair_attempt_count"] == 1
+    assert metrics["synthesizer_json_repair_success_count"] == 1
+    assert metrics["structured_repair_attempt_count"] == 3
+    assert metrics["structured_repair_success_count"] == 3
+    assert metrics["structured_repair_success_rate"] == 1.0
+
+
 def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
     results = [
         FinanceBenchmarkResult(
@@ -1223,6 +1641,72 @@ def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
                 "synthesis_gate_attempt_count": 2,
                 "synthesis_gate_repaired": True,
                 "finance_numeric_failure_reasons": [],
+                "agent_loop_stage_counts": {
+                    "Intake": 1,
+                    "Plan": 2,
+                    "Policy": 1,
+                    "Tools": 2,
+                    "Search": 1,
+                    "Evidence": 3,
+                    "Verify": 2,
+                    "Answer": 1,
+                },
+                "agent_loop_stage_coverage_rate": 1.0,
+                "agent_loop_terminal": True,
+                "agent_loop_tool_stage_present": True,
+                "agent_loop_search_stage_present": True,
+                "agent_loop_verify_stage_present": True,
+                "agent_loop_delta_count": 13,
+                "agent_loop_transition_count": 8,
+                "toolchain_depth": 3,
+                "retrieval_calculator_verifier_chain_present": True,
+                "tool_observation_error_rate": 0.0,
+                "tool_action_repetition_rate": 0.25,
+                "tool_action_payload_repetition_rate": 0.2,
+                "tool_action_payload_repeated_group_count": 1,
+                "tool_action_payload_max_repeat_count": 2,
+                "tool_action_payload_repeated_tool_counts": {"calculator.compute": 1},
+                "tool_observation_source_counts": {
+                    "tool:retrieval.run": 1,
+                    "tool:calculator.compute": 2,
+                    "tool:finance.verify_numeric": 2,
+                },
+                "tool_observation_count": 5,
+                "tool_observation_diagnostics_count": 2,
+                "tool_observation_repair_guidance_count": 1,
+                "tool_observation_diagnostic_issue_code_counts": {"unsupported_answer_number": 1},
+                "post_final_record_count": 0,
+                "post_final_record_kind_counts": {},
+                "finance_verify_numeric_tool_call_count": 2,
+                "finance_verify_numeric_tool_error_count": 1,
+                "processor_prompt_cache_hit_tokens": 40,
+                "processor_prompt_cache_miss_tokens": 10,
+                "context_record_count": 2,
+                "context_dynamic_state_present_count": 1,
+                "context_toolchain_state_present_count": 1,
+                "context_toolchain_state_empty_count": 1,
+                "context_toolchain_observation_diagnostics_present_count": 1,
+                "context_finance_working_state_present_count": 1,
+                "context_finance_working_state_empty_count": 1,
+                "processor_usage_by_task_type": {
+                    "task.compile": {
+                        "call_count": 1,
+                        "prompt_cache_hit_tokens": 40,
+                        "prompt_cache_miss_tokens": 10,
+                        "total_tokens": 100,
+                    }
+                },
+                "processor_error_counts": {},
+                "task_compile_retry_count": 1,
+                "task_compile_retry_success_count": 1,
+                "synthesizer_json_repair_attempt_count": 1,
+                "synthesizer_json_repair_success_count": 1,
+                "structured_repair_attempt_count": 2,
+                "structured_repair_success_count": 2,
+                "formula_trace_support_count": 2,
+                "formula_trace_fact_linked_count": 2,
+                "formula_trace_citation_linked_count": 1,
+                "formula_trace_evidence_linked_count": 2,
             },
             trace_refs=[],
             final_answer=None,
@@ -1247,6 +1731,74 @@ def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
                 "synthesis_gate_status": "failed",
                 "finance_numeric_failure_reason": "unsupported_answer_number",
                 "finance_numeric_failure_reasons": ["unsupported_answer_number"],
+                "agent_loop_stage_counts": {
+                    "Intake": 1,
+                    "Plan": 2,
+                    "Policy": 1,
+                    "Tools": 1,
+                    "Search": 0,
+                    "Evidence": 1,
+                    "Verify": 0,
+                    "Answer": 1,
+                },
+                "agent_loop_stage_coverage_rate": 0.625,
+                "agent_loop_terminal": True,
+                "agent_loop_tool_stage_present": True,
+                "agent_loop_search_stage_present": False,
+                "agent_loop_verify_stage_present": False,
+                "agent_loop_delta_count": 7,
+                "agent_loop_transition_count": 5,
+                "toolchain_depth": 1,
+                "retrieval_calculator_verifier_chain_present": False,
+                "tool_observation_error_rate": 0.5,
+                "tool_action_repetition_rate": 0.0,
+                "tool_action_payload_repetition_rate": 0.0,
+                "tool_action_payload_repeated_group_count": 0,
+                "tool_action_payload_max_repeat_count": 0,
+                "tool_action_payload_repeated_tool_counts": {},
+                "tool_observation_source_counts": {
+                    "tool:retrieval.run": 1,
+                    "tool:workspace.search": 1,
+                },
+                "tool_observation_count": 2,
+                "tool_observation_diagnostics_count": 1,
+                "tool_observation_repair_guidance_count": 0,
+                "tool_observation_diagnostic_issue_code_counts": {"network_failed": 1},
+                "post_final_record_count": 2,
+                "post_final_record_kind_counts": {"memory_proposal": 1, "processor_result": 1},
+                "finance_verify_numeric_tool_call_count": 0,
+                "finance_verify_numeric_tool_error_count": 0,
+                "processor_prompt_cache_hit_tokens": 10,
+                "processor_prompt_cache_miss_tokens": 40,
+                "context_record_count": 1,
+                "context_dynamic_state_present_count": 0,
+                "context_toolchain_state_present_count": 0,
+                "context_toolchain_state_empty_count": 1,
+                "context_finance_working_state_present_count": 0,
+                "context_finance_working_state_empty_count": 1,
+                "processor_usage_by_task_type": {
+                    "task.compile": {
+                        "call_count": 1,
+                        "prompt_cache_hit_tokens": 10,
+                        "prompt_cache_miss_tokens": 10,
+                        "total_tokens": 80,
+                    },
+                    "finance.slot_bind": {
+                        "call_count": 1,
+                        "prompt_cache_hit_tokens": 0,
+                        "prompt_cache_miss_tokens": 30,
+                        "total_tokens": 70,
+                    },
+                },
+                "processor_error_counts": {"json_invalid": 1},
+                "finance_slot_bind_repair_attempt_count": 1,
+                "finance_slot_bind_repair_success_count": 0,
+                "structured_repair_attempt_count": 1,
+                "structured_repair_success_count": 0,
+                "formula_trace_support_count": 1,
+                "formula_trace_fact_linked_count": 0,
+                "formula_trace_citation_linked_count": 0,
+                "formula_trace_evidence_linked_count": 0,
             },
             trace_refs=[],
             final_answer=None,
@@ -1264,8 +1816,207 @@ def test_finance_benchmark_summary_includes_generic_substrate_rates() -> None:
     assert summary.verifier_gate_pass_rate == 0.5
     assert summary.synthesis_gate_pass_rate == 0.5
     assert summary.synthesis_gate_repair_rate == 1.0
+    assert summary.average_agent_loop_stage_coverage_rate == 0.8125
+    assert summary.agent_loop_terminal_rate == 1.0
+    assert summary.agent_loop_tool_stage_rate == 1.0
+    assert summary.agent_loop_search_stage_rate == 0.5
+    assert summary.agent_loop_verify_stage_rate == 0.5
+    assert summary.average_agent_loop_delta_count == 10.0
+    assert summary.average_agent_loop_transition_count == 6.5
+    assert summary.agent_loop_stage_counts["Plan"] == 4
+    assert summary.agent_loop_stage_counts["Verify"] == 2
+    assert summary.average_toolchain_depth == 2.0
+    assert summary.retrieval_calculator_verifier_chain_rate == 0.5
+    assert summary.average_tool_observation_error_rate == 0.25
+    assert summary.average_tool_action_repetition_rate == 0.125
+    assert summary.average_tool_action_payload_repetition_rate == 0.1
+    assert summary.tool_action_payload_repeated_group_count == 1
+    assert summary.max_tool_action_payload_repeat_count == 2
+    assert summary.tool_action_payload_repeated_tool_counts == {"calculator.compute": 1}
+    assert summary.post_final_clean_rate == 0.5
+    assert summary.average_post_final_record_count == 1.0
+    assert summary.tool_observation_source_counts["tool:retrieval.run"] == 2
+    assert summary.tool_observation_source_counts["tool:calculator.compute"] == 2
+    assert summary.tool_observation_source_counts["tool:finance.verify_numeric"] == 2
+    assert summary.tool_observation_diagnostics_count == 3
+    assert summary.tool_observation_repair_guidance_count == 1
+    assert summary.tool_observation_diagnostics_rate == 0.4286
+    assert summary.tool_observation_repair_guidance_rate == 0.1429
+    assert summary.tool_observation_diagnostic_issue_code_counts == {
+        "unsupported_answer_number": 1,
+        "network_failed": 1,
+    }
+    assert summary.post_final_record_kind_counts == {"memory_proposal": 1, "processor_result": 1}
+    assert summary.finance_verify_numeric_tool_call_count == 2
+    assert summary.finance_verify_numeric_tool_error_count == 1
+    assert summary.finance_verify_numeric_tool_used_rate == 0.5
+    assert summary.finance_verify_numeric_tool_error_rate == 0.5
     assert summary.unsupported_numeric_claim_rate == 0.5
     assert summary.citation_preservation_rate == 0.5
+    assert summary.processor_prompt_cache_hit_tokens == 50
+    assert summary.processor_prompt_cache_miss_tokens == 50
+    assert summary.processor_prompt_cache_hit_ratio == 0.5
+    assert summary.context_record_count == 3
+    assert summary.average_context_record_count == 1.5
+    assert summary.context_dynamic_state_present_count == 1
+    assert summary.context_dynamic_state_present_rate == 0.3333
+    assert summary.context_dynamic_state_item_rate == 0.5
+    assert summary.context_toolchain_state_present_count == 1
+    assert summary.context_toolchain_state_empty_count == 2
+    assert summary.context_toolchain_state_prompt_eligible_rate == 0.3333
+    assert summary.context_toolchain_observation_diagnostics_present_count == 1
+    assert summary.context_toolchain_observation_diagnostics_prompt_eligible_rate == 0.3333
+    assert summary.context_finance_working_state_present_count == 1
+    assert summary.context_finance_working_state_empty_count == 2
+    assert summary.context_finance_working_state_prompt_eligible_rate == 0.3333
+    assert summary.processor_task_type_counts == {"task.compile": 2, "finance.slot_bind": 1}
+    assert summary.processor_cache_by_task_type["task.compile"]["prompt_cache_hit_tokens"] == 50
+    assert summary.processor_cache_by_task_type["task.compile"]["prompt_cache_miss_tokens"] == 20
+    assert summary.processor_cache_by_task_type["finance.slot_bind"]["prompt_cache_hit_ratio"] == 0.0
+    assert summary.processor_error_counts == {"json_invalid": 1}
+    assert summary.task_compile_retry_count == 1
+    assert summary.task_compile_retry_success_count == 1
+    assert summary.finance_slot_bind_repair_attempt_count == 1
+    assert summary.finance_slot_bind_repair_success_count == 0
+    assert summary.synthesizer_json_repair_attempt_count == 1
+    assert summary.synthesizer_json_repair_success_count == 1
+    assert summary.structured_repair_attempt_count == 3
+    assert summary.structured_repair_success_count == 2
+    assert summary.structured_repair_success_rate == 0.6667
+    assert summary.average_formula_trace_support_count == 1.5
+    assert summary.formula_trace_fact_link_rate == 0.6667
+    assert summary.formula_trace_citation_link_rate == 0.3333
+    assert summary.formula_trace_evidence_link_rate == 0.6667
+
+
+def test_finance_benchmark_summary_flags_strict_failures_with_internal_verifier_support() -> None:
+    results = [
+        FinanceBenchmarkResult(
+            item_id="Q-supported-fail",
+            status="failed",
+            question="What was the supported metric?",
+            answer="The supported metric was $1,577 million.",
+            task_id="task-1",
+            run_id="run-1",
+            thread_id="thread-1",
+            scorecard={
+                "status": "failed",
+                "scored": True,
+                "answer_present": True,
+                "reason": "numeric_outside_tolerance",
+            },
+            trace_metrics={
+                "numeric_verifier_status": "passed",
+                "verifier_gate_status": "passed",
+            },
+            trace_refs=[],
+            final_answer=None,
+            failure_report=None,
+        ),
+        FinanceBenchmarkResult(
+            item_id="Q-real-fail",
+            status="failed",
+            question="What was the unsupported metric?",
+            answer="The metric was unsupported.",
+            task_id="task-2",
+            run_id="run-2",
+            thread_id="thread-2",
+            scorecard={
+                "status": "failed",
+                "scored": True,
+                "answer_present": True,
+                "reason": "numeric_outside_tolerance",
+            },
+            trace_metrics={
+                "numeric_verifier_status": "failed",
+                "verifier_gate_status": "failed",
+            },
+            trace_refs=[],
+            final_answer=None,
+            failure_report=None,
+        ),
+        FinanceBenchmarkResult(
+            item_id="Q-pass",
+            status="passed",
+            question="What passed?",
+            answer="A supported answer.",
+            task_id="task-3",
+            run_id="run-3",
+            thread_id="thread-3",
+            scorecard={
+                "status": "passed",
+                "scored": True,
+                "answer_present": True,
+                "reason": "numeric_within_tolerance",
+            },
+            trace_metrics={"numeric_verifier_status": "passed"},
+            trace_refs=[],
+            final_answer=None,
+            failure_report=None,
+        ),
+    ]
+
+    summary = summarize_finance_benchmark(results)
+
+    assert summary.failed_count == 2
+    assert summary.strict_failed_internal_verifier_passed_count == 1
+    assert summary.strict_failed_internal_verifier_passed_rate == 0.5
+    assert summary.failure_layer_counts == {
+        "numeric_verifier": 1,
+        "scoring_alignment_review": 1,
+    }
+
+
+def test_finance_benchmark_progress_prints_processor_breakdown(capsys) -> None:
+    callback = cli._finance_benchmark_progress_callback(output_path=None, total=1)
+    assert callback is not None
+    item = FinanceBenchmarkItem(item_id="Q-proc", question="How strong is processor observability?")
+    result = FinanceBenchmarkResult(
+        item_id="Q-proc",
+        status="failed",
+        question=item.question,
+        answer="",
+        task_id="task-proc",
+        run_id="run-proc",
+        thread_id="thread-proc",
+        scorecard={"reason": "json_invalid"},
+        trace_metrics={
+            "total_tokens": 180,
+            "processor_duration_ms": 300,
+            "processor_prompt_cache_hit_tokens": 120,
+            "processor_prompt_cache_miss_tokens": 60,
+            "processor_prompt_cache_hit_ratio": 0.666667,
+            "processor_usage_by_task_type": {
+                "task.compile": {"call_count": 1},
+                "finance.slot_bind": {"call_count": 1},
+            },
+            "processor_error_counts": {"json_invalid": 1},
+            "structured_repair_attempt_count": 2,
+            "structured_repair_success_count": 1,
+            "structured_repair_success_rate": 0.5,
+            "synthesizer_json_repair_attempt_count": 1,
+            "synthesizer_json_repair_success_count": 1,
+            "formula_trace_fact_link_rate": 1.0,
+            "formula_trace_citation_link_rate": 0.5,
+        },
+        trace_refs=[],
+        final_answer=None,
+        failure_report=None,
+    )
+
+    callback(0, item, result)
+
+    stderr = capsys.readouterr().err
+    assert "proc_cache=66.7%" in stderr
+    assert "proc_hit=120" in stderr
+    assert "proc_miss=60" in stderr
+    assert "repair=50.0%" in stderr
+    assert "repair_n=1/2" in stderr
+    assert "json_repair=1/1" in stderr
+    assert "trace_link=100.0%" in stderr
+    assert "trace_cite=50.0%" in stderr
+    assert "proc_tasks=finance.slot_bind:1,task.compile:1" in stderr
+    assert "proc_errors=json_invalid:1" in stderr
 
 
 def test_finance_benchmark_cli_imports_public_dataset(tmp_path: Path) -> None:

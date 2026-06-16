@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 import time
@@ -11,10 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol
 
+from kernel_v3.benchmark_diagnostics import finance_failure_layer, strict_failed_internal_verifier_passed
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.contracts import Contract, JsonObject, JsonValue
 from kernel_v3.journal import JournalStore
+from kernel_v3.processors.usage import aggregate_processor_usage_by_task_type, summarize_processor_usage
 from kernel_v3.retrieval import retrieval_behavior_benchmark
+from kernel_v3.retrieval.url_utils import unwrap_url_candidates, url_equivalent_or_unwrapped
+from kernel_v3.runtime_graph import is_terminal_record, runtime_graph_delta_stream, runtime_topology_projection
 from kernel_v3.storage import safe_storage_id
 from kernel_v3.substrate import Claim, EvidencePolicy, SlotFill, SlotFrame, SlotSpec, TransformPlan, VerificationGateResult
 
@@ -121,6 +126,10 @@ class FinanceBenchmarkSummary(Contract):
     average_calculator_calls: float
     formula_trace_present_rate: float
     average_formula_traces: float
+    average_formula_trace_support_count: float
+    formula_trace_fact_link_rate: float | None
+    formula_trace_citation_link_rate: float | None
+    formula_trace_evidence_link_rate: float | None
     claim_ledger_present_rate: float
     compiled_task_program_present_rate: float
     average_compiled_evidence_specs: float
@@ -138,6 +147,35 @@ class FinanceBenchmarkSummary(Contract):
     average_workbench_actual_rescued_count: float
     average_workbench_rescue_blocked_count: float
     average_workbench_semantic_missing_slots: float
+    average_agent_loop_stage_coverage_rate: float
+    agent_loop_terminal_rate: float
+    agent_loop_tool_stage_rate: float
+    agent_loop_search_stage_rate: float
+    agent_loop_verify_stage_rate: float
+    average_agent_loop_delta_count: float
+    average_agent_loop_transition_count: float
+    agent_loop_stage_counts: JsonObject
+    average_toolchain_depth: float
+    retrieval_calculator_verifier_chain_rate: float
+    average_tool_observation_error_rate: float
+    average_tool_action_repetition_rate: float
+    average_tool_action_payload_repetition_rate: float
+    tool_action_payload_repeated_group_count: int
+    max_tool_action_payload_repeat_count: int
+    tool_action_payload_repeated_tool_counts: JsonObject
+    post_final_clean_rate: float
+    average_post_final_record_count: float
+    tool_observation_source_counts: JsonObject
+    tool_observation_diagnostics_count: int
+    tool_observation_repair_guidance_count: int
+    tool_observation_diagnostics_rate: float | None
+    tool_observation_repair_guidance_rate: float | None
+    tool_observation_diagnostic_issue_code_counts: JsonObject
+    post_final_record_kind_counts: JsonObject
+    finance_verify_numeric_tool_call_count: int
+    finance_verify_numeric_tool_error_count: int
+    finance_verify_numeric_tool_used_rate: float
+    finance_verify_numeric_tool_error_rate: float | None
     numeric_verifier_pass_rate: float | None
     verifier_gate_pass_rate: float | None
     synthesis_gate_pass_rate: float | None
@@ -152,6 +190,37 @@ class FinanceBenchmarkSummary(Contract):
     workflow_type_counts: JsonObject
     finance_numeric_failure_reason_counts: JsonObject
     status_counts: JsonObject
+    failure_layer_counts: JsonObject = field(default_factory=dict)
+    processor_prompt_cache_hit_tokens: int = 0
+    processor_prompt_cache_miss_tokens: int = 0
+    processor_prompt_cache_hit_ratio: float | None = None
+    context_record_count: int = 0
+    average_context_record_count: float = 0.0
+    context_dynamic_state_present_count: int = 0
+    context_dynamic_state_present_rate: float | None = None
+    context_dynamic_state_item_rate: float | None = None
+    context_toolchain_state_present_count: int = 0
+    context_toolchain_state_empty_count: int = 0
+    context_toolchain_state_prompt_eligible_rate: float | None = None
+    context_toolchain_observation_diagnostics_present_count: int = 0
+    context_toolchain_observation_diagnostics_prompt_eligible_rate: float | None = None
+    context_finance_working_state_present_count: int = 0
+    context_finance_working_state_empty_count: int = 0
+    context_finance_working_state_prompt_eligible_rate: float | None = None
+    processor_task_type_counts: JsonObject = field(default_factory=dict)
+    processor_cache_by_task_type: JsonObject = field(default_factory=dict)
+    processor_error_counts: JsonObject = field(default_factory=dict)
+    strict_failed_internal_verifier_passed_count: int = 0
+    strict_failed_internal_verifier_passed_rate: float | None = None
+    task_compile_retry_count: int = 0
+    task_compile_retry_success_count: int = 0
+    finance_slot_bind_repair_attempt_count: int = 0
+    finance_slot_bind_repair_success_count: int = 0
+    synthesizer_json_repair_attempt_count: int = 0
+    synthesizer_json_repair_success_count: int = 0
+    structured_repair_attempt_count: int = 0
+    structured_repair_success_count: int = 0
+    structured_repair_success_rate: float | None = None
     output_path: str | None = None
     dev_annotation_score: JsonObject | None = None
     benchmark_split: JsonObject = field(default_factory=dict)
@@ -249,7 +318,7 @@ def score_finance_answer(
         expected_numeric = _numeric_target_from_gold(gold)
         if expected_numeric is not None:
             expected_tolerance = max(abs(expected_numeric) * 0.01, 1.0)
-    numeric = _score_numeric(answer_text, expected_numeric, expected_tolerance)
+    numeric = _score_numeric(answer_text, expected_numeric, expected_tolerance, question=item.question)
     gold_overlap = _token_overlap(gold, answer_text) if gold and not gold_sentinel else None
     gold_string_match = _normalize_text(gold) in normalized_answer if gold and not gold_sentinel else None
     citation_refs = _citation_refs(final_answer, answer_text=answer_text)
@@ -554,6 +623,101 @@ def summarize_finance_benchmark(
         str(result.metadata.get("workflow_type") or result.metadata.get("category") or "unclassified")
         for result in results
     )
+    processor_cache_hit = sum(_int_value(result.trace_metrics.get("processor_prompt_cache_hit_tokens")) for result in results)
+    processor_cache_miss = sum(_int_value(result.trace_metrics.get("processor_prompt_cache_miss_tokens")) for result in results)
+    context_record_count = sum(_int_value(result.trace_metrics.get("context_record_count")) for result in results)
+    context_toolchain_state_present_count = sum(
+        _int_value(result.trace_metrics.get("context_toolchain_state_present_count")) for result in results
+    )
+    context_toolchain_state_empty_count = sum(
+        _int_value(result.trace_metrics.get("context_toolchain_state_empty_count")) for result in results
+    )
+    context_finance_working_state_present_count = sum(
+        _int_value(result.trace_metrics.get("context_finance_working_state_present_count")) for result in results
+    )
+    context_finance_working_state_empty_count = sum(
+        _int_value(result.trace_metrics.get("context_finance_working_state_empty_count")) for result in results
+    )
+    context_dynamic_state_context_count = sum(
+        _int_value(result.trace_metrics.get("context_dynamic_state_present_count")) for result in results
+    )
+    context_dynamic_state_item_count = sum(
+        1
+        for result in results
+        if _int_value(result.trace_metrics.get("context_dynamic_state_present_count")) > 0
+    )
+    task_compile_retry_count = sum(_int_value(result.trace_metrics.get("task_compile_retry_count")) for result in results)
+    task_compile_retry_success_count = sum(_int_value(result.trace_metrics.get("task_compile_retry_success_count")) for result in results)
+    finance_slot_bind_repair_attempt_count = sum(
+        _int_value(result.trace_metrics.get("finance_slot_bind_repair_attempt_count")) for result in results
+    )
+    finance_slot_bind_repair_success_count = sum(
+        _int_value(result.trace_metrics.get("finance_slot_bind_repair_success_count")) for result in results
+    )
+    synthesizer_json_repair_attempt_count = sum(
+        _int_value(result.trace_metrics.get("synthesizer_json_repair_attempt_count")) for result in results
+    )
+    synthesizer_json_repair_success_count = sum(
+        _int_value(result.trace_metrics.get("synthesizer_json_repair_success_count")) for result in results
+    )
+    structured_repair_attempt_count = sum(_int_value(result.trace_metrics.get("structured_repair_attempt_count")) for result in results)
+    structured_repair_success_count = sum(_int_value(result.trace_metrics.get("structured_repair_success_count")) for result in results)
+    formula_trace_support_count = sum(_int_value(result.trace_metrics.get("formula_trace_support_count")) for result in results)
+    formula_trace_fact_linked_count = sum(_int_value(result.trace_metrics.get("formula_trace_fact_linked_count")) for result in results)
+    formula_trace_citation_linked_count = sum(_int_value(result.trace_metrics.get("formula_trace_citation_linked_count")) for result in results)
+    formula_trace_evidence_linked_count = sum(_int_value(result.trace_metrics.get("formula_trace_evidence_linked_count")) for result in results)
+    finance_verify_numeric_tool_call_count = sum(
+        _int_value(result.trace_metrics.get("finance_verify_numeric_tool_call_count")) for result in results
+    )
+    finance_verify_numeric_tool_error_count = sum(
+        _int_value(result.trace_metrics.get("finance_verify_numeric_tool_error_count")) for result in results
+    )
+    tool_observation_count = sum(_int_value(result.trace_metrics.get("tool_observation_count")) for result in results)
+    tool_observation_diagnostics_count = sum(
+        _int_value(result.trace_metrics.get("tool_observation_diagnostics_count")) for result in results
+    )
+    tool_observation_repair_guidance_count = sum(
+        _int_value(result.trace_metrics.get("tool_observation_repair_guidance_count")) for result in results
+    )
+    tool_observation_diagnostic_issue_code_counts = _metric_counter(results, "tool_observation_diagnostic_issue_code_counts")
+    context_toolchain_observation_diagnostics_present_count = sum(
+        _int_value(result.trace_metrics.get("context_toolchain_observation_diagnostics_present_count"))
+        for result in results
+    )
+    agent_loop_stage_counts = _agent_loop_stage_counts(results)
+    tool_observation_source_counts = _metric_counter(results, "tool_observation_source_counts")
+    tool_action_payload_repeated_group_count = sum(
+        _int_value(result.trace_metrics.get("tool_action_payload_repeated_group_count")) for result in results
+    )
+    max_tool_action_payload_repeat_count = max(
+        (_int_value(result.trace_metrics.get("tool_action_payload_max_repeat_count")) for result in results),
+        default=0,
+    )
+    tool_action_payload_repeated_tool_counts = _metric_counter(results, "tool_action_payload_repeated_tool_counts")
+    post_final_record_kind_counts = _metric_counter(results, "post_final_record_kind_counts")
+    processor_task_type_counts = _processor_task_type_counts(results)
+    processor_cache_by_task_type = aggregate_processor_usage_by_task_type([result.trace_metrics for result in results])
+    processor_error_counts = _processor_error_counts(results)
+    strict_failed_count = status_counts.get("failed", 0)
+    strict_failed_internal_verifier_passed_count = sum(
+        1
+        for result in results
+        if strict_failed_internal_verifier_passed(
+            status=result.status,
+            scorecard=result.scorecard,
+            trace_metrics=result.trace_metrics,
+        )
+    )
+    failure_layer_counts = Counter(
+        finance_failure_layer(
+            status=result.status,
+            scorecard=result.scorecard,
+            trace_metrics=result.trace_metrics,
+            failure_report=result.failure_report,
+        )
+        for result in results
+        if result.status == "failed"
+    )
     repeated_item_count, repeatability_score = _repeatability_summary(results)
     return FinanceBenchmarkSummary(
         schema="holo.kernel_v3.finance_benchmark_summary.v1",
@@ -586,6 +750,16 @@ def summarize_finance_benchmark(
         average_calculator_calls=_average_metric(results, "calculator_call_count"),
         formula_trace_present_rate=_rate(sum(1 for result in results if int(result.trace_metrics.get("formula_trace_count") or 0) > 0), len(results)),
         average_formula_traces=_average_metric(results, "formula_trace_count"),
+        average_formula_trace_support_count=_average_metric(results, "formula_trace_support_count"),
+        formula_trace_fact_link_rate=_rate(formula_trace_fact_linked_count, formula_trace_support_count)
+        if formula_trace_support_count
+        else None,
+        formula_trace_citation_link_rate=_rate(formula_trace_citation_linked_count, formula_trace_support_count)
+        if formula_trace_support_count
+        else None,
+        formula_trace_evidence_link_rate=_rate(formula_trace_evidence_linked_count, formula_trace_support_count)
+        if formula_trace_support_count
+        else None,
         claim_ledger_present_rate=_rate(sum(1 for result in results if bool(result.trace_metrics.get("claim_ledger_present"))), len(results)),
         compiled_task_program_present_rate=_rate(
             sum(1 for result in results if bool(result.trace_metrics.get("compiled_task_program_present"))),
@@ -619,6 +793,47 @@ def summarize_finance_benchmark(
         average_workbench_actual_rescued_count=_average_metric(results, "workbench_actual_rescued_count"),
         average_workbench_rescue_blocked_count=_average_metric(results, "workbench_rescue_blocked_count"),
         average_workbench_semantic_missing_slots=_average_metric(results, "workbench_semantic_missing_slot_count"),
+        average_agent_loop_stage_coverage_rate=_average_metric(results, "agent_loop_stage_coverage_rate"),
+        agent_loop_terminal_rate=_rate(sum(1 for result in results if bool(result.trace_metrics.get("agent_loop_terminal"))), len(results)),
+        agent_loop_tool_stage_rate=_rate(sum(1 for result in results if bool(result.trace_metrics.get("agent_loop_tool_stage_present"))), len(results)),
+        agent_loop_search_stage_rate=_rate(sum(1 for result in results if bool(result.trace_metrics.get("agent_loop_search_stage_present"))), len(results)),
+        agent_loop_verify_stage_rate=_rate(sum(1 for result in results if bool(result.trace_metrics.get("agent_loop_verify_stage_present"))), len(results)),
+        average_agent_loop_delta_count=_average_metric(results, "agent_loop_delta_count"),
+        average_agent_loop_transition_count=_average_metric(results, "agent_loop_transition_count"),
+        agent_loop_stage_counts=dict(agent_loop_stage_counts),
+        average_toolchain_depth=_average_metric(results, "toolchain_depth"),
+        retrieval_calculator_verifier_chain_rate=_rate(
+            sum(1 for result in results if bool(result.trace_metrics.get("retrieval_calculator_verifier_chain_present"))),
+            len(results),
+        ),
+        average_tool_observation_error_rate=_average_metric(results, "tool_observation_error_rate"),
+        average_tool_action_repetition_rate=_average_metric(results, "tool_action_repetition_rate"),
+        average_tool_action_payload_repetition_rate=_average_metric(results, "tool_action_payload_repetition_rate"),
+        tool_action_payload_repeated_group_count=tool_action_payload_repeated_group_count,
+        max_tool_action_payload_repeat_count=max_tool_action_payload_repeat_count,
+        tool_action_payload_repeated_tool_counts=dict(tool_action_payload_repeated_tool_counts),
+        post_final_clean_rate=_rate(sum(1 for result in results if _int_value(result.trace_metrics.get("post_final_record_count")) == 0), len(results)),
+        average_post_final_record_count=_average_metric(results, "post_final_record_count"),
+        tool_observation_source_counts=dict(tool_observation_source_counts),
+        tool_observation_diagnostics_count=tool_observation_diagnostics_count,
+        tool_observation_repair_guidance_count=tool_observation_repair_guidance_count,
+        tool_observation_diagnostics_rate=_rate(tool_observation_diagnostics_count, tool_observation_count)
+        if tool_observation_count
+        else None,
+        tool_observation_repair_guidance_rate=_rate(tool_observation_repair_guidance_count, tool_observation_count)
+        if tool_observation_count
+        else None,
+        tool_observation_diagnostic_issue_code_counts=dict(tool_observation_diagnostic_issue_code_counts),
+        post_final_record_kind_counts=dict(post_final_record_kind_counts),
+        finance_verify_numeric_tool_call_count=finance_verify_numeric_tool_call_count,
+        finance_verify_numeric_tool_error_count=finance_verify_numeric_tool_error_count,
+        finance_verify_numeric_tool_used_rate=_rate(
+            sum(1 for result in results if _int_value(result.trace_metrics.get("finance_verify_numeric_tool_call_count")) > 0),
+            len(results),
+        ),
+        finance_verify_numeric_tool_error_rate=_rate(finance_verify_numeric_tool_error_count, finance_verify_numeric_tool_call_count)
+        if finance_verify_numeric_tool_call_count
+        else None,
         numeric_verifier_pass_rate=_rate(
             sum(1 for result in verifier_scored if result.trace_metrics.get("numeric_verifier_status") == "passed"),
             len(verifier_scored),
@@ -657,7 +872,58 @@ def summarize_finance_benchmark(
         repeatability_score=repeatability_score,
         workflow_type_counts=dict(workflow_type_counts),
         finance_numeric_failure_reason_counts=dict(numeric_failure_reasons),
+        failure_layer_counts=dict(failure_layer_counts),
         status_counts=dict(status_counts),
+        processor_prompt_cache_hit_tokens=processor_cache_hit,
+        processor_prompt_cache_miss_tokens=processor_cache_miss,
+        processor_prompt_cache_hit_ratio=round(processor_cache_hit / (processor_cache_hit + processor_cache_miss), 6)
+        if processor_cache_hit + processor_cache_miss
+        else None,
+        context_record_count=context_record_count,
+        average_context_record_count=_average_metric(results, "context_record_count"),
+        context_dynamic_state_present_count=context_dynamic_state_context_count,
+        context_dynamic_state_present_rate=_rate(context_dynamic_state_context_count, context_record_count)
+        if context_record_count
+        else None,
+        context_dynamic_state_item_rate=_rate(context_dynamic_state_item_count, len(results)),
+        context_toolchain_state_present_count=context_toolchain_state_present_count,
+        context_toolchain_state_empty_count=context_toolchain_state_empty_count,
+        context_toolchain_state_prompt_eligible_rate=_rate(context_toolchain_state_present_count, context_record_count)
+        if context_record_count
+        else None,
+        context_toolchain_observation_diagnostics_present_count=context_toolchain_observation_diagnostics_present_count,
+        context_toolchain_observation_diagnostics_prompt_eligible_rate=_rate(
+            context_toolchain_observation_diagnostics_present_count,
+            context_record_count,
+        )
+        if context_record_count
+        else None,
+        context_finance_working_state_present_count=context_finance_working_state_present_count,
+        context_finance_working_state_empty_count=context_finance_working_state_empty_count,
+        context_finance_working_state_prompt_eligible_rate=_rate(
+            context_finance_working_state_present_count,
+            context_record_count,
+        )
+        if context_record_count
+        else None,
+        processor_task_type_counts=dict(processor_task_type_counts),
+        processor_cache_by_task_type=processor_cache_by_task_type,
+        processor_error_counts=dict(processor_error_counts),
+        strict_failed_internal_verifier_passed_count=strict_failed_internal_verifier_passed_count,
+        strict_failed_internal_verifier_passed_rate=_rate(strict_failed_internal_verifier_passed_count, strict_failed_count)
+        if strict_failed_count
+        else None,
+        task_compile_retry_count=task_compile_retry_count,
+        task_compile_retry_success_count=task_compile_retry_success_count,
+        finance_slot_bind_repair_attempt_count=finance_slot_bind_repair_attempt_count,
+        finance_slot_bind_repair_success_count=finance_slot_bind_repair_success_count,
+        synthesizer_json_repair_attempt_count=synthesizer_json_repair_attempt_count,
+        synthesizer_json_repair_success_count=synthesizer_json_repair_success_count,
+        structured_repair_attempt_count=structured_repair_attempt_count,
+        structured_repair_success_count=structured_repair_success_count,
+        structured_repair_success_rate=_rate(structured_repair_success_count, structured_repair_attempt_count)
+        if structured_repair_attempt_count
+        else None,
         output_path=str(output_path) if output_path is not None else None,
         dev_annotation_score=score_finance_dev_annotations(results, annotation_path=annotation_path)
         if annotation_path is not None
@@ -787,11 +1053,21 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     if journal is None or task_id is None:
         return {}
     records = journal.records(task_id=task_id)
-    processor_results = [record.data for record in records if record.kind == "processor_result"]
+    processor_request_records = [record for record in records if record.kind == "processor_request"]
+    processor_result_records = [record for record in records if record.kind == "processor_result"]
+    processor_results = [record.data for record in processor_result_records]
     actions = [record.data for record in records if record.kind == "action"]
     observations = [record.data for record in records if record.kind == "observation"]
+    context_metrics = _context_hygiene_metrics(records)
     finance_ledgers = [record.data for record in records if record.kind == "finance_fact_ledger"]
-    numeric_verifications = [record.data for record in records if record.kind == "finance_numeric_verification"]
+    numeric_verifications = []
+    for record in records:
+        if record.kind == "finance_numeric_verification":
+            numeric_verifications.append(record.data)
+        elif record.kind == "observation":
+            tool_verification = _finance_numeric_verification_from_tool_observation(record.data)
+            if tool_verification is not None:
+                numeric_verifications.append(tool_verification)
     claim_ledgers = [record.data for record in records if record.kind == "claim_ledger"]
     slot_frames = [record.data for record in records if record.kind == "slot_frame"]
     transform_plans = [record.data for record in records if record.kind == "transform_plan"]
@@ -800,28 +1076,70 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     synthesis_gates = [record.data for record in records if record.kind == "synthesis_gate_result"]
     workbench_decisions = [record.data for record in records if record.kind == "retrieval_workbench_decision"]
     workbench_rescues = [record.data for record in records if record.kind == "retrieval_workbench_rescue"]
+    finance_slot_binds = [record.data for record in records if record.kind == "finance_slot_bind"]
     retrieval_evidence_records = [record.data for record in records if record.kind == "retrieval_evidence"]
     retrieval_citation_records = [record.data for record in records if record.kind == "retrieval_citation"]
     retrieval = retrieval_behavior_benchmark(journal, task_id)
-    total_tokens = 0
-    duration_ms = 0
-    processor_errors = 0
-    for item in processor_results:
-        usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
-        total_tokens += _int_value(usage.get("total_tokens"))
-        duration_ms += _int_value(item.get("duration_ms"))
-        if item.get("status") != "ok":
-            processor_errors += 1
+    processor_usage = summarize_processor_usage(processor_results)
+    runtime_topology = runtime_topology_projection(records)
+    runtime_deltas = runtime_graph_delta_stream(records)
+    runtime_diagnostics = runtime_topology.diagnostics if isinstance(runtime_topology.diagnostics, dict) else {}
+    runtime_stage_counts = (
+        runtime_diagnostics.get("stage_counts")
+        if isinstance(runtime_diagnostics.get("stage_counts"), dict)
+        else {}
+    )
+    runtime_stage_counts = {str(stage): _int_value(count) for stage, count in runtime_stage_counts.items()}
+    runtime_visited_stage_count = sum(1 for count in runtime_stage_counts.values() if count > 0)
+    runtime_stage_total_count = len(runtime_stage_counts)
+    runtime_transition_count = sum(
+        len(delta.get("edge_updates") or [])
+        for delta in runtime_deltas
+        if isinstance(delta, dict) and isinstance(delta.get("edge_updates"), list)
+    )
+    terminal_index = next((index for index, record in enumerate(records) if is_terminal_record(record)), None)
+    post_final_records = records[terminal_index + 1 :] if terminal_index is not None else []
+    post_final_record_kinds = Counter(str(record.kind) for record in post_final_records)
+    tool_action_names = [_action_tool_name(action) for action in actions]
+    tool_action_names = [name for name in tool_action_names if name]
+    tool_action_repeated_count = max(0, len(tool_action_names) - len(set(tool_action_names)))
+    tool_payload_repetition = _tool_action_payload_repetition_metrics(actions)
+    tool_observation_sources = [
+        str(item.get("source"))
+        for item in observations
+        if isinstance(item.get("source"), str) and str(item.get("source")).startswith("tool:")
+    ]
+    tool_observations = [
+        item
+        for item in observations
+        if isinstance(item.get("source"), str) and str(item.get("source")).startswith("tool:")
+    ]
+    tool_observation_source_counts = Counter(tool_observation_sources)
+    tool_observation_diagnostics = _tool_observation_diagnostics_metrics(tool_observations)
+    tool_observation_error_count = sum(
+        1
+        for item in observations
+        if isinstance(item.get("source"), str) and str(item.get("source")).startswith("tool:") and item.get("status") != "ok"
+    )
     calculator_observations = [
         item for item in observations
         if item.get("source") == "tool:calculator.compute"
     ]
+    finance_verify_observations = [
+        item
+        for item in observations
+        if item.get("source") == "tool:finance.verify_numeric"
+        or (item.get("kind") == "finance_numeric_verification" and isinstance(item.get("content"), dict))
+    ]
     formula_trace_ids = set()
+    formula_traces: list[JsonObject] = []
     for item in calculator_observations:
         content = item.get("content") if isinstance(item.get("content"), dict) else {}
         trace = content.get("formula_trace") if isinstance(content.get("formula_trace"), dict) else {}
         formula_id = trace.get("formula_id")
         if isinstance(formula_id, str) and formula_id:
+            if formula_id not in formula_trace_ids:
+                formula_traces.append(dict(trace))
             formula_trace_ids.add(formula_id)
     latest_ledger = finance_ledgers[-1] if finance_ledgers else {}
     latest_claim_ledger = claim_ledgers[-1] if claim_ledgers else {}
@@ -873,13 +1191,63 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     claim_citation_count = _claim_citation_count(claim_ledgers)
     finance_source_forms = _ordered_unique([*_finance_source_forms(finance_ledgers), *_claim_source_forms(claim_ledgers)])
     transform_methods = _transform_methods(transform_plans)
+    formula_trace_support = _formula_trace_support_metrics(formula_traces, latest_ledger)
+    structured_repair = _structured_repair_metrics(
+        processor_request_records=processor_request_records,
+        processor_result_records=processor_result_records,
+        finance_slot_binds=finance_slot_binds,
+    )
+    retrieval_tool_present = _int_value(retrieval.get("retrieval_run_count", 0)) > 0 or tool_observation_source_counts.get("tool:retrieval.run", 0) > 0
+    calculator_tool_present = bool(calculator_observations)
+    verifier_tool_present = bool(finance_verify_observations)
+    toolchain_depth = int(retrieval_tool_present) + int(calculator_tool_present) + int(verifier_tool_present)
     return {
         "schema": "holo.kernel_v3.finance_trace_metrics.v1",
         "record_count": len(records),
-        "processor_call_count": len(processor_results),
-        "processor_error_count": processor_errors,
-        "total_tokens": total_tokens,
-        "processor_duration_ms": duration_ms,
+        "processor_call_count": processor_usage.get("call_count", 0),
+        "processor_error_count": processor_usage.get("failed_count", 0),
+        "total_tokens": processor_usage.get("total_tokens", 0),
+        "processor_duration_ms": processor_usage.get("duration_ms", 0),
+        "processor_prompt_cache_hit_tokens": processor_usage.get("prompt_cache_hit_tokens", 0),
+        "processor_prompt_cache_miss_tokens": processor_usage.get("prompt_cache_miss_tokens", 0),
+        "processor_prompt_cache_hit_ratio": processor_usage.get("prompt_cache_hit_ratio"),
+        "processor_usage_by_task_type": processor_usage.get("by_task_type", {}),
+        "processor_usage_by_provider_model": processor_usage.get("by_provider_model", {}),
+        "processor_status_counts": processor_usage.get("status_counts", {}),
+        "processor_error_counts": processor_usage.get("error_counts", {}),
+        **context_metrics,
+        **structured_repair,
+        "agent_loop_stage_counts": runtime_stage_counts,
+        "agent_loop_visited_stage_count": runtime_visited_stage_count,
+        "agent_loop_stage_total_count": runtime_stage_total_count,
+        "agent_loop_stage_coverage_rate": _rate(runtime_visited_stage_count, runtime_stage_total_count),
+        "agent_loop_terminal": bool(runtime_topology.terminal),
+        "agent_loop_latest_stage": runtime_topology.latest_stage,
+        "agent_loop_delta_count": len(runtime_deltas),
+        "agent_loop_transition_count": runtime_transition_count,
+        "agent_loop_tool_stage_present": _int_value(runtime_stage_counts.get("Tools")) > 0,
+        "agent_loop_search_stage_present": _int_value(runtime_stage_counts.get("Search")) > 0,
+        "agent_loop_evidence_stage_present": _int_value(runtime_stage_counts.get("Evidence")) > 0,
+        "agent_loop_verify_stage_present": _int_value(runtime_stage_counts.get("Verify")) > 0,
+        "agent_loop_answer_stage_present": _int_value(runtime_stage_counts.get("Answer")) > 0,
+        "post_final_record_count": len(post_final_records),
+        "post_final_record_kind_counts": dict(post_final_record_kinds),
+        "post_final_clean": len(post_final_records) == 0,
+        "tool_action_count": len(tool_action_names),
+        "tool_action_unique_count": len(set(tool_action_names)),
+        "tool_action_repeated_count": tool_action_repeated_count,
+        "tool_action_repetition_rate": _rate(tool_action_repeated_count, len(tool_action_names)) if tool_action_names else 0.0,
+        **tool_payload_repetition,
+        "tool_observation_count": len(tool_observation_sources),
+        "tool_observation_source_counts": dict(tool_observation_source_counts),
+        **tool_observation_diagnostics,
+        "tool_observation_error_count": tool_observation_error_count,
+        "tool_observation_error_rate": _rate(tool_observation_error_count, len(tool_observation_sources)) if tool_observation_sources else 0.0,
+        "toolchain_depth": toolchain_depth,
+        "retrieval_tool_present": retrieval_tool_present,
+        "calculator_tool_present": calculator_tool_present,
+        "finance_verify_tool_present": verifier_tool_present,
+        "retrieval_calculator_verifier_chain_present": retrieval_tool_present and calculator_tool_present and verifier_tool_present,
         "action_count": len(actions),
         "retrieval_run_count": retrieval.get("retrieval_run_count", 0),
         "search_attempt_count": retrieval.get("search_attempt_count", 0),
@@ -898,8 +1266,11 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "claim_citation_count": claim_citation_count,
         "calculator_used": bool(calculator_observations),
         "calculator_call_count": len(calculator_observations),
+        "finance_verify_numeric_tool_call_count": len(finance_verify_observations),
+        "finance_verify_numeric_tool_error_count": sum(1 for item in finance_verify_observations if item.get("status") != "ok"),
         "formula_trace_present": bool(formula_trace_ids),
         "formula_trace_count": len(formula_trace_ids),
+        **formula_trace_support,
         "claim_ledger_present": bool(claim_ledgers),
         "claim_count": _int_value(latest_claim_ledger.get("claim_count")) if isinstance(latest_claim_ledger, dict) else 0,
         "compiled_task_program_present": bool(compiled_programs),
@@ -962,6 +1333,122 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     }
 
 
+def _context_hygiene_metrics(records: list[object]) -> JsonObject:
+    context_records = [record for record in records if getattr(record, "kind", None) == "context"]
+    toolchain_present = 0
+    toolchain_empty = 0
+    finance_present = 0
+    finance_empty = 0
+    dynamic_present = 0
+    toolchain_observation_diagnostics_present = 0
+    latest_toolchain_present = False
+    latest_finance_present = False
+    latest_toolchain_observation_diagnostics_present = False
+    for record in context_records:
+        data = getattr(record, "data", None)
+        if not isinstance(data, dict):
+            continue
+        state = data.get("state")
+        if not isinstance(state, dict):
+            continue
+        toolchain_state = state.get("toolchain_state")
+        finance_working_state = state.get("finance_working_state")
+        current_toolchain_present = isinstance(toolchain_state, dict) and bool(toolchain_state)
+        current_finance_present = isinstance(finance_working_state, dict) and bool(finance_working_state)
+        if current_toolchain_present:
+            toolchain_present += 1
+            if _toolchain_state_has_observation_diagnostics(toolchain_state):
+                toolchain_observation_diagnostics_present += 1
+        elif "toolchain_state" in state:
+            toolchain_empty += 1
+        if current_finance_present:
+            finance_present += 1
+        elif "finance_working_state" in state:
+            finance_empty += 1
+        if current_toolchain_present or current_finance_present:
+            dynamic_present += 1
+        latest_toolchain_present = current_toolchain_present
+        latest_finance_present = current_finance_present
+        latest_toolchain_observation_diagnostics_present = (
+            current_toolchain_present and _toolchain_state_has_observation_diagnostics(toolchain_state)
+        )
+    context_count = len(context_records)
+    return {
+        "context_record_count": context_count,
+        "context_dynamic_state_present_count": dynamic_present,
+        "context_dynamic_state_present_rate": _rate(dynamic_present, context_count) if context_count else None,
+        "context_toolchain_state_present_count": toolchain_present,
+        "context_toolchain_state_empty_count": toolchain_empty,
+        "context_toolchain_state_prompt_eligible_rate": _rate(toolchain_present, context_count) if context_count else None,
+        "context_toolchain_observation_diagnostics_present_count": toolchain_observation_diagnostics_present,
+        "context_toolchain_observation_diagnostics_prompt_eligible_rate": _rate(
+            toolchain_observation_diagnostics_present,
+            context_count,
+        )
+        if context_count
+        else None,
+        "context_finance_working_state_present_count": finance_present,
+        "context_finance_working_state_empty_count": finance_empty,
+        "context_finance_working_state_prompt_eligible_rate": _rate(finance_present, context_count)
+        if context_count
+        else None,
+        "latest_context_toolchain_state_present": latest_toolchain_present,
+        "latest_context_toolchain_observation_diagnostics_present": latest_toolchain_observation_diagnostics_present,
+        "latest_context_finance_working_state_present": latest_finance_present,
+    }
+
+
+def _toolchain_state_has_observation_diagnostics(toolchain_state: object) -> bool:
+    state = toolchain_state if isinstance(toolchain_state, dict) else {}
+    observations = state.get("recent_tool_observations") if isinstance(state.get("recent_tool_observations"), list) else []
+    return any(
+        isinstance(item, dict)
+        and isinstance(item.get("observation_diagnostics"), dict)
+        and bool(item.get("observation_diagnostics"))
+        for item in observations
+    )
+
+
+def _tool_observation_diagnostics_metrics(observations: list[JsonObject]) -> JsonObject:
+    diagnostic_count = 0
+    repair_guidance_count = 0
+    issue_counts: Counter[str] = Counter()
+    for observation in observations:
+        content = observation.get("content") if isinstance(observation.get("content"), dict) else {}
+        if not content:
+            continue
+        guidance = content.get("repair_guidance") if isinstance(content.get("repair_guidance"), dict) else {}
+        verification = content.get("verification") if isinstance(content.get("verification"), dict) else {}
+        has_diagnostic = bool(guidance) or any(
+            key in content
+            for key in (
+                "verifier_status",
+                "issue_count",
+                "matched_value_count",
+                "missing_value_count",
+                "error",
+                "reason",
+            )
+        )
+        if has_diagnostic:
+            diagnostic_count += 1
+        if guidance:
+            repair_guidance_count += 1
+        issue_codes = _string_list(guidance.get("issue_codes")) if guidance else []
+        if not issue_codes:
+            issue_codes = _finance_numeric_issue_codes(verification)
+        for code in issue_codes:
+            issue_counts[str(code)] += 1
+    total = len(observations)
+    return {
+        "tool_observation_diagnostics_count": diagnostic_count,
+        "tool_observation_repair_guidance_count": repair_guidance_count,
+        "tool_observation_diagnostics_rate": _rate(diagnostic_count, total) if total else None,
+        "tool_observation_repair_guidance_rate": _rate(repair_guidance_count, total) if total else None,
+        "tool_observation_diagnostic_issue_code_counts": dict(issue_counts),
+    }
+
+
 def _finance_numeric_issue_codes(verification: JsonObject) -> list[str]:
     issues = verification.get("issues") if isinstance(verification.get("issues"), list) else []
     codes: list[str] = []
@@ -972,6 +1459,151 @@ def _finance_numeric_issue_codes(verification: JsonObject) -> list[str]:
         if isinstance(code, str) and code:
             codes.append(code)
     return list(dict.fromkeys(codes))
+
+
+def _finance_numeric_verification_from_tool_observation(observation: JsonObject) -> JsonObject | None:
+    if not isinstance(observation, dict):
+        return None
+    content = observation.get("content") if isinstance(observation.get("content"), dict) else {}
+    if observation.get("source") != "tool:finance.verify_numeric" and observation.get("kind") != "finance_numeric_verification":
+        return None
+    verification = content.get("verification") if isinstance(content.get("verification"), dict) else {}
+    if not verification:
+        return None
+    result = dict(verification)
+    if not isinstance(result.get("status"), str) and isinstance(content.get("verifier_status"), str):
+        result["status"] = content["verifier_status"]
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+    result["diagnostics"] = {
+        **diagnostics,
+        "source": "tool:finance.verify_numeric",
+        "tool_observation_status": observation.get("status"),
+        "tool_observation_id": observation.get("observation_id"),
+    }
+    return result
+
+
+def _formula_trace_support_metrics(formula_traces: list[JsonObject], ledger: JsonObject) -> JsonObject:
+    facts = ledger.get("facts") if isinstance(ledger.get("facts"), list) else []
+    fact_by_id: dict[str, JsonObject] = {}
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        fact_id = str(fact.get("fact_id") or "").strip()
+        if fact_id:
+            fact_by_id[fact_id] = fact
+    support_count = len(formula_traces)
+    fact_linked = 0
+    citation_linked = 0
+    evidence_linked = 0
+    missing_input_fact_ids: list[str] = []
+    for trace in formula_traces:
+        input_fact_ids = [str(item).strip() for item in trace.get("input_fact_ids") or [] if str(item or "").strip()]
+        linked_facts = [fact_by_id[fact_id] for fact_id in input_fact_ids if fact_id in fact_by_id]
+        if linked_facts:
+            fact_linked += 1
+        if any(str(fact.get("citation_ref") or "").strip() for fact in linked_facts):
+            citation_linked += 1
+        if any(str(fact.get("evidence_ref") or "").strip() for fact in linked_facts):
+            evidence_linked += 1
+        missing_input_fact_ids.extend(fact_id for fact_id in input_fact_ids if fact_id not in fact_by_id)
+    return {
+        "formula_trace_support_count": support_count,
+        "formula_trace_fact_linked_count": fact_linked,
+        "formula_trace_citation_linked_count": citation_linked,
+        "formula_trace_evidence_linked_count": evidence_linked,
+        "formula_trace_input_fact_missing_count": len(_ordered_unique(missing_input_fact_ids)),
+        "formula_trace_fact_link_rate": _rate(fact_linked, support_count) if support_count else None,
+        "formula_trace_citation_link_rate": _rate(citation_linked, support_count) if support_count else None,
+        "formula_trace_evidence_link_rate": _rate(evidence_linked, support_count) if support_count else None,
+    }
+
+
+def _structured_repair_metrics(
+    *,
+    processor_request_records: list[object],
+    processor_result_records: list[object],
+    finance_slot_binds: list[JsonObject],
+) -> JsonObject:
+    task_compile_retry_count = 0
+    task_compile_retry_success_count = 0
+    for record in processor_result_records:
+        data = getattr(record, "data", {})
+        if not isinstance(data, dict):
+            continue
+        task_type = str(data.get("task_type") or "")
+        step_id = str(getattr(record, "step_id", "") or "")
+        if task_type != "task.compile" or "retry" not in step_id:
+            continue
+        task_compile_retry_count += 1
+        if data.get("status") == "ok":
+            task_compile_retry_success_count += 1
+
+    finance_slot_bind_repair_attempt_count = 0
+    finance_slot_bind_repair_success_count = 0
+    for item in finance_slot_binds:
+        if item.get("repair_attempted") is not True:
+            continue
+        finance_slot_bind_repair_attempt_count += 1
+        if item.get("status") == "ready":
+            finance_slot_bind_repair_success_count += 1
+
+    synthesizer_json_repair_request_ids: set[str] = set()
+    for record in processor_request_records:
+        data = getattr(record, "data", {})
+        if not isinstance(data, dict):
+            continue
+        task_type = str(data.get("task_type") or "")
+        if task_type != "synthesizer.answer":
+            continue
+        context_id = str(data.get("context_id") or "")
+        parameters = data.get("parameters") if isinstance(data.get("parameters"), dict) else {}
+        is_json_repair = (
+            context_id.endswith("-json-repair")
+            or parameters.get("repair_reason") == "invalid_json"
+            or parameters.get("repair_feedback_schema") == "holo.kernel_v3.synthesizer_repair_feedback.v1"
+        )
+        if not is_json_repair:
+            continue
+        request_id = data.get("request_id")
+        if isinstance(request_id, str) and request_id:
+            synthesizer_json_repair_request_ids.add(request_id)
+
+    synthesizer_json_repair_attempt_count = 0
+    synthesizer_json_repair_success_count = 0
+    for record in processor_result_records:
+        data = getattr(record, "data", {})
+        if not isinstance(data, dict):
+            continue
+        if data.get("request_id") not in synthesizer_json_repair_request_ids:
+            continue
+        synthesizer_json_repair_attempt_count += 1
+        if data.get("status") == "ok":
+            synthesizer_json_repair_success_count += 1
+
+    structured_repair_attempt_count = (
+        task_compile_retry_count
+        + finance_slot_bind_repair_attempt_count
+        + synthesizer_json_repair_attempt_count
+    )
+    structured_repair_success_count = (
+        task_compile_retry_success_count
+        + finance_slot_bind_repair_success_count
+        + synthesizer_json_repair_success_count
+    )
+    return {
+        "task_compile_retry_count": task_compile_retry_count,
+        "task_compile_retry_success_count": task_compile_retry_success_count,
+        "finance_slot_bind_repair_attempt_count": finance_slot_bind_repair_attempt_count,
+        "finance_slot_bind_repair_success_count": finance_slot_bind_repair_success_count,
+        "synthesizer_json_repair_attempt_count": synthesizer_json_repair_attempt_count,
+        "synthesizer_json_repair_success_count": synthesizer_json_repair_success_count,
+        "structured_repair_attempt_count": structured_repair_attempt_count,
+        "structured_repair_success_count": structured_repair_success_count,
+        "structured_repair_success_rate": _rate(structured_repair_success_count, structured_repair_attempt_count)
+        if structured_repair_attempt_count
+        else None,
+    }
 
 
 def _annotation_map(records: list[JsonObject]) -> dict[str, JsonObject]:
@@ -988,7 +1620,7 @@ def _score_dev_annotation(result: FinanceBenchmarkResult, annotation: JsonObject
     expected_contains = _string_list(annotation.get("expected_answer_contains"))
     contains_hits = [item for item in expected_contains if _expected_contains_met(answer, item)]
     numeric_expectations = _expected_numeric_annotations(annotation.get("expected_numeric"))
-    numeric_matches = [_score_expected_numeric(answer, expectation) for expectation in numeric_expectations]
+    numeric_matches = [_score_expected_numeric(answer, expectation, question=result.question) for expectation in numeric_expectations]
     required_trace = _ordered_unique([*_string_list(annotation.get("required_trace")), *_string_list(annotation.get("expected_trace"))])
     trace_hits = [name for name in required_trace if _trace_requirement_met(name, result)]
     required_sources = _string_list(annotation.get("required_sources"))
@@ -1299,6 +1931,8 @@ def _source_url_requirement_met(url: str, result: FinanceBenchmarkResult, *, hay
     observed = _result_source_urls(result)
     if any(normalized_url == item.casefold().rstrip("/") for item in observed):
         return True
+    if any(url_equivalent_or_unwrapped(url, item) for item in observed):
+        return True
     required_accession = _sec_accession_key(normalized_url)
     if not required_accession:
         return False
@@ -1497,10 +2131,10 @@ def _expected_numeric_annotations(value: object) -> list[JsonObject]:
     return result
 
 
-def _score_expected_numeric(answer: str, expectation: JsonObject) -> JsonObject:
+def _score_expected_numeric(answer: str, expectation: JsonObject, *, question: str | None = None) -> JsonObject:
     expected = _optional_float(expectation.get("value"))
     tolerance = _optional_float(expectation.get("tolerance"))
-    numeric = _score_numeric(answer, expected, tolerance)
+    numeric = _score_numeric(answer, expected, tolerance, question=question)
     return {"name": expectation.get("name"), **numeric}
 
 
@@ -1539,6 +2173,8 @@ def _source_uris(records: list[JsonObject]) -> list[str]:
         uri = record.get("uri")
         if isinstance(uri, str) and uri:
             uris.append(uri)
+        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        uris.extend(_metadata_source_urls(metadata))
     return _ordered_unique(uris)
 
 
@@ -1568,11 +2204,38 @@ def _target_document_trace_urls(latest_ledger: JsonObject) -> list[str]:
         value = binding.get(key)
         if isinstance(value, str) and value:
             urls.append(value)
+            urls.extend(unwrap_url_candidates(value))
+    for key in ("unwrapped_doc_link", "original_doc_link"):
+        value = binding.get(key)
+        if isinstance(value, str) and value:
+            urls.append(value)
     source_urls = binding.get("source_urls")
     if isinstance(source_urls, list):
         for value in source_urls:
             if isinstance(value, str) and value:
                 urls.append(value)
+                urls.extend(unwrap_url_candidates(value))
+    return _ordered_unique(urls)
+
+
+def _metadata_source_urls(metadata: JsonObject) -> list[str]:
+    urls: list[str] = []
+    for key in ("source_url", "original_source_url", "unwrapped_from_url", "doc_link", "unwrapped_doc_link"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            urls.append(value)
+            urls.extend(unwrap_url_candidates(value))
+    for key in ("source_urls", "preferred_source_urls", "required_source_urls"):
+        value = metadata.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if isinstance(item, str) and item:
+                urls.append(item)
+                urls.extend(unwrap_url_candidates(item))
+    binding = metadata.get("target_document_binding")
+    if isinstance(binding, dict):
+        urls.extend(_metadata_source_urls(binding))
     return _ordered_unique(urls)
 
 
@@ -1878,9 +2541,13 @@ def _benchmark_prompt(item: FinanceBenchmarkItem, *, question_prefix: str) -> st
                 "Prefer direct URL fetch before broad search. This is an answerable public benchmark item: the target "
                 "document or its primary filing data should contain enough information to solve it. Do not treat an "
                 "initial missing slot, unsupported-number verifier result, or synthesis-gate failure as a final answer. "
-                "If the first path fails, continue by changing method: read the target filing, parse tables, use "
-                "script.exec/shell.exec when available, extract structured facts, run calculator.compute when needed, "
-                "and then answer from ClaimLedger or FormulaTrace-backed numbers."
+                "If the first path fails, continue by changing method: read the target filing, parse tables with the "
+                "exposed document tools when available, extract structured facts, run exact arithmetic when "
+                "needed, and then answer from ClaimLedger or FormulaTrace-backed numbers. Tool availability is a "
+                "harness interface detail, not part of the user's requested objective. Return only the requested "
+                "answer, the minimal supporting calculation or line-item explanation, and citations. Do not add "
+                "unrequested company overview, valuation, market-data, growth-driver, or risk sections. Avoid extra "
+                "numeric claims unless they are necessary to answer the question."
             )
             context = _doc_retrieval_context_for_prompt(item) or context
         else:
@@ -2122,10 +2789,11 @@ def _citation_refs(final_answer: JsonObject | None, *, answer_text: str) -> list
     return sorted(set(refs))
 
 
-def _score_numeric(answer: str, expected: float | None, tolerance: float | None) -> JsonObject:
+def _score_numeric(answer: str, expected: float | None, tolerance: float | None, *, question: str | None = None) -> JsonObject:
     if expected is None:
         return {"scored": False, "passed": None, "expected": None, "tolerance": None, "matched_value": None, "values": []}
-    values = _extract_numeric_values(answer)
+    candidates = _extract_numeric_candidates(answer)
+    values = _numeric_values_for_scoring(candidates, requested_scale=_requested_unit_scale(question or ""))
     tol = abs(float(tolerance)) if tolerance is not None else max(abs(expected) * 0.01, 1e-9)
     matched = None
     for value in values:
@@ -2204,6 +2872,38 @@ def _extract_numeric_candidates(text: str) -> list[JsonObject]:
                 }
             )
     return candidates
+
+
+def _numeric_values_for_scoring(candidates: list[JsonObject], *, requested_scale: float | None = None) -> list[float]:
+    values: list[float] = []
+    for candidate in candidates:
+        value = float(candidate["value"])
+        _append_unique_float(values, value)
+        if requested_scale and not _looks_like_year(value):
+            requested_value = value / requested_scale
+            _append_unique_float(values, requested_value)
+    return values
+
+
+def _append_unique_float(values: list[float], value: float) -> None:
+    if not math.isfinite(value):
+        return
+    if any(abs(existing - value) <= max(abs(existing), abs(value), 1.0) * 1e-12 for existing in values):
+        return
+    values.append(value)
+
+
+def _requested_unit_scale(question: str) -> float | None:
+    text = _normalize_text(question)
+    if not any(marker in text for marker in ("usd", "dollar", "$")):
+        return None
+    if re.search(r"\b(?:in|answer in|reported in)\s+(?:usd|us dollars?|dollars?)?\s*millions?\b", text):
+        return 1_000_000.0
+    if re.search(r"\b(?:in|answer in|reported in)\s+(?:usd|us dollars?|dollars?)?\s*billions?\b", text):
+        return 1_000_000_000.0
+    if re.search(r"\b(?:in|answer in|reported in)\s+(?:usd|us dollars?|dollars?)?\s*thousands?\b", text):
+        return 1_000.0
+    return None
 
 
 def _ambiguous_compact_scale_unit(text: str, match: re.Match[str], *, raw: str, prefix: str, unit: str) -> bool:
@@ -2326,6 +3026,100 @@ def _average_metric(results: list[FinanceBenchmarkResult], key: str) -> float:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             values.append(float(value))
     return _average(values)
+
+
+def _processor_task_type_counts(results: list[FinanceBenchmarkResult]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for result in results:
+        by_task_type = result.trace_metrics.get("processor_usage_by_task_type")
+        if not isinstance(by_task_type, dict):
+            continue
+        for task_type, payload in by_task_type.items():
+            if not isinstance(payload, dict):
+                continue
+            counts[str(task_type)] += _int_value(payload.get("call_count"))
+    return counts
+
+
+def _processor_error_counts(results: list[FinanceBenchmarkResult]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for result in results:
+        errors = result.trace_metrics.get("processor_error_counts")
+        if not isinstance(errors, dict):
+            continue
+        for error, count in errors.items():
+            counts[str(error)] += _int_value(count)
+    return counts
+
+
+def _metric_counter(results: list[FinanceBenchmarkResult], key: str) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for result in results:
+        payload = result.trace_metrics.get(key)
+        if not isinstance(payload, dict):
+            continue
+        for name, count in payload.items():
+            counts[str(name)] += _int_value(count)
+    return counts
+
+
+def _agent_loop_stage_counts(results: list[FinanceBenchmarkResult]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for result in results:
+        stages = result.trace_metrics.get("agent_loop_stage_counts")
+        if not isinstance(stages, dict):
+            continue
+        for stage, count in stages.items():
+            counts[str(stage)] += _int_value(count)
+    return counts
+
+
+def _action_tool_name(action: JsonObject) -> str | None:
+    if not isinstance(action, dict):
+        return None
+    kind = str(action.get("kind") or "").strip().lower()
+    name = action.get("name") or action.get("tool_name")
+    if kind and kind != "tool":
+        return None
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None
+
+
+def _tool_action_payload_repetition_metrics(actions: list[JsonObject]) -> JsonObject:
+    payload_groups: dict[str, JsonObject] = {}
+    action_count = 0
+    for action in actions:
+        tool = _action_tool_name(action)
+        if not tool:
+            continue
+        action_count += 1
+        payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+        fingerprint = _tool_action_payload_fingerprint(tool, payload)
+        group = payload_groups.setdefault(
+            fingerprint,
+            {
+                "tool": tool,
+                "count": 0,
+            },
+        )
+        group["count"] = _int_value(group.get("count")) + 1
+    repeated_groups = [group for group in payload_groups.values() if _int_value(group.get("count")) > 1]
+    repeated_count = sum(_int_value(group.get("count")) - 1 for group in repeated_groups)
+    repeated_tool_counts = Counter(str(group.get("tool") or "unknown") for group in repeated_groups)
+    return {
+        "tool_action_payload_unique_count": len(payload_groups),
+        "tool_action_payload_repeated_count": repeated_count,
+        "tool_action_payload_repetition_rate": _rate(repeated_count, action_count) if action_count else 0.0,
+        "tool_action_payload_repeated_group_count": len(repeated_groups),
+        "tool_action_payload_max_repeat_count": max((_int_value(group.get("count")) for group in repeated_groups), default=0),
+        "tool_action_payload_repeated_tool_counts": dict(repeated_tool_counts),
+    }
+
+
+def _tool_action_payload_fingerprint(tool: str, payload: JsonObject) -> str:
+    canonical = json.dumps({"tool": tool, "payload": payload}, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
 
 def _average(values: list[float]) -> float:

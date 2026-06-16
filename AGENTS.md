@@ -14,7 +14,7 @@ We are always working in the new kernel v3, the old phase-naming-mode is already
 
 Demands for codex:
 
-You need to update the documents precisely and timely, as well as README.md on github. Push to branch: kernel-v3 insteaof default branch.
+You need to update the documents precisely and timely, as well as README.md on github. Push to branch: kernel-v3 instead of default branch.
 Think before you act. Make sure of high code quality.
 
 It's preferred to do live tests, which are important. Fake offline tests often disturbs the whole process of iteration of the whole plan. You shouldn't do table cheating in real tests. The LLM should decide what it needs to do, then the harness system shouldn't be doing precomputation cheating. Do not expect the system to be responding in a fixed way and we shouldn't anyway.你不可以打表来骗过仿真测试！
@@ -28,6 +28,7 @@ Make full use of Internet, learn from other excellent open-source projects.
 
 You will have to ensure the limit of how each role of conversation consumes.
 
+Upgrade for higher cache hit rate to reduce calling cost.
 
 Kernel v3 demands:
 

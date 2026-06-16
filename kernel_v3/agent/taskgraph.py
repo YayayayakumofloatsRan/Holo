@@ -43,9 +43,11 @@ _SYSTEM_TOOL_CAPABILITIES = {"system.time"}
 _SYSTEM_HOST_CAPABILITIES = {"system.environment"}
 _SYSTEM_CAPABILITIES = _SYSTEM_TOOL_CAPABILITIES | _SYSTEM_HOST_CAPABILITIES | {"system.process"}
 _COMPUTE_CAPABILITIES = {"calculator.compute"}
+_FINANCE_VERIFY_CAPABILITIES = {"finance.verify_numeric"}
 _EXECUTABLE_TOOL_CAPABILITIES = {
     "retrieval.run",
     "calculator.compute",
+    "finance.verify_numeric",
     "workspace.list",
     "workspace.search",
     "file.read",
@@ -679,6 +681,8 @@ def _tool_for_node(node: TaskGraphNode) -> str | None:
         return "retrieval.run"
     if capabilities & _COMPUTE_CAPABILITIES:
         return "calculator.compute"
+    if capabilities & _FINANCE_VERIFY_CAPABILITIES:
+        return "finance.verify_numeric"
     if capabilities & _MEMORY_READ_CAPABILITIES:
         return "memory.recall"
     if capabilities & _WORKSPACE_WRITE_CAPABILITIES:
@@ -710,6 +714,8 @@ def _capability_plan(capabilities: list[str]) -> JsonObject:
         tools.append("retrieval.run")
     if _has_any(capabilities, _COMPUTE_CAPABILITIES) and "calculator.compute" not in tools:
         tools.append("calculator.compute")
+    if _has_any(capabilities, _FINANCE_VERIFY_CAPABILITIES) and "finance.verify_numeric" not in tools:
+        tools.append("finance.verify_numeric")
     if _has_any(capabilities, _MEMORY_READ_CAPABILITIES) and "memory.recall" not in tools:
         tools.append("memory.recall")
     if "workspace:write" in capabilities and "workspace.write" not in tools:

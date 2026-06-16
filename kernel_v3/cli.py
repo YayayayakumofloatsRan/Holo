@@ -33,16 +33,16 @@ from kernel_v3.bench import (
     finance_benchmark_run_id,
     load_finance_benchmark_items,
     render_finance_benchmark_report,
+    resolve_finance_benchmark_split,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
-    resolve_finance_benchmark_split,
     run_general_capability_gauntlet,
     score_finance_prediction_file,
     write_general_capability_gauntlet_outputs,
     write_finance_dev_annotations_from_dataset,
     write_finance_benchmark_outputs,
 )
-from kernel_v3.capabilities import semantic_capability_catalog
+from kernel_v3.capabilities import compact_semantic_capability_catalog, semantic_capability_catalog
 from kernel_v3.chat import ChatRuntime
 from kernel_v3.chat.console import (
     ChatConsoleOptions,
@@ -3550,6 +3550,22 @@ def _compact_progress_dict_counts(value: object, *, limit: int = 5) -> str:
     return ",".join(parts)
 
 
+def _compact_progress_processor_tasks(value: object, *, limit: int = 5) -> str:
+    if not isinstance(value, dict) or not value:
+        return "-"
+    counts: dict[str, int] = {}
+    for task_type, payload in value.items():
+        if isinstance(payload, dict):
+            raw_count = payload.get("call_count")
+        else:
+            raw_count = payload
+        try:
+            counts[str(task_type)] = int(raw_count or 0)
+        except (TypeError, ValueError):
+            counts[str(task_type)] = 0
+    return _compact_progress_dict_counts(counts, limit=limit)
+
+
 def _finance_benchmark_progress_callback(
     *,
     output_path: Path | None,
@@ -3579,6 +3595,8 @@ def _finance_benchmark_progress_callback(
         duration_ms = metrics.get("processor_duration_ms")
         calculator_calls = metrics.get("calculator_call_count")
         formula_traces = metrics.get("formula_trace_count")
+        formula_trace_link_rate = metrics.get("formula_trace_fact_link_rate")
+        formula_trace_citation_rate = metrics.get("formula_trace_citation_link_rate")
         finance_facts = metrics.get("finance_fact_count")
         claim_count = metrics.get("claim_count")
         missing_slots = metrics.get("missing_slot_count")
@@ -3589,6 +3607,16 @@ def _finance_benchmark_progress_callback(
         verifier_status = metrics.get("numeric_verifier_status")
         support_rate = metrics.get("answer_numeric_support_rate")
         numeric_failure = metrics.get("finance_numeric_failure_reason")
+        processor_cache_ratio = metrics.get("processor_prompt_cache_hit_ratio")
+        processor_cache_hit = metrics.get("processor_prompt_cache_hit_tokens")
+        processor_cache_miss = metrics.get("processor_prompt_cache_miss_tokens")
+        structured_repair_rate = metrics.get("structured_repair_success_rate")
+        structured_repair_attempts = metrics.get("structured_repair_attempt_count")
+        structured_repair_successes = metrics.get("structured_repair_success_count")
+        synthesizer_json_repair_attempts = metrics.get("synthesizer_json_repair_attempt_count")
+        synthesizer_json_repair_successes = metrics.get("synthesizer_json_repair_success_count")
+        processor_tasks = _compact_progress_processor_tasks(metrics.get("processor_usage_by_task_type"))
+        processor_errors = _compact_progress_dict_counts(metrics.get("processor_error_counts"), limit=3)
         reason = result.scorecard.get("reason") if isinstance(result.scorecard, dict) else None
         print(
             "[bench] "
@@ -3601,6 +3629,8 @@ def _finance_benchmark_progress_callback(
             f"retrieval_runs={retrieval_runs if retrieval_runs is not None else '-'} "
             f"calc={calculator_calls if calculator_calls is not None else '-'} "
             f"formula={formula_traces if formula_traces is not None else '-'} "
+            f"trace_link={_percent_for_progress(formula_trace_link_rate)} "
+            f"trace_cite={_percent_for_progress(formula_trace_citation_rate)} "
             f"facts={finance_facts if finance_facts is not None else '-'} "
             f"claims={claim_count if claim_count is not None else '-'} "
             f"slots_missing={missing_slots if missing_slots is not None else '-'} "
@@ -3611,7 +3641,17 @@ def _finance_benchmark_progress_callback(
             f"synth_repair={synthesis_repaired if synthesis_repaired is not None else '-'} "
             f"num_support={_percent_for_progress(support_rate)} "
             f"num_fail={numeric_failure or '-'} "
-            f"processor_ms={duration_ms if duration_ms is not None else '-'}",
+            f"processor_ms={duration_ms if duration_ms is not None else '-'} "
+            f"proc_cache={_percent_for_progress(processor_cache_ratio)} "
+            f"proc_hit={processor_cache_hit if processor_cache_hit is not None else '-'} "
+            f"proc_miss={processor_cache_miss if processor_cache_miss is not None else '-'} "
+            f"repair={_percent_for_progress(structured_repair_rate)} "
+            f"repair_n={structured_repair_successes if structured_repair_successes is not None else '-'}/"
+            f"{structured_repair_attempts if structured_repair_attempts is not None else '-'} "
+            f"json_repair={synthesizer_json_repair_successes if synthesizer_json_repair_successes is not None else '-'}/"
+            f"{synthesizer_json_repair_attempts if synthesizer_json_repair_attempts is not None else '-'} "
+            f"proc_tasks={processor_tasks} "
+            f"proc_errors={processor_errors}",
             file=sys.stderr,
             flush=True,
         )
@@ -4300,7 +4340,7 @@ def _packet_prompt(task_type: str, goal: str) -> str:
         payload = {
             "contract": SEMANTIC_INTAKE_PROMPT_CONTRACT,
             "user_goal": goal,
-            "host_capability_catalog": semantic_capability_catalog(),
+            "host_capability_catalog": compact_semantic_capability_catalog(),
         }
     elif task_type == "evaluator.assess":
         payload = {

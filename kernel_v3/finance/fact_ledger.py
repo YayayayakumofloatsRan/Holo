@@ -114,6 +114,11 @@ HTML_SENTENCE_FACT_PATTERN = re.compile(
     r"metric=(?P<metric>.*?)\s+fy=(?P=fy)\s+value=(?P<value>\([^)]+\)|[^\s]+)\s+scale=(?P<scale>[A-Za-z]+)",
     re.IGNORECASE,
 )
+HTML_TABLE_COLUMN_CELL_PATTERN = re.compile(
+    r"\bcolumn_(?P<index>\d+)=(?P<value>.*?)(?=\s*column_\d+=|\s*html_table_\d+_row_\d+:|$)",
+    re.IGNORECASE,
+)
+HTML_TABLE_ROW_BOUNDARY_PATTERN = re.compile(r"\s+html_table_\d+_row_\d+:", re.IGNORECASE)
 AMOUNT_PATTERN = re.compile(
     r"(?P<prefix>[$€£¥])?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
     r"(?P<unit>%|bps|basis\s+points|basis\s+point|percentage\s+points|percentage\s+point|"
@@ -169,8 +174,11 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "property plant and equipment net",
         (
             "property, plant and equipment, net",
+            "property, plant and equipment - net",
+            "property, plant and equipment net",
             "property plant and equipment net",
             "property and equipment, net",
+            "property and equipment - net",
             "property and equipment net",
             "net property, plant and equipment",
             "net property plant and equipment",
@@ -181,6 +189,7 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "ppne",
         ),
     ),
+    ("assets", ("total assets", "assets")),
     ("income from continuing operations", ("income from continuing operations", "income from continuing ops")),
     ("net income", ("net income", "net loss", "net earnings")),
     ("operating income", ("operating income", "operating loss")),
@@ -575,6 +584,9 @@ def _table_header_years(text: str) -> list[int]:
 
 
 def _table_row_amounts(after_marker: str, *, max_count: int) -> list[tuple[str, str, str, str, str]]:
+    html_column_amounts = _table_row_amounts_from_html_columns(after_marker, max_count=max_count)
+    if html_column_amounts:
+        return html_column_amounts
     amounts: list[tuple[str, str, str, str, str]] = []
     first_amount = True
     for match in AMOUNT_PATTERN.finditer(str(after_marker or "")):
@@ -595,6 +607,36 @@ def _table_row_amounts(after_marker: str, *, max_count: int) -> list[tuple[str, 
         if raw_unit.lower() in {"m", "b"} and match.end() < len(after_marker) and after_marker[match.end()].isalpha():
             raw_unit = ""
         signed_number = f"-{raw_number}" if _is_parenthesized_amount(after_marker, match.start(), match.end()) else raw_number
+        display_raw = f"({match.group(0).strip()})" if signed_number.startswith("-") else match.group(0).strip()
+        amounts.append((raw_number, raw_unit, prefix, display_raw, signed_number))
+        if len(amounts) >= max_count:
+            break
+    return amounts
+
+
+def _table_row_amounts_from_html_columns(after_marker: str, *, max_count: int) -> list[tuple[str, str, str, str, str]]:
+    text = str(after_marker or "")
+    if "column_" not in text:
+        return []
+    row_segment = HTML_TABLE_ROW_BOUNDARY_PATTERN.split(text, maxsplit=1)[0]
+    amounts: list[tuple[str, str, str, str, str]] = []
+    for cell in HTML_TABLE_COLUMN_CELL_PATTERN.finditer(row_segment):
+        raw_cell = " ".join(str(cell.group("value") or "").split())
+        if raw_cell in {"", "$", "€", "£", "¥", "-", "—", "--"}:
+            continue
+        match = AMOUNT_PATTERN.search(raw_cell)
+        if match is None:
+            continue
+        raw_number = match.group("number") or ""
+        raw_unit = match.group("unit") or ""
+        prefix = match.group("prefix") or ""
+        if not raw_number:
+            continue
+        if _looks_like_standalone_year(raw_number, raw_unit, prefix):
+            continue
+        if raw_unit.lower() in {"m", "b"} and match.end() < len(raw_cell) and raw_cell[match.end()].isalpha():
+            raw_unit = ""
+        signed_number = f"-{raw_number}" if _is_parenthesized_amount(raw_cell, match.start(), match.end()) else raw_number
         display_raw = f"({match.group(0).strip()})" if signed_number.startswith("-") else match.group(0).strip()
         amounts.append((raw_number, raw_unit, prefix, display_raw, signed_number))
         if len(amounts) >= max_count:
@@ -652,10 +694,13 @@ def _fact_from_values(
         "label": values.get("label"),
         "cik": values.get("cik"),
         "taxonomy": values.get("taxonomy"),
+        "period": values.get("period"),
         "form": values.get("form"),
+        "fp": values.get("fp"),
         "filed": values.get("filed"),
         "end": values.get("end"),
         "start": values.get("start"),
+        "duration_days": _period_duration_days(values.get("start"), values.get("end")),
         "frame": values.get("frame"),
         "accn": values.get("accn"),
         "supported_metric": metric in SUPPORTED_FINANCE_METRICS,
@@ -691,6 +736,21 @@ def _scaled_value_from_scale(value: Decimal, scale: str) -> Decimal:
     if text in {"trillion", "trillions", "in trillions"}:
         return value * Decimal(1_000_000_000_000)
     return value
+
+
+def _period_duration_days(start: str | None, end: str | None) -> int | None:
+    start_days = _date_days(start)
+    end_days = _date_days(end)
+    if start_days is None or end_days is None:
+        return None
+    return max(0, end_days - start_days)
+
+
+def _date_days(value: str | None) -> int | None:
+    match = re.match(r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})$", str(value or ""))
+    if not match:
+        return None
+    return int(match.group("year")) * 372 + int(match.group("month")) * 31 + int(match.group("day"))
 
 
 def _decimal_amount_from_structured_value(value: str) -> Decimal | None:
@@ -804,15 +864,27 @@ def _canonical_metric(value: str) -> str:
         "payments to acquire property plant and equipment": "capital expenditures",
         "paymentstoacquirepropertyplantandequipment": "capital expenditures",
         "payments to acquire property and equipment": "capital expenditures",
+        "purchases of property plant and equipment": "capital expenditures",
+        "purchasesofpropertyplantandequipment": "capital expenditures",
+        "purchases of property, plant and equipment": "capital expenditures",
+        "purchases of property plant and equipment pp e": "capital expenditures",
+        "purchasesofpropertyplantandequipmentppe": "capital expenditures",
         "capital expenditures": "capital expenditures",
         "propertyplantandequipmentnet": "property plant and equipment net",
+        "property plant and equipment  net": "property plant and equipment net",
         "property plant and equipment net": "property plant and equipment net",
+        "property, plant and equipment, net": "property plant and equipment net",
+        "property, plant and equipment net": "property plant and equipment net",
         "property and equipment net": "property plant and equipment net",
+        "property and equipment  net": "property plant and equipment net",
         "net property plant and equipment": "property plant and equipment net",
         "net property and equipment": "property plant and equipment net",
         "net ppe": "property plant and equipment net",
         "net ppne": "property plant and equipment net",
         "ppne": "property plant and equipment net",
+        "assets": "assets",
+        "totalassets": "assets",
+        "total assets": "assets",
         "stockholdersequity": "shareholders equity",
         "stockholders equity": "shareholders equity",
         "stockholders' equity": "shareholders equity",

@@ -551,6 +551,47 @@ def _normalize_processor_json_for_schema(value: JsonObject, schema: JsonSchema) 
                     normalized["reason_summary"] = alias_value.strip()
                     break
         return normalized
+    if schema.name == "finance.slot_bind":
+        normalized = dict(value)
+        if "formula_requests" not in normalized or normalized.get("formula_requests") is None:
+            for alias in ("formula_request", "formulas", "calculations", "calculator_calls", "tool_calls"):
+                alias_value = normalized.get(alias)
+                if isinstance(alias_value, list):
+                    normalized["formula_requests"] = alias_value
+                    break
+                if isinstance(alias_value, dict):
+                    normalized["formula_requests"] = [alias_value]
+                    break
+        if "reason_summary" not in normalized:
+            for alias in ("reason", "rationale", "explanation", "summary"):
+                alias_value = normalized.get(alias)
+                if isinstance(alias_value, str) and alias_value.strip():
+                    normalized["reason_summary"] = alias_value.strip()
+                    break
+            else:
+                normalized["reason_summary"] = "The model returned slot bindings without a dedicated reason_summary field."
+        for key in ("slot_bindings", "formula_requests", "missing_slots"):
+            if key not in normalized or normalized.get(key) is None:
+                normalized[key] = []
+        if "decision" not in normalized or not isinstance(normalized.get("decision"), str):
+            normalized["decision"] = "ready" if normalized.get("formula_requests") else "needs_more_evidence"
+        if "next_action" in normalized:
+            next_action = normalized.get("next_action")
+            if next_action is None or next_action == "":
+                normalized.pop("next_action", None)
+            elif isinstance(next_action, str):
+                normalized["next_action"] = {"tool": next_action.strip(), "reason": ""}
+            elif isinstance(next_action, list):
+                first = next((item for item in next_action if isinstance(item, dict) or isinstance(item, str)), None)
+                if isinstance(first, dict):
+                    normalized["next_action"] = first
+                elif isinstance(first, str):
+                    normalized["next_action"] = {"tool": first.strip(), "reason": ""}
+                else:
+                    normalized.pop("next_action", None)
+            elif not isinstance(next_action, dict):
+                normalized.pop("next_action", None)
+        return normalized
     return value
 
 

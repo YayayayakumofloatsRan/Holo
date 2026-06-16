@@ -39,6 +39,7 @@ SAFE_SEMANTIC_CAPABILITIES = frozenset(
         "finance.macro_data",
         "finance.competitive_landscape",
         "finance.source_directory",
+        "finance.verify_numeric",
         "academic.research",
         "academic.frontier_research",
         "academic.literature_review",
@@ -559,7 +560,7 @@ def semantic_capability_catalog() -> JsonObject:
             "memory": ["durable_memory.read", "durable_memory.search", "durable_memory.propose", "durable_memory.commit", "durable_memory.delete", "durable_memory.export"],
             "artifact": ["artifact.create", "artifact.read", "artifact.export"],
             "document": ["document.draft", "document.review", "report.compose", "email.draft"],
-            "data": ["calculator.compute", "data.table.analyze", "data.transform", "chart.generate"],
+            "data": ["calculator.compute", "finance.verify_numeric", "data.table.analyze", "data.transform", "chart.generate"],
             "database": ["database.query", "database.schema.inspect"],
             "code": ["code.search", "code.read", "code.patch", "test.run"],
             "cloud": ["cloud.resource.inspect", "cloud.deploy.boundary"],
@@ -609,6 +610,44 @@ def semantic_capability_catalog() -> JsonObject:
             "secret.store",
             "device.input.control",
         ],
+    }
+
+
+def compact_semantic_capability_catalog() -> JsonObject:
+    """Provider-facing semantic catalog.
+
+    The full semantic state space remains available through
+    semantic_capability_catalog()/semantic_state_space_catalog() for host audit,
+    state profiling, and UI. Semantic intake only needs the stable vocabulary
+    that lets the model choose task modes, capability ids, and broad state axes.
+    """
+
+    catalog = semantic_capability_catalog()
+    state_dimensions = catalog["state_dimensions"]
+    selected_dimensions = (
+        "execution_surface",
+        "evidence",
+        "permissions",
+        "domain_profile",
+        "route_class",
+        "risk",
+        "authority",
+    )
+    return {
+        "version": catalog["version"],
+        "modes": list(catalog["modes"]),
+        "core_rule": catalog["core_rule"],
+        "catalog_rule": catalog["catalog_rule"],
+        "families": dict(catalog["families"]),
+        "executable_tools_by_recipe": dict(catalog["executable_tools_by_recipe"]),
+        "not_default_or_requires_configuration": list(catalog["not_default_or_requires_configuration"]),
+        "state_dimensions": {
+            key: list(state_dimensions[key])
+            for key in selected_dimensions
+            if key in state_dimensions
+        },
+        "state_dimension_keys": list(state_dimensions.keys()),
+        "capability_statuses": list(catalog["capability_statuses"]),
     }
 
 
@@ -1405,6 +1444,7 @@ def _tool_capabilities(
         "system.time": ("system.time", "system", "Read current host time with an explicit timezone."),
         "memory.recall": ("durable_memory.search", "memory", "Recall committed workspace/project and thread memory."),
         "calculator.compute": ("calculator.compute", "data", "Evaluate deterministic numeric expressions from model-proposed, evidence-backed inputs."),
+        "finance.verify_numeric": ("finance.verify_numeric", "data", "Verify model-proposed finance numeric claims against provided facts, formula traces, citations, and evidence."),
     }
     for tool_name, manifest in manifests.items():
         capability_id, family, description = mappings.get(

@@ -57,7 +57,7 @@ def test_general_capability_gauntlet_can_filter_cases_and_categories() -> None:
 
 
 def test_general_capability_summary_accumulates_cache_usage() -> None:
-    result = GeneralCapabilityResult(
+    passed_result = GeneralCapabilityResult(
         case_id="cache-case",
         category="direct_chat",
         status="passed",
@@ -76,15 +76,85 @@ def test_general_capability_summary_accumulates_cache_usage() -> None:
             "total_tokens": 120,
             "prompt_cache_hit_tokens": 80,
             "prompt_cache_miss_tokens": 20,
+            "processor_call_count": 2,
+            "processor_duration_ms": 300,
+            "processor_usage_by_task_type": {
+                "semantic.intake": {
+                    "call_count": 1,
+                    "prompt_cache_hit_tokens": 60,
+                    "prompt_cache_miss_tokens": 10,
+                    "total_tokens": 90,
+                },
+                "planner.propose": {
+                    "call_count": 1,
+                    "prompt_cache_hit_tokens": 20,
+                    "prompt_cache_miss_tokens": 10,
+                    "total_tokens": 30,
+                },
+            },
+            "processor_status_counts": {"ok": 2},
+        },
+    )
+    failed_result = GeneralCapabilityResult(
+        case_id="failed-case",
+        category="technical_research",
+        status="failed",
+        prompt="research",
+        expected_mode="retrieval_answer",
+        selected_mode="semantic_answer",
+        expected_tools=["retrieval.run"],
+        observed_tools=[],
+        missing_tools=["retrieval.run"],
+        forbidden_tools_seen=[],
+        expected_domains=["technical"],
+        observed_domains=[],
+        score=0.25,
+        checks={
+            "mode": False,
+            "expected_tools_present": False,
+            "forbidden_tools_absent": True,
+            "expected_domains_present": False,
+        },
+        usage={
+            "total_tokens": 30,
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 10,
+            "processor_call_count": 1,
+            "processor_duration_ms": 50,
+            "processor_usage_by_task_type": {
+                "semantic.intake": {
+                    "call_count": 1,
+                    "prompt_cache_hit_tokens": 0,
+                    "prompt_cache_miss_tokens": 10,
+                    "total_tokens": 30,
+                }
+            },
+            "processor_status_counts": {"failed": 1},
+            "processor_error_counts": {"json_invalid": 1},
         },
     )
 
-    summary = summarize_general_capability_results([result], started_at_ms=1)
+    summary = summarize_general_capability_results([passed_result, failed_result], started_at_ms=1)
 
-    assert summary["total_tokens"] == 120
+    assert summary["total_tokens"] == 150
     assert summary["prompt_cache_hit_tokens"] == 80
-    assert summary["prompt_cache_miss_tokens"] == 20
-    assert summary["prompt_cache_hit_ratio"] == 0.8
+    assert summary["prompt_cache_miss_tokens"] == 30
+    assert summary["prompt_cache_hit_ratio"] == 0.727273
+    assert summary["processor_call_count"] == 3
+    assert summary["processor_duration_ms"] == 350
+    assert summary["processor_task_type_counts"] == {"semantic.intake": 2, "planner.propose": 1}
+    assert summary["processor_cache_by_task_type"]["semantic.intake"]["prompt_cache_hit_tokens"] == 60
+    assert summary["processor_cache_by_task_type"]["semantic.intake"]["prompt_cache_miss_tokens"] == 20
+    assert summary["processor_cache_by_task_type"]["semantic.intake"]["prompt_cache_hit_ratio"] == 0.75
+    assert summary["processor_cache_by_task_type"]["planner.propose"]["prompt_cache_hit_ratio"] == 0.666667
+    assert summary["processor_status_counts"] == {"ok": 2, "failed": 1}
+    assert summary["processor_error_counts"] == {"json_invalid": 1}
+    assert summary["failed_category_counts"] == {"technical_research": 1}
+    assert summary["failure_check_counts"] == {
+        "expected_domains_present": 1,
+        "expected_tools_present": 1,
+        "mode": 1,
+    }
 
 
 def test_general_capability_live_pending_question_counts_as_output() -> None:

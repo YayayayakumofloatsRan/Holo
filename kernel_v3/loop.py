@@ -252,7 +252,8 @@ class LoopControllerV3:
                         "max_network_fetches": self.max_network_fetches,
                     },
                 )
-            current_feedback = self.evaluator.evaluate(context, observation)
+            evaluation_context = self.context_compiler.compile(task, self.journal)
+            current_feedback = self.evaluator.evaluate(evaluation_context, observation)
             self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
             guard_reason = self._guard_stop_reason(observation)
             if guard_reason is not None and not callable(getattr(self.evaluator, "finalize_guard", None)):
@@ -266,7 +267,7 @@ class LoopControllerV3:
                 self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
                 self._append_guard(task, stop_reason, step_id=step_id, data=data)
                 current_feedback = self._finalize_guard_feedback(
-                    context,
+                    evaluation_context,
                     observation,
                     current_feedback,
                     task=task,
@@ -283,7 +284,7 @@ class LoopControllerV3:
                 self._append_feedback(task, current_feedback, action=action, observation=observation, step_id=step_id)
                 self._append_guard(task, stop_reason, step_id=step_id, data=data)
                 current_feedback = self._finalize_guard_feedback(
-                    context,
+                    evaluation_context,
                     observation,
                     current_feedback,
                     task=task,
