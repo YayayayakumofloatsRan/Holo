@@ -297,6 +297,9 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
         ],
         "margin_profile_change": [],
         "margin_consistency_range": [],
+        "category_metric_rank": [
+            "ranked_category_metric_table",
+        ],
         "average_capex_to_revenue": [],
         "fixed_charge_coverage": [
             "earnings_available_for_fixed_charges_or_pretax_income",
@@ -562,6 +565,19 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "premium revenue",
         ],
         "assets": ["assets", "total assets"],
+        "ranked_category_metric_table": [
+            "category",
+            "segment revenue",
+            "segment net revenue",
+            "segment net income",
+            "regional ebitdar",
+            "product category revenue",
+            "short-term investments",
+            "debt securities",
+            "derivative instruments",
+            "notional value",
+            "liabilities",
+        ],
     }
     return mapping.get(name, [name])
 
@@ -606,6 +622,7 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "cash_flow_activity_comparison",
         "margin_profile_change",
         "margin_consistency_range",
+        "category_metric_rank",
         "effective_tax_rate_change",
         "interest_coverage_ratio",
         "unadjusted_ebitda",
@@ -733,11 +750,53 @@ def _infer_formula_name(question: str) -> str:
         return "bridge_subtotal"
     if "basis point" in text or "bps" in text:
         return "bps_difference"
+    if _looks_like_category_metric_rank(text):
+        return "category_metric_rank"
     if "margin" in text:
         return "margin"
     if "growth rate" in text or "yoy" in text:
         return "yoy_growth"
     return ""
+
+
+def _looks_like_category_metric_rank(text: str) -> bool:
+    rank_markers = (
+        "highest",
+        "lowest",
+        "largest",
+        "smallest",
+        "best",
+        "worst",
+        "most",
+        "least",
+        "dragged down",
+        "proportionally increase",
+        "proportionally increased",
+        "performed the best",
+    )
+    if not any(marker in text for marker in rank_markers):
+        return False
+    if "registered to trade" in text or "registered on a national securities exchange" in text:
+        return False
+    category_markers = (
+        "segment",
+        "region",
+        "geographic",
+        "product category",
+        "service category",
+        "category",
+        "among",
+        "derivative instrument",
+        "notional value",
+        "short term investments",
+        "short-term investments",
+        "type of debt",
+        "liability",
+        "liabilities",
+        "topline",
+        "ebitdar",
+    )
+    return any(marker in text for marker in category_markers)
 
 
 def _looks_like_reconciliation_task(text: str, *, formula_name: str | None) -> bool:

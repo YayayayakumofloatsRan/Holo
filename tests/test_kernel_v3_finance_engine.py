@@ -856,14 +856,16 @@ def test_finance_numeric_verifier_tool_schema_rejects_non_object_fact_rows() -> 
     assert observation.content["error"] == "invalid_field_type:facts:list[object]"
 
 
-def test_formula_planner_does_not_force_generic_growth_into_yoy_formula() -> None:
+def test_formula_planner_routes_segment_growth_driver_to_rank_scaffold_not_yoy() -> None:
     plan = plan_finance_formula(
         question="If we exclude the impact of M&A, which segment dragged down 3M's overall growth in 2022?",
         facts=[],
     )
 
-    assert plan.status == "not_applicable"
-    assert plan.formula_name is None
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "category_metric_rank"
+    assert plan.missing_facts == ["ranked_category_metric_table"]
+    assert plan.diagnostics["rank_direction"] == "min"
 
 
 def test_formula_planner_keeps_explicit_growth_rate_formula() -> None:
@@ -4275,6 +4277,48 @@ def test_finance_task_compiler_emits_margin_profile_and_consistency_programs() -
         assert evidence_slots[missing_slots[1]].line_item == "revenue"
 
 
+def test_finance_task_compiler_emits_category_metric_rank_programs() -> None:
+    cases = [
+        (
+            "Which Best Buy product category performed the best (by top line) in the domestic (USA) Market during Q2 of FY2024?",
+            "max(category_metric_values)",
+            "segment_note",
+            "product category revenue",
+        ),
+        (
+            "Which of JPM's business segments had the lowest net revenue in 2021 Q1?",
+            "min(category_metric_values)",
+            "segment_note",
+            "segment revenue",
+        ),
+        (
+            "Among all of the derivative instruments Verizon used, which one had the highest notional value in FY 2021?",
+            "max(category_metric_values)",
+            "derivatives_note_or_market_risk",
+            "derivative instruments notional value",
+        ),
+        (
+            "Which type of debt received the largest investment among the short term investments for MGM in H1 FY2023?",
+            "max(category_metric_values)",
+            "investment_or_fair_value_note",
+            "short-term investments by debt security type",
+        ),
+    ]
+
+    for question, expression, statement, line_item in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.diagnostics["formula_name"] == "category_metric_rank"
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == ["ranked_category_metric_table"]
+        assert program.transform_specs[0].expression == expression
+        assert program.transform_specs[0].output_attribute == "category_metric_rank_value"
+        assert "LLM maps" in program.transform_specs[0].diagnostics["semantic_decision_policy"]
+        evidence_slot = {spec.slot_name: spec for spec in program.evidence_specs}["ranked_category_metric_table"]
+        assert evidence_slot.statement == statement
+        assert evidence_slot.line_item == line_item
+
+
 def test_finance_task_compiler_emits_tax_working_capital_and_interest_programs() -> None:
     cases = [
         (
@@ -4655,6 +4699,60 @@ def test_finance_formula_planner_computes_margin_profile_and_consistency_formula
     )
     assert gross_plan.payload["variables"]["cogs_2020"] == "60"
     assert gross_plan.payload["variables"]["gross_profit_2021"] == "44"
+
+
+def test_finance_formula_planner_computes_category_metric_rank_formulas() -> None:
+    revenue_plan = plan_finance_formula(
+        question="Which segment had the highest net revenue in FY2022?",
+        facts=[
+            _year_fact("segment revenue", "100", 2022, fact_id="consumer-revenue", metadata={"category": "Consumer"}),
+            _year_fact("segment revenue", "140", 2022, fact_id="business-revenue", metadata={"category": "Business"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert revenue_plan.status == "ready"
+    assert revenue_plan.formula_name == "category_metric_rank"
+    assert revenue_plan.payload["expression"] == "max(category_1, category_2)"
+    assert revenue_plan.payload["variables"] == {"category_1": "140", "category_2": "100"}
+    assert revenue_plan.payload["diagnostics"]["variable_category_map"]["category_1"]["category"] == "Business"
+    assert "LLM must map" in revenue_plan.payload["diagnostics"]["semantic_decision_policy"]
+
+    low_plan = plan_finance_formula(
+        question="Which segment had the lowest net income in FY2022?",
+        facts=[
+            _year_fact("segment net income", "10", 2022, fact_id="consumer-income", metadata={"category": "Consumer"}),
+            _year_fact("segment net income", "5", 2022, fact_id="business-income", metadata={"category": "Business"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert low_plan.status == "ready"
+    assert low_plan.payload["expression"] == "min(category_1, category_2)"
+    assert low_plan.payload["diagnostics"]["rank_direction"] == "min"
+
+    growth_plan = plan_finance_formula(
+        question="From FY21 to FY22, excluding Embedded, in which AMD reporting segment did sales proportionally increase the most?",
+        facts=[
+            _year_fact("segment revenue", "100", 2021, fact_id="gaming-2021", metadata={"category": "Gaming"}),
+            _year_fact("segment revenue", "150", 2022, fact_id="gaming-2022", metadata={"category": "Gaming"}),
+            _year_fact("segment revenue", "200", 2021, fact_id="data-center-2021", metadata={"category": "Data Center"}),
+            _year_fact("segment revenue", "260", 2022, fact_id="data-center-2022", metadata={"category": "Data Center"}),
+            _year_fact("segment revenue", "10", 2021, fact_id="embedded-2021", metadata={"category": "Embedded"}),
+            _year_fact("segment revenue", "100", 2022, fact_id="embedded-2022", metadata={"category": "Embedded"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert growth_plan.status == "ready"
+    assert growth_plan.formula_name == "category_metric_rank"
+    assert growth_plan.payload["expression"] == (
+        "max(((category_1_current - category_1_prior) / abs(category_1_prior)), "
+        "((category_2_current - category_2_prior) / abs(category_2_prior)))"
+    )
+    assert growth_plan.payload["diagnostics"]["rank_mode"] == "growth_rate"
+    category_map = growth_plan.payload["diagnostics"]["variable_category_map"]
+    assert {item["category"] for item in category_map.values()} == {"Data Center", "Gaming"}
 
 
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:

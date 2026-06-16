@@ -121,6 +121,8 @@ def plan_finance_formula(
         return _plan_margin_series(question=question, facts=usable, formula_name="margin_profile_change", mode="change")
     if formula == "margin_consistency_range":
         return _plan_margin_series(question=question, facts=usable, formula_name="margin_consistency_range", mode="range")
+    if formula == "category_metric_rank":
+        return _plan_category_metric_rank(question=question, facts=usable)
     if formula == "yoy_growth":
         return _plan_yoy_growth(question=question, facts=usable)
     if formula == "debt_to_equity":
@@ -261,6 +263,8 @@ def _detect_formula(question: str) -> str | None:
         return "bps_difference"
     if "bridge" in text or "add-back" in text or "add back" in text or "addback" in text:
         return "bridge_subtotal"
+    if _looks_like_category_metric_rank(text):
+        return "category_metric_rank"
     if "yoy" in text or "year-over-year" in text or "year over year" in text:
         return "yoy_growth"
     if _source_grounded_explanation_intent(text) and not _explicit_calculation_intent(text):
@@ -360,6 +364,46 @@ def _looks_like_cash_flow_activity_comparison(text: str) -> bool:
         and any(marker in text for marker in ("brought in the most", "lost the least", "which brought", "among"))
         and "cash flow" in text
     )
+
+
+def _looks_like_category_metric_rank(text: str) -> bool:
+    rank_markers = (
+        "highest",
+        "lowest",
+        "largest",
+        "smallest",
+        "best",
+        "worst",
+        "most",
+        "least",
+        "dragged down",
+        "proportionally increase",
+        "proportionally increased",
+        "performed the best",
+    )
+    if not any(marker in text for marker in rank_markers):
+        return False
+    if "registered to trade" in text or "registered on a national securities exchange" in text:
+        return False
+    category_markers = (
+        "segment",
+        "region",
+        "geographic",
+        "product category",
+        "service category",
+        "category",
+        "among",
+        "derivative instrument",
+        "notional value",
+        "short term investments",
+        "short-term investments",
+        "type of debt",
+        "liability",
+        "liabilities",
+        "topline",
+        "ebitdar",
+    )
+    return any(marker in text for marker in category_markers)
 
 
 def _looks_like_margin_consistency(text: str) -> bool:
@@ -1089,6 +1133,268 @@ def _absolute_decimal_string(value: object) -> str:
     if decimal is None:
         return str(value)
     return str(abs(decimal))
+
+
+def _category_rank_direction(question: str) -> str:
+    text = _metric_text(question)
+    if any(marker in text for marker in ("lowest", "smallest", "worst", "least", "dragged down")):
+        return "min"
+    return "max"
+
+
+def _category_rank_mode(question: str) -> str:
+    text = _metric_text(question)
+    if "proportionally" in text and any(marker in text for marker in ("increase", "increased", "growth", "grew")):
+        return "growth_rate"
+    if "growth" in text and any(marker in text for marker in ("most", "least", "highest", "lowest")):
+        return "growth_rate"
+    return "value"
+
+
+def _category_rank_metric_focus(question: str) -> str:
+    text = _metric_text(question)
+    if "net income" in text or "net earnings" in text:
+        return "net_income"
+    if "ebitdar" in text:
+        return "ebitdar"
+    if "notional value" in text or "derivative instrument" in text:
+        return "notional_value"
+    if "short term investments" in text or "short term investment" in text or "type of debt" in text:
+        return "short_term_investments"
+    if "liability" in text or "liabilities" in text:
+        return "liabilities"
+    if "topline" in text or "net revenue" in text or "revenue" in text or "sales" in text:
+        return "revenue"
+    return "generic"
+
+
+def _category_rank_candidate_facts(
+    question: str,
+    facts: list[FinanceFact],
+    *,
+    target_year: int | None,
+    target_fp: str | None,
+    metric_focus: str,
+) -> list[tuple[str, FinanceFact]]:
+    selected: dict[str, FinanceFact] = {}
+    for fact in facts:
+        if _decimal_or_none(fact.value) is None:
+            continue
+        if target_year is not None and fact.fiscal_year != target_year and _fact_end_year(fact) != target_year:
+            continue
+        if target_fp is not None and not _fact_matches_fiscal_quarter(fact, target_fp):
+            continue
+        if not _category_rank_fact_matches_metric(fact, metric_focus):
+            continue
+        category = _category_label_from_fact(fact)
+        if not category or _category_label_is_total(category) or _category_excluded_by_question(question, category):
+            continue
+        existing = selected.get(category)
+        if existing is None or _fact_sort_token(fact) > _fact_sort_token(existing):
+            selected[category] = fact
+    return [(category, selected[category]) for category in sorted(selected)]
+
+
+def _category_rank_fact_matches_metric(fact: FinanceFact, metric_focus: str) -> bool:
+    if metric_focus == "generic":
+        return True
+    text = _category_fact_text(fact)
+    markers_by_focus = {
+        "revenue": ("revenue", "revenues", "net revenue", "net sales", "sales", "topline"),
+        "net_income": ("net income", "net earnings", "profit loss", "income loss"),
+        "ebitdar": ("ebitdar",),
+        "notional_value": ("notional value", "notional amount", "notional"),
+        "short_term_investments": (
+            "short term investments",
+            "short term investment",
+            "marketable securities",
+            "debt securities",
+            "available for sale",
+            "held to maturity",
+        ),
+        "liabilities": ("liability", "liabilities"),
+    }
+    return any(marker in text for marker in markers_by_focus.get(metric_focus, (metric_focus,)))
+
+
+def _category_fact_text(fact: FinanceFact) -> str:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    return _metric_text(
+        " ".join(
+            str(value or "")
+            for value in (
+                fact.metric,
+                metadata.get("label"),
+                metadata.get("concept"),
+                metadata.get("raw_metric"),
+                metadata.get("row_marker"),
+                metadata.get("category"),
+                metadata.get("segment"),
+                metadata.get("region"),
+                metadata.get("product_category"),
+                metadata.get("instrument"),
+                metadata.get("type"),
+                metadata.get("context"),
+            )
+        )
+    )
+
+
+def _category_label_from_fact(fact: FinanceFact) -> str | None:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    for key in (
+        "category",
+        "segment",
+        "region",
+        "product_category",
+        "service_category",
+        "instrument",
+        "debt_type",
+        "type",
+        "member",
+    ):
+        value = str(metadata.get(key) or "").strip()
+        if value and not _category_label_candidate_is_generic(value):
+            return value[:160]
+    context_label = _category_label_from_context(fact)
+    if context_label:
+        return context_label
+    for key in ("label", "concept"):
+        value = str(metadata.get(key) or "").strip()
+        if value and not _category_label_candidate_is_generic(value):
+            return value[:160]
+    metric = str(fact.metric or "").strip()
+    if metric and not _category_label_candidate_is_generic(metric):
+        return metric[:160]
+    return None
+
+
+def _category_label_from_context(fact: FinanceFact) -> str | None:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    context = str(metadata.get("context") or "").strip()
+    if not context:
+        return None
+    marker = str(metadata.get("row_marker") or fact.metric or "").strip()
+    position = context.lower().find(marker.lower()) if marker else -1
+    before = context[:position] if position > 0 else context[:160]
+    before = re.sub(r"\bcolumn_\d+\s*=\s*", " ", before)
+    before = re.sub(r"\b(?:19|20)\d{2}\b", " ", before)
+    before = re.sub(r"[$€£¥(),.%]", " ", before)
+    tokens = [
+        token
+        for token in re.findall(r"[A-Za-z][A-Za-z&'/.-]*", before)
+        if token.lower()
+        not in {
+            "table",
+            "note",
+            "year",
+            "years",
+            "ended",
+            "fiscal",
+            "amounts",
+            "millions",
+            "thousands",
+            "unaudited",
+            "total",
+            "net",
+            "sales",
+            "revenue",
+            "revenues",
+            "income",
+            "loss",
+        }
+    ]
+    if not tokens:
+        return None
+    label = " ".join(tokens[-8:]).strip(" -/")
+    if not label or _category_label_candidate_is_generic(label):
+        return None
+    return label[:160]
+
+
+def _category_label_candidate_is_generic(value: str) -> bool:
+    text = _metric_text(value)
+    generic = {
+        "",
+        "revenue",
+        "revenues",
+        "net revenue",
+        "net revenues",
+        "net sales",
+        "sales",
+        "topline",
+        "net income",
+        "net earnings",
+        "income",
+        "loss",
+        "ebitdar",
+        "notional",
+        "notional value",
+        "notional amount",
+        "short term investments",
+        "marketable securities",
+        "debt securities",
+        "liabilities",
+        "liability",
+    }
+    return text in generic
+
+
+def _category_label_is_total(value: str) -> bool:
+    text = _metric_text(value)
+    return text in {"total", "totals", "consolidated"} or text.startswith("total ")
+
+
+def _category_excluded_by_question(question: str, category: str) -> bool:
+    text = _metric_text(question)
+    category_text = _metric_text(category)
+    excluded = re.findall(r"\bexcluding\s+([a-z0-9&'/-]+(?:\s+[a-z0-9&'/-]+){0,3})", text)
+    for exclusion in excluded:
+        first_token = exclusion.split()[0] if exclusion else ""
+        if exclusion and exclusion in category_text:
+            return True
+        if first_token and first_token in category_text:
+            return True
+    return False
+
+
+def _fact_matches_fiscal_quarter(fact: FinanceFact, quarter: str) -> bool:
+    quarter_text = quarter.lower()
+    text = _metric_text(
+        " ".join(
+            str(value or "")
+            for value in (
+                fact.period,
+                fact.metadata.get("fp"),
+                fact.metadata.get("frame"),
+                fact.metadata.get("context"),
+            )
+        )
+    )
+    quarter_words = {
+        "q1": ("q1", "first quarter", "quarter 1"),
+        "q2": ("q2", "second quarter", "quarter 2"),
+        "q3": ("q3", "third quarter", "quarter 3"),
+        "q4": ("q4", "fourth quarter", "quarter 4"),
+    }
+    return any(marker in text for marker in quarter_words.get(quarter_text, (quarter_text,)))
+
+
+def _target_fiscal_quarter(question: str) -> str | None:
+    text = str(question or "").lower()
+    match = re.search(r"\bq\s*([1-4])\b", text)
+    if match:
+        return f"Q{match.group(1)}"
+    word_map = {
+        "first quarter": "Q1",
+        "second quarter": "Q2",
+        "third quarter": "Q3",
+        "fourth quarter": "Q4",
+    }
+    for marker, quarter in word_map.items():
+        if marker in text:
+            return quarter
+    return None
 
 
 def _debt_to_equity_numerator_slot(fact: FinanceFact) -> str:
@@ -2850,6 +3156,156 @@ def _plan_cash_flow_activity_comparison(*, question: str, facts: list[FinanceFac
             "target_fiscal_year": target_year,
             "formula_definition": "maximum of operating, investing, and financing cash flow activity amounts",
             "comparison_policy": "LLM maps the maximum signed amount to the activity name and explains most cash brought in or least cash lost.",
+        },
+    )
+
+
+def _plan_category_metric_rank(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    target_years = _target_fiscal_years(question)
+    target_fp = _target_fiscal_quarter(question)
+    direction = _category_rank_direction(question)
+    metric_focus = _category_rank_metric_focus(question)
+    mode = _category_rank_mode(question)
+    diagnostics: JsonObject = {
+        "target_fiscal_year": target_year,
+        "target_fiscal_years": target_years,
+        "target_fiscal_quarter": target_fp,
+        "rank_direction": direction,
+        "metric_focus": metric_focus,
+        "rank_mode": mode,
+        "formula_definition": "rank numeric values from a cited category, segment, region, instrument, or line-item table",
+        "semantic_decision_policy": (
+            "The calculator only returns an extreme numeric value. The LLM must map that value back to the cited "
+            "category row, resolve ties or disclosure wording, and explain the final answer from filing evidence."
+        ),
+    }
+    if mode == "growth_rate" and len(target_years) >= 2:
+        growth_plan = _plan_category_metric_growth_rank(
+            question=question,
+            facts=facts,
+            prior_year=min(target_years),
+            current_year=max(target_years),
+            direction=direction,
+            metric_focus=metric_focus,
+            diagnostics=diagnostics,
+        )
+        if growth_plan.status != "missing_facts" or not facts:
+            return growth_plan
+    candidates = _category_rank_candidate_facts(
+        question,
+        facts,
+        target_year=target_year,
+        target_fp=target_fp,
+        metric_focus=metric_focus,
+    )
+    if len(candidates) < 2:
+        return _missing(
+            "category_metric_rank",
+            ["ranked_category_metric_table"],
+            facts=[fact for _, fact in candidates],
+            diagnostics={**diagnostics, "candidate_count": len(candidates)},
+        )
+    variables: JsonObject = {}
+    variable_category_map: JsonObject = {}
+    input_facts: list[FinanceFact] = []
+    for index, (category, fact) in enumerate(candidates, start=1):
+        variable = f"category_{index}"
+        variables[variable] = fact.value
+        variable_category_map[variable] = {
+            "category": category,
+            "bound_line_item": _formula_bound_line_item(fact),
+        }
+        input_facts.append(fact)
+    operator = "min" if direction == "min" else "max"
+    expression = f"{operator}({', '.join(variables.keys())})"
+    return _ready(
+        "category_metric_rank",
+        expression,
+        variables,
+        unit=input_facts[0].unit,
+        facts=input_facts,
+        diagnostics={
+            **diagnostics,
+            "candidate_count": len(candidates),
+            "variable_category_map": variable_category_map,
+        },
+    )
+
+
+def _plan_category_metric_growth_rank(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    prior_year: int,
+    current_year: int,
+    direction: str,
+    metric_focus: str,
+    diagnostics: JsonObject,
+) -> FinanceFormulaPlan:
+    prior_candidates = _category_rank_candidate_facts(
+        question,
+        facts,
+        target_year=prior_year,
+        target_fp=None,
+        metric_focus=metric_focus,
+    )
+    current_candidates = _category_rank_candidate_facts(
+        question,
+        facts,
+        target_year=current_year,
+        target_fp=None,
+        metric_focus=metric_focus,
+    )
+    prior_by_category = {category: fact for category, fact in prior_candidates}
+    current_by_category = {category: fact for category, fact in current_candidates}
+    common_categories = [category for category in current_by_category if category in prior_by_category]
+    if len(common_categories) < 2:
+        return _missing(
+            "category_metric_rank",
+            ["ranked_category_metric_table"],
+            facts=[fact for _, fact in [*prior_candidates, *current_candidates]],
+            diagnostics={
+                **diagnostics,
+                "candidate_count": len(common_categories),
+                "formula_definition": "rank category growth rates as (current period value - prior period value) / abs(prior period value)",
+            },
+        )
+    variables: JsonObject = {}
+    terms: list[str] = []
+    input_facts: list[FinanceFact] = []
+    variable_category_map: JsonObject = {}
+    for index, category in enumerate(common_categories, start=1):
+        prior_fact = prior_by_category[category]
+        current_fact = current_by_category[category]
+        prior_slot = f"category_{index}_prior"
+        current_slot = f"category_{index}_current"
+        variables[prior_slot] = prior_fact.value
+        variables[current_slot] = current_fact.value
+        term = f"(({current_slot} - {prior_slot}) / abs({prior_slot}))"
+        terms.append(term)
+        variable_category_map[f"category_{index}"] = {
+            "category": category,
+            "prior_slot": prior_slot,
+            "current_slot": current_slot,
+            "prior_bound_line_item": _formula_bound_line_item(prior_fact),
+            "current_bound_line_item": _formula_bound_line_item(current_fact),
+            "growth_expression": term,
+        }
+        input_facts.extend([prior_fact, current_fact])
+    operator = "min" if direction == "min" else "max"
+    expression = f"{operator}({', '.join(terms)})"
+    return _ready(
+        "category_metric_rank",
+        expression,
+        variables,
+        unit="percent",
+        facts=input_facts,
+        diagnostics={
+            **diagnostics,
+            "candidate_count": len(common_categories),
+            "formula_definition": "rank category growth rates as (current period value - prior period value) / abs(prior period value)",
+            "variable_category_map": variable_category_map,
         },
     )
 

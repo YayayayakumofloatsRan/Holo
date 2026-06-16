@@ -64,11 +64,20 @@ task compiler now add generic evidence/slot/transform scaffolds for:
 - `margin_consistency_range`: maximum annual margin less minimum annual margin
   for historical gross-margin consistency questions. The host computes the
   range only; the LLM applies any explicit question criterion such as "roughly
-  2%" and decides whether the metric is useful in context.
+  2%" and decides whether the metric is useful in context;
+- `category_metric_rank`: a generic table-ranking scaffold for questions that
+  ask which segment, region, product category, liability line, short-term
+  investment type, or derivative instrument has the highest/lowest/largest/
+  worst metric. The host only prepares a ranked-category evidence slot and
+  calculator-visible `max`/`min` transform over cited numeric rows; the LLM
+  maps the extreme value back to the category, resolves ties or wording, and
+  explains the final answer from filing evidence.
 
 The fact ledger also now canonicalizes investing cash flow, financing cash
-flow, and store-count metrics, and splits inline `metric=... ; metric=...`
-fact segments even when the text does not include a `facts=` wrapper.
+flow, store-count, segment-income, EBITDAR, debt-securities, marketable-
+securities, derivative-instrument, and notional-value metrics, and splits
+inline `metric=... ; metric=...` fact segments even when the text does not
+include a `facts=` wrapper.
 
 This continues the 2026-06-16 DPO and multi-year average capex/revenue scaffold
 work. The host supplies auditable formulas, EvidenceSpec line-item targets, and
@@ -80,12 +89,12 @@ Current static question-only FinanceBench formula coverage:
 
 | Slice | Recognized formula rows | Rows with TransformSpec |
 | --- | ---: | ---: |
-| `debug50` | `26/50` | `26/50` |
-| `test100` | `48/100` | `48/100` |
-| `all150` | `74/150` | `74/150` |
+| `debug50` | `29/50` | `29/50` |
+| `test100` | `55/100` | `55/100` |
+| `all150` | `84/150` | `84/150` |
 
 Compared with the 2026-06-16 common-formula baseline, all150 recognized formula
-coverage moved from `38/150` to `74/150`. This is only code-regression evidence
+coverage moved from `38/150` to `84/150`. This is only code-regression evidence
 for the next live run, not a live benchmark score.
 
 ## Verification
@@ -94,16 +103,17 @@ The following checks were run as code regression only:
 
 ```bash
 .venv/bin/python -m py_compile kernel_v3/finance/formula_planner.py kernel_v3/finance/fact_ledger.py kernel_v3/finance/substrate_adapter.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "category_metric_rank"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "margin_profile_and_consistency"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
-.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py tests/test_kernel_v3_finance_benchmark_report.py -q
 git diff --check
 ```
 
-Latest result: py_compile passed; targeted finance-engine slice
-`2 passed, 268 deselected in 0.46s`; full finance engine
-`270 passed in 5.17s`; full FinanceBench harness
-`52 passed in 296.78s`; `git diff --check` passed.
+Latest result: py_compile passed; targeted category-rank slice
+`2 passed, 270 deselected in 1.57s`; full finance engine
+`272 passed in 5.34s`; FinanceBench harness/report regression
+`59 passed in 399.94s`; `git diff --check` passed.
 
 ## Next Honest Benchmark Step
 

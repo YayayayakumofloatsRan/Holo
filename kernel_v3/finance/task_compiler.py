@@ -1409,6 +1409,12 @@ def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
         add("material_legal_proceedings", statement="legal_proceedings", line_item="material legal proceedings")
     if "debt securities" in text and "registered" in text:
         add("registered_debt_securities", statement="registered_securities", line_item="debt securities registered on national securities exchange")
+    if _looks_like_category_metric_rank_question(text):
+        add(
+            "ranked_category_metric_table",
+            statement=_category_rank_statement(question),
+            line_item=_category_rank_line_item(question),
+        )
     if "major acquisitions" in text or "companies acquired" in text or "acquired by" in text:
         add("acquisitions", statement="business_combinations", line_item="acquisitions")
     if "m and a" in text or "merger and acquisition" in text:
@@ -1664,6 +1670,33 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                     "source": "finance_task_compiler",
                     "formula_status": formula_plan.status,
                     "semantic_decision_policy": "LLM decides margin usefulness, improvement, stability, or drivers from evidence and explicit question criteria.",
+                },
+            )
+        ]
+    if name == "category_metric_rank":
+        payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        required_slots = list(variables.keys()) if variables else list(formula_plan.missing_facts or frame_missing_slots)
+        rank_direction = _string(formula_plan.diagnostics.get("rank_direction")) or "max"
+        expression = _string(payload.get("expression"))
+        if not expression:
+            expression = "min(category_metric_values)" if rank_direction == "min" else "max(category_metric_values)"
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, ",".join(required_slots), expression),
+                domain="finance",
+                name="category_metric_rank",
+                required_slots=required_slots,
+                expression=expression,
+                output_unit=_string(payload.get("unit")) or "metric_value",
+                output_attribute="category_metric_rank_value",
+                diagnostics={
+                    "source": "finance_task_compiler",
+                    "formula_status": formula_plan.status,
+                    "rank_direction": rank_direction,
+                    "semantic_decision_policy": (
+                        "LLM maps the computed extreme numeric value to the cited category row and explains the final answer."
+                    ),
                 },
             )
         ]
@@ -2083,6 +2116,8 @@ def _source_role(*, binding: JsonObject, source_families: list[str]) -> str | No
 
 
 def _statement_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
+    if formula_name == "category_metric_rank" and slot_name == "ranked_category_metric_table":
+        return _category_rank_statement(question)
     if formula_name == "yoy_growth" and slot_name in {"prior_period_value", "current_period_value"}:
         line_item = _yoy_growth_line_item(question)
         if line_item in {"revenue", "net sales", "net revenues", "total revenues", "operating income", "net income", "ebitda"}:
@@ -2155,6 +2190,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "balance_sheet"
     if slot_name in {"store_count", "store_count_prior", "store_count_current"}:
         return "business_or_properties"
+    if slot_name == "ranked_category_metric_table":
+        return "md&a_or_note_table"
     if slot_name in {
         "revenue",
         "net_income",
@@ -2176,6 +2213,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
 
 
 def _line_item_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
+    if formula_name == "category_metric_rank" and slot_name == "ranked_category_metric_table":
+        return _category_rank_line_item(question)
     if formula_name == "yoy_growth" and slot_name in {"prior_period_value", "current_period_value"}:
         return _yoy_growth_line_item(question)
     if formula_name == "margin":
@@ -2246,8 +2285,81 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "store_count": "stores",
         "store_count_prior": "stores",
         "store_count_current": "stores",
+        "ranked_category_metric_table": "ranked category metric table",
     }
     return mapping.get(slot_name)
+
+
+def _category_rank_statement(question: str) -> str | None:
+    text = _normalized_question(question)
+    if "derivative instrument" in text or "notional value" in text:
+        return "derivatives_note_or_market_risk"
+    if "short term investments" in text or "short-term investments" in text or "type of debt" in text:
+        return "investment_or_fair_value_note"
+    if "liability" in text or "liabilities" in text:
+        return "balance_sheet"
+    if any(marker in text for marker in ("segment", "region", "ebitdar", "topline", "product category", "service category")):
+        return "segment_note"
+    return "md&a_or_note_table"
+
+
+def _category_rank_line_item(question: str) -> str:
+    text = _normalized_question(question)
+    if "derivative instrument" in text or "notional value" in text:
+        return "derivative instruments notional value"
+    if "short term investments" in text or "short-term investments" in text or "type of debt" in text:
+        return "short-term investments by debt security type"
+    if "liability" in text or "liabilities" in text:
+        return "liabilities"
+    if "product category" in text or "service category" in text:
+        return "product category revenue"
+    if "ebitdar" in text:
+        return "regional ebitdar contribution"
+    if "net income" in text:
+        return "segment net income"
+    if "revenue" in text or "sales" in text or "topline" in text:
+        return "segment revenue"
+    return "ranked category metric table"
+
+
+def _looks_like_category_metric_rank_question(text: str) -> bool:
+    rank_markers = (
+        "highest",
+        "lowest",
+        "largest",
+        "smallest",
+        "best",
+        "worst",
+        "most",
+        "least",
+        "dragged down",
+        "proportionally increase",
+        "proportionally increased",
+        "performed the best",
+    )
+    if not any(marker in text for marker in rank_markers):
+        return False
+    if "registered to trade" in text or "registered on a national securities exchange" in text:
+        return False
+    category_markers = (
+        "segment",
+        "region",
+        "geographic",
+        "product category",
+        "service category",
+        "category",
+        "among",
+        "derivative instrument",
+        "notional value",
+        "short term investments",
+        "short-term investments",
+        "type of debt",
+        "liability",
+        "liabilities",
+        "topline",
+        "ebitdar",
+    )
+    return any(marker in text for marker in category_markers)
 
 
 def _margin_line_item(slot_name: str, question: str) -> str | None:
@@ -2398,6 +2510,19 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "total_amount": ["total amount", "annual amount", "share repurchases", "stock repurchases"],
         "credit_facility": ["revolving credit agreement", "credit facility", "borrowings"],
         "share_repurchases": ["share repurchases", "stock repurchases", "treasury stock"],
+        "ranked_category_metric_table": [
+            "category",
+            "segment revenue",
+            "segment net revenue",
+            "segment net income",
+            "regional ebitdar",
+            "product category revenue",
+            "short-term investments",
+            "debt securities",
+            "derivative instruments",
+            "notional value",
+            "liabilities",
+        ],
     }
     values = list(mapping.get(slot_name, []))
     if line_item:
