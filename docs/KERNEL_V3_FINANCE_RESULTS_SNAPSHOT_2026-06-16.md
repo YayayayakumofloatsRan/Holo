@@ -118,6 +118,51 @@ Latest result: targeted slice `6 passed, 243 deselected in 0.28s`; py_compile
 and `git diff --check` passed; `249 passed in 2.45s` for finance engine and
 `51 passed in 277.47s` for FinanceBench tests.
 
+## 2026-06-16 Direct Evidence Scaffold Follow-Up
+
+The next static FinanceBench scan showed that many rows are not formula-first
+questions. They are direct extraction, disclosure, or qualitative comparison
+tasks where the fallback compiler previously emitted no `EvidenceSpec`. That
+left the later agent loop with a raw prompt but no explicit statement/section
+or line-item target.
+
+The compiler now emits generic primary-filing evidence scaffolds for these
+non-formula tasks. Examples include capital expenditures, net PP&E, cash and
+cash equivalents, current assets/liabilities, dividends, legal proceedings,
+registered debt securities, acquisitions, operating geographies, products and
+services, customers, segment results, guidance, derivative notionals,
+retirement benefit payments, and governance/voting disclosures. These specs do
+not contain answers or gold references; they only tell the model-owned loop what
+evidence family and slot to acquire.
+
+The same follow-up makes `margin` missing-fact plans more executable. For
+example, COGS margin now compiles to `cogs_numerator / revenue_denominator`,
+with income-statement evidence targets for both slots.
+
+Static coverage on `financebench_doc_retrieval.jsonl` changed from:
+
+| Slice | Before | After |
+| --- | ---: | ---: |
+| `debug50` | `14/50` rows with at least one `EvidenceSpec` | `50/50` |
+| `test100` | `17/100` rows with at least one `EvidenceSpec` | `100/100` |
+| `all150` | `31/150` rows with at least one `EvidenceSpec` | `150/150` |
+
+Verification:
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "direct_metric_evidence or direct_disclosure_evidence or cogs_margin_transform"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q -k "evidence_scaffold or named_splits"
+.venv/bin/python -m py_compile kernel_v3/finance/task_compiler.py kernel_v3/finance/formula_planner.py tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_benchmark.py
+git diff --check
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+```
+
+Latest result: targeted finance compiler tests `3 passed, 249 deselected`;
+targeted FinanceBench tests `2 passed, 50 deselected`; py_compile and
+`git diff --check` passed; full finance engine `252 passed in 4.37s`; full
+FinanceBench tests `52 passed in 299.68s`.
+
 ## What Is Not Proven Yet
 
 - The post-2026-06-16 code changes do not yet have a fresh live accuracy number.

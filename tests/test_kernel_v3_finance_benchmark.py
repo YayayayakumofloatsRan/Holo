@@ -19,6 +19,7 @@ from kernel_v3.bench import (
 )
 from kernel_v3.bench.finance import _append_benchmark_provided_context_trace, summarize_finance_benchmark, trace_metrics
 from kernel_v3.chat.contracts import ChatRuntimeResult
+from kernel_v3.finance import compile_finance_task_program
 from kernel_v3.journal import JournalStore
 from kernel_v3.agent.answer_profile import infer_answer_profile
 from kernel_v3.agent.runtime import _benchmark_doc_retrieval_payload
@@ -99,6 +100,18 @@ def test_financebench_debug50_and_test100_load_non_overlapping_rows(tmp_path: Pa
     assert test_items[0].item_id == "fb-050"
     assert test_items[-1].item_id == "fb-149"
     assert {item.item_id for item in debug_items}.isdisjoint({item.item_id for item in test_items})
+
+
+def test_financebench_doc_retrieval_rows_compile_with_evidence_scaffold() -> None:
+    dataset = Path("data/bench/finance/financebench_doc_retrieval.jsonl")
+    missing_evidence: list[tuple[int, str]] = []
+    for index, line in enumerate(dataset.read_text(encoding="utf-8").splitlines()):
+        row = json.loads(line)
+        program = compile_finance_task_program(question=str(row.get("question") or ""), facts=[])
+        if not program.evidence_specs:
+            missing_evidence.append((index, str(row.get("id") or "")))
+
+    assert len(missing_evidence) == 0
 
 
 def test_finance_benchmark_outputs_record_split_metadata(tmp_path: Path) -> None:

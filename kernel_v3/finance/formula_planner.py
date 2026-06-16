@@ -239,7 +239,14 @@ def _plan_margin(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPl
     extra_facts: list[FinanceFact] = []
     expression = "numerator / denominator"
     variables: JsonObject
-    if "gross margin" in normalized or "gross profit margin" in normalized:
+    if "cogs" in normalized or "cost of goods sold" in normalized or "cost of revenue" in normalized:
+        numerator = _latest_fact_for_year(
+            facts,
+            ("cost of revenue", "cost of sales", "cost of goods sold", "cogs"),
+            target_year=target_year,
+        )
+        missing_numerator = "cogs_numerator"
+    elif "gross margin" in normalized or "gross profit margin" in normalized:
         numerator = _latest_fact_for_year(facts, ("gross profit",), target_year=target_year)
         if numerator is None:
             cost = _latest_fact_for_year(

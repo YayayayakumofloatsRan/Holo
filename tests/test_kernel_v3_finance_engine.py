@@ -3891,6 +3891,62 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
     assert tool_chain["recommended_steps"][-1]["tool"] == "host.verifier_gate"
 
 
+def test_finance_task_compiler_emits_direct_metric_evidence_for_capex_lookup() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is the FY2018 capital expenditure amount (in USD millions) for 3M? "
+            "Give a response by relying on the details shown in the cash flow statement."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "lookup"
+    assert program.transform_specs == []
+    assert program.evidence_specs
+    spec = program.evidence_specs[0]
+    assert spec.slot_name == "capital_expenditures"
+    assert spec.statement == "cash_flow_statement"
+    assert spec.line_item == "capital expenditures"
+    assert "capex" in spec.accepted_attributes
+    assert spec.diagnostics["from_direct_question_scaffold"] is True
+    assert program.diagnostics["tool_chain_plan"]["next_action_candidates"][0]["tool"] == "retrieval.run"
+
+
+def test_finance_task_compiler_emits_direct_disclosure_evidence_for_legal_lookup() -> None:
+    program = compile_finance_task_program(
+        question="Has Boeing reported any materially important ongoing legal battles from FY2022?",
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "lookup"
+    assert program.transform_specs == []
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["material_legal_proceedings"].statement == "legal_proceedings"
+    assert evidence_slots["material_legal_proceedings"].line_item == "material legal proceedings"
+    assert "litigation" in evidence_slots["material_legal_proceedings"].accepted_attributes
+
+
+def test_finance_task_compiler_emits_cogs_margin_transform_and_specific_evidence() -> None:
+    question = (
+        "What is Coca Cola's FY2021 COGS % margin? Calculate what was asked by utilizing "
+        "the line items clearly shown in the income statement."
+    )
+    plan = plan_finance_formula(question=question, facts=[], existing_traces=[])
+    program = compile_finance_task_program(question=question, facts=[], plan=plan)
+
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "margin"
+    assert plan.missing_facts == ["cogs_numerator", "revenue_denominator"]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["cogs_numerator"].statement == "income_statement"
+    assert evidence_slots["cogs_numerator"].line_item == "cost of goods sold"
+    assert evidence_slots["revenue_denominator"].statement == "income_statement"
+    assert evidence_slots["revenue_denominator"].line_item == "revenue"
+    assert program.transform_specs[0].name == "margin"
+    assert program.transform_specs[0].required_slots == ["cogs_numerator", "revenue_denominator"]
+    assert program.transform_specs[0].expression == "cogs_numerator / revenue_denominator"
+
+
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:
     question = (
         "What is the FY2017 operating cash flow ratio for Adobe? Operating cash flow ratio is defined as: "

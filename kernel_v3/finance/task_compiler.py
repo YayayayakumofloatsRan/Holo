@@ -1204,6 +1204,37 @@ def _evidence_specs(
                 diagnostics={"source": "finance_task_compiler"},
             )
         )
+    existing_slots = {spec.slot_name for spec in specs}
+    if formula_plan is not None:
+        for slot_name in list(formula_plan.missing_facts):
+            if not slot_name or slot_name in existing_slots:
+                continue
+            formula_line_item = _line_item_for_formula_slot(
+                str(formula_plan.formula_name or ""),
+                slot_name,
+                question,
+            )
+            formula_statement = _statement_for_formula_slot(
+                str(formula_plan.formula_name or ""),
+                slot_name,
+                question,
+            )
+            specs.append(
+                EvidenceSpec(
+                    spec_id="evidence-spec-" + _short_hash(frame.frame_id, slot_name),
+                    slot_name=slot_name,
+                    domain="finance",
+                    accepted_attributes=_accepted_attributes_for_evidence_slot(slot_name, formula_line_item),
+                    source_role=_source_role(binding=binding, source_families=source_families),
+                    required_source_families=source_families,
+                    target_period=target_period,
+                    statement=statement or formula_statement or _statement_for_slot(slot_name),
+                    line_item=line_item if _slot_matches_target_line(slot_name, line_item) else formula_line_item or _line_item_for_slot(slot_name),
+                    required=True,
+                    diagnostics={"source": "finance_task_compiler", "from_formula_missing_fact": True},
+                )
+            )
+            existing_slots.add(slot_name)
     if not specs and line_item:
         specs.append(
             EvidenceSpec(
@@ -1220,13 +1251,209 @@ def _evidence_specs(
                 diagnostics={"source": "finance_task_compiler", "from_target_document_binding": True},
             )
         )
+    if not specs:
+        specs.extend(
+            _direct_evidence_specs(
+                question=question,
+                binding=binding,
+                target_period=target_period,
+                source_families=source_families,
+                statement=statement,
+            )
+        )
     return specs
+
+
+def _direct_evidence_specs(
+    *,
+    question: str,
+    binding: JsonObject,
+    target_period: str | None,
+    source_families: list[str],
+    statement: str,
+) -> list[EvidenceSpec]:
+    blueprints = _direct_evidence_blueprints(question)
+    specs: list[EvidenceSpec] = []
+    for index, blueprint in enumerate(blueprints[:12]):
+        slot_name = blueprint["slot_name"]
+        line_item = blueprint.get("line_item") or _line_item_for_slot(slot_name)
+        specs.append(
+            EvidenceSpec(
+                spec_id="evidence-spec-" + _short_hash("direct", question, index, slot_name),
+                slot_name=slot_name,
+                domain="finance",
+                accepted_attributes=_ordered_unique([
+                    *_string_list(blueprint.get("accepted_attributes")),
+                    *_accepted_attributes_for_evidence_slot(slot_name, line_item),
+                ]),
+                source_role=_source_role(binding=binding, source_families=source_families),
+                required_source_families=source_families,
+                target_period=target_period,
+                statement=statement or _string(blueprint.get("statement")) or _statement_for_slot(slot_name),
+                line_item=line_item,
+                required=True,
+                diagnostics={"source": "finance_task_compiler", "from_direct_question_scaffold": True},
+            )
+        )
+    return specs
+
+
+def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
+    text = _normalized_question(question)
+    blueprints: list[JsonObject] = []
+
+    def add(slot_name: str, *, statement: str | None = None, line_item: str | None = None, attributes: list[str] | None = None) -> None:
+        if any(item.get("slot_name") == slot_name and item.get("line_item") == line_item for item in blueprints):
+            return
+        blueprints.append(
+            {
+                "slot_name": slot_name,
+                "statement": statement,
+                "line_item": line_item,
+                "accepted_attributes": list(attributes or []),
+            }
+        )
+
+    if "quick ratio" in text:
+        add("cash_and_equivalents", statement="balance_sheet", line_item="cash and cash equivalents")
+        add("marketable_securities", statement="balance_sheet", line_item="marketable securities")
+        add("accounts_receivable", statement="balance_sheet", line_item="accounts receivable")
+        add("total_current_liabilities", statement="balance_sheet", line_item="total current liabilities")
+    if "working capital" in text:
+        add("total_current_assets", statement="balance_sheet", line_item="total current assets")
+        add("total_current_liabilities", statement="balance_sheet", line_item="total current liabilities")
+    if "capital expenditure" in text or "capex" in text:
+        add("capital_expenditures", statement="cash_flow_statement", line_item="capital expenditures")
+    if any(marker in text for marker in ("cash flow from operating activities", "cash from operations", "operating cash flow")):
+        add("operating_cash_flow", statement="cash_flow_statement", line_item="operating cash flow")
+    if "free cash flow" in text or "free cashflow" in text or "fcf" in text:
+        add("operating_cash_flow", statement="cash_flow_statement", line_item="operating cash flow")
+        add("capital_expenditures", statement="cash_flow_statement", line_item="capital expenditures")
+    if "operations, investing, and financing" in text or "operating, investing, and financing" in text:
+        add("cash_flow_activity_totals", statement="cash_flow_statement", line_item="net cash provided by operating investing financing activities")
+    if "dividend" in text:
+        add("dividends_paid", statement="cash_flow_statement", line_item="dividends paid")
+    if "cash and cash equivalents" in text or "cash equivalents" in text:
+        add("cash_and_equivalents", statement="balance_sheet", line_item="cash and cash equivalents")
+    if "debt" in text and ("increased" in text or "balance sheet" in text or "largest investment" in text):
+        add("debt", statement="balance_sheet", line_item="debt")
+    if "short term investments" in text or "short-term investments" in text:
+        add("short_term_investments", statement="balance_sheet", line_item="short-term investments")
+    if any(marker in text for marker in ("ppne", "pp and e", "net ppne", "net pp&e", "net property plant and equipment", "property, plant, and equipment")):
+        add("property_plant_and_equipment_net", statement="balance_sheet", line_item="property plant and equipment net")
+    if "total assets" in text:
+        add("assets", statement="balance_sheet", line_item="total assets")
+    if "total current assets" in text:
+        add("total_current_assets", statement="balance_sheet", line_item="total current assets")
+    if "total current liabilities" in text:
+        add("total_current_liabilities", statement="balance_sheet", line_item="total current liabilities")
+    if "accounts payable" in text:
+        add("accounts_payable", statement="balance_sheet", line_item="accounts payable")
+    if "accounts receivable" in text or "net ar" in text:
+        add("accounts_receivable", statement="balance_sheet", line_item="accounts receivable")
+    if "inventor" in text:
+        add("inventory", statement="balance_sheet", line_item="inventories")
+    if "cogs" in text or "cost of revenue" in text or "cost of goods sold" in text:
+        add("cogs_numerator", statement="income_statement", line_item="cost of goods sold")
+    if "net income" in text or "net earnings" in text:
+        add("net_income", statement="income_statement", line_item="net income")
+    if "operating income" in text:
+        add("operating_income", statement="income_statement", line_item="operating income")
+    if "adjusted non gaap ebitda" in text or "adjusted ebitda" in text or "non gaap ebitda" in text:
+        add("adjusted_ebitda", statement="non_gaap_reconciliation", line_item="adjusted ebitda")
+    if "interest coverage" in text:
+        add("adjusted_ebit", statement="non_gaap_reconciliation_or_income_statement", line_item="adjusted ebit")
+        add("interest_expense", statement="income_statement_or_debt_note", line_item="interest expense")
+    if "revenue" in text or "sales" in text:
+        add("revenue", statement="income_statement", line_item="revenue")
+    if "restructuring" in text:
+        add("restructuring_costs", statement="income_statement", line_item="restructuring costs")
+    if "effective tax rate" in text:
+        add("effective_tax_rate", statement="income_tax_note", line_item="effective tax rate")
+    if "largest liability" in text:
+        add("liabilities", statement="balance_sheet", line_item="liabilities")
+    if "legal" in text or "litigation" in text:
+        add("material_legal_proceedings", statement="legal_proceedings", line_item="material legal proceedings")
+    if "debt securities" in text and "registered" in text:
+        add("registered_debt_securities", statement="registered_securities", line_item="debt securities registered on national securities exchange")
+    if "major acquisitions" in text or "companies acquired" in text or "acquired by" in text:
+        add("acquisitions", statement="business_combinations", line_item="acquisitions")
+    if "m and a" in text or "merger and acquisition" in text:
+        add("acquisitions", statement="business_combinations", line_item="acquisitions")
+    if "8k filing" in text or "8 k filing" in text or "8-k filing" in text:
+        add("filing_event_summary", statement="form_8k", line_item="filing event")
+    if "geographies" in text or "geographic region" in text or "primarily operates in" in text:
+        add("operating_geographies", statement="business", line_item="geographic areas")
+    if "products and services" in text or "product category" in text or "product categories" in text or "service category" in text or "service categories" in text:
+        add("products_and_services", statement="business", line_item="products and services")
+    if "primary customers" in text or "customer concentration" in text:
+        add("customers", statement="business", line_item="customers")
+    if "retain card members" in text or "card members" in text or "customer retention" in text:
+        add("customer_retention", statement="md&a_or_business", line_item="customer retention")
+    if "industry" in text:
+        add("industry", statement="business", line_item="industry")
+    if "cyclicality" in text or "cyclical" in text:
+        add("business_cyclicality", statement="risk_factors_or_md&a", line_item="cyclicality")
+    if "number of stores" in text or "stores between" in text:
+        add("store_count", statement="business_or_properties", line_item="stores")
+    if "production rate" in text:
+        add("production_rates", statement="md&a_or_business_outlook", line_item="production rates")
+    if "ceo" in text or "board member" in text or "nominees" in text:
+        add("governance_disclosure", statement="proxy_statement", line_item="directors and executive officers")
+    if "shareholder vote" in text or "shareholder proposal" in text:
+        add("shareholder_vote_results", statement="proxy_or_8k_voting_results", line_item="shareholder vote")
+    if "high growth company" in text or "growth company" in text:
+        add("revenue", statement="income_statement", line_item="revenue")
+        add("net_income", statement="income_statement", line_item="net income")
+    if "adjusted eps" in text or "guidance" in text:
+        add("guidance", statement="earnings_release_or_md&a", line_item="guidance")
+    if "discontinued operation" in text or "spin off" in text or "spinning off" in text or "separation" in text or "kenvue" in text:
+        add("separation_or_discontinued_operation", statement="business_combinations_or_subsequent_events", line_item="separation or discontinued operation")
+    if "gain" in text and ("separation" in text or "spin off" in text or "spinoff" in text):
+        add("gain_on_separation", statement="business_combinations_or_subsequent_events", line_item="gain on separation")
+    if "cash proceeds" in text or "proceeds" in text:
+        add("cash_proceeds", statement="cash_flow_statement_or_transaction_note", line_item="cash proceeds")
+    if "business segments" in text or "reporting segment" in text or "segment" in text or "ebitdar" in text or "region had" in text:
+        add("segment_results", statement="segment_note", line_item="segment revenue income")
+    if re.search(r"\bvar\b", text) or "value at risk" in text:
+        add("market_risk_var", statement="market_risk_disclosures", line_item="value at risk")
+    if "bankrupted" in text or "liquidated" in text or "liquidation" in text:
+        add("assets", statement="balance_sheet", line_item="total assets")
+        add("liabilities", statement="balance_sheet", line_item="total liabilities")
+        add("shares_outstanding", statement="equity_or_cover_page", line_item="shares outstanding")
+    if "revolving credit" in text or "credit agreement" in text:
+        add("credit_facility", statement="debt_or_liquidity_note", line_item="revolving credit agreement")
+    if "stock repurchases" in text or "share repurchases" in text:
+        add("share_repurchases", statement="equity_note_or_cash_flow_statement", line_item="share repurchases")
+    if "derivative instruments" in text or "notional value" in text:
+        add("derivative_instruments", statement="derivatives_note_or_market_risk", line_item="derivative instruments notional value")
+    if "retirees" in text or "pension" in text or "postretirement" in text:
+        add("pension_postretirement_payments", statement="pension_and_postretirement_note", line_item="expected benefit payments")
+    return blueprints
 
 
 def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: list[str]) -> list[TransformSpec]:
     name = str(formula_plan.formula_name or "")
     if not name:
         return []
+    if name == "margin":
+        payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        required_slots = list(variables.keys()) if variables else list(formula_plan.missing_facts or frame_missing_slots)
+        numerator_slot = _margin_numerator_slot(required_slots)
+        denominator_slot = "revenue_denominator" if "revenue_denominator" in required_slots else "denominator"
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, ",".join(required_slots), str(payload.get("expression") or "")),
+                domain="finance",
+                name="margin",
+                required_slots=required_slots,
+                expression=_string(payload.get("expression")) or f"{numerator_slot} / {denominator_slot}",
+                output_unit=_string(payload.get("unit")) or "percent",
+                output_attribute="margin",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
     if name == "capital_intensity":
         return [
             TransformSpec(
@@ -1538,23 +1765,52 @@ def _statement_for_formula_slot(formula_name: str, slot_name: str, question: str
         line_item = _yoy_growth_line_item(question)
         if line_item in {"revenue", "net sales", "net revenues", "total revenues", "operating income", "net income", "ebitda"}:
             return "income_statement"
+    if formula_name == "margin" and slot_name in {
+        "margin_numerator",
+        "cogs_numerator",
+        "gross_profit_numerator",
+        "operating_income_numerator",
+        "net_income_numerator",
+        "ebitda_numerator",
+        "revenue_denominator",
+    }:
+        return "income_statement"
     return None
 
 
 def _statement_for_slot(slot_name: str) -> str | None:
-    if slot_name in {"capital_expenditures", "operating_cash_flow"}:
+    if slot_name in {"capital_expenditures", "operating_cash_flow", "dividends_paid", "cash_flow_activity_totals"}:
         return "cash_flow_statement"
     if slot_name in {
         "assets",
+        "liabilities",
         "property_plant_and_equipment_net",
         "property_plant_and_equipment_net_current",
         "property_plant_and_equipment_net_prior",
         "total_current_liabilities",
+        "total_current_assets",
+        "cash_and_equivalents",
+        "marketable_securities",
+        "accounts_receivable",
+        "accounts_payable",
+        "inventory",
         "debt",
         "cash",
     }:
         return "balance_sheet"
-    if slot_name in {"revenue", "net_income", "ebitda_or_ebitda_components"}:
+    if slot_name in {
+        "revenue",
+        "net_income",
+        "operating_income",
+        "cogs_numerator",
+        "gross_profit_numerator",
+        "operating_income_numerator",
+        "net_income_numerator",
+        "ebitda_numerator",
+        "revenue_denominator",
+        "restructuring_costs",
+        "ebitda_or_ebitda_components",
+    }:
         return "income_statement"
     return None
 
@@ -1562,6 +1818,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
 def _line_item_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
     if formula_name == "yoy_growth" and slot_name in {"prior_period_value", "current_period_value"}:
         return _yoy_growth_line_item(question)
+    if formula_name == "margin":
+        return _margin_line_item(slot_name, question)
     return None
 
 
@@ -1570,14 +1828,132 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "capital_expenditures": "capital expenditures",
         "operating_cash_flow": "operating cash flow",
         "total_current_liabilities": "total current liabilities",
+        "total_current_assets": "total current assets",
+        "cash_and_equivalents": "cash and cash equivalents",
+        "marketable_securities": "marketable securities",
+        "accounts_receivable": "accounts receivable",
+        "accounts_payable": "accounts payable",
+        "inventory": "inventories",
         "property_plant_and_equipment_net": "property plant and equipment net",
         "property_plant_and_equipment_net_current": "property plant and equipment net",
         "property_plant_and_equipment_net_prior": "property plant and equipment net",
         "assets": "assets",
+        "liabilities": "liabilities",
         "revenue": "revenue",
+        "operating_income": "operating income",
         "net_income": "net income",
+        "cogs_numerator": "cost of goods sold",
+        "gross_profit_numerator": "gross profit",
+        "operating_income_numerator": "operating income",
+        "net_income_numerator": "net income",
+        "ebitda_numerator": "ebitda",
+        "revenue_denominator": "revenue",
+        "dividends_paid": "dividends paid",
+        "cash_flow_activity_totals": "net cash provided by operating investing financing activities",
+        "restructuring_costs": "restructuring costs",
     }
     return mapping.get(slot_name)
+
+
+def _margin_line_item(slot_name: str, question: str) -> str | None:
+    if slot_name == "margin_numerator":
+        resolved = _margin_numerator_slot([], question=question)
+        if resolved == "margin_numerator":
+            return None
+        return _margin_line_item(resolved, question)
+    mapping = {
+        "cogs_numerator": "cost of goods sold",
+        "gross_profit_numerator": "gross profit",
+        "operating_income_numerator": "operating income",
+        "net_income_numerator": "net income",
+        "ebitda_numerator": "ebitda",
+        "revenue_denominator": "revenue",
+    }
+    return mapping.get(slot_name)
+
+
+def _margin_numerator_slot(required_slots: list[str], *, question: str = "") -> str:
+    for slot_name in required_slots:
+        if slot_name.endswith("_numerator") or slot_name == "margin_numerator":
+            return slot_name
+    text = _normalized_question(question)
+    if "cogs" in text or "cost of goods sold" in text or "cost of revenue" in text:
+        return "cogs_numerator"
+    if "gross margin" in text or "gross profit margin" in text:
+        return "gross_profit_numerator"
+    if "operating margin" in text or "operating income" in text:
+        return "operating_income_numerator"
+    if "net profit margin" in text or "net margin" in text or "net income" in text:
+        return "net_income_numerator"
+    if "ebitda" in text:
+        return "ebitda_numerator"
+    return "margin_numerator"
+
+
+def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None = None) -> list[str]:
+    mapping = {
+        "capital_expenditures": ["capital expenditures", "capex", "purchases of property plant and equipment"],
+        "operating_cash_flow": ["operating cash flow", "cash flow from operations", "net cash provided by operating activities"],
+        "total_current_liabilities": ["total current liabilities", "current liabilities", "liabilities current"],
+        "total_current_assets": ["total current assets", "current assets", "assets current"],
+        "debt": ["debt", "short-term debt", "long-term debt", "borrowings"],
+        "short_term_investments": ["short-term investments", "short term investments", "marketable securities"],
+        "cash_and_equivalents": ["cash and cash equivalents", "cash equivalents", "cash"],
+        "marketable_securities": ["marketable securities", "short-term investments"],
+        "accounts_receivable": ["accounts receivable", "net accounts receivable", "receivables"],
+        "accounts_payable": ["accounts payable", "payables"],
+        "inventory": ["inventories", "inventory"],
+        "property_plant_and_equipment_net": ["property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"],
+        "assets": ["assets", "total assets"],
+        "revenue": ["revenue", "revenues", "net sales", "net revenues", "sales"],
+        "revenue_denominator": ["revenue", "revenues", "net sales", "net revenues", "sales"],
+        "net_income": ["net income", "net earnings", "net income attributable to shareholders"],
+        "operating_income": ["operating income", "income from operations"],
+        "adjusted_ebitda": ["adjusted ebitda", "non-gaap ebitda", "non gaap ebitda"],
+        "adjusted_ebit": ["adjusted ebit", "ebit"],
+        "interest_expense": ["interest expense", "interest"],
+        "cogs_numerator": ["cost of goods sold", "cost of revenue", "cost of sales", "cogs"],
+        "gross_profit_numerator": ["gross profit"],
+        "operating_income_numerator": ["operating income", "income from operations"],
+        "net_income_numerator": ["net income", "net earnings", "net income attributable to shareholders"],
+        "ebitda_numerator": ["ebitda", "adjusted ebitda", "depreciation and amortization"],
+        "dividends_paid": ["dividends paid", "cash dividends paid", "dividends to shareholders"],
+        "cash_flow_activity_totals": ["operating activities", "investing activities", "financing activities"],
+        "restructuring_costs": ["restructuring costs", "restructuring expenses", "restructuring charges"],
+        "effective_tax_rate": ["effective tax rate", "tax rate", "income tax rate"],
+        "liabilities": ["liabilities", "total liabilities"],
+        "material_legal_proceedings": ["legal proceedings", "litigation", "material legal proceedings"],
+        "registered_debt_securities": ["registered securities", "debt securities", "national securities exchange"],
+        "acquisitions": ["acquisitions", "business combinations", "companies acquired"],
+        "filing_event_summary": ["8-k", "8k", "filing event", "item"],
+        "operating_geographies": ["geographies", "geographic areas", "regions"],
+        "products_and_services": ["products", "services", "product categories", "service categories"],
+        "customers": ["customers", "customer concentration", "primary customers"],
+        "customer_retention": ["customer retention", "card member retention", "card members"],
+        "industry": ["industry", "business"],
+        "business_cyclicality": ["cyclicality", "cyclical", "business cycle"],
+        "store_count": ["stores", "store count", "number of stores"],
+        "production_rates": ["production rate", "production rates", "forecast production"],
+        "governance_disclosure": ["directors", "executive officers", "board nominees", "ceo"],
+        "shareholder_vote_results": ["shareholder vote", "shareholder proposal", "voting results"],
+        "guidance": ["guidance", "outlook", "forecast"],
+        "separation_or_discontinued_operation": ["separation", "spin-off", "discontinued operation", "subsequent events"],
+        "gain_on_separation": ["gain on separation", "gain", "separation"],
+        "cash_proceeds": ["cash proceeds", "proceeds"],
+        "segment_results": ["segment revenue", "segment income", "reportable segments", "business segments"],
+        "market_risk_var": ["value at risk", "var", "market risk"],
+        "derivative_instruments": ["derivative instruments", "notional value", "foreign currency derivatives", "interest rate derivatives"],
+        "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],
+        "shares_outstanding": ["shares outstanding", "common shares outstanding"],
+        "credit_facility": ["revolving credit agreement", "credit facility", "borrowings"],
+        "share_repurchases": ["share repurchases", "stock repurchases", "treasury stock"],
+    }
+    values = list(mapping.get(slot_name, []))
+    if line_item:
+        values.insert(0, line_item)
+    if not values:
+        values.append(slot_name.replace("_", " "))
+    return _ordered_unique(values)
 
 
 def _yoy_growth_line_item(question: str) -> str | None:
@@ -1610,6 +1986,10 @@ def _slot_name_for_line_item(line_item: str) -> str:
     if normalized in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}:
         return "property_plant_and_equipment_net"
     return normalized.replace(" ", "_").replace("-", "_")
+
+
+def _normalized_question(question: str) -> str:
+    return " ".join(str(question or "").lower().replace("&", " and ").replace("-", " ").split())
 
 
 def _ordered_unique(items: list[str]) -> list[str]:
