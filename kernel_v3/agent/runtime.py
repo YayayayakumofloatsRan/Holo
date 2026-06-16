@@ -14143,6 +14143,10 @@ def _report_with_finance_fact_context(
     if competing_clusters:
         diagnostics["finance_competing_fact_clusters"] = competing_clusters
         diagnostics["finance_competing_fact_cluster_policy"] = _finance_competing_fact_cluster_policy()
+    metric_intent_hints = _finance_metric_intent_hints_for_model(facts[:FINANCE_SLOT_BIND_FACT_LIMIT])
+    if metric_intent_hints:
+        diagnostics["finance_metric_intent_hints"] = metric_intent_hints
+        diagnostics["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
         "host_role": "expose raw candidate facts, concepts, labels, periods, provenance, and verification only",
@@ -14296,6 +14300,10 @@ def _compact_finance_synthesis_rescue_packet(
     if competing_clusters:
         diagnostics["finance_competing_fact_clusters"] = competing_clusters
         diagnostics["finance_competing_fact_cluster_policy"] = _finance_competing_fact_cluster_policy()
+    metric_intent_hints = _finance_metric_intent_hints_for_model(facts[:64])
+    if metric_intent_hints:
+        diagnostics["finance_metric_intent_hints"] = metric_intent_hints
+        diagnostics["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
         "host_role": "expose compact raw candidate facts; the model chooses the answer",
@@ -15557,6 +15565,7 @@ FINANCE_SLOT_BIND_CONTRACT = (
     "Inspect raw SEC fields such as period, fiscal_year, form, fp, start, end, frame, accn, concept, label, and source_uri yourself. "
     "Treat extracted metric, period, and scale labels as noisy hints, not authority: inspect raw_fields.raw/context/row_marker/label/concept/source metadata and bind an imperfectly labeled fact when those raw fields clearly answer the slot. "
     "If slot_bind_packet.competing_fact_clusters is present, treat it as a host-built attention index only: candidate order is source order, not semantic ranking, and you must decide from raw fields yourself. "
+    "If slot_bind_packet.finance_metric_intent_hints is present, treat it as weak retrieval/extraction diagnostics only: it may help notice candidate line-item matches or demotions, but it is not a host-selected answer and never overrides raw_fields, citations, or your semantic judgment. "
     "If raw_fields include target_document_binding hints, treat them as provenance hints only; still inspect raw/context before selecting a fact_id. "
     "When the task names a specific target filing or source document, compare raw_fields.accn, filed, form, source_uri, target_document_binding_accepted, and target_document_binding_score. "
     "For competing facts with the same company, fiscal year, metric, and period, a fact from the target filing accession or with target_document_binding_accepted=true is usually the better candidate than a later-filed restatement or spin-off-era filing; "
@@ -15726,14 +15735,15 @@ def _finance_slot_bind_packet(
     facts: list[FinanceFact],
     compiled_program: JsonObject,
 ) -> JsonObject:
-    return {
+    visible_facts = facts[:FINANCE_SLOT_BIND_FACT_LIMIT]
+    packet: JsonObject = {
         "schema": "holo.kernel_v3.finance_slot_bind_input.v1",
         "raw_fact_count": len(facts),
         "raw_facts": [
             _raw_fact_summary_for_slot_bind(fact)
-            for fact in facts[:FINANCE_SLOT_BIND_FACT_LIMIT]
+            for fact in visible_facts
         ],
-        "competing_fact_clusters": _finance_competing_fact_clusters_for_model(facts[:FINANCE_SLOT_BIND_FACT_LIMIT]),
+        "competing_fact_clusters": _finance_competing_fact_clusters_for_model(visible_facts),
         "question": question,
         "slot_requirements": _slot_requirements_for_slot_bind(compiled_program),
         "compiled_program": _compact_compiled_program_for_slot_bind(compiled_program),
@@ -15746,6 +15756,11 @@ def _finance_slot_bind_packet(
             },
         },
     }
+    metric_intent_hints = _finance_metric_intent_hints_for_model(visible_facts)
+    if metric_intent_hints:
+        packet["finance_metric_intent_hints"] = metric_intent_hints
+        packet["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
+    return packet
 
 
 def _finance_competing_fact_cluster_policy() -> JsonObject:
@@ -15758,6 +15773,74 @@ def _finance_competing_fact_cluster_policy() -> JsonObject:
             "The cluster does not select, rank, or validate a value; inspect each candidate's raw label, SEC concept, statement, "
             "form, fiscal period fields, source URI, evidence ref, and citation ref before making the line-item or period judgment."
         ),
+    }
+
+
+def _finance_metric_intent_hint_policy() -> JsonObject:
+    return {
+        "semantic_decision_owner": "model",
+        "host_role": "weak_attention_hint_carrier_only",
+        "candidate_ordering": "source_order_from_raw_facts",
+        "instruction": (
+            "Use finance_metric_intent_hints only as retrieval/extraction diagnostics for noticing likely line-item matches "
+            "or demoted candidates. They do not rank, select, validate, or replace facts. Make the final binding from raw "
+            "concepts, labels, statements, periods, source text, citations, FormulaTrace support, and the question wording."
+        ),
+    }
+
+
+def _finance_metric_intent_hints_for_model(facts: list[FinanceFact], *, limit: int = 48) -> list[JsonObject]:
+    result: list[JsonObject] = []
+    for fact in facts:
+        metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+        intent = metadata.get("finance_metric_intent") if isinstance(metadata.get("finance_metric_intent"), dict) else {}
+        if not intent:
+            continue
+        hint = _finance_metric_intent_hint_for_fact(fact, intent)
+        if not hint:
+            continue
+        result.append(hint)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _finance_metric_intent_hint_for_fact(fact: FinanceFact, intent: JsonObject) -> JsonObject:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    score = intent.get("score")
+    has_score = isinstance(score, (int, float)) and not isinstance(score, bool)
+    matched_preferred = _string_list(intent.get("matched_preferred"))[:8]
+    matched_demoted = _string_list(intent.get("matched_demoted"))[:8]
+    metric_family = str(intent.get("metric_family") or "").strip()
+    if not has_score and not matched_preferred and not matched_demoted and not metric_family:
+        return {}
+    raw_label = ""
+    for key in ("label", "line_item", "concept", "raw_metric", "row_marker", "target_line_item"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            raw_label = value
+            break
+    hint: JsonObject = {
+        "fact_id": _text_preview(fact.fact_id, limit=120),
+        "metric": _text_preview(fact.metric, limit=160),
+        "value": _text_preview(fact.value, limit=120),
+        "unit": _text_preview(fact.unit, limit=80),
+        "fiscal_year": fact.fiscal_year,
+        "citation_ref": _text_preview(fact.citation_ref, limit=120),
+        "raw_label": _text_preview(raw_label, limit=180),
+        "target_line_item": _text_preview(metadata.get("target_line_item"), limit=120),
+        "intent": {
+            "active": intent.get("active") if isinstance(intent.get("active"), bool) else None,
+            "metric_family": _text_preview(metric_family, limit=80),
+            "score": score if has_score else None,
+            "matched_preferred": matched_preferred,
+            "matched_demoted": matched_demoted,
+        },
+    }
+    return {
+        key: value
+        for key, value in hint.items()
+        if value not in (None, "", [], {})
     }
 
 

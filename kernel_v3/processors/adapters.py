@@ -856,6 +856,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
     finance_fact_ledger = diagnostics.get("finance_fact_ledger")
     finance_competing_fact_clusters = diagnostics.get("finance_competing_fact_clusters")
     finance_numeric_repair_context = diagnostics.get("finance_numeric_repair_context")
+    finance_metric_intent_hints = diagnostics.get("finance_metric_intent_hints")
     return {
         "report_id": report.report_id,
         "goal_id": report.goal_id,
@@ -905,6 +906,8 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             "finance_metric_disambiguation": _json_object(diagnostics.get("finance_metric_disambiguation")),
             "finance_competing_fact_clusters": _compact_list_for_provider(finance_competing_fact_clusters, limit=16),
             "finance_competing_fact_cluster_policy": _json_object(diagnostics.get("finance_competing_fact_cluster_policy")),
+            "finance_metric_intent_hints": _compact_list_for_provider(finance_metric_intent_hints, limit=32),
+            "finance_metric_intent_hint_policy": _json_object(diagnostics.get("finance_metric_intent_hint_policy")),
             "finance_slot_bind_state": _compact_prompt_value(finance_slot_bind_state),
             "finance_slot_bind_basis_policy": _json_object(diagnostics.get("finance_slot_bind_basis_policy")),
             "finance_numeric_repair_context": _compact_finance_numeric_repair_context_for_provider(

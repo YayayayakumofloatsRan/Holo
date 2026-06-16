@@ -389,6 +389,33 @@ def test_compact_finance_synthesis_rescue_packet_exposes_competing_fact_clusters
             ),
         ),
     ]
+    evidence[0].diagnostics.update(
+        {
+            "span_metadata": {
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 2.5,
+                    "matched_preferred": ["metric=revenue"],
+                    "matched_demoted": [],
+                }
+            }
+        }
+    )
+    evidence[1].diagnostics.update(
+        {
+            "span_metadata": {
+                "target_line_item": "total revenues",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 13.5,
+                    "matched_preferred": ["metric=sales and other operating revenues"],
+                    "matched_demoted": [],
+                },
+            }
+        }
+    )
     citations = [_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence]
     report = _retrieval_report(evidence=evidence, citations=citations)
     recipe = task_recipe(
@@ -1048,6 +1075,33 @@ def test_finance_fact_context_exposes_competing_clusters_to_synthesizer_prompt()
             ),
         ),
     ]
+    evidence[0].diagnostics.update(
+        {
+            "span_metadata": {
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 2.5,
+                    "matched_preferred": ["metric=revenue"],
+                    "matched_demoted": [],
+                }
+            }
+        }
+    )
+    evidence[1].diagnostics.update(
+        {
+            "span_metadata": {
+                "target_line_item": "total revenues",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 13.5,
+                    "matched_preferred": ["metric=sales and other operating revenues"],
+                    "matched_demoted": [],
+                },
+            }
+        }
+    )
     citations = [_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence]
     report = _report_with_finance_fact_context(
         _retrieval_report(evidence=evidence, citations=citations),
@@ -1063,6 +1117,7 @@ def test_finance_fact_context_exposes_competing_clusters_to_synthesizer_prompt()
     diagnostics = prompt_payload["retrieval_report"]["diagnostics"]
     clusters = diagnostics["finance_competing_fact_clusters"]
     policy = diagnostics["finance_competing_fact_cluster_policy"]
+    metric_hints = diagnostics["finance_metric_intent_hints"]
 
     assert clusters
     assert policy["semantic_decision_owner"] == "model"
@@ -1070,6 +1125,11 @@ def test_finance_fact_context_exposes_competing_clusters_to_synthesizer_prompt()
     assert clusters[0]["host_role"] == "attention_grouping_only_no_semantic_preference"
     assert clusters[0]["candidate_ordering"] == "source_order_from_raw_facts"
     assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
+    assert diagnostics["finance_metric_intent_hint_policy"]["semantic_decision_owner"] == "model"
+    assert diagnostics["finance_metric_intent_hint_policy"]["host_role"] == "weak_attention_hint_carrier_only"
+    assert [item["value"] for item in metric_hints] == ["202792000000", "193414000000"]
+    assert metric_hints[1]["target_line_item"] == "total revenues"
+    assert metric_hints[1]["intent"]["matched_preferred"] == ["metric=sales and other operating revenues"]
     assert any("not a host ranking" in item for item in prompt_payload["answer_requirements"])
 
 
@@ -9455,6 +9515,7 @@ def test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels() ->
 
     assert prompt.index('"contract"') < prompt.index('"slot_bind_packet"')
     assert "metric, period, and scale labels as noisy hints" in payload["contract"]
+    assert "finance_metric_intent_hints" in payload["contract"]
     assert "identity formula_request" in payload["contract"]
     assert "cash-flow outflows shown in parentheses" in payload["contract"]
     assert "Do not confuse cash-flow purchases" in payload["contract"]
@@ -9478,6 +9539,12 @@ def test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels() ->
     assert [item["fact_id"] for item in cluster["candidates"]] == ["fact-q", "fact-a"]
     assert cluster["candidates"][0]["raw_fields"]["form"] == "10-Q"
     assert cluster["candidates"][1]["raw_fields"]["form"] == "10-K"
+    metric_hints = payload["slot_bind_packet"]["finance_metric_intent_hints"]
+    assert payload["slot_bind_packet"]["finance_metric_intent_hint_policy"]["semantic_decision_owner"] == "model"
+    assert payload["slot_bind_packet"]["finance_metric_intent_hint_policy"]["host_role"] == "weak_attention_hint_carrier_only"
+    assert payload["slot_bind_packet"]["finance_metric_intent_hint_policy"]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert metric_hints[0]["fact_id"] == "fact-q"
+    assert metric_hints[0]["intent"]["score"] == 99
     assert raw_fact["raw_fields"]["form"] == "10-Q"
     assert raw_fact["raw_fields"]["fp"] == "Q2"
     assert raw_fact["raw_fields"]["duration_days"] == 90
@@ -9496,6 +9563,45 @@ def test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels() ->
     assert "period_scope" not in json.dumps(raw_fact, ensure_ascii=False)
     assert "finance_metric_intent" not in json.dumps(raw_fact, ensure_ascii=False)
     assert "finance_question_period_scope" not in json.dumps(raw_fact, ensure_ascii=False)
+
+
+def test_finance_fact_ledger_carries_span_metric_intent_as_diagnostic_metadata() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-sales-other",
+            text=(
+                "entityName=Chevron Corp ticker=CVX fy=2024 period=annual "
+                "metric=sales and other operating revenues concept=SalesAndOtherOperatingRevenue "
+                "value=193414000000 unit=USD"
+            ),
+            title="Chevron 2024 SEC companyfacts",
+        )
+    ]
+    evidence[0].diagnostics.update(
+        {
+            "span_metadata": {
+                "target_line_item": "total revenues",
+                "target_slot": "revenue",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 13.5,
+                    "matched_preferred": ["metric=sales and other operating revenues"],
+                    "matched_demoted": [],
+                },
+            }
+        }
+    )
+    citations = [_finance_citation(evidence[0], citation_id="cite-sales-other")]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+
+    assert facts
+    fact = facts[0]
+    assert fact.metadata["target_line_item"] == "total revenues"
+    assert fact.metadata["target_slot"] == "revenue"
+    assert fact.metadata["finance_metric_intent"]["metric_family"] == "revenue"
+    assert fact.metadata["finance_metric_intent"]["matched_preferred"] == ["metric=sales and other operating revenues"]
 
 
 def test_model_compiled_program_authorizes_numeric_preflight_for_direct_filing_lookup() -> None:

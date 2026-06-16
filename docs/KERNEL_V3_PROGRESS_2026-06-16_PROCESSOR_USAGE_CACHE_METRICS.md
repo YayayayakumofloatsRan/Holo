@@ -3357,3 +3357,61 @@ numeric judge 决定需要 synthesis repair 时，真正负责重写答案的 co
 4 passed in 0.29s
 py_compile passed
 ```
+
+---
+
+## 54. 追加落地：Metric Intent Diagnostics into Slot Binding and Synthesis
+
+FinAgent / FinanceBench / public finance questions still expose a recurring
+generalization gap: broad revenue-style questions often contain several
+source-backed candidates, such as generic `Revenues`, `net revenues`,
+`sales and other operating revenues`, `total revenues and other income`, or
+segment revenue. Holo already had retrieval-time `finance_metric_intent`
+diagnostics, but those diagnostics were not consistently available to the LLM
+that performs finance slot binding or final synthesis.
+
+本节把这些诊断变成模型可见的 weak hints，而不是 host 规则：
+
+- `build_finance_fact_ledger()` now carries selected evidence/span diagnostics
+  into `FinanceFact.metadata`:
+  - `finance_metric_intent`
+  - `target_line_item`
+  - `target_slot`
+  - `target_period`
+  - `target_statement`
+- `_evidence_has_target_line_item()` also checks `diagnostics.span_metadata`,
+  so target-bound span metadata can activate table-row extraction;
+- `_finance_slot_bind_packet()` now includes independent
+  `finance_metric_intent_hints` and `finance_metric_intent_hint_policy`;
+- `_report_with_finance_fact_context()` and
+  `_compact_finance_synthesis_rescue_packet()` carry the same hints into
+  synthesizer diagnostics;
+- `_compact_retrieval_report_for_provider()` preserves the hints and policy.
+
+边界：
+
+- `raw_facts` still do not include `finance_metric_intent`; raw facts stay close
+  to source/provenance fields;
+- hints preserve source-order candidate ordering and are explicitly labeled
+  `host_role=weak_attention_hint_carrier_only`;
+- host does not select, rank, validate, or replace a fact using these hints;
+- `finance.slot_bind` and final synthesis must still inspect raw SEC concepts,
+  labels, statements, periods, source text, citations, and FormulaTrace support.
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels tests/test_kernel_v3_finance_engine.py::test_finance_fact_ledger_carries_span_metric_intent_as_diagnostic_metadata tests/test_kernel_v3_finance_metric_intent.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_fact_context_exposes_competing_clusters_to_synthesizer_prompt tests/test_kernel_v3_finance_engine.py::test_compact_finance_synthesis_rescue_packet_exposes_competing_fact_clusters tests/test_kernel_v3_finance_engine.py::test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels tests/test_kernel_v3_finance_engine.py::test_finance_fact_ledger_carries_span_metric_intent_as_diagnostic_metadata -q
+.venv/bin/python -m py_compile kernel_v3/finance/fact_ledger.py kernel_v3/agent/runtime.py kernel_v3/processors/adapters.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+9 passed in 1.06s
+4 passed in 1.07s
+py_compile passed
+318 passed in 3.31s
+```

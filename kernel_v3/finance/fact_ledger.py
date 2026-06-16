@@ -458,6 +458,7 @@ def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: Citatio
                     "source_uri": item.uri,
                     "source_title": item.title,
                     "supported_metric": metric in SUPPORTED_FINANCE_METRICS,
+                    **_evidence_fact_diagnostics(item),
                     "per_share": _context_indicates_per_share(
                         context,
                         amount_offset=match.start() - start,
@@ -471,11 +472,32 @@ def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: Citatio
 
 def _evidence_has_target_line_item(item: EvidenceItem) -> bool:
     diagnostics = item.diagnostics if isinstance(item.diagnostics, dict) else {}
+    span_metadata = diagnostics.get("span_metadata") if isinstance(diagnostics.get("span_metadata"), dict) else {}
     return bool(
         diagnostics.get("target_slot")
         or diagnostics.get("target_line_item")
+        or span_metadata.get("target_slot")
+        or span_metadata.get("target_line_item")
         or isinstance(diagnostics.get("target_document_binding"), dict)
+        or isinstance(span_metadata.get("target_document_binding"), dict)
     )
+
+
+def _evidence_fact_diagnostics(item: EvidenceItem) -> JsonObject:
+    diagnostics = item.diagnostics if isinstance(item.diagnostics, dict) else {}
+    span_metadata = diagnostics.get("span_metadata") if isinstance(diagnostics.get("span_metadata"), dict) else {}
+    result: JsonObject = {}
+    for key in (
+        "finance_metric_intent",
+        "target_line_item",
+        "target_slot",
+        "target_period",
+        "target_statement",
+    ):
+        value = span_metadata.get(key) if key in span_metadata else diagnostics.get(key)
+        if value not in (None, "", [], {}):
+            result[key] = value
+    return result
 
 
 def _natural_table_row_extraction_enabled(*, item: EvidenceItem, text: str) -> bool:
@@ -557,6 +579,7 @@ def _natural_table_row_facts_from_text(
                                 "source_uri": item.uri,
                                 "source_title": item.title,
                                 "supported_metric": True,
+                                **_evidence_fact_diagnostics(item),
                                 "per_share": False,
                             },
                         )
@@ -706,6 +729,7 @@ def _fact_from_values(
         "supported_metric": metric in SUPPORTED_FINANCE_METRICS,
         "source_uri": item.uri,
         "source_title": item.title,
+        **_evidence_fact_diagnostics(item),
     }
     metadata = {key: item for key, item in metadata.items() if item not in (None, "")}
     return FinanceFact(
