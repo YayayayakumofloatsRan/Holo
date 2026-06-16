@@ -14441,23 +14441,25 @@ def _finance_formula_trace_support_index(traces: list[FormulaTrace], facts_or_su
                     },
                 }
             )
-        result.append(
-            {
-                "formula_id": trace.formula_id,
-                "formula_name": trace.formula_name,
-                "result_value": trace.result_value,
-                "unit": trace.unit,
-                "formatted_value": diagnostics.get("formatted_value"),
-                "source": diagnostics.get("source"),
-                "method": diagnostics.get("method"),
-                "output_attribute": diagnostics.get("output_attribute"),
-                "input_fact_ids": list(trace.input_fact_ids or [])[:24],
-                "input_facts": linked_facts,
-                "evidence_refs": _ordered_unique(evidence_refs),
-                "citation_refs": _ordered_unique(citation_refs),
-                "support_status": "linked_to_fact_ledger" if linked_facts else "trace_only",
-            }
-        )
+        support = {
+            "formula_id": trace.formula_id,
+            "formula_name": trace.formula_name,
+            "result_value": trace.result_value,
+            "unit": trace.unit,
+            "formatted_value": diagnostics.get("formatted_value"),
+            "source": diagnostics.get("source"),
+            "method": diagnostics.get("method"),
+            "output_attribute": diagnostics.get("output_attribute"),
+            "input_fact_ids": list(trace.input_fact_ids or [])[:24],
+            "input_facts": linked_facts,
+            "evidence_refs": _ordered_unique(evidence_refs),
+            "citation_refs": _ordered_unique(citation_refs),
+            "support_status": "linked_to_fact_ledger" if linked_facts else "trace_only",
+        }
+        model_context = _compact_formula_trace_model_context(trace)
+        if model_context:
+            support["model_context"] = model_context
+        result.append(support)
     return result
 
 
@@ -14679,7 +14681,31 @@ def _finance_formula_trace_synthesis_policy(traces: list[FormulaTrace]) -> JsonO
         return {}
     labels = [_finance_formula_trace_label(trace) for trace in traces]
     is_capital_intensity = any(_finance_trace_label_is_capital_intensity(label) for label in labels)
+    model_contexts = [
+        context
+        for trace in traces[:12]
+        if (context := _compact_formula_trace_model_context(trace))
+    ]
     if not is_capital_intensity:
+        if model_contexts:
+            return {
+                "semantic_decision_owner": "model",
+                "host_role": "surface calculator traces, model outputs, and explicit assumptions; do not choose the answer",
+                "task_family": "finance_modeling_or_derived_metric",
+                "model_trace_context": model_contexts[:8],
+                "assumption_labeling_instruction": (
+                    "If a FormulaTrace carries assumptions or defaulted_assumptions, label those values as modeling assumptions in the final answer. "
+                    "Assumptions are not filing facts."
+                ),
+                "supported_model_output_policy": (
+                    "Use model_outputs only when they are present in FormulaTrace diagnostics. Do not invent valuation outputs, bridge values, "
+                    "growth rates, discount rates, exit multiples, or other model drivers that are absent from the provided traces."
+                ),
+                "unsupported_comparison_number_policy": (
+                    "Do not introduce generic industry thresholds, comparison cutoffs, multiples, or benchmark percentages unless those "
+                    "numbers are explicitly present in provided facts, evidence, citations, or FormulaTrace values."
+                ),
+            }
         return {}
     lenses: list[str] = []
     for label in labels:
@@ -14741,6 +14767,12 @@ def _finance_formula_trace_synthesis_policy(traces: list[FormulaTrace]) -> JsonO
             "Avoid unsupported comparison numbers; the model should make the finance judgment from the supported lenses."
         ),
     }
+    if model_contexts:
+        policy["model_trace_context"] = model_contexts[:8]
+        policy["assumption_labeling_instruction"] = (
+            "If any supported capital-intensity trace contains explicit assumptions or defaulted_assumptions, label them as assumptions; "
+            "do not present them as filing facts."
+        )
     if "return_on_assets" in policy["available_lenses"]:
         policy["roa_preservation_instruction"] = (
             "A supported ROA/return-on-assets FormulaTrace is available. Include it as a supporting capital-intensity lens "
@@ -16503,6 +16535,7 @@ FINANCE_NUMERIC_JUDGE_CONTRACT = (
     "If judge_packet.competing_fact_clusters is present, treat it as host-built attention grouping only: candidate order is source order, not semantic ranking, and you must inspect raw fields yourself. "
     "If judge_packet.metric_intent_hints is present, treat it as weak retrieval/extraction diagnostics only: it may help notice line-item matches or demotions, but it is not host answer selection. "
     "Use formula_trace_support to connect FormulaTrace outputs to their input facts, evidence refs, and citation refs when deciding whether a numeric claim is supported. "
+    "If FormulaTrace model_context is present, treat model_outputs as calculator-supported derived values and assumptions/defaulted_assumptions as explicit modeling assumptions that must be labeled in the final answer. "
     "Do not invent facts, citations, formulas, values, source ids, or unsupported calculations. "
     "If supported facts or formula traces are enough to answer, return repair_answer with a concrete repair_instruction instead of requiring more work. "
     "If more work is required, name exact missing slots and the next tool action. "
@@ -16807,10 +16840,90 @@ def _compact_primary_source_binding_for_judge(value: JsonObject) -> JsonObject:
     }
 
 
+def _compact_formula_trace_model_context(trace: FormulaTrace) -> JsonObject:
+    diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+    context: JsonObject = {}
+    for key in ("modeling_workflow", "assumption_source"):
+        value = diagnostics.get(key)
+        if value not in (None, "", [], {}):
+            context[key] = _text_preview(value, limit=160) if isinstance(value, str) else value
+    assumptions = diagnostics.get("assumptions")
+    if isinstance(assumptions, dict) and assumptions:
+        compact_assumptions = _compact_formula_trace_context_value(assumptions, depth=0, key_hint="assumptions")
+        if compact_assumptions not in (None, "", [], {}):
+            context["assumptions"] = compact_assumptions
+    defaulted = _string_list(diagnostics.get("defaulted_assumptions"))
+    if defaulted:
+        context["defaulted_assumptions"] = defaulted[:16]
+    model_outputs = diagnostics.get("model_outputs")
+    if isinstance(model_outputs, dict) and model_outputs:
+        compact_outputs = _compact_formula_trace_model_outputs(model_outputs)
+        if compact_outputs:
+            context["model_outputs"] = compact_outputs
+    return context
+
+
+def _compact_formula_trace_model_outputs(model_outputs: JsonObject) -> JsonObject:
+    compact: JsonObject = {}
+    for key, value in list(model_outputs.items())[:32]:
+        key_text = str(key)
+        if key_text == "projection" and isinstance(value, list):
+            compact["projection_summary"] = _compact_formula_trace_projection(value)
+            continue
+        item = _compact_formula_trace_context_value(value, depth=0, key_hint=key_text)
+        if item not in (None, "", [], {}):
+            compact[key_text] = item
+    return compact
+
+
+def _compact_formula_trace_projection(rows: list[object]) -> JsonObject:
+    first_rows = [
+        _compact_formula_trace_context_value(row, depth=0, key_hint="projection_row")
+        for row in rows[:3]
+    ]
+    last_row = (
+        _compact_formula_trace_context_value(rows[-1], depth=0, key_hint="projection_row")
+        if len(rows) > 3
+        else None
+    )
+    result: JsonObject = {"row_count": len(rows), "first_rows": [row for row in first_rows if row not in (None, "", [], {})]}
+    if last_row not in (None, "", [], {}):
+        result["last_row"] = last_row
+    return result
+
+
+def _compact_formula_trace_context_value(value: object, *, depth: int, key_hint: str) -> object:
+    if depth >= 3:
+        return _text_preview(value, limit=160) if isinstance(value, str) else value
+    if isinstance(value, dict):
+        result: JsonObject = {}
+        for key, item in list(value.items())[:24]:
+            compact = _compact_formula_trace_context_value(item, depth=depth + 1, key_hint=str(key))
+            if compact not in (None, "", [], {}):
+                result[str(key)] = compact
+        return result
+    if isinstance(value, list):
+        return [
+            item
+            for item in (
+                _compact_formula_trace_context_value(raw, depth=depth + 1, key_hint=key_hint)
+                for raw in value[:8]
+            )
+            if item not in (None, "", [], {})
+        ]
+    if isinstance(value, str):
+        return _text_preview(value, limit=180)
+    if isinstance(value, Decimal):
+        return _decimal_string_runtime(value)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return _text_preview(value, limit=160)
+
+
 def _compact_formula_trace_for_judge(trace: FormulaTrace) -> JsonObject:
     data = trace.to_dict()
     diagnostics = _json_object(data.get("diagnostics"))
-    return {
+    result = {
         "formula_id": data.get("formula_id"),
         "formula_name": data.get("formula_name"),
         "expression": _text_preview(data.get("expression"), limit=240),
@@ -16824,6 +16937,10 @@ def _compact_formula_trace_for_judge(trace: FormulaTrace) -> JsonObject:
             if diagnostics.get(key) is not None
         },
     }
+    model_context = _compact_formula_trace_model_context(trace)
+    if model_context:
+        result["model_context"] = model_context
+    return result
 
 
 def _rank_finance_facts_for_model(facts: list[FinanceFact], *, question: str = "") -> list[FinanceFact]:

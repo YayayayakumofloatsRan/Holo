@@ -183,6 +183,50 @@ def test_finance_formula_trace_policy_preserves_capital_intensity_roa() -> None:
     assert "generic industry thresholds" in policy["unsupported_comparison_number_policy"]
 
 
+def test_finance_formula_trace_policy_labels_model_outputs_and_assumptions() -> None:
+    trace = FormulaTrace(
+        formula_id="formula-dcf-crm",
+        formula_name="dcf",
+        expression="discounted projected free cash flow plus terminal value",
+        input_fact_ids=["finfact-ocf", "finfact-capex"],
+        result_value="123000000000",
+        unit="USD",
+        diagnostics={
+            "source": "finance_slot_bind_model",
+            "modeling_workflow": "discounted_cash_flow",
+            "assumption_source": "question_or_host_modeling_policy",
+            "assumptions": {
+                "growth_rate": "0.04",
+                "discount_rate": "0.09",
+                "terminal_growth_rate": "0.02",
+                "forecast_years": 5,
+            },
+            "defaulted_assumptions": ["terminal_growth_rate"],
+            "model_outputs": {
+                "enterprise_value": "123000000000",
+                "equity_value": "114000000000",
+                "projection": [
+                    {"year": 1, "free_cash_flow": "9900000000"},
+                    {"year": 2, "free_cash_flow": "10296000000"},
+                    {"year": 3, "free_cash_flow": "10707840000"},
+                    {"year": 4, "free_cash_flow": "11136153600"},
+                ],
+            },
+        },
+    )
+
+    policy = _finance_formula_trace_synthesis_policy([trace])
+    model_context = policy["model_trace_context"][0]
+
+    assert policy["task_family"] == "finance_modeling_or_derived_metric"
+    assert "assumptions are not filing facts" in policy["assumption_labeling_instruction"].lower()
+    assert model_context["assumptions"]["discount_rate"] == "0.09"
+    assert model_context["defaulted_assumptions"] == ["terminal_growth_rate"]
+    assert model_context["model_outputs"]["enterprise_value"] == "123000000000"
+    assert model_context["model_outputs"]["projection_summary"]["row_count"] == 4
+    assert model_context["model_outputs"]["projection_summary"]["last_row"]["year"] == 4
+
+
 def test_finance_formula_trace_support_links_traces_to_fact_citations_in_synthesizer_prompt() -> None:
     journal = JournalStore.in_memory()
     trace = FormulaTrace(
@@ -288,6 +332,8 @@ def test_finance_formula_trace_support_links_traces_to_fact_citations_in_synthes
     assert diagnostics["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY2022"
     assert diagnostics["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "capital expenditures"
     assert diagnostics["finance_slot_bind_basis_policy"]["semantic_decision_owner"] == "model"
+    assert diagnostics["finance_formula_trace_synthesis_policy"]["task_family"] == "capital_intensity_assessment"
+    assert "capex_to_revenue" in diagnostics["finance_formula_trace_synthesis_policy"]["available_lenses"]
 
 
 def test_compact_finance_synthesis_rescue_packet_exposes_formula_trace_support() -> None:
@@ -9529,6 +9575,86 @@ def test_finance_numeric_judge_prompt_preserves_capital_intensity_roa_trace_cont
     assert support["support_status"] == "linked_to_fact_ledger"
     assert support["citation_refs"] == ["cite-finfact-net-income", "cite-finfact-assets"]
     assert [item["fact_id"] for item in support["input_facts"]] == ["finfact-net-income", "finfact-assets"]
+
+
+def test_finance_numeric_judge_prompt_exposes_model_trace_context_for_assumption_judgment() -> None:
+    question = (
+        "Using a discounted cash flow analysis for CRM, forecast 5 years, cash flow growth 4%, "
+        "discount rate 9%, and terminal growth 2%."
+    )
+    trace = FormulaTrace(
+        formula_id="formula-dcf-crm",
+        formula_name="dcf",
+        expression="discounted projected free cash flow plus terminal value",
+        input_fact_ids=["finfact-ocf", "finfact-capex"],
+        result_value="123000000000",
+        unit="USD",
+        diagnostics={
+            "source": "finance_slot_bind_model",
+            "formatted_value": "$123.0 billion",
+            "modeling_workflow": "discounted_cash_flow",
+            "assumption_source": "question_or_host_modeling_policy",
+            "assumptions": {
+                "growth_rate": "0.04",
+                "discount_rate": "0.09",
+                "terminal_growth_rate": "0.02",
+                "forecast_years": 5,
+            },
+            "defaulted_assumptions": ["terminal_growth_rate"],
+            "model_outputs": {
+                "enterprise_value": "123000000000",
+                "equity_value": "114000000000",
+                "projection": [
+                    {"year": 1, "free_cash_flow": "9900000000"},
+                    {"year": 2, "free_cash_flow": "10296000000"},
+                    {"year": 3, "free_cash_flow": "10707840000"},
+                    {"year": 4, "free_cash_flow": "11136153600"},
+                ],
+            },
+        },
+    )
+    final = FinalAnswer(
+        answer="CRM DCF enterprise value is $123.0 billion.",
+        citation_refs=[],
+        used_evidence=[],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-dcf",
+        run_id="run-judge-dcf",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(
+        answer=final.answer,
+        facts=[],
+        formula_traces=[trace],
+        question=question,
+    )
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=[],
+        formula_traces=[trace],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    payload = json.loads(prompt)
+    packet = payload["judge_packet"]
+    compact_trace = packet["formula_traces"][0]
+    support = packet["formula_trace_support"][0]
+
+    assert packet["formula_trace_synthesis_policy"]["task_family"] == "finance_modeling_or_derived_metric"
+    assert "model_context" in compact_trace
+    assert compact_trace["model_context"]["assumptions"]["growth_rate"] == "0.04"
+    assert compact_trace["model_context"]["defaulted_assumptions"] == ["terminal_growth_rate"]
+    assert compact_trace["model_context"]["model_outputs"]["enterprise_value"] == "123000000000"
+    assert compact_trace["model_context"]["model_outputs"]["projection_summary"]["row_count"] == 4
+    assert support["support_status"] == "trace_only"
+    assert support["model_context"]["model_outputs"]["equity_value"] == "114000000000"
+    assert "model_context" in payload["contract"]
 
 
 def test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels() -> None:

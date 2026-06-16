@@ -2242,6 +2242,14 @@ SEC source expansion is intentionally scoped to SEC/EDGAR/10-K/10-Q style
 queries, so generic "annual report" language for ASX/HKEX/SGX issuers does not
 silently route to EDGAR.
 
+Recent finance modeling hardening also carries FormulaTrace model context all
+the way to final synthesis and numeric judgment. DCF/LBO-style traces now expose
+compact `assumptions`, `defaulted_assumptions`, `model_outputs`, and projection
+summaries to the LLM judge and synthesizer, while the host policy states that
+assumptions are not filing facts and unsupported model drivers or comparison
+thresholds must not be invented. This improves general modeling-task repair
+without adding answer tables or host-side semantic selection.
+
 ## Validation
 
 Default validation should stay offline:

@@ -320,6 +320,7 @@ def _synthesizer_prompt(
             "For finance research, distinguish facts, source-backed metrics, analysis, risks, and limitations; do not rely on generic product or encyclopedia pages as if they were financial statements.",
             "For finance calculations, if retrieval_report.diagnostics.finance_formula_traces is present, use those host calculator results as authoritative computed values and do not recompute them mentally.",
             "For finance calculations, if retrieval_report.diagnostics.finance_formula_trace_support is present, use it to connect FormulaTrace results to input facts, evidence refs, and citation refs.",
+            "For finance modeling traces, if retrieval_report.diagnostics.finance_formula_trace_synthesis_policy is present, follow its model-output and assumption-labeling policy; assumptions are not filing facts.",
             "For finance calculations, if retrieval_report.diagnostics.finance_slot_bind_state is present, use its period_basis and line_item_basis as prior model-owned binding rationale; preserve it when still supported, or explicitly revise it when later evidence conflicts.",
             "For finance answers, if retrieval_report.diagnostics.finance_competing_fact_clusters is present, treat it only as an attention index over raw facts that share entity, period, and broad metric hints; it is not a host ranking or selected answer.",
             "For finance answers, every material numeric claim must be supported by retrieval_report.diagnostics.finance_formula_traces, finance fact or claim ledger evidence, or an explicit assumption label. Omit unsupported numbers or move them into limitations; do not invent bridging figures, multiples, growth rates, margins, or dates.",
@@ -852,6 +853,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
     host_situation = _json_object(diagnostics.get("host_situation"))
     finance_formula_traces = diagnostics.get("finance_formula_traces")
     finance_formula_trace_support = diagnostics.get("finance_formula_trace_support")
+    finance_formula_trace_synthesis_policy = diagnostics.get("finance_formula_trace_synthesis_policy")
     finance_slot_bind_state = diagnostics.get("finance_slot_bind_state")
     finance_fact_ledger = diagnostics.get("finance_fact_ledger")
     finance_competing_fact_clusters = diagnostics.get("finance_competing_fact_clusters")
@@ -913,6 +915,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             "finance_numeric_repair_context": _compact_finance_numeric_repair_context_for_provider(
                 finance_numeric_repair_context
             ),
+            "finance_formula_trace_synthesis_policy": _compact_prompt_value(finance_formula_trace_synthesis_policy),
             "finance_formula_traces": _compact_list_for_provider(finance_formula_traces, limit=16),
             "finance_formula_trace_support": _compact_list_for_provider(finance_formula_trace_support, limit=24),
             "finance_fact_ledger": _compact_list_for_provider(finance_fact_ledger, limit=96),

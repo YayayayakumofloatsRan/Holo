@@ -3462,3 +3462,59 @@ py_compile passed
 py_compile passed
 319 passed in 3.59s
 ```
+
+---
+
+## 56. 追加落地：FormulaTrace Model Context for Finance Modeling Tasks
+
+DCF/LBO and other modeling-style finance tasks already write assumptions,
+defaulted assumptions, and derived model outputs into `FormulaTrace`
+diagnostics. The remaining gap was data-plane visibility: the modern
+`finance.numeric_judge` compact trace only carried source/method/output
+metadata, and the synthesizer provider adapter did not forward
+`finance_formula_trace_synthesis_policy`. That made it easier for the final
+model to drop assumption labels, present assumptions as filing facts, or treat
+supported model outputs as unsupported numeric noise.
+
+变更：
+
+- `_compact_formula_trace_model_context()` now compacts FormulaTrace
+  `assumptions`, `defaulted_assumptions`, `assumption_source`,
+  `modeling_workflow`, and `model_outputs`;
+- long projection schedules are summarized as row count, first rows, and last
+  row so prompt/cache cost stays bounded;
+- `_compact_formula_trace_for_judge()` exposes `model_context` to the modern
+  numeric judge packet;
+- `_finance_formula_trace_support_index()` also carries `model_context`, so
+  support rows connect the formula result, facts/citations, and modeling
+  assumptions in one place;
+- `_finance_formula_trace_synthesis_policy()` now emits a generic
+  `finance_modeling_or_derived_metric` policy for non-capital-intensity traces
+  that contain model context;
+- `_compact_retrieval_report_for_provider()` now forwards
+  `finance_formula_trace_synthesis_policy` into the synthesizer prompt.
+
+边界：
+
+- host still does not choose the semantic answer or tune benchmark-specific
+  outputs;
+- `model_outputs` are calculator-supported derived values only when present in
+  FormulaTrace diagnostics;
+- assumptions and defaulted assumptions must be labeled as assumptions, not
+  retrieved filing facts;
+- unsupported thresholds, multiples, rates, and comparison cutoffs remain
+  forbidden unless present in facts, evidence, citations, or FormulaTrace.
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "formula_trace_policy or trace_support or model_trace_context or dcf_model_outputs"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+6 passed, 218 deselected in 0.69s
+321 passed in 3.88s
+```
