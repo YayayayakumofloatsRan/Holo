@@ -965,6 +965,11 @@ def test_phase5_model_planner_prompt_preserves_compact_finance_working_state():
                 "fact_count": 2,
                 "facts": [{"fact_id": "finfact-revenue", "metric": "revenue", "value": "1000"}],
                 "slot_frame": {"task_type": "compute", "missing_slots": ["margin"]},
+                "slot_bind": {
+                    "decision": "ready",
+                    "period_basis": [{"slot_name": "revenue", "selected_period": "FY2024"}],
+                    "line_item_basis": [{"slot_name": "revenue", "selected_line_item": "Revenue"}],
+                },
                 "formula_traces": [{"formula_id": "formula-margin", "result_value": "0.4"}],
                 "formula_trace_support": [{"formula_id": "formula-margin", "citation_refs": ["cite-revenue"]}],
                 "numeric_verification": {
@@ -986,6 +991,8 @@ def test_phase5_model_planner_prompt_preserves_compact_finance_working_state():
     assert finance_state["fact_count"] == 2
     assert finance_state["facts"][0]["metric"] == "revenue"
     assert finance_state["slot_frame"]["missing_slots"] == ["margin"]
+    assert finance_state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert finance_state["slot_bind"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
     assert finance_state["formula_trace_support"][0]["citation_refs"] == ["cite-revenue"]
     assert finance_state["numeric_verification"]["issue_codes"] == ["unsupported_answer_number"]
     assert finance_state["numeric_verification"]["repair_options"] == ["ask synthesis to remove unsupported numbers"]
@@ -1022,6 +1029,11 @@ def test_phase5_model_evaluator_prompt_preserves_compact_finance_working_state()
                 "fact_count": 2,
                 "facts": [{"fact_id": "finfact-revenue", "metric": "revenue", "value": "1000"}],
                 "slot_frame": {"task_type": "compute", "missing_slots": ["margin"]},
+                "slot_bind": {
+                    "decision": "ready",
+                    "period_basis": [{"slot_name": "revenue", "selected_period": "FY2024"}],
+                    "line_item_basis": [{"slot_name": "revenue", "selected_line_item": "Revenue"}],
+                },
                 "formula_traces": [{"formula_id": "formula-margin", "result_value": "0.4"}],
                 "formula_trace_support": [{"formula_id": "formula-margin", "citation_refs": ["cite-revenue"]}],
                 "numeric_verification": {
@@ -1052,6 +1064,8 @@ def test_phase5_model_evaluator_prompt_preserves_compact_finance_working_state()
     assert feedback.status == "continue"
     finance_state = prompt_payload["context"]["state"]["finance_working_state"]
     assert finance_state["fact_count"] == 2
+    assert finance_state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert finance_state["slot_bind"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
     assert finance_state["formula_trace_support"][0]["citation_refs"] == ["cite-revenue"]
     assert finance_state["numeric_verification"]["issue_codes"] == ["unsupported_answer_number"]
     assert finance_state["numeric_verification"]["repair_options"] == ["ask synthesis to remove unsupported numbers"]

@@ -2903,3 +2903,61 @@ py_compile passed
 py_compile passed
 243 passed in 2.46s
 ```
+
+---
+
+## 45. 追加落地：Slot-Bind Basis Enters Finance Working State
+
+上一节让模型在 `finance.slot_bind` 输出 period/line-item basis。本节把这些依据接入
+下一轮 agent loop 可见的 `finance_working_state`，避免模型第一轮做出的绑定依据只
+停留在 journal 和 FormulaTrace diagnostics 中。
+
+问题：
+
+- 多步金融题经常需要先绑定事实，再计算，再验证，再最终合成；
+- 如果第二轮 planner/evaluator 只看到 facts、FormulaTrace、verifier issues，却看不到
+  第一轮模型为什么选择某个 FY / line item，就容易重复检索、误判冲突或在 synthesis 中
+  丢掉 period/line-item 口径；
+- host 仍不能接管语义判断，但可以把模型自己的依据作为工作状态转交给下一轮模型。
+
+变更：
+
+- `_finance_working_state_for_prompt()` 新增 `slot_bind` 子状态：
+  - `status`
+  - `decision`
+  - `accepted_formula_plan_count`
+  - `missing_slots`
+  - `next_action`
+  - `period_basis`
+  - `line_item_basis`
+  - `reason_summary`
+- `presence` 新增 `slot_bind`；
+- 当 slot-bind basis 存在时，`model_attention` 会提示：
+  - 后续模型应显式保留或基于新证据修正该 basis；
+- 只有 `finance_slot_bind` 记录存在时，也可以形成一个 compact finance working state，
+  防止中间轮依据被过滤掉。
+
+边界：
+
+- host 只转存模型生成的 basis；
+- host 不根据 basis 改写 fact selection、formula request 或 final answer；
+- planner/evaluator/synthesizer 仍由模型决定是否保留、修正、继续检索或输出限制；
+- 空状态过滤仍保留，普通非金融 slot/transform 不会污染 prompt。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_working_state_for_prompt_summarizes_facts_traces_and_verifier_without_deciding_answer tests/test_kernel_v3_finance_engine.py::test_finance_working_state_includes_slot_bind_basis_without_fact_ledger tests/test_kernel_v3_finance_engine.py::test_agent_context_compiler_injects_compact_finance_working_state_for_model_planner tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_model_planner_prompt_preserves_compact_finance_working_state tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_model_evaluator_prompt_preserves_compact_finance_working_state -q
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py -q -k "finance_working_state or slot_bind_basis or model_planner_prompt_preserves_compact_finance_working_state or model_evaluator_prompt_preserves_compact_finance_working_state"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+5 passed in 1.03s
+py_compile passed
+11 passed, 258 deselected in 0.45s
+244 passed in 2.63s
+```

@@ -4094,6 +4094,7 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
     ledger_records = [record for record in records if record.kind == "finance_fact_ledger"]
     slot_records = [record for record in records if record.kind == "slot_frame"]
     transform_records = [record for record in records if record.kind == "transform_plan"]
+    slot_bind_records = [record for record in records if record.kind == "finance_slot_bind"]
     verification_payloads = _finance_verification_payloads_for_working_state(records)
 
     latest_ledger = ledger_records[-1].data if ledger_records and isinstance(ledger_records[-1].data, dict) else {}
@@ -4109,6 +4110,7 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
         verification_records=verification_payloads,
         slot_records=slot_records,
         transform_records=transform_records,
+        slot_bind_records=slot_bind_records,
     ):
         return {}
     compact_traces = [_compact_formula_trace_for_judge(trace) for trace in traces[:12]]
@@ -4116,6 +4118,7 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
 
     latest_slot_frame = _compact_slot_frame_state(slot_records[-1].data if slot_records else {})
     latest_transform_plan = _compact_transform_plan_state(transform_records[-1].data if transform_records else {})
+    latest_slot_bind = _compact_finance_slot_bind_state(slot_bind_records[-1].data if slot_bind_records else {})
     latest_verification = _compact_finance_verification_state(
         verification_payloads[-1] if verification_payloads else {}
     )
@@ -4133,6 +4136,8 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
         attention.append("finance facts are available but no calculator FormulaTrace is present yet")
     if compact_traces and not latest_verification:
         attention.append("FormulaTrace values are available; decide whether numeric verification is needed before final answer")
+    if latest_slot_bind.get("period_basis") or latest_slot_bind.get("line_item_basis"):
+        attention.append("model-owned slot binding basis is available; preserve or revise it explicitly if later evidence conflicts")
     if latest_verification.get("status") == "failed":
         attention.append("latest finance numeric verification failed; inspect issue codes before finalizing")
     if latest_verification.get("status") == "passed":
@@ -4143,6 +4148,7 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
         "fact_count": int(latest_ledger.get("fact_count") or len(facts) or 0),
         "facts": compact_facts,
         "slot_frame": latest_slot_frame,
+        "slot_bind": latest_slot_bind,
         "transform_plan": latest_transform_plan,
         "formula_trace_count": len(traces),
         "formula_traces": compact_traces,
@@ -4151,6 +4157,7 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
         "presence": {
             "finance_facts": bool(compact_facts),
             "slot_frame": bool(latest_slot_frame),
+            "slot_bind": bool(latest_slot_bind),
             "missing_slots": bool(missing_slots),
             "formula_trace": bool(compact_traces),
             "numeric_verification": bool(latest_verification),
@@ -4218,8 +4225,9 @@ def _has_finance_working_state_anchor(
     verification_records: list[object],
     slot_records: list[object],
     transform_records: list[object],
+    slot_bind_records: list[object],
 ) -> bool:
-    if ledger_records or traces or verification_records:
+    if ledger_records or traces or verification_records or slot_bind_records:
         return True
     for record in [*slot_records[-2:], *transform_records[-2:]]:
         data = getattr(record, "data", None)
@@ -4229,6 +4237,27 @@ def _has_finance_working_state_anchor(
         if domain == "finance" or source == "finance_fact_ledger":
             return True
     return False
+
+
+def _compact_finance_slot_bind_state(data: object) -> JsonObject:
+    payload = data if isinstance(data, dict) else {}
+    if not payload:
+        return {}
+    return {
+        "status": _bounded_text(payload.get("status"), limit=64),
+        "decision": _bounded_text(payload.get("decision"), limit=64),
+        "processor_status": _bounded_text(payload.get("processor_status"), limit=64),
+        "processor_error": _bounded_text(payload.get("processor_error"), limit=180),
+        "repair_attempted": payload.get("repair_attempted") if isinstance(payload.get("repair_attempted"), bool) else None,
+        "accepted_formula_plan_count": payload.get("accepted_formula_plan_count")
+        if isinstance(payload.get("accepted_formula_plan_count"), int)
+        else None,
+        "missing_slots": _string_list(payload.get("missing_slots"))[:16],
+        "next_action": _compact_model_dict(payload.get("next_action"), limit=8),
+        "period_basis": [_compact_model_dict(item, limit=12) for item in _dict_items(payload.get("period_basis"))[:12]],
+        "line_item_basis": [_compact_model_dict(item, limit=12) for item in _dict_items(payload.get("line_item_basis"))[:12]],
+        "reason_summary": _bounded_text(payload.get("reason_summary"), limit=240),
+    }
 
 
 def _compact_slot_frame_state(data: object) -> JsonObject:

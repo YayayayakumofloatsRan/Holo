@@ -1407,6 +1407,10 @@ def test_finance_working_state_for_prompt_summarizes_facts_traces_and_verifier_w
     assert state["facts"][0]["metric"] == "revenue"
     assert state["slot_frame"]["task_type"] == "compute"
     assert state["slot_frame"]["evidence_policy"]["required_source_families"] == ["sec_filing"]
+    assert state["slot_bind"]["decision"] == "ready"
+    assert state["slot_bind"]["accepted_formula_plan_count"] == 1
+    assert state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert state["slot_bind"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
     assert state["missing_slots"] == ["net_income", "margin"]
     assert state["transform_plan"]["method"] == "margin"
     assert state["formula_trace_count"] == 1
@@ -1420,6 +1424,7 @@ def test_finance_working_state_for_prompt_summarizes_facts_traces_and_verifier_w
     assert state["presence"] == {
         "finance_facts": True,
         "slot_frame": True,
+        "slot_bind": True,
         "missing_slots": True,
         "formula_trace": True,
         "numeric_verification": True,
@@ -1508,6 +1513,49 @@ def test_finance_working_state_includes_verify_numeric_tool_observation() -> Non
     ]
     assert "remove or replace unsupported answer numbers" in " ".join(verification["repair_options"])
     assert any("latest finance numeric verification failed" in item for item in state["model_attention"])
+
+
+def test_finance_working_state_includes_slot_bind_basis_without_fact_ledger() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-finance-slot-basis-only",
+        run_id="run-1",
+        step_id="step-slot-bind",
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "ready",
+            "decision": "ready",
+            "accepted_formula_plan_count": 1,
+            "period_basis": [
+                {
+                    "slot_name": "revenue",
+                    "fact_id": "finfact-revenue",
+                    "selected_period": "FY2024",
+                    "raw_fields_used": ["form", "fp", "start", "end"],
+                    "reason": "Model selected the annual FY fact.",
+                }
+            ],
+            "line_item_basis": [
+                {
+                    "slot_name": "revenue",
+                    "fact_id": "finfact-revenue",
+                    "selected_line_item": "Revenue",
+                    "raw_fields_used": ["concept", "label"],
+                    "reason": "Model selected the revenue line item.",
+                }
+            ],
+            "reason_summary": "Model-owned slot binding basis is available before synthesis.",
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-slot-basis-only", run_id="run-1")
+
+    assert state["presence"]["slot_bind"] is True
+    assert state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert state["slot_bind"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
+    assert any("model-owned slot binding basis" in item for item in state["model_attention"])
+    assert "model owns metric binding" in state["host_boundary"]
 
 
 def test_finance_working_state_for_prompt_is_absent_without_finance_anchor() -> None:
@@ -1822,6 +1870,40 @@ def _append_finance_working_state_fixture(journal: JournalStore) -> None:
             "input_claim_ids": ["claim-profit", "claim-revenue"],
             "output_attribute": "gross_margin",
             "missing_slots": ["margin"],
+        },
+    )
+    journal.append(
+        task_id="task-finance-state",
+        run_id="run-1",
+        step_id="step-slot-bind",
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "ready",
+            "decision": "ready",
+            "processor_status": "ok",
+            "repair_attempted": False,
+            "accepted_formula_plan_count": 1,
+            "missing_slots": [],
+            "reason_summary": "Model selected FY revenue and gross profit from the 10-K.",
+            "period_basis": [
+                {
+                    "slot_name": "revenue",
+                    "fact_id": "finfact-revenue",
+                    "selected_period": "FY2024",
+                    "raw_fields_used": ["form", "fp"],
+                    "reason": "10-K FY fact matches requested fiscal year.",
+                }
+            ],
+            "line_item_basis": [
+                {
+                    "slot_name": "revenue",
+                    "fact_id": "finfact-revenue",
+                    "selected_line_item": "Revenue",
+                    "raw_fields_used": ["concept", "label"],
+                    "reason": "Revenue concept and label match the requested line item.",
+                }
+            ],
         },
     )
     trace = FormulaTrace(
