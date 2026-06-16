@@ -197,6 +197,42 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "operating_cash_flow",
             "total_current_liabilities",
         ],
+        "quick_ratio": [
+            "cash_and_equivalents",
+            "marketable_securities",
+            "accounts_receivable",
+            "total_current_liabilities",
+        ],
+        "working_capital_ratio": [
+            "total_current_assets",
+            "total_current_liabilities",
+        ],
+        "net_working_capital": [
+            "total_current_assets",
+            "total_current_liabilities",
+        ],
+        "return_on_assets": [
+            "net_income",
+            "assets_current",
+            "assets_prior",
+        ],
+        "free_cash_flow": [
+            "operating_cash_flow",
+            "capital_expenditures",
+        ],
+        "inventory_turnover": [
+            "inventory_begin",
+            "inventory_end",
+            "cogs",
+        ],
+        "dividend_payout_ratio": [
+            "dividends_paid",
+            "net_income",
+        ],
+        "retention_ratio": [
+            "dividends_paid",
+            "net_income",
+        ],
         "fixed_charge_coverage": [
             "earnings_available_for_fixed_charges_or_pretax_income",
             "fixed_charges",
@@ -372,6 +408,13 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "exit_assumption": ["exit multiple", "terminal multiple", "exit value"],
         "capital_expenditures": ["capital expenditures", "capex"],
         "net_income": ["net income", "net earnings", "profit"],
+        "cash_and_equivalents": ["cash and cash equivalents", "cash equivalents", "cash"],
+        "marketable_securities": ["marketable securities", "short-term investments", "short term investments"],
+        "accounts_receivable": ["accounts receivable", "net accounts receivable", "receivables"],
+        "total_current_assets": ["total current assets", "current assets", "assets current"],
+        "assets_current": ["assets", "total assets"],
+        "assets_prior": ["assets", "total assets"],
+        "dividends_paid": ["dividends paid", "cash dividends paid", "dividends to shareholders"],
         "operating_cash_flow": [
             "operating cash flow",
             "cash flow from operations",
@@ -446,6 +489,14 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "fixed_charge_coverage",
         "mlr_rebate",
         "operating_cash_flow_ratio",
+        "quick_ratio",
+        "working_capital_ratio",
+        "net_working_capital",
+        "return_on_assets",
+        "free_cash_flow",
+        "inventory_turnover",
+        "dividend_payout_ratio",
+        "retention_ratio",
     }:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
@@ -476,6 +527,22 @@ def _infer_formula_name(question: str) -> str:
         )
     ):
         return "operating_cash_flow_ratio"
+    if "quick ratio" in text:
+        return "quick_ratio"
+    if "working capital ratio" in text:
+        return "working_capital_ratio"
+    if "net working capital" in text:
+        return "net_working_capital"
+    if "return on assets" in text or re.search(r"\broa\b", text):
+        return "return_on_assets"
+    if "free cash flow" in text or "free cashflow" in text or re.search(r"\bfcf\b", text):
+        return "free_cash_flow"
+    if "inventory turnover" in text:
+        return "inventory_turnover"
+    if "dividend payout ratio" in text or "payout ratio" in text:
+        return "dividend_payout_ratio"
+    if "retention ratio" in text:
+        return "retention_ratio"
     if "fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text:
         return "fixed_charge_coverage"
     if "medical loss ratio" in text or " mlr" in f" {text}":

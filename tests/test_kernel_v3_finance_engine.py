@@ -3947,6 +3947,112 @@ def test_finance_task_compiler_emits_cogs_margin_transform_and_specific_evidence
     assert program.transform_specs[0].expression == "cogs_numerator / revenue_denominator"
 
 
+def test_finance_task_compiler_emits_common_balance_sheet_ratio_programs() -> None:
+    cases = [
+        (
+            "Does 3M have a reasonably healthy liquidity profile based on its quick ratio for Q2 of FY2023?",
+            "quick_ratio",
+            ["cash_and_equivalents", "marketable_securities", "accounts_receivable", "total_current_liabilities"],
+            "(cash_and_equivalents + marketable_securities + accounts_receivable) / total_current_liabilities",
+        ),
+        (
+            "What is Block's FY2016 working capital ratio? Define working capital ratio as total current assets divided by total current liabilities.",
+            "working_capital_ratio",
+            ["total_current_assets", "total_current_liabilities"],
+            "total_current_assets / total_current_liabilities",
+        ),
+        (
+            "What is Lockheed Martin's FY2021 net working capital? Define net working capital as total current assets less total current liabilities.",
+            "net_working_capital",
+            ["total_current_assets", "total_current_liabilities"],
+            "total_current_assets - total_current_liabilities",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+        for slot in missing_slots:
+            assert slot in evidence_slots
+        assert evidence_slots[missing_slots[-1]].statement == "balance_sheet"
+
+
+def test_finance_task_compiler_emits_common_cash_flow_and_turnover_programs() -> None:
+    cases = [
+        (
+            "What is FY2020 free cash flow (FCF)? FCF here is defined as cash from operations - capex.",
+            "free_cash_flow",
+            ["operating_cash_flow", "capital_expenditures"],
+            "operating_cash_flow - capital_expenditures",
+        ),
+        (
+            "What is FY2019 inventory turnover ratio? Inventory turnover ratio is defined as COGS / average inventory.",
+            "inventory_turnover",
+            ["inventory_begin", "inventory_end", "cogs"],
+            "cogs / ((inventory_begin + inventory_end) / 2)",
+        ),
+        (
+            "What is FY2022 dividend payout ratio using total cash dividends paid and net income?",
+            "dividend_payout_ratio",
+            ["dividends_paid", "net_income"],
+            "dividends_paid / net_income",
+        ),
+        (
+            "What is FY2022 retention ratio using total cash dividends paid and net income?",
+            "retention_ratio",
+            ["dividends_paid", "net_income"],
+            "1 - dividends_paid / net_income",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
+
+
+def test_finance_formula_planner_computes_free_cash_flow_and_return_on_assets() -> None:
+    fcf_plan = plan_finance_formula(
+        question="What is FY2020 free cash flow? FCF is operating cash flow less capex.",
+        facts=[
+            _year_fact("operating cash flow", "1000", 2020, fact_id="ocf-2020"),
+            _year_fact("capital expenditures", "-250", 2020, fact_id="capex-2020"),
+        ],
+        existing_traces=[],
+    )
+
+    assert fcf_plan.status == "ready"
+    assert fcf_plan.formula_name == "free_cash_flow"
+    assert fcf_plan.payload["expression"] == "operating_cash_flow - capital_expenditures"
+    assert fcf_plan.payload["variables"] == {"operating_cash_flow": "1000", "capital_expenditures": "250"}
+
+    roa_plan = plan_finance_formula(
+        question="What is FY2021 return on assets (ROA)? ROA is net income / average total assets between FY2020 and FY2021.",
+        facts=[
+            _year_fact("net income", "120", 2021, fact_id="net-income-2021"),
+            _year_fact("assets", "900", 2020, fact_id="assets-2020"),
+            _year_fact("assets", "1100", 2021, fact_id="assets-2021"),
+        ],
+        existing_traces=[],
+    )
+
+    assert roa_plan.status == "ready"
+    assert roa_plan.formula_name == "return_on_assets"
+    assert roa_plan.payload["expression"] == "net_income / ((assets_current + assets_prior) / 2)"
+    assert roa_plan.payload["variables"] == {"net_income": "120", "assets_current": "1100", "assets_prior": "900"}
+
+
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:
     question = (
         "What is the FY2017 operating cash flow ratio for Adobe? Operating cash flow ratio is defined as: "
@@ -6928,6 +7034,32 @@ def test_finance_missing_fact_payload_for_yoy_operating_income_seeds_companyfact
     assert payload["metadata"]["target_yoy_growth_structured_source_required"] is True
     assert payload["metadata"]["missing_slots"] == ["prior_period_value", "current_period_value"]
     assert any("OperatingIncomeLoss" in query for query in payload["queries"])
+
+
+def test_finance_missing_fact_payload_for_quick_ratio_seeds_statement_companyfacts() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="quick_ratio",
+        missing=[
+            "cash_and_equivalents",
+            "marketable_securities",
+            "accounts_receivable",
+            "total_current_liabilities",
+        ],
+        goal="3M FY2023 quick ratio",
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/submissions/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/LiabilitiesCurrent.json" in source_urls
+    assert payload["metadata"]["target_statement_formula_structured_source_required"] is True
+    assert payload["metadata"]["missing_slots"] == [
+        "cash_and_equivalents",
+        "marketable_securities",
+        "accounts_receivable",
+        "total_current_liabilities",
+    ]
+    assert any("LiabilitiesCurrent" in query for query in payload["queries"])
 
 
 def test_finance_modeling_payload_uses_model_compiled_capital_intensity_program_for_source_urls() -> None:

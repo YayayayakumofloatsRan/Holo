@@ -74,6 +74,22 @@ def plan_finance_formula(
         return _plan_fixed_asset_turnover(question=question, facts=usable)
     if formula == "operating_cash_flow_ratio":
         return _plan_operating_cash_flow_ratio(question=question, facts=usable)
+    if formula == "quick_ratio":
+        return _plan_quick_ratio(question=question, facts=usable)
+    if formula == "working_capital_ratio":
+        return _plan_working_capital_ratio(question=question, facts=usable)
+    if formula == "net_working_capital":
+        return _plan_net_working_capital(question=question, facts=usable)
+    if formula == "return_on_assets":
+        return _plan_return_on_assets(question=question, facts=usable)
+    if formula == "free_cash_flow":
+        return _plan_free_cash_flow(question=question, facts=usable)
+    if formula == "inventory_turnover":
+        return _plan_inventory_turnover(question=question, facts=usable)
+    if formula == "dividend_payout_ratio":
+        return _plan_dividend_payout_ratio(question=question, facts=usable)
+    if formula == "retention_ratio":
+        return _plan_retention_ratio(question=question, facts=usable)
     return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "unsupported_formula", "formula": formula})
 
 
@@ -102,6 +118,22 @@ def _detect_formula(question: str) -> str | None:
         )
     ):
         return "operating_cash_flow_ratio"
+    if "quick ratio" in text:
+        return "quick_ratio"
+    if "working capital ratio" in text:
+        return "working_capital_ratio"
+    if "net working capital" in text:
+        return "net_working_capital"
+    if "return on assets" in text or re.search(r"\broa\b", text):
+        return "return_on_assets"
+    if "free cash flow" in text or "free cashflow" in text or re.search(r"\bfcf\b", text):
+        return "free_cash_flow"
+    if "inventory turnover" in text:
+        return "inventory_turnover"
+    if "dividend payout ratio" in text or "payout ratio" in text:
+        return "dividend_payout_ratio"
+    if "retention ratio" in text:
+        return "retention_ratio"
     if "ev/revenue" in compact or "ev/rev" in compact or "enterprise value to revenue" in text:
         return "ev_revenue"
     if "ev/ebitda" in compact or "enterprise value to ebitda" in text:
@@ -528,6 +560,335 @@ def _plan_operating_cash_flow_ratio(*, question: str, facts: list[FinanceFact]) 
                 "denominator": _formula_bound_line_item(current_liabilities),
             },
         },
+    )
+
+
+def _plan_quick_ratio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    cash = _latest_fact_for_year(facts, ("cash and cash equivalents", "cash equivalents", "cash"), target_year=target_year)
+    marketable = _latest_fact_for_year(
+        facts,
+        ("marketable securities", "short term investments", "short-term investments"),
+        target_year=target_year,
+    )
+    receivables = _latest_fact_for_year(
+        facts,
+        ("accounts receivable", "receivables", "net accounts receivable"),
+        target_year=target_year,
+    )
+    current_liabilities = _latest_fact_for_year(
+        facts,
+        ("total current liabilities", "current liabilities", "liabilities current"),
+        target_year=target_year,
+    )
+    missing: list[str] = []
+    if cash is None:
+        missing.append("cash_and_equivalents")
+    if marketable is None:
+        missing.append("marketable_securities")
+    if receivables is None:
+        missing.append("accounts_receivable")
+    if current_liabilities is None:
+        missing.append("total_current_liabilities")
+    supporting = [item for item in (cash, marketable, receivables, current_liabilities) if item is not None]
+    if missing:
+        return _missing(
+            "quick_ratio",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "(cash and equivalents + marketable securities + accounts receivable) / total current liabilities",
+            },
+        )
+    return _ready(
+        "quick_ratio",
+        "(cash_and_equivalents + marketable_securities + accounts_receivable) / total_current_liabilities",
+        {
+            "cash_and_equivalents": cash.value,
+            "marketable_securities": marketable.value,
+            "accounts_receivable": receivables.value,
+            "total_current_liabilities": current_liabilities.value,
+        },
+        unit="ratio",
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year},
+    )
+
+
+def _plan_working_capital_ratio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    current_assets = _latest_fact_for_year(facts, ("total current assets", "current assets", "assets current"), target_year=target_year)
+    current_liabilities = _latest_fact_for_year(
+        facts,
+        ("total current liabilities", "current liabilities", "liabilities current"),
+        target_year=target_year,
+    )
+    missing: list[str] = []
+    if current_assets is None:
+        missing.append("total_current_assets")
+    if current_liabilities is None:
+        missing.append("total_current_liabilities")
+    supporting = [item for item in (current_assets, current_liabilities) if item is not None]
+    if missing:
+        return _missing(
+            "working_capital_ratio",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "total current assets divided by total current liabilities",
+            },
+        )
+    return _ready(
+        "working_capital_ratio",
+        "total_current_assets / total_current_liabilities",
+        {
+            "total_current_assets": current_assets.value,
+            "total_current_liabilities": current_liabilities.value,
+        },
+        unit="ratio",
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year},
+    )
+
+
+def _plan_net_working_capital(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    current_assets = _latest_fact_for_year(facts, ("total current assets", "current assets", "assets current"), target_year=target_year)
+    current_liabilities = _latest_fact_for_year(
+        facts,
+        ("total current liabilities", "current liabilities", "liabilities current"),
+        target_year=target_year,
+    )
+    missing: list[str] = []
+    if current_assets is None:
+        missing.append("total_current_assets")
+    if current_liabilities is None:
+        missing.append("total_current_liabilities")
+    supporting = [item for item in (current_assets, current_liabilities) if item is not None]
+    if missing:
+        return _missing(
+            "net_working_capital",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "total current assets less total current liabilities",
+            },
+        )
+    return _ready(
+        "net_working_capital",
+        "total_current_assets - total_current_liabilities",
+        {
+            "total_current_assets": current_assets.value,
+            "total_current_liabilities": current_liabilities.value,
+        },
+        unit=current_assets.unit,
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year},
+    )
+
+
+def _plan_return_on_assets(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    normalized = _metric_text(question)
+    net_income = _latest_fact_for_year(
+        facts,
+        ("net income", "net earnings"),
+        target_year=target_year,
+        predicate=_is_net_income_fact,
+    )
+    use_average_assets = "average" in normalized or "between" in normalized
+    assets_current = _latest_fact_for_year(facts, ("assets", "total assets"), target_year=target_year)
+    assets_prior = (
+        _latest_fact_for_year(
+            facts,
+            ("assets", "total assets"),
+            target_year=target_year - 1 if target_year is not None else None,
+            exclude_fact_ids={assets_current.fact_id} if assets_current is not None else None,
+        )
+        if use_average_assets
+        else None
+    )
+    missing: list[str] = []
+    if net_income is None:
+        missing.append("net_income")
+    if assets_current is None:
+        missing.append("assets_current" if use_average_assets else "assets")
+    if use_average_assets and assets_prior is None:
+        missing.append("assets_prior")
+    supporting = [item for item in (net_income, assets_current, assets_prior) if item is not None]
+    if missing:
+        return _missing(
+            "return_on_assets",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": (
+                    "net income divided by average total assets"
+                    if use_average_assets
+                    else "net income divided by total assets"
+                ),
+            },
+        )
+    if use_average_assets:
+        return _ready(
+            "return_on_assets",
+            "net_income / ((assets_current + assets_prior) / 2)",
+            {"net_income": net_income.value, "assets_current": assets_current.value, "assets_prior": assets_prior.value},
+            unit="percent",
+            facts=supporting,
+            diagnostics={"target_fiscal_year": target_year, "uses_average_assets": True},
+        )
+    return _ready(
+        "return_on_assets",
+        "net_income / assets",
+        {"net_income": net_income.value, "assets": assets_current.value},
+        unit="percent",
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year, "uses_average_assets": False},
+    )
+
+
+def _plan_free_cash_flow(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    reported = _latest_fact_for_year(facts, ("free cash flow",), target_year=target_year)
+    if reported is not None:
+        return _ready(
+            "free_cash_flow",
+            "free_cash_flow",
+            {"free_cash_flow": reported.value},
+            unit=reported.unit,
+            facts=[reported],
+            diagnostics={"target_fiscal_year": target_year, "formula_definition": "reported free cash flow"},
+        )
+    operating_cash_flow = _latest_fact_for_year(
+        facts,
+        (
+            "operating cash flow",
+            "cash flow from operations",
+            "cash from operations",
+            "net cash provided by operating activities",
+        ),
+        target_year=target_year,
+    )
+    capex = _latest_fact_for_year(facts, ("capital expenditures", "capex"), target_year=target_year)
+    missing: list[str] = []
+    if operating_cash_flow is None:
+        missing.append("operating_cash_flow")
+    if capex is None:
+        missing.append("capital_expenditures")
+    supporting = [item for item in (operating_cash_flow, capex) if item is not None]
+    if missing:
+        return _missing(
+            "free_cash_flow",
+            missing,
+            facts=supporting,
+            diagnostics={"target_fiscal_year": target_year, "formula_definition": "operating cash flow less capital expenditures"},
+        )
+    return _ready(
+        "free_cash_flow",
+        "operating_cash_flow - capital_expenditures",
+        {"operating_cash_flow": operating_cash_flow.value, "capital_expenditures": _absolute_decimal_string(capex.value)},
+        unit=operating_cash_flow.unit,
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year},
+    )
+
+
+def _plan_inventory_turnover(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    inventory_facts = _dio_inventory_facts(facts)
+    inventory_used = _dio_inventory_pair(inventory_facts, target_year=target_year)
+    cogs = _dio_cogs_fact(facts, target_year=target_year)
+    missing: list[str] = []
+    if len(inventory_used) < 2:
+        missing.extend(["inventory_begin", "inventory_end"] if not inventory_used else ["inventory_begin_or_end"])
+    if cogs is None:
+        missing.append("cogs")
+    supporting = [*inventory_used, *([cogs] if cogs is not None else [])]
+    if missing:
+        return _missing(
+            "inventory_turnover",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "cost of goods sold divided by average inventory",
+            },
+        )
+    return _ready(
+        "inventory_turnover",
+        "cogs / ((inventory_begin + inventory_end) / 2)",
+        {
+            "cogs": cogs.value,
+            "inventory_begin": inventory_used[0].value,
+            "inventory_end": inventory_used[1].value,
+        },
+        unit="x",
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year},
+    )
+
+
+def _plan_dividend_payout_ratio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    dividends = _latest_fact_for_year(
+        facts,
+        ("dividends paid", "cash dividends paid", "dividends to shareholders"),
+        target_year=target_year,
+    )
+    net_income = _latest_fact_for_year(
+        facts,
+        ("net income", "net earnings"),
+        target_year=target_year,
+        predicate=_is_net_income_fact,
+    )
+    missing: list[str] = []
+    if dividends is None:
+        missing.append("dividends_paid")
+    if net_income is None:
+        missing.append("net_income")
+    supporting = [item for item in (dividends, net_income) if item is not None]
+    if missing:
+        return _missing(
+            "dividend_payout_ratio",
+            missing,
+            facts=supporting,
+            diagnostics={"target_fiscal_year": target_year, "formula_definition": "cash dividends paid divided by net income"},
+        )
+    return _ready(
+        "dividend_payout_ratio",
+        "dividends_paid / net_income",
+        {"dividends_paid": _absolute_decimal_string(dividends.value), "net_income": net_income.value},
+        unit="ratio",
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year},
+    )
+
+
+def _plan_retention_ratio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    payout = _plan_dividend_payout_ratio(question=question, facts=facts)
+    if payout.status == "missing_facts":
+        return FinanceFormulaPlan(
+            status="missing_facts",
+            formula_name="retention_ratio",
+            missing_facts=list(payout.missing_facts),
+            input_fact_ids=list(payout.input_fact_ids),
+            diagnostics={**dict(payout.diagnostics), "formula_definition": "1 - cash dividends paid / net income"},
+        )
+    if payout.status != "ready" or not isinstance(payout.payload, dict):
+        return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "dividend_payout_ratio_not_available"})
+    variables = dict(payout.payload.get("variables")) if isinstance(payout.payload.get("variables"), dict) else {}
+    return _ready(
+        "retention_ratio",
+        "1 - dividends_paid / net_income",
+        variables,
+        unit="ratio",
+        facts=[fact for fact in facts if fact.fact_id in set(payout.input_fact_ids)],
+        diagnostics={**dict(payout.diagnostics), "formula_definition": "1 - cash dividends paid / net income"},
     )
 
 

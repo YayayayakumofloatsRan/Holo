@@ -163,6 +163,48 @@ targeted FinanceBench tests `2 passed, 50 deselected`; py_compile and
 `git diff --check` passed; full finance engine `252 passed in 4.37s`; full
 FinanceBench tests `52 passed in 299.68s`.
 
+## 2026-06-16 Common Formula Planner Follow-Up
+
+After the direct evidence scaffold, the remaining FinanceBench gap was that
+many common numeric questions had evidence targets but no executable formula
+plan. The planner/compiler/runtime now support these generic formula families:
+
+- `quick_ratio`: `(cash_and_equivalents + marketable_securities + accounts_receivable) / total_current_liabilities`
+- `working_capital_ratio`: `total_current_assets / total_current_liabilities`
+- `net_working_capital`: `total_current_assets - total_current_liabilities`
+- `return_on_assets`: `net_income / ((assets_current + assets_prior) / 2)`
+- `free_cash_flow`: `operating_cash_flow - capital_expenditures`
+- `inventory_turnover`: `cogs / ((inventory_begin + inventory_end) / 2)`
+- `dividend_payout_ratio`: `dividends_paid / net_income`
+- `retention_ratio`: `1 - dividends_paid / net_income`
+
+These are not benchmark row hacks. They are formula-name, slot-frame,
+EvidenceSpec, TransformSpec, and missing-fact retrieval capabilities. Runtime
+missing-fact payloads for these formulas now trigger structured retrieval and
+seed SEC companyfacts/companyconcept URLs for known issuers where possible.
+
+Static FinanceBench `financebench_doc_retrieval.jsonl` formula coverage changed:
+
+| Measure | Before | After |
+| --- | ---: | ---: |
+| Rows with recognized formula plan | `21/150` | `38/150` |
+| Recognized missing-fact formulas with no `TransformSpec` | `0` | `0` |
+| Rows with at least one `EvidenceSpec` | `150/150` | `150/150` |
+
+Verification:
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "common_balance_sheet_ratio or common_cash_flow_and_turnover or computes_free_cash_flow_and_return_on_assets or quick_ratio_seeds"
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/finance/formula_planner.py kernel_v3/finance/task_compiler.py kernel_v3/finance/substrate_adapter.py tests/test_kernel_v3_finance_engine.py
+git diff --check
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+```
+
+Latest result: targeted common-formula tests `4 passed, 252 deselected`;
+py_compile and `git diff --check` passed; full finance engine
+`256 passed in 4.06s`; full FinanceBench tests `52 passed in 297.24s`.
+
 ## What Is Not Proven Yet
 
 - The post-2026-06-16 code changes do not yet have a fresh live accuracy number.

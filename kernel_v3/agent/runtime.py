@@ -5100,6 +5100,8 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
         return any(marker in text for marker in ("capital-intensive", "capital intensive", "capital intensity", "capex", "property plant", "assets"))
     if formula_name == "operating_cash_flow_ratio" and missing:
         return any(marker in text for marker in ("operating cash flow ratio", "cash from operations", "current liabilities"))
+    if formula_name in _finance_statement_formula_names() and missing:
+        return True
     if formula_name == "fixed_charge_coverage" and missing:
         return any(marker in text for marker in ("fixed charge", "fixed-charge", "coverage", "earnings to fixed charges"))
     if formula_name == "mlr_rebate" and missing:
@@ -5168,6 +5170,11 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             f"{base_query} SEC companyfacts 10-K operating cash flow cash from operations "
             "total current liabilities balance sheet cash flow statement"
         )
+    elif formula_name in _finance_statement_formula_names():
+        query = (
+            f"{base_query} SEC companyfacts 10-K annual filing "
+            f"{_finance_statement_formula_query_terms(formula_name)}"
+        )
     elif formula_name == "fixed_charge_coverage":
         query = (
             f"{base_query} SEC companyfacts 10-K fixed charges earnings available for fixed charges "
@@ -5220,6 +5227,9 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
     if formula_name == "yoy_growth":
         max_queries = min(5, max(3, len(queries)))
         max_fetches = 16
+    if formula_name in _finance_statement_formula_names():
+        max_queries = min(5, max(3, len(queries)))
+        max_fetches = 16
     return {
         "query": query,
         "queries": queries[:max_queries],
@@ -5250,6 +5260,7 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
                 else {}
             ),
             **({"target_yoy_growth_structured_source_required": True} if formula_name == "yoy_growth" else {}),
+            **({"target_statement_formula_structured_source_required": True} if formula_name in _finance_statement_formula_names() else {}),
             **({"target_fixed_charge_coverage_structured_source_required": True} if formula_name == "fixed_charge_coverage" else {}),
             **({"target_mlr_rebate_regulatory_source_required": True} if formula_name == "mlr_rebate" else {}),
             **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda", "dcf", "lbo"} else {}),
@@ -5280,6 +5291,7 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             "fixed_charge_coverage",
             "mlr_rebate",
             "operating_cash_flow_ratio",
+            *_finance_statement_formula_names(),
         }:
             urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
         if formula_name == "dio":
@@ -5305,6 +5317,9 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
                 urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
         elif formula_name == "operating_cash_flow_ratio":
             for concept in ("NetCashProvidedByUsedInOperatingActivities", "LiabilitiesCurrent"):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name in _finance_statement_formula_names():
+            for concept in _finance_statement_formula_companyconcepts(formula_name):
                 urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
         elif formula_name == "fixed_charge_coverage":
             for concept in (
@@ -5512,6 +5527,13 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts NetCashProvidedByUsedInOperatingActivities LiabilitiesCurrent 10-K")
             add(f"{ticker} 10-K cash flow statement operating activities balance sheet total current liabilities")
+    elif formula_name in _finance_statement_formula_names():
+        terms = _finance_statement_formula_query_terms(formula_name)
+        concepts = " ".join(_finance_statement_formula_companyconcepts(formula_name))
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts {concepts} 10-K")
+            add(f"{ticker} 10-K annual report {terms}")
+        add(f"{goal} SEC companyfacts {concepts} {terms}")
     elif formula_name == "dio":
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts inventory cost of revenue cost of sales COGS 10-K")
@@ -5575,6 +5597,8 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} annual report 10-K PP&E total assets capital expenditures operating cash flow revenue net income"
     if formula_name == "operating_cash_flow_ratio":
         return f"{goal} annual report 10-K cash flow statement operating activities balance sheet total current liabilities"
+    if formula_name in _finance_statement_formula_names():
+        return f"{goal} annual report 10-K {_finance_statement_formula_query_terms(formula_name)}"
     if formula_name == "fixed_charge_coverage":
         return f"{goal} annual report 10-K Exhibit 12 fixed charges earnings available for fixed charges pretax income"
     if formula_name == "mlr_rebate":
@@ -5601,6 +5625,8 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} SEC companyfacts PropertyPlantAndEquipmentNet Assets PaymentsToAcquirePropertyPlantAndEquipment NetCashProvidedByUsedInOperatingActivities Revenues"
     if formula_name == "operating_cash_flow_ratio":
         return f"{goal} SEC companyfacts NetCashProvidedByUsedInOperatingActivities LiabilitiesCurrent current liabilities"
+    if formula_name in _finance_statement_formula_names():
+        return f"{goal} SEC companyfacts {' '.join(_finance_statement_formula_companyconcepts(formula_name))}"
     if formula_name == "fixed_charge_coverage":
         return f"{goal} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
     if formula_name == "mlr_rebate":
@@ -6175,6 +6201,24 @@ def _canonical_finance_formula_name(value: str) -> str:
         return "dio"
     if text.startswith("yoy_growth") or text in {"year_over_year_growth", "year_over_year_change"}:
         return "yoy_growth"
+    if text in _finance_statement_formula_names():
+        return text
+    if text.startswith("quick_ratio"):
+        return "quick_ratio"
+    if text.startswith("working_capital_ratio"):
+        return "working_capital_ratio"
+    if text.startswith("net_working_capital"):
+        return "net_working_capital"
+    if text.startswith("return_on_assets") or text == "roa":
+        return "return_on_assets"
+    if text.startswith("free_cash_flow") or text == "fcf":
+        return "free_cash_flow"
+    if text.startswith("inventory_turnover"):
+        return "inventory_turnover"
+    if text.startswith("dividend_payout_ratio") or text == "payout_ratio":
+        return "dividend_payout_ratio"
+    if text.startswith("retention_ratio"):
+        return "retention_ratio"
     if text.startswith("ev_revenue") or "enterprise_value_to_revenue" in text:
         return "ev_revenue"
     if text.startswith("ev_ebitda") or "enterprise_value_to_ebitda" in text:
@@ -6186,6 +6230,57 @@ def _canonical_finance_formula_name(value: str) -> str:
     if text.startswith("bridge_subtotal"):
         return "bridge_subtotal"
     return ""
+
+
+def _finance_statement_formula_names() -> set[str]:
+    return {
+        "quick_ratio",
+        "working_capital_ratio",
+        "net_working_capital",
+        "return_on_assets",
+        "free_cash_flow",
+        "inventory_turnover",
+        "dividend_payout_ratio",
+        "retention_ratio",
+    }
+
+
+def _finance_statement_formula_query_terms(formula_name: str) -> str:
+    mapping = {
+        "quick_ratio": "cash and cash equivalents marketable securities accounts receivable total current liabilities balance sheet quick ratio",
+        "working_capital_ratio": "total current assets total current liabilities balance sheet working capital ratio",
+        "net_working_capital": "total current assets total current liabilities balance sheet net working capital",
+        "return_on_assets": "net income total assets average assets income statement balance sheet return on assets ROA",
+        "free_cash_flow": "net cash provided by operating activities capital expenditures free cash flow cash flow statement",
+        "inventory_turnover": "inventory cost of goods sold cost of revenue cost of sales average inventory inventory turnover",
+        "dividend_payout_ratio": "cash dividends paid net income dividend payout ratio cash flow statement income statement",
+        "retention_ratio": "cash dividends paid net income retention ratio payout ratio cash flow statement income statement",
+    }
+    return mapping.get(formula_name, "financial statement line items")
+
+
+def _finance_statement_formula_companyconcepts(formula_name: str) -> list[str]:
+    mapping = {
+        "quick_ratio": [
+            "CashAndCashEquivalentsAtCarryingValue",
+            "ShortTermInvestments",
+            "MarketableSecuritiesCurrent",
+            "AccountsReceivableNetCurrent",
+            "LiabilitiesCurrent",
+        ],
+        "working_capital_ratio": ["AssetsCurrent", "LiabilitiesCurrent"],
+        "net_working_capital": ["AssetsCurrent", "LiabilitiesCurrent"],
+        "return_on_assets": ["NetIncomeLoss", "Assets"],
+        "free_cash_flow": [
+            "NetCashProvidedByUsedInOperatingActivities",
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            "PaymentsToAcquireProductiveAssets",
+        ],
+        "inventory_turnover": ["InventoryNet", "CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold"],
+        "dividend_payout_ratio": ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "NetIncomeLoss"],
+        "retention_ratio": ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "NetIncomeLoss"],
+    }
+    return list(mapping.get(formula_name, []))
 
 
 def _yoy_growth_metric_query_terms(goal: str) -> str:

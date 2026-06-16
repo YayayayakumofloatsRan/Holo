@@ -1527,6 +1527,73 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             )
         ]
+    simple_transforms: dict[str, tuple[list[str], str, str, str]] = {
+        "quick_ratio": (
+            ["cash_and_equivalents", "marketable_securities", "accounts_receivable", "total_current_liabilities"],
+            "(cash_and_equivalents + marketable_securities + accounts_receivable) / total_current_liabilities",
+            "ratio",
+            "quick_ratio",
+        ),
+        "working_capital_ratio": (
+            ["total_current_assets", "total_current_liabilities"],
+            "total_current_assets / total_current_liabilities",
+            "ratio",
+            "working_capital_ratio",
+        ),
+        "net_working_capital": (
+            ["total_current_assets", "total_current_liabilities"],
+            "total_current_assets - total_current_liabilities",
+            "currency",
+            "net_working_capital",
+        ),
+        "return_on_assets": (
+            ["net_income", "assets_current", "assets_prior"],
+            "net_income / ((assets_current + assets_prior) / 2)",
+            "percent",
+            "return_on_assets",
+        ),
+        "free_cash_flow": (
+            ["operating_cash_flow", "capital_expenditures"],
+            "operating_cash_flow - capital_expenditures",
+            "currency",
+            "free_cash_flow",
+        ),
+        "inventory_turnover": (
+            ["cogs", "inventory_begin", "inventory_end"],
+            "cogs / ((inventory_begin + inventory_end) / 2)",
+            "x",
+            "inventory_turnover",
+        ),
+        "dividend_payout_ratio": (
+            ["dividends_paid", "net_income"],
+            "dividends_paid / net_income",
+            "ratio",
+            "dividend_payout_ratio",
+        ),
+        "retention_ratio": (
+            ["dividends_paid", "net_income"],
+            "1 - dividends_paid / net_income",
+            "ratio",
+            "retention_ratio",
+        ),
+    }
+    if name in simple_transforms:
+        default_slots, default_expression, default_unit, output_attribute = simple_transforms[name]
+        payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        required_slots = list(variables.keys()) if variables else list(formula_plan.missing_facts or frame_missing_slots or default_slots)
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, ",".join(required_slots), str(payload.get("expression") or default_expression)),
+                domain="finance",
+                name=name,
+                required_slots=required_slots,
+                expression=_string(payload.get("expression")) or default_expression,
+                output_unit=_string(payload.get("unit")) or default_unit,
+                output_attribute=output_attribute,
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
     if name == "yoy_growth":
         return [
             TransformSpec(
@@ -1783,6 +1850,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "cash_flow_statement"
     if slot_name in {
         "assets",
+        "assets_current",
+        "assets_prior",
         "liabilities",
         "property_plant_and_equipment_net",
         "property_plant_and_equipment_net_current",
@@ -1794,6 +1863,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         "accounts_receivable",
         "accounts_payable",
         "inventory",
+        "inventory_begin",
+        "inventory_end",
         "debt",
         "cash",
     }:
@@ -1802,6 +1873,7 @@ def _statement_for_slot(slot_name: str) -> str | None:
         "revenue",
         "net_income",
         "operating_income",
+        "cogs",
         "cogs_numerator",
         "gross_profit_numerator",
         "operating_income_numerator",
@@ -1834,14 +1906,19 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "accounts_receivable": "accounts receivable",
         "accounts_payable": "accounts payable",
         "inventory": "inventories",
+        "inventory_begin": "inventories",
+        "inventory_end": "inventories",
         "property_plant_and_equipment_net": "property plant and equipment net",
         "property_plant_and_equipment_net_current": "property plant and equipment net",
         "property_plant_and_equipment_net_prior": "property plant and equipment net",
         "assets": "assets",
+        "assets_current": "total assets",
+        "assets_prior": "total assets",
         "liabilities": "liabilities",
         "revenue": "revenue",
         "operating_income": "operating income",
         "net_income": "net income",
+        "cogs": "cost of goods sold",
         "cogs_numerator": "cost of goods sold",
         "gross_profit_numerator": "gross profit",
         "operating_income_numerator": "operating income",
@@ -1903,12 +1980,17 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "accounts_receivable": ["accounts receivable", "net accounts receivable", "receivables"],
         "accounts_payable": ["accounts payable", "payables"],
         "inventory": ["inventories", "inventory"],
+        "inventory_begin": ["inventories", "inventory", "beginning inventory"],
+        "inventory_end": ["inventories", "inventory", "ending inventory"],
         "property_plant_and_equipment_net": ["property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"],
         "assets": ["assets", "total assets"],
+        "assets_current": ["assets", "total assets", "current period total assets"],
+        "assets_prior": ["assets", "total assets", "prior period total assets"],
         "revenue": ["revenue", "revenues", "net sales", "net revenues", "sales"],
         "revenue_denominator": ["revenue", "revenues", "net sales", "net revenues", "sales"],
         "net_income": ["net income", "net earnings", "net income attributable to shareholders"],
         "operating_income": ["operating income", "income from operations"],
+        "cogs": ["cost of goods sold", "cost of revenue", "cost of sales", "cogs"],
         "adjusted_ebitda": ["adjusted ebitda", "non-gaap ebitda", "non gaap ebitda"],
         "adjusted_ebit": ["adjusted ebit", "ebit"],
         "interest_expense": ["interest expense", "interest"],
