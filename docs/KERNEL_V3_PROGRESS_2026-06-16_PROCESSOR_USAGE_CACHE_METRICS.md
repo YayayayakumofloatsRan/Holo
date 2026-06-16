@@ -3671,3 +3671,56 @@ FormulaTrace values.
 2 passed, 227 deselected in 1.21s
 326 passed in 4.56s
 ```
+
+---
+
+## 60. 追加落地：Purchase Price Allocation Formula Coverage
+
+Acquisition-accounting questions often ask for purchase-price allocation rather
+than a conventional ratio such as margin or DIO. Before this pass, those cases
+could gather merger or filing evidence but still stop at `required_trace_missing`
+because the host planner did not know how to bind purchase consideration,
+goodwill, and identifiable intangible assets into an auditable FormulaTrace.
+
+变更：
+
+- `FinanceFormulaPlanner` now recognizes purchase-price-allocation, PPA,
+  business-combination, purchase-accounting, and acquisition-accounting phrasing;
+- the PPA planner binds total purchase consideration, goodwill, and identifiable
+  intangible assets from the finance fact ledger;
+- it can compile three semantic variants:
+  - goodwill plus identifiable intangible assets divided by purchase
+    consideration;
+  - goodwill-only allocation divided by purchase consideration;
+  - intangible-assets-only allocation divided by purchase consideration;
+- when both acquisition-table amounts and balance-sheet totals are present for
+  goodwill or intangible assets, acquisition/PPA context is preferred;
+- FormulaTrace diagnostics expose target fiscal year, selected output
+  attribute, bound line items, and model-visible outputs such as goodwill /
+  consideration, intangible assets / consideration, combined allocation share,
+  and residual consideration after those allocations;
+- per-share merger prices are explicitly rejected as total purchase
+  consideration, so evidence such as "$229 per share" cannot become a fake
+  acquisition total.
+
+边界：
+
+- no company, benchmark row, or answer table was added;
+- the planner only builds the calculation after facts are present in the
+  ledger, and missing purchase consideration still compiles as missing facts;
+- host diagnostics expose candidate arithmetic, but final acquisition-accounting
+  interpretation remains with the LLM and cited evidence.
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "purchase_price_allocation or per_share_consideration"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+5 passed, 228 deselected in 1.00s
+330 passed in 4.25s
+```

@@ -7851,6 +7851,157 @@ def test_finance_formula_planner_generates_ev_ebitda_payload() -> None:
     assert plan.payload["variables"]["ebitda"] == "3000"
 
 
+def test_finance_formula_planner_generates_purchase_price_allocation_payload() -> None:
+    facts = [
+        _year_fact("purchase consideration", "43000000000", 2023, fact_id="pfe-seagen-consideration"),
+        _year_fact("goodwill", "26000000000", 2023, fact_id="pfe-seagen-goodwill"),
+        _year_fact(
+            "intangible assets",
+            "12000000000",
+            2023,
+            fact_id="pfe-seagen-intangibles",
+            metadata={"label": "Total identifiable intangible assets acquired"},
+        ),
+    ]
+
+    plan = plan_finance_formula(
+        question=(
+            "For Pfizer's Seagen acquisition, calculate the purchase price allocation "
+            "share assigned to goodwill and identifiable intangible assets."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "purchase_price_allocation"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "(goodwill + intangible_assets) / purchase_consideration"
+    assert plan.payload["variables"] == {
+        "purchase_consideration": "43000000000",
+        "goodwill": "26000000000",
+        "intangible_assets": "12000000000",
+    }
+    assert plan.payload["input_fact_ids"] == [
+        "pfe-seagen-consideration",
+        "pfe-seagen-goodwill",
+        "pfe-seagen-intangibles",
+    ]
+    assert plan.payload["diagnostics"]["output_attribute"] == "goodwill_and_intangible_assets_to_consideration"
+    assert (
+        plan.payload["diagnostics"]["model_outputs"]["goodwill_and_intangible_assets_to_consideration"]
+        == "0.8837209302325581395348837209"
+    )
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value).quantize(Decimal("0.0001")) == Decimal("0.8837")
+    assert trace.diagnostics["formatted_value"] == "88.37209302325581395348837209%"
+
+
+def test_finance_formula_planner_purchase_price_allocation_prefers_acquisition_context_facts() -> None:
+    facts = [
+        _year_fact("purchase consideration", "43000000000", 2023, fact_id="acquisition-consideration"),
+        _year_fact(
+            "goodwill",
+            "95000000000",
+            2023,
+            fact_id="balance-sheet-goodwill",
+            metadata={"label": "Goodwill", "context": "Consolidated balance sheets"},
+        ),
+        _year_fact(
+            "goodwill",
+            "26000000000",
+            2023,
+            fact_id="acquired-goodwill",
+            metadata={"label": "Goodwill", "context": "Purchase price allocation for the acquired business"},
+        ),
+        _year_fact(
+            "intangible assets",
+            "55000000000",
+            2023,
+            fact_id="balance-sheet-intangibles",
+            metadata={"label": "Intangible assets, net", "context": "Consolidated balance sheets"},
+        ),
+        _year_fact(
+            "intangible assets",
+            "12000000000",
+            2023,
+            fact_id="acquired-intangibles",
+            metadata={"label": "Total identifiable intangible assets acquired", "context": "Business combination"},
+        ),
+    ]
+
+    plan = plan_finance_formula(
+        question="Calculate the PPA share allocated to goodwill and identifiable intangible assets.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["variables"] == {
+        "purchase_consideration": "43000000000",
+        "goodwill": "26000000000",
+        "intangible_assets": "12000000000",
+    }
+    assert plan.payload["input_fact_ids"] == [
+        "acquisition-consideration",
+        "acquired-goodwill",
+        "acquired-intangibles",
+    ]
+
+
+def test_finance_formula_planner_purchase_price_allocation_can_focus_goodwill() -> None:
+    facts = [
+        _year_fact("purchase consideration", "43000000000", 2023, fact_id="pfe-seagen-consideration"),
+        _year_fact("goodwill", "26000000000", 2023, fact_id="pfe-seagen-goodwill"),
+        _year_fact("intangible assets", "12000000000", 2023, fact_id="pfe-seagen-intangibles"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For the business combination, what percent of purchase consideration was allocated to goodwill?",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "purchase_price_allocation"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "goodwill / purchase_consideration"
+    assert plan.payload["variables"] == {
+        "purchase_consideration": "43000000000",
+        "goodwill": "26000000000",
+    }
+    assert plan.payload["diagnostics"]["output_attribute"] == "goodwill_to_consideration"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value).quantize(Decimal("0.0001")) == Decimal("0.6047")
+    assert trace.diagnostics["formatted_value"] == "60.46511627906976744186046512%"
+
+
+def test_finance_formula_planner_purchase_price_allocation_rejects_per_share_consideration() -> None:
+    facts = [
+        _year_fact(
+            "purchase price",
+            "229",
+            2023,
+            fact_id="pfe-seagen-per-share-price",
+            metadata={"per_share": True, "context": "$229 per Seagen share in cash"},
+        ),
+        _year_fact("goodwill", "26000000000", 2023, fact_id="pfe-seagen-goodwill"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For Pfizer's Seagen acquisition, calculate purchase price allocation to goodwill.",
+        facts=facts,
+    )
+
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "purchase_price_allocation"
+    assert "purchase_consideration" in plan.missing_facts
+    assert plan.payload is None
+    assert plan.input_fact_ids == ["pfe-seagen-goodwill"]
+
+
 def test_finance_formula_preflight_returns_missing_plan_when_no_entity_is_ready() -> None:
     evidence = [
         _finance_evidence(

@@ -2262,6 +2262,13 @@ supported FinanceFact and FormulaTrace values and exposed to synthesis and
 `finance.numeric_judge`, so the LLM can state a corrected actual value when the
 evidence contradicts the premise. The host only carries the hint; it does not
 decide the semantic answer.
+Purchase-price-allocation questions now have a dedicated formula planner path
+for business-combination and acquisition-accounting tasks. The planner binds
+purchase consideration, goodwill, and identifiable intangible assets into
+FormulaTrace payloads, can focus on goodwill-only or intangible-only subclaims,
+prefers acquisition-table facts over balance-sheet totals when both are present,
+and rejects per-share purchase prices as total consideration so merger press
+release evidence does not pollute the calculation.
 
 ## Validation
 

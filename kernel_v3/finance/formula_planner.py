@@ -50,6 +50,8 @@ def plan_finance_formula(
         return _plan_ev_revenue(question=question, facts=usable)
     if formula == "ev_ebitda":
         return _plan_ev_ebitda(usable)
+    if formula == "purchase_price_allocation":
+        return _plan_purchase_price_allocation(question=question, facts=usable)
     if formula == "dio":
         return _plan_dio(question=question, facts=usable)
     if formula == "yoy_growth":
@@ -88,6 +90,18 @@ def _detect_formula(question: str) -> str | None:
         return "ev_revenue"
     if "ev/ebitda" in compact or "enterprise value to ebitda" in text:
         return "ev_ebitda"
+    if (
+        "purchase price allocation" in text
+        or "purchase-price allocation" in text
+        or re.search(r"\bppa\b", text)
+        or "allocation of purchase price" in text
+        or "allocated purchase price" in text
+        or (
+            any(marker in text for marker in ("business combination", "purchase accounting", "acquisition accounting"))
+            and any(marker in text for marker in ("goodwill", "intangible", "consideration"))
+        )
+    ):
+        return "purchase_price_allocation"
     if "debt-to-equity" in text or "debt to equity" in text or "debt/equity" in compact:
         return "debt_to_equity"
     if "basis point" in text or "bps" in text:
@@ -758,6 +772,220 @@ def _plan_ev_ebitda(facts: list[FinanceFact]) -> FinanceFormulaPlan:
             "enterprise_value_source": ev_inputs["source"],
             "ebitda_source": "direct" if ebitda is not None else "derived_from_components",
         },
+    )
+
+
+def _plan_purchase_price_allocation(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    consideration = _ppa_consideration_fact(facts, target_year=target_year)
+    goodwill = _ppa_goodwill_fact(facts, target_year=target_year)
+    intangible_facts = _ppa_intangible_facts(facts, target_year=target_year)
+    missing: list[str] = []
+    if consideration is None:
+        missing.append("purchase_consideration")
+    question_text = _metric_text(question)
+    needs_goodwill = "goodwill" in question_text
+    needs_intangibles = "intangible" in question_text or "identifiable" in question_text
+    if needs_goodwill and goodwill is None:
+        missing.append("goodwill")
+    if needs_intangibles and not intangible_facts:
+        missing.append("intangible_assets")
+    if not needs_goodwill and not needs_intangibles and goodwill is None and not intangible_facts:
+        missing.append("goodwill_or_intangible_assets")
+    support_facts = [fact for fact in [consideration, goodwill] if fact is not None]
+    support_facts.extend(intangible_facts)
+    if missing:
+        return _missing(
+            "purchase_price_allocation",
+            missing,
+            facts=support_facts,
+            diagnostics={
+                "reason": "purchase_price_allocation_requires_consideration_and_allocated_asset_facts",
+                "target_fiscal_year": target_year,
+            },
+        )
+    related_facts = support_facts
+    consideration_value = _decimal_or_none(_fact_value_for_formula(consideration, related_facts=related_facts)) if consideration else None
+    goodwill_value = _decimal_or_none(_fact_value_for_formula(goodwill, related_facts=related_facts)) if goodwill else Decimal(0)
+    intangible_values = [
+        value
+        for fact in intangible_facts
+        if (value := _decimal_or_none(_fact_value_for_formula(fact, related_facts=related_facts))) is not None
+    ]
+    intangible_total = sum(intangible_values, Decimal(0))
+    if consideration_value is None or consideration_value == 0:
+        return _missing(
+            "purchase_price_allocation",
+            ["positive_purchase_consideration"],
+            facts=support_facts,
+            diagnostics={"target_fiscal_year": target_year},
+        )
+    if needs_goodwill and goodwill is not None and not needs_intangibles:
+        expression = "goodwill / purchase_consideration"
+        output_attribute = "goodwill_to_consideration"
+        variables: JsonObject = {
+            "purchase_consideration": _decimal_string(consideration_value),
+            "goodwill": _decimal_string(goodwill_value),
+        }
+        formula_facts = [fact for fact in (consideration, goodwill) if fact is not None]
+    elif needs_intangibles and intangible_facts and not needs_goodwill:
+        expression = "intangible_assets / purchase_consideration"
+        output_attribute = "intangible_assets_to_consideration"
+        variables = {
+            "purchase_consideration": _decimal_string(consideration_value),
+            "intangible_assets": _decimal_string(intangible_total),
+        }
+        formula_facts = ([consideration] if consideration is not None else []) + intangible_facts
+    else:
+        expression = "(goodwill + intangible_assets) / purchase_consideration"
+        output_attribute = "goodwill_and_intangible_assets_to_consideration"
+        variables = {
+            "purchase_consideration": _decimal_string(consideration_value),
+            "goodwill": _decimal_string(goodwill_value),
+            "intangible_assets": _decimal_string(intangible_total),
+        }
+        formula_facts = [fact for fact in (consideration, goodwill) if fact is not None] + intangible_facts
+    allocated_total = goodwill_value + intangible_total
+    model_outputs = {
+        "purchase_consideration": _decimal_string(consideration_value),
+        "goodwill": _decimal_string(goodwill_value) if goodwill is not None else None,
+        "intangible_assets": _decimal_string(intangible_total) if intangible_facts else None,
+        "goodwill_and_intangible_assets": _decimal_string(allocated_total),
+        "goodwill_to_consideration": _ratio_decimal_string(goodwill_value, consideration_value) if goodwill is not None else None,
+        "intangible_assets_to_consideration": _ratio_decimal_string(intangible_total, consideration_value) if intangible_facts else None,
+        "goodwill_and_intangible_assets_to_consideration": _ratio_decimal_string(allocated_total, consideration_value),
+        "residual_after_goodwill_and_intangible_assets": _decimal_string(consideration_value - allocated_total),
+    }
+    return _ready(
+        "purchase_price_allocation",
+        expression,
+        variables,
+        unit="percent",
+        facts=formula_facts,
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "allocated acquisition amounts divided by purchase consideration",
+            "output_attribute": output_attribute,
+            "bound_line_items": {
+                "purchase_consideration": _formula_bound_line_item(consideration),
+                **({"goodwill": _formula_bound_line_item(goodwill)} if "goodwill" in variables and goodwill is not None else {}),
+                **(
+                    {"intangible_assets": [_formula_bound_line_item(fact) for fact in intangible_facts]}
+                    if "intangible_assets" in variables
+                    else {}
+                ),
+            },
+            "model_outputs": {key: value for key, value in model_outputs.items() if value is not None},
+        },
+    )
+
+
+def _ppa_consideration_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    candidates = [
+        fact
+        for fact in _facts_for_metric(
+            facts,
+            (
+                "purchase consideration",
+                "consideration paid",
+                "fair value of consideration",
+                "purchase price",
+                "transaction value",
+                "deal value",
+            ),
+        )
+        if not _is_per_share_fact(fact) and not _looks_like_unscaled_equity_quote(fact)
+    ]
+    if target_year is not None:
+        year_matches = [
+            fact
+            for fact in candidates
+            if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+        ]
+        if year_matches:
+            candidates = year_matches
+    return _sort_facts(candidates)[-1] if candidates else None
+
+
+def _ppa_goodwill_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    candidates = _sort_unique_facts(_facts_for_metric(facts, ("goodwill",)))
+    if target_year is not None:
+        year_matches = [
+            fact
+            for fact in candidates
+            if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+        ]
+        if year_matches:
+            candidates = year_matches
+    ppa_context_candidates = [
+        fact
+        for fact in candidates
+        if _ppa_fact_has_acquisition_context(fact)
+    ]
+    if ppa_context_candidates:
+        candidates = ppa_context_candidates
+    return _sort_facts(candidates)[-1] if candidates else None
+
+
+def _ppa_intangible_facts(facts: list[FinanceFact], *, target_year: int | None) -> list[FinanceFact]:
+    candidates = _sort_unique_facts(_facts_for_metric(facts, ("intangible assets", "developed technology", "customer relationships")))
+    if target_year is not None:
+        year_matches = [
+            fact
+            for fact in candidates
+            if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+        ]
+        if year_matches:
+            candidates = year_matches
+    ppa_context_candidates = [
+        fact
+        for fact in candidates
+        if _ppa_fact_has_acquisition_context(fact)
+    ]
+    if ppa_context_candidates:
+        candidates = ppa_context_candidates
+    total_candidates = [
+        fact
+        for fact in candidates
+        if _ppa_intangible_fact_is_total(fact)
+    ]
+    if total_candidates:
+        return [_sort_facts(total_candidates)[-1]]
+    return candidates
+
+
+def _ppa_intangible_fact_is_total(fact: FinanceFact) -> bool:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    text = _metric_text(
+        " ".join(
+            str(metadata.get(key) or "")
+            for key in ("label", "raw", "raw_metric", "context")
+        )
+    )
+    return "total" in text and "intangible" in text
+
+
+def _ppa_fact_has_acquisition_context(fact: FinanceFact) -> bool:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    text = _metric_text(
+        " ".join(
+            str(metadata.get(key) or "")
+            for key in ("label", "raw", "raw_metric", "context", "section", "source_title")
+        )
+    )
+    return any(
+        marker in text
+        for marker in (
+            "purchase price allocation",
+            "business combination",
+            "acquisition",
+            "acquired",
+            "purchase accounting",
+            "consideration transferred",
+            "allocation of purchase price",
+            "assets acquired",
+            "liabilities assumed",
+        )
     )
 
 
