@@ -50,6 +50,8 @@ def plan_finance_formula(
         return _plan_ev_revenue(question=question, facts=usable)
     if formula == "ev_ebitda":
         return _plan_ev_ebitda(usable)
+    if formula == "fixed_charge_coverage":
+        return _plan_fixed_charge_coverage(question=question, facts=usable)
     if formula == "purchase_price_allocation":
         return _plan_purchase_price_allocation(question=question, facts=usable)
     if formula == "dio":
@@ -90,6 +92,8 @@ def _detect_formula(question: str) -> str | None:
         return "ev_revenue"
     if "ev/ebitda" in compact or "enterprise value to ebitda" in text:
         return "ev_ebitda"
+    if "fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text:
+        return "fixed_charge_coverage"
     if (
         "purchase price allocation" in text
         or "purchase-price allocation" in text
@@ -772,6 +776,174 @@ def _plan_ev_ebitda(facts: list[FinanceFact]) -> FinanceFormulaPlan:
             "enterprise_value_source": ev_inputs["source"],
             "ebitda_source": "direct" if ebitda is not None else "derived_from_components",
         },
+    )
+
+
+def _plan_fixed_charge_coverage(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    fixed_charges = _fixed_charge_denominator_fact(facts, target_year=target_year)
+    earnings_available = _fixed_charge_numerator_fact(facts, target_year=target_year)
+    pretax_income = _latest_fact_for_year(facts, ("pretax income",), target_year=target_year) if earnings_available is None else None
+    missing: list[str] = []
+    if fixed_charges is None:
+        missing.append("fixed_charges")
+    if earnings_available is None and pretax_income is None:
+        missing.append("earnings_available_for_fixed_charges_or_pretax_income")
+    support_facts = [fact for fact in (earnings_available, pretax_income, fixed_charges) if fact is not None]
+    if missing:
+        return _missing(
+            "fixed_charge_coverage",
+            missing,
+            facts=support_facts,
+            diagnostics={
+                "reason": "fixed_charge_coverage_requires_fixed_charges_and_earnings_basis",
+                "target_fiscal_year": target_year,
+            },
+        )
+    related_facts = support_facts
+    fixed_charge_value = _decimal_or_none(_fact_value_for_formula(fixed_charges, related_facts=related_facts)) if fixed_charges else None
+    earnings_value = (
+        _decimal_or_none(_fact_value_for_formula(earnings_available, related_facts=related_facts))
+        if earnings_available
+        else None
+    )
+    pretax_value = _decimal_or_none(_fact_value_for_formula(pretax_income, related_facts=related_facts)) if pretax_income else None
+    if fixed_charge_value is None or fixed_charge_value == 0:
+        return _missing(
+            "fixed_charge_coverage",
+            ["positive_fixed_charges"],
+            facts=support_facts,
+            diagnostics={"target_fiscal_year": target_year},
+        )
+    if earnings_value is not None:
+        expression = "earnings_available_for_fixed_charges / fixed_charges"
+        variables: JsonObject = {
+            "earnings_available_for_fixed_charges": _decimal_string(earnings_value),
+            "fixed_charges": _decimal_string(fixed_charge_value),
+        }
+        formula_facts = [fact for fact in (earnings_available, fixed_charges) if fact is not None]
+        earnings_basis = "direct_disclosure"
+        numerator_value = earnings_value
+    elif pretax_value is not None:
+        expression = "(pretax_income + fixed_charges) / fixed_charges"
+        variables = {
+            "pretax_income": _decimal_string(pretax_value),
+            "fixed_charges": _decimal_string(fixed_charge_value),
+        }
+        formula_facts = [fact for fact in (pretax_income, fixed_charges) if fact is not None]
+        earnings_basis = "derived_from_pretax_income_plus_fixed_charges"
+        numerator_value = pretax_value + fixed_charge_value
+    else:
+        return _missing(
+            "fixed_charge_coverage",
+            ["earnings_available_for_fixed_charges_or_pretax_income"],
+            facts=support_facts,
+            diagnostics={"target_fiscal_year": target_year},
+        )
+    return _ready(
+        "fixed_charge_coverage",
+        expression,
+        variables,
+        unit="x",
+        facts=formula_facts,
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "earnings available for fixed charges divided by fixed charges",
+            "earnings_basis": earnings_basis,
+            "bound_line_items": {
+                **(
+                    {"earnings_available_for_fixed_charges": _formula_bound_line_item(earnings_available)}
+                    if earnings_available is not None
+                    else {"pretax_income": _formula_bound_line_item(pretax_income)}
+                ),
+                "fixed_charges": _formula_bound_line_item(fixed_charges),
+            },
+            "model_outputs": {
+                "earnings_available_for_fixed_charges": _decimal_string(numerator_value),
+                "fixed_charges": _decimal_string(fixed_charge_value),
+                "fixed_charge_coverage": _ratio_decimal_string(numerator_value, fixed_charge_value),
+            },
+        },
+    )
+
+
+def _fixed_charge_numerator_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    candidates = [
+        fact
+        for fact in _facts_for_metric(
+            facts,
+            (
+                "earnings available for fixed charges",
+                "earnings before fixed charges",
+                "income before fixed charges",
+            ),
+        )
+        if _is_fixed_charge_numerator_fact(fact)
+    ]
+    candidates = _fixed_charge_year_matches(candidates, target_year=target_year)
+    return _sort_facts(candidates)[-1] if candidates else None
+
+
+def _fixed_charge_denominator_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    candidates = [
+        fact
+        for fact in _facts_for_metric(facts, ("fixed charges", "total fixed charges"))
+        if _is_fixed_charge_denominator_fact(fact)
+    ]
+    candidates = _fixed_charge_year_matches(candidates, target_year=target_year)
+    return _sort_facts(candidates)[-1] if candidates else None
+
+
+def _fixed_charge_year_matches(facts: list[FinanceFact], *, target_year: int | None) -> list[FinanceFact]:
+    candidates = _sort_unique_facts(facts)
+    if target_year is None:
+        return candidates
+    target_matches = [
+        fact
+        for fact in candidates
+        if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+    ]
+    return target_matches
+
+
+def _is_fixed_charge_numerator_fact(fact: FinanceFact) -> bool:
+    text = _fixed_charge_fact_text(fact)
+    if _is_fixed_charge_ratio_fact(fact):
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "earnings available for fixed charges",
+            "earnings before fixed charges",
+            "income before fixed charges",
+        )
+    )
+
+
+def _is_fixed_charge_denominator_fact(fact: FinanceFact) -> bool:
+    text = _fixed_charge_fact_text(fact)
+    if _is_fixed_charge_ratio_fact(fact) or _is_fixed_charge_numerator_fact(fact):
+        return False
+    return "fixed charges" in text
+
+
+def _is_fixed_charge_ratio_fact(fact: FinanceFact) -> bool:
+    text = _fixed_charge_fact_text(fact)
+    return "ratio" in text or "coverage ratio" in text or "times" in text
+
+
+def _fixed_charge_fact_text(fact: FinanceFact) -> str:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    return _metric_text(
+        " ".join(
+            str(value or "")
+            for value in (
+                fact.metric,
+                metadata.get("label"),
+                metadata.get("concept"),
+                metadata.get("raw_metric"),
+            )
+        )
     )
 
 

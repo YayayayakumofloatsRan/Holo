@@ -5095,6 +5095,8 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
         return any(marker in text for marker in ("lbo", "leveraged buyout", "ebitda", "exit multiple", "leverage"))
     if formula_name == "capital_intensity" and missing:
         return any(marker in text for marker in ("capital-intensive", "capital intensive", "capital intensity", "capex", "property plant", "assets"))
+    if formula_name == "fixed_charge_coverage" and missing:
+        return any(marker in text for marker in ("fixed charge", "fixed-charge", "coverage", "earnings to fixed charges"))
     return False
 
 
@@ -5149,6 +5151,11 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             f"{base_query} SEC companyfacts capital expenditures revenue net sales operating cash flow total assets "
             "PropertyPlantAndEquipmentNet PP&E net net income ROA"
         )
+    elif formula_name == "fixed_charge_coverage":
+        query = (
+            f"{base_query} SEC companyfacts 10-K fixed charges earnings available for fixed charges "
+            "ratio of earnings to fixed charges Exhibit 12 pretax income"
+        )
     elif formula_name == "fixed_asset_turnover":
         query = (
             f"{base_query} SEC companyfacts revenue PropertyPlantAndEquipmentNet PP&E net "
@@ -5174,6 +5181,9 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
         max_queries = min(6, max(4, len(queries)))
         max_fetches = 20
     if formula_name == "fixed_asset_turnover":
+        max_queries = min(5, max(3, len(queries)))
+        max_fetches = 16
+    if formula_name == "fixed_charge_coverage":
         max_queries = min(5, max(3, len(queries)))
         max_fetches = 16
     if formula_name == "dio":
@@ -5203,6 +5213,7 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             "required_evidence_terms": evidence_policy.required_terms if evidence_policy is not None else [],
             "research_profile": "finance_fundamentals",
             **({"target_inventory_and_cogs_structured_source_required": True} if formula_name == "dio" else {}),
+            **({"target_fixed_charge_coverage_structured_source_required": True} if formula_name == "fixed_charge_coverage" else {}),
             **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda", "dcf", "lbo"} else {}),
             **({"target_tickers": tickers} if tickers else {}),
         },
@@ -5228,6 +5239,7 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             "dio",
             "capital_intensity",
             "fixed_asset_turnover",
+            "fixed_charge_coverage",
         }:
             urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
         if formula_name == "dio":
@@ -5247,6 +5259,14 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
                 urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
         elif formula_name == "fixed_asset_turnover":
             for concept in ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet", "PropertyPlantAndEquipmentNet"):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name == "fixed_charge_coverage":
+            for concept in (
+                "EarningsAvailableForFixedCharges",
+                "FixedCharges",
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
+            ):
                 urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
     return _ordered_unique(urls)[:12]
 
@@ -5424,6 +5444,10 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
                 "PropertyPlantAndEquipmentNet net income"
             )
             add(f"{ticker} 10-K balance sheet PP&E assets income statement net income cash flow capital expenditures")
+    elif formula_name == "fixed_charge_coverage" and tickers:
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges pretax income")
+            add(f"{ticker} 10-K Exhibit 12 ratio of earnings to fixed charges fixed charges")
     elif formula_name == "fixed_asset_turnover" and tickers:
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
@@ -5451,6 +5475,8 @@ def _finance_missing_fact_preferred_families(formula_name: str) -> list[str]:
     if formula_name in {"dcf", "lbo"}:
         return ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"]
     if formula_name == "capital_intensity":
+        return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
+    if formula_name == "fixed_charge_coverage":
         return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
     if formula_name == "fixed_asset_turnover":
         return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
@@ -5481,6 +5507,8 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} annual report 10-K adjusted EBITDA operating cash flow free cash flow debt cash enterprise value"
     if formula_name == "capital_intensity":
         return f"{goal} annual report 10-K PP&E total assets capital expenditures operating cash flow revenue net income"
+    if formula_name == "fixed_charge_coverage":
+        return f"{goal} annual report 10-K Exhibit 12 fixed charges earnings available for fixed charges pretax income"
     if formula_name == "fixed_asset_turnover":
         return f"{goal} annual report 10-K revenue property plant equipment net fixed asset turnover"
     return f"{goal} SEC Archives 8-K 10-K consideration revenue"
@@ -5499,6 +5527,8 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} investor relations LBO assumptions leverage exit multiple EBITDA cash flow"
     if formula_name == "capital_intensity":
         return f"{goal} SEC companyfacts PropertyPlantAndEquipmentNet Assets PaymentsToAcquirePropertyPlantAndEquipment NetCashProvidedByUsedInOperatingActivities Revenues"
+    if formula_name == "fixed_charge_coverage":
+        return f"{goal} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
     if formula_name == "fixed_asset_turnover":
         return f"{goal} SEC companyfacts Revenues PropertyPlantAndEquipmentNet 10-K balance sheet statement of income"
     return f"{goal} official filing transaction value revenue"
@@ -5833,6 +5863,8 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         )
         else "dio"
         if ("days inventory outstanding" in text or "days inventory" in text or " dio" in f" {text}")
+        else "fixed_charge_coverage"
+        if ("fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text)
         else ""
     )
     if not formula_name:
@@ -5851,6 +5883,11 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         additions = (
             "SEC companyfacts companyconcept 10-K annual revenue net sales capital expenditures operating cash flow "
             "total assets property plant equipment net PP&E net net income ROA capital intensity"
+        )
+    elif formula_name == "fixed_charge_coverage":
+        additions = (
+            "SEC companyfacts companyconcept 10-K Exhibit 12 fixed charges earnings available for fixed charges "
+            "ratio of earnings to fixed charges pretax income"
         )
     elif formula_name == "fixed_asset_turnover":
         additions = "SEC companyfacts companyconcept 10-K annual revenue net sales property plant equipment net PP&E fixed asset turnover"
@@ -5885,6 +5922,11 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
             )
             extra_queries.append(f"{ticker} SEC companyconcept capital intensity capex revenue PP&E assets net income")
         extra_queries.append(f"{root_goal} SEC companyfacts capital intensity revenue capex OCF PP&E assets ROA")
+    elif formula_name == "fixed_charge_coverage":
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges pretax income")
+            extra_queries.append(f"{ticker} 10-K Exhibit 12 ratio of earnings to fixed charges fixed charges")
+        extra_queries.append(f"{root_goal} SEC filing fixed charges earnings available for fixed charges")
     elif formula_name == "fixed_asset_turnover":
         for ticker in _finance_goal_tickers(root_goal):
             extra_queries.append(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
@@ -5922,7 +5964,7 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
             metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:16]
         metadata.setdefault("source_authority_requirement", "primary")
         metadata.setdefault("target_inventory_and_cogs_structured_source_required", True)
-    if formula_name in {"capital_intensity", "fixed_asset_turnover"}:
+    if formula_name in {"capital_intensity", "fixed_asset_turnover", "fixed_charge_coverage"}:
         source_urls = _finance_issuer_seed_urls(root_goal, formula_name=formula_name)
         if source_urls:
             updated["source_urls"] = _ordered_unique([*_string_list(updated.get("source_urls")), *source_urls])[:24]
@@ -5932,12 +5974,14 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
             metadata.setdefault("target_capital_intensity_structured_source_required", True)
         if formula_name == "fixed_asset_turnover":
             metadata.setdefault("target_fixed_asset_turnover_structured_source_required", True)
+        if formula_name == "fixed_charge_coverage":
+            metadata.setdefault("target_fixed_charge_coverage_structured_source_required", True)
     metadata.setdefault("preferred_source_families", ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"])
     updated["metadata"] = metadata
     updated["max_sources"] = max(int(updated.get("max_sources") or 0), 24)
     updated["max_fetches"] = max(
         int(updated.get("max_fetches") or 0),
-        20 if formula_name == "capital_intensity" else 18 if formula_name in {"ev_revenue", "fixed_asset_turnover"} else 12,
+        20 if formula_name == "capital_intensity" else 18 if formula_name in {"ev_revenue", "fixed_asset_turnover", "fixed_charge_coverage"} else 12,
     )
     updated["max_spans_per_document"] = max(int(updated.get("max_spans_per_document") or 0), 8)
     return updated
@@ -5992,6 +6036,8 @@ def _canonical_finance_formula_name(value: str) -> str:
         return "capital_intensity"
     if text.startswith("fixed_asset_turnover"):
         return "fixed_asset_turnover"
+    if text.startswith("fixed_charge_coverage") or "fixed_charge" in text or "earnings_to_fixed_charges" in text:
+        return "fixed_charge_coverage"
     if text.startswith("dio") or "days_inventory" in text:
         return "dio"
     if text.startswith("ev_revenue") or "enterprise_value_to_revenue" in text:

@@ -193,6 +193,10 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "property_plant_and_equipment_net_current",
             "property_plant_and_equipment_net_prior",
         ],
+        "fixed_charge_coverage": [
+            "earnings_available_for_fixed_charges_or_pretax_income",
+            "fixed_charges",
+        ],
     }
     names = slots_by_formula.get(str(formula_name or ""), [])
     return [
@@ -381,6 +385,11 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "net ppne",
             "ppne",
         ],
+        "earnings_available_for_fixed_charges_or_pretax_income": [
+            "earnings available for fixed charges",
+            "pretax income",
+        ],
+        "fixed_charges": ["fixed charges"],
         "assets": ["assets", "total assets"],
     }
     return mapping.get(name, [name])
@@ -401,6 +410,7 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "yoy_growth",
         "capital_intensity",
         "fixed_asset_turnover",
+        "fixed_charge_coverage",
     }:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
@@ -421,6 +431,8 @@ def _infer_formula_name(question: str) -> str:
         return "capital_intensity"
     if "fixed asset turnover" in text or "fixed-asset turnover" in text:
         return "fixed_asset_turnover"
+    if "fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text:
+        return "fixed_charge_coverage"
     if "dio" in text or "days inventory" in text:
         return "dio"
     if "cagr" in text:

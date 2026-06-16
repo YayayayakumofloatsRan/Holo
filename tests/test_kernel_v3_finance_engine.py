@@ -7851,6 +7851,104 @@ def test_finance_formula_planner_generates_ev_ebitda_payload() -> None:
     assert plan.payload["variables"]["ebitda"] == "3000"
 
 
+def test_finance_fact_ledger_extracts_fixed_charge_coverage_line_items_from_structured_facts() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="fixed-charge-earnings",
+            text=(
+                "entityName=Retailer ticker=RTL taxonomy=us-gaap concept=EarningsAvailableForFixedCharges "
+                "label='Earnings available for fixed charges' unit=USD fy=2024 form=10-K value=19500000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="fixed-charges",
+            text=(
+                "entityName=Retailer ticker=RTL taxonomy=us-gaap concept=FixedCharges "
+                "label='Total fixed charges' unit=USD fy=2024 form=10-K value=1500000000"
+            ),
+        ),
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence],
+    )
+
+    by_metric = {fact.metric: fact for fact in facts}
+    assert by_metric["earnings available for fixed charges"].value == "19500000000"
+    assert by_metric["fixed charges"].value == "1500000000"
+
+
+def test_finance_formula_planner_generates_fixed_charge_coverage_payload() -> None:
+    facts = [
+        _year_fact(
+            "earnings available for fixed charges",
+            "19500000000",
+            2024,
+            fact_id="rtl-fixed-charge-earnings",
+        ),
+        _year_fact("fixed charges", "1500000000", 2024, fact_id="rtl-fixed-charges"),
+        _year_fact(
+            "ratio of earnings to fixed charges",
+            "13",
+            2024,
+            fact_id="rtl-disclosed-fixed-charge-ratio",
+            metadata={"label": "Ratio of earnings to fixed charges"},
+        ),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, calculate the fixed-charge coverage ratio.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "fixed_charge_coverage"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "earnings_available_for_fixed_charges / fixed_charges"
+    assert plan.payload["variables"] == {
+        "earnings_available_for_fixed_charges": "19500000000",
+        "fixed_charges": "1500000000",
+    }
+    assert plan.payload["input_fact_ids"] == ["rtl-fixed-charge-earnings", "rtl-fixed-charges"]
+    assert plan.payload["diagnostics"]["earnings_basis"] == "direct_disclosure"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("13")
+    assert trace.diagnostics["formatted_value"] == "13 x"
+
+
+def test_finance_formula_planner_derives_fixed_charge_coverage_from_pretax_income() -> None:
+    facts = [
+        _year_fact("pretax income", "18000000000", 2024, fact_id="rtl-pretax-income"),
+        _year_fact("fixed charges", "1500000000", 2024, fact_id="rtl-fixed-charges"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, compute fixed charge coverage using earnings before fixed charges.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "fixed_charge_coverage"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "(pretax_income + fixed_charges) / fixed_charges"
+    assert plan.payload["variables"] == {
+        "pretax_income": "18000000000",
+        "fixed_charges": "1500000000",
+    }
+    assert plan.payload["diagnostics"]["earnings_basis"] == "derived_from_pretax_income_plus_fixed_charges"
+    assert (
+        plan.payload["diagnostics"]["model_outputs"]["earnings_available_for_fixed_charges"]
+        == "19500000000"
+    )
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("13")
+
+
 def test_finance_formula_planner_generates_purchase_price_allocation_payload() -> None:
     facts = [
         _year_fact("purchase consideration", "43000000000", 2023, fact_id="pfe-seagen-consideration"),
@@ -8492,6 +8590,41 @@ def test_finance_missing_fact_retrieval_action_supports_ev_ebitda() -> None:
     assert action.payload["metadata"]["finance_formula_name"] == "ev_ebitda"
     assert "enterprise value" in action.payload["query"].lower()
     assert "ebitda" in action.payload["query"].lower()
+
+
+def test_finance_missing_fact_retrieval_action_supports_fixed_charge_coverage() -> None:
+    plan = plan_finance_formula(question="Compare TGT and WMT fixed-charge coverage ratios.", facts=[])
+    source_action = CandidateAction(
+        action_id="act-source",
+        kind="respond",
+        name=None,
+        description="fallback",
+        score=0.1,
+        payload={"text": "fallback"},
+        reasons=["fallback"],
+        side_effect_class="none",
+    )
+
+    action = _finance_missing_fact_retrieval_action(
+        source_action,
+        plan=plan,
+        goal="Compare TGT and WMT fixed-charge coverage ratios using public filings.",
+        call_index=1,
+    )
+
+    assert action is not None
+    assert action.name == "retrieval.run"
+    assert action.payload["metadata"]["finance_formula_name"] == "fixed_charge_coverage"
+    assert action.payload["metadata"]["target_fixed_charge_coverage_structured_source_required"] is True
+    slot_specs = action.payload["metadata"]["slot_frame"]["required_slots"]
+    assert [slot["name"] for slot in slot_specs] == [
+        "earnings_available_for_fixed_charges_or_pretax_income",
+        "fixed_charges",
+    ]
+    assert slot_specs[0]["accepted_attributes"] == ["earnings available for fixed charges", "pretax income"]
+    assert slot_specs[1]["accepted_attributes"] == ["fixed charges"]
+    assert "fixed charges" in action.payload["query"].lower()
+    assert any("EarningsAvailableForFixedCharges" in query for query in action.payload["queries"])
 
 
 def test_finance_missing_fact_retrieval_action_preserves_target_document_binding() -> None:

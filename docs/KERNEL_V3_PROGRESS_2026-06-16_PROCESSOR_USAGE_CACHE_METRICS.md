@@ -3724,3 +3724,59 @@ goodwill, and identifiable intangible assets into an auditable FormulaTrace.
 5 passed, 228 deselected in 1.00s
 330 passed in 4.25s
 ```
+
+---
+
+## 61. 追加落地：Fixed-Charge Coverage Formula Coverage
+
+Coverage-ratio tasks are another recurring `required_trace_missing` family.
+Before this pass, fixed-charge coverage questions could be recognized as a
+workflow requirement by benchmark metadata, but the finance ledger and formula
+planner did not canonicalize the relevant filing line items or compile an
+auditable FormulaTrace.
+
+变更：
+
+- `FinanceFactLedger` now canonicalizes filing line items for:
+  - `earnings available for fixed charges`;
+  - `fixed charges`;
+- natural/structured metric aliases cover common SEC-style phrases such as
+  `EarningsAvailableForFixedCharges`, `FixedCharges`, `earnings before fixed
+  charges`, and `total fixed charges`;
+- `FinanceFormulaPlanner` now detects fixed-charge coverage / earnings-to-fixed
+  charges wording;
+- the planner compiles direct-disclosure coverage as
+  `earnings_available_for_fixed_charges / fixed_charges`;
+- when the direct numerator is absent but pretax income and fixed charges are
+  present, it compiles the auditable derived basis
+  `(pretax_income + fixed_charges) / fixed_charges`;
+- disclosed ratio facts are treated as ratio evidence, not as denominator line
+  items;
+- runtime missing-fact retrieval now adds fixed-charge-specific SEC/companyfacts,
+  Exhibit 12, `EarningsAvailableForFixedCharges`, `FixedCharges`, and pretax
+  income query terms;
+- `finance_slot_frame` now exposes required slots and accepted attributes for
+  fixed-charge coverage so the model sees a structured missing-fact contract.
+
+边界：
+
+- no company, benchmark row, or fixed answer was added;
+- if a filing uses a more specialized earnings definition with capitalized
+  interest or lease-interest adjustments, the LLM still owns the final
+  interpretation and must cite the filing definition;
+- host arithmetic only creates the trace from bound facts and labels derived
+  bases explicitly.
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "fixed_charge"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+4 passed, 233 deselected in 0.88s
+334 passed in 3.84s
+```

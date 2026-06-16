@@ -1039,12 +1039,13 @@ Post-dev10 EV/EBITDA iteration:
   tokens `61,422.7`, average finance facts `71.4`, and average claims `71.4`.
   The first four representative workflow items all closed: HD/LOW DIO,
   KHC adjusted EBITDA bridge, PFE/SGEN transaction multiple, and WSC adjusted
-  EBITDA add-back trend. The remaining six items mainly fail by
+  EBITDA add-back trend. The remaining six items mainly failed by
   `required_trace_missing` or `unsupported_answer_number`: CRM DCF, EPAM LBO,
   TGT/WMT fixed-charge coverage, LULU/VSCO EV/EBITDA, CNC MLR rebate, and
-  PFE/Seagen purchase-price allocation. These are now best classified as
-  transform-planning / formula-template / modeling-policy gaps, not source
-  acquisition failures.
+  PFE/Seagen purchase-price allocation. Subsequent planner passes have added
+  EV/EBITDA, purchase-price-allocation, and fixed-charge coverage FormulaTrace
+  coverage, so those historical failures now need fresh live reruns rather than
+  another source-acquisition diagnosis.
 - 2026-06-11 workflow-harness scoring pass:
   curated dev10 items and scoring annotations now carry structured workflow
   annotations. `trace_metrics`, `FinanceBenchmarkSummary`, behavior graph diagnostics,
@@ -1151,12 +1152,12 @@ Post-dev10 EV/EBITDA iteration:
 7. Run the curated dev10 in small batches and classify verifier failures into
    unsupported answer number, ledger extraction gap, missing formula trace, unit
    mismatch, period mismatch, and assumption-label issues.
-8. Expand the finance fact ledger and formula planner for fixed-charge
-   coverage, MLR, and purchase price allocation cases. DCF/LBO v1 now binds
-   cash-flow / entry-value facts to explicit modeling assumptions and emits
-   calculator payloads. EV/EBITDA now has formula intent and missing-fact
-   fallback; it still needs stronger acquisition for market cap, total debt,
-   cash, and EBITDA components.
+8. Expand the finance fact ledger and formula planner for remaining MLR and
+   modeling-policy cases. Fixed-charge coverage, purchase price allocation, and
+   EV/EBITDA now have formula intent, missing-fact fallback, and FormulaTrace
+   paths; fresh live reruns still need to prove end-to-end benchmark closure.
+   DCF/LBO v1 now binds cash-flow / entry-value facts to explicit modeling
+   assumptions and emits calculator payloads.
 
 ## 2026-06-11 Modeling-Lite Substrate Update
 
