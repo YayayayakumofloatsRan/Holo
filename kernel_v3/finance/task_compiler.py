@@ -1300,6 +1300,19 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             )
         ]
+    if name == "yoy_growth":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "prior_current"),
+                domain="finance",
+                name="yoy_growth",
+                required_slots=["prior_period_value", "current_period_value"],
+                expression="current_period_value / prior_period_value - 1",
+                output_unit="percent",
+                output_attribute="yoy_growth",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
     payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
     return [
         TransformSpec(

@@ -90,26 +90,33 @@ The finance stack now supports the generic `operating_cash_flow_ratio` formula:
 
 The `yoy_growth` compiler now binds prior/current operating-income slots to
 `income_statement` / `operating income` when the question asks for operating
-income growth.
+income growth, and emits an executable transform:
+`current_period_value / prior_period_value - 1`, with percent output. Its
+missing-fact retrieval payload also seeds known issuers with SEC submissions,
+companyfacts, and the relevant companyconcept endpoint such as
+`OperatingIncomeLoss` for operating-income growth.
 
 Static verification on the same Adobe rows now shows:
 
-| Offset | Item | Formula | Evidence slots |
+| Offset | Item | Formula | Transform / evidence slots |
 | ---: | --- | --- | --- |
-| `10` | `financebench_id_04735` | `operating_cash_flow_ratio` | `operating_cash_flow` -> cash flow statement; `total_current_liabilities` -> balance sheet |
-| `11` | `financebench_id_07507` | `yoy_growth` | prior/current values -> income statement / operating income |
-| `12` | `financebench_id_03856` | `operating_cash_flow_ratio` | `operating_cash_flow` -> cash flow statement; `total_current_liabilities` -> balance sheet |
+| `10` | `financebench_id_04735` | `operating_cash_flow_ratio` | `operating_cash_flow / total_current_liabilities`; `operating_cash_flow` -> cash flow statement; `total_current_liabilities` -> balance sheet |
+| `11` | `financebench_id_07507` | `yoy_growth` | `current_period_value / prior_period_value - 1`; prior/current values -> income statement / operating income |
+| `12` | `financebench_id_03856` | `operating_cash_flow_ratio` | `operating_cash_flow / total_current_liabilities`; `operating_cash_flow` -> cash flow statement; `total_current_liabilities` -> balance sheet |
 
 Verification:
 
 ```bash
-.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "operating_cash_flow_ratio or current_liabilities_metric or yoy_operating_income_evidence_specs"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "yoy_operating_income or operating_cash_flow_ratio or current_liabilities_metric"
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py
+git diff --check
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
 ```
 
-Latest result: `248 passed in 2.53s` for finance engine and
-`51 passed in 205.27s` for FinanceBench tests.
+Latest result: targeted slice `6 passed, 243 deselected in 0.28s`; py_compile
+and `git diff --check` passed; `249 passed in 2.45s` for finance engine and
+`51 passed in 277.47s` for FinanceBench tests.
 
 ## What Is Not Proven Yet
 

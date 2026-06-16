@@ -5090,6 +5090,8 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
         return any(marker in text for marker in ("adjusted ebitda", "bridge", "addback", "add-back", "add back", "non-gaap"))
     if formula_name == "dio" and any(item in missing for item in ("inventory", "cogs_or_cost_of_sales", "cogs", "cost_of_sales")):
         return any(marker in text for marker in ("dio", "days inventory", "inventory", "cost of sales", "cost of revenue", "cogs"))
+    if formula_name == "yoy_growth" and missing:
+        return any(marker in text for marker in ("yoy", "year-over-year", "year over year", "growth rate", "change"))
     if formula_name == "dcf" and missing:
         return any(marker in text for marker in ("dcf", "discounted cash flow", "cash flow", "wacc", "terminal growth"))
     if formula_name == "lbo" and missing:
@@ -5140,6 +5142,11 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
         query = (
             f"{base_query} SEC companyfacts 10-K inventory cost of revenue cost of sales "
             "COGS days inventory outstanding"
+        )
+    elif formula_name == "yoy_growth":
+        query = (
+            f"{base_query} SEC companyfacts 10-K year-over-year prior current period "
+            f"{_yoy_growth_metric_query_terms(base_query)}"
         )
     elif formula_name == "dcf":
         query = (
@@ -5210,6 +5217,9 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
     if formula_name == "dio":
         max_queries = min(6, max(4, len(queries)))
         max_fetches = 18
+    if formula_name == "yoy_growth":
+        max_queries = min(5, max(3, len(queries)))
+        max_fetches = 16
     return {
         "query": query,
         "queries": queries[:max_queries],
@@ -5239,6 +5249,7 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
                 if formula_name == "operating_cash_flow_ratio"
                 else {}
             ),
+            **({"target_yoy_growth_structured_source_required": True} if formula_name == "yoy_growth" else {}),
             **({"target_fixed_charge_coverage_structured_source_required": True} if formula_name == "fixed_charge_coverage" else {}),
             **({"target_mlr_rebate_regulatory_source_required": True} if formula_name == "mlr_rebate" else {}),
             **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda", "dcf", "lbo"} else {}),
@@ -5273,6 +5284,9 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
         if formula_name == "dio":
             for concept in ("InventoryNet", "CostOfRevenue", "CostOfGoodsAndServicesSold"):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name == "yoy_growth":
+            for concept in _yoy_growth_companyconcepts(goal):
                 urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
         elif formula_name == "capital_intensity":
             for concept in (
@@ -5489,6 +5503,11 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
             add(f"{ticker} 10-K statement of income balance sheet revenue PP&E net")
+    elif formula_name == "yoy_growth":
+        metric_terms = _yoy_growth_metric_query_terms(goal)
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts {metric_terms} prior current annual 10-K year-over-year")
+            add(f"{ticker} 10-K income statement {metric_terms} year-over-year change")
     elif formula_name == "operating_cash_flow_ratio":
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts NetCashProvidedByUsedInOperatingActivities LiabilitiesCurrent 10-K")
@@ -5546,6 +5565,8 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} annual report 10-K 10-Q non-GAAP adjusted EBITDA reconciliation add backs"
     if formula_name == "dio":
         return f"{goal} annual report 10-K inventory cost of sales cost of revenue COGS"
+    if formula_name == "yoy_growth":
+        return f"{goal} annual report 10-K income statement {_yoy_growth_metric_query_terms(goal)} prior current period"
     if formula_name == "dcf":
         return f"{goal} annual report 10-K operating cash flow free cash flow capital expenditures"
     if formula_name == "lbo":
@@ -5570,6 +5591,8 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} investor relations annual report adjusted EBITDA non-GAAP reconciliation table"
     if formula_name == "dio":
         return f"{goal} SEC companyfacts InventoryNet CostOfRevenue CostOfGoodsAndServicesSold"
+    if formula_name == "yoy_growth":
+        return f"{goal} SEC companyfacts {' '.join(_yoy_growth_companyconcepts(goal))}"
     if formula_name == "dcf":
         return f"{goal} investor relations DCF assumptions WACC terminal growth cash flow"
     if formula_name == "lbo":
@@ -5916,6 +5939,8 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         )
         else "dio"
         if ("days inventory outstanding" in text or "days inventory" in text or " dio" in f" {text}")
+        else "yoy_growth"
+        if ("yoy" in text or "year-over-year" in text or "year over year" in text or "growth rate" in text)
         else "operating_cash_flow_ratio"
         if (
             "operating cash flow ratio" in text
@@ -5944,6 +5969,8 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         additions = "SEC companyfacts 10-K annual revenue transaction value enterprise value consideration acquisition target company"
     elif formula_name == "dio":
         additions = "SEC companyfacts 10-K annual inventory cost of revenue cost of sales COGS days inventory outstanding"
+    elif formula_name == "yoy_growth":
+        additions = f"SEC companyfacts 10-K annual prior current period {_yoy_growth_metric_query_terms(root_goal)} year-over-year"
     elif formula_name == "operating_cash_flow_ratio":
         additions = "SEC companyfacts 10-K operating cash flow cash from operations total current liabilities balance sheet cash flow statement"
     elif formula_name == "capital_intensity":
@@ -5986,6 +6013,12 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         for ticker in _finance_goal_tickers(root_goal):
             extra_queries.append(f"{ticker} SEC companyfacts inventory cost of revenue cost of sales COGS 10-K")
         extra_queries.append(f"{root_goal} SEC companyfacts inventory cost of revenue cost of sales")
+    elif formula_name == "yoy_growth":
+        metric_terms = _yoy_growth_metric_query_terms(root_goal)
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} SEC companyfacts {metric_terms} prior current annual 10-K year-over-year")
+            extra_queries.append(f"{ticker} 10-K income statement {metric_terms} year-over-year change")
+        extra_queries.append(f"{root_goal} SEC companyfacts {metric_terms} prior current year-over-year")
     elif formula_name == "operating_cash_flow_ratio":
         for ticker in _finance_goal_tickers(root_goal):
             extra_queries.append(f"{ticker} SEC companyfacts NetCashProvidedByUsedInOperatingActivities LiabilitiesCurrent")
@@ -6046,12 +6079,14 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
             metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:16]
         metadata.setdefault("source_authority_requirement", "primary")
         metadata.setdefault("target_inventory_and_cogs_structured_source_required", True)
-    if formula_name in {"capital_intensity", "fixed_asset_turnover", "fixed_charge_coverage", "mlr_rebate", "operating_cash_flow_ratio"}:
+    if formula_name in {"capital_intensity", "fixed_asset_turnover", "fixed_charge_coverage", "mlr_rebate", "operating_cash_flow_ratio", "yoy_growth"}:
         source_urls = _finance_issuer_seed_urls(root_goal, formula_name=formula_name)
         if source_urls:
             updated["source_urls"] = _ordered_unique([*_string_list(updated.get("source_urls")), *source_urls])[:24]
             metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:24]
         metadata.setdefault("source_authority_requirement", "primary")
+        if formula_name == "yoy_growth":
+            metadata.setdefault("target_yoy_growth_structured_source_required", True)
         if formula_name == "capital_intensity":
             metadata.setdefault("target_capital_intensity_structured_source_required", True)
         if formula_name == "fixed_asset_turnover":
@@ -6138,6 +6173,8 @@ def _canonical_finance_formula_name(value: str) -> str:
         return "mlr_rebate"
     if text.startswith("dio") or "days_inventory" in text:
         return "dio"
+    if text.startswith("yoy_growth") or text in {"year_over_year_growth", "year_over_year_change"}:
+        return "yoy_growth"
     if text.startswith("ev_revenue") or "enterprise_value_to_revenue" in text:
         return "ev_revenue"
     if text.startswith("ev_ebitda") or "enterprise_value_to_ebitda" in text:
@@ -6149,6 +6186,36 @@ def _canonical_finance_formula_name(value: str) -> str:
     if text.startswith("bridge_subtotal"):
         return "bridge_subtotal"
     return ""
+
+
+def _yoy_growth_metric_query_terms(goal: str) -> str:
+    text = " ".join(str(goal or "").lower().replace("-", " ").split())
+    if "operating income" in text:
+        return "OperatingIncomeLoss operating income"
+    if "net income" in text or "net earnings" in text:
+        return "NetIncomeLoss net income"
+    if "ebitda" in text:
+        return "EBITDA adjusted EBITDA"
+    if "net sales" in text:
+        return "SalesRevenueNet net sales"
+    if "net revenues" in text or "net revenue" in text:
+        return "Revenues net revenues"
+    if "total revenues" in text or "total revenue" in text:
+        return "Revenues total revenues"
+    return "Revenues RevenueFromContractWithCustomerExcludingAssessedTax revenue"
+
+
+def _yoy_growth_companyconcepts(goal: str) -> list[str]:
+    text = " ".join(str(goal or "").lower().replace("-", " ").split())
+    if "operating income" in text:
+        return ["OperatingIncomeLoss"]
+    if "net income" in text or "net earnings" in text:
+        return ["NetIncomeLoss"]
+    if "net sales" in text:
+        return ["SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax"]
+    if "net revenues" in text or "net revenue" in text or "total revenues" in text or "total revenue" in text:
+        return ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"]
+    return ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"]
 
 
 def _append_query_terms(query: str, additions: str) -> str:

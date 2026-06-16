@@ -3989,6 +3989,8 @@ def test_finance_task_compiler_emits_yoy_operating_income_evidence_specs() -> No
     assert evidence_slots["current_period_value"].statement == "income_statement"
     assert evidence_slots["current_period_value"].line_item == "operating income"
     assert program.transform_specs[0].name == "yoy_growth"
+    assert program.transform_specs[0].expression == "current_period_value / prior_period_value - 1"
+    assert program.transform_specs[0].output_unit == "percent"
     assert program.slot_frame is not None
     assert program.slot_frame.missing_slots == ["prior_period_value", "current_period_value"]
 
@@ -6853,6 +6855,23 @@ def test_finance_missing_fact_payload_for_operating_cash_flow_ratio_seeds_compan
     assert payload["metadata"]["target_operating_cash_flow_ratio_structured_source_required"] is True
     assert payload["metadata"]["missing_slots"] == ["operating_cash_flow", "total_current_liabilities"]
     assert any("LiabilitiesCurrent" in query for query in payload["queries"])
+
+
+def test_finance_missing_fact_payload_for_yoy_operating_income_seeds_companyfacts() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="yoy_growth",
+        missing=["prior_period_value", "current_period_value"],
+        goal="3M FY2024 year-over-year operating income change",
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/submissions/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/OperatingIncomeLoss.json" in source_urls
+    assert payload["source_urls"] == source_urls
+    assert payload["metadata"]["target_yoy_growth_structured_source_required"] is True
+    assert payload["metadata"]["missing_slots"] == ["prior_period_value", "current_period_value"]
+    assert any("OperatingIncomeLoss" in query for query in payload["queries"])
 
 
 def test_finance_modeling_payload_uses_model_compiled_capital_intensity_program_for_source_urls() -> None:
