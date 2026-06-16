@@ -4298,6 +4298,69 @@ def _latest_finance_slot_bind_state(journal: JournalStore, *, task_id: str, run_
     return _compact_finance_slot_bind_state(records[-1].data)
 
 
+def _latest_finance_numeric_verification_payload(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    payloads = _finance_verification_payloads_for_working_state(journal.records(task_id=task_id, run_id=run_id))
+    if not payloads:
+        return {}
+    return dict(payloads[-1])
+
+
+def _compact_finance_numeric_repair_context_for_synthesis(data: object) -> JsonObject:
+    payload = data if isinstance(data, dict) else {}
+    if not payload:
+        return {}
+    guidance = finance_numeric_repair_guidance(payload)
+    diagnostics = _json_object(payload.get("diagnostics"))
+    target_binding = _compact_target_document_binding_for_judge(_json_object(diagnostics.get("target_document_binding")))
+    primary_binding = _compact_primary_source_binding_for_judge(_json_object(diagnostics.get("primary_source_numeric_binding")))
+    missing_values = payload.get("missing_values") if isinstance(payload.get("missing_values"), list) else []
+    unit_mismatches = payload.get("unit_mismatches") if isinstance(payload.get("unit_mismatches"), list) else []
+    matched_values = payload.get("matched_values") if isinstance(payload.get("matched_values"), list) else []
+    context: JsonObject = {
+        "schema": "holo.kernel_v3.finance_numeric_repair_context.v1",
+        "status": _bounded_text(payload.get("status"), limit=64),
+        "semantic_decision_owner": "model",
+        "host_role": "diagnostic_carrier_only",
+        "instruction": (
+            "Use these verifier diagnostics to repair unsupported numeric wording, units, source binding, or missing facts; "
+            "the model still decides the final finance semantics from the compact facts, FormulaTrace values, evidence, and citations."
+        ),
+        "issue_codes": _string_list(guidance.get("issue_codes"))[:12],
+        "matched_value_count": len(matched_values),
+        "missing_value_count": len(missing_values),
+        "unit_mismatch_count": len(unit_mismatches),
+        "missing_value_examples": [
+            dict(item)
+            for item in list(guidance.get("missing_value_examples") or [])
+            if isinstance(item, dict)
+        ][:8],
+        "unit_mismatch_examples": [
+            dict(item)
+            for item in list(guidance.get("unit_mismatch_examples") or [])
+            if isinstance(item, dict)
+        ][:8],
+        "repair_options": _string_list(guidance.get("repair_options"))[:8],
+        "host_boundary": _text_preview(guidance.get("host_boundary"), limit=240),
+        "target_document_binding": target_binding,
+        "primary_source_numeric_binding": primary_binding,
+    }
+    return {
+        key: value
+        for key, value in context.items()
+        if key
+        in {
+            "schema",
+            "semantic_decision_owner",
+            "host_role",
+            "instruction",
+            "matched_value_count",
+            "missing_value_count",
+            "unit_mismatch_count",
+        }
+        or value not in (None, "", [], {})
+    }
+
+
 def _compact_slot_frame_state(data: object) -> JsonObject:
     payload = data if isinstance(data, dict) else {}
     if not payload:
@@ -14221,6 +14284,11 @@ def _compact_finance_synthesis_rescue_packet(
                 "If compact facts/citations conflict with it, explain the revised period or line-item basis."
             ),
         }
+    repair_context = _compact_finance_numeric_repair_context_for_synthesis(
+        _latest_finance_numeric_verification_payload(journal, task_id=task_id, run_id=run_id)
+    )
+    if repair_context:
+        diagnostics["finance_numeric_repair_context"] = repair_context
     diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:64]]
     diagnostics["finance_fact_ledger_count"] = len(facts)
     diagnostics["finance_candidate_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
@@ -14262,6 +14330,14 @@ def _compact_finance_synthesis_rescue_packet(
             "Do not add generic industry thresholds, comparison cutoffs, multiples, benchmark percentages, or decorative numeric context "
             "unless those numbers are present in the compact facts, evidence, citations, or FormulaTrace values."
         ),
+    )
+    diagnostics.setdefault(
+        "finance_numeric_claim_policy",
+        {
+            "allowed_numeric_sources": ["formula_trace", "finance_fact_ledger", "claim_ledger", "explicit_assumption_label"],
+            "unsupported_numeric_behavior": "omit_or_limit",
+            "material_claim_scope": "figures, percentages, multiples, margins, growth rates, periods, transaction values, and bridge components",
+        },
     )
     preview_parts = []
     if facts:

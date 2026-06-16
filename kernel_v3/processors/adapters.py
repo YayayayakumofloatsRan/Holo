@@ -855,6 +855,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
     finance_slot_bind_state = diagnostics.get("finance_slot_bind_state")
     finance_fact_ledger = diagnostics.get("finance_fact_ledger")
     finance_competing_fact_clusters = diagnostics.get("finance_competing_fact_clusters")
+    finance_numeric_repair_context = diagnostics.get("finance_numeric_repair_context")
     return {
         "report_id": report.report_id,
         "goal_id": report.goal_id,
@@ -906,6 +907,9 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             "finance_competing_fact_cluster_policy": _json_object(diagnostics.get("finance_competing_fact_cluster_policy")),
             "finance_slot_bind_state": _compact_prompt_value(finance_slot_bind_state),
             "finance_slot_bind_basis_policy": _json_object(diagnostics.get("finance_slot_bind_basis_policy")),
+            "finance_numeric_repair_context": _compact_finance_numeric_repair_context_for_provider(
+                finance_numeric_repair_context
+            ),
             "finance_formula_traces": _compact_list_for_provider(finance_formula_traces, limit=16),
             "finance_formula_trace_support": _compact_list_for_provider(finance_formula_trace_support, limit=24),
             "finance_fact_ledger": _compact_list_for_provider(finance_fact_ledger, limit=96),
@@ -941,6 +945,21 @@ def _compact_retrieval_evaluation_for_provider(value: JsonObject) -> JsonObject:
         "covered_finance_facets": _string_list(value.get("covered_finance_facets"))[:16],
         "failure_attribution": _compact_prompt_value(value.get("failure_attribution")),
     }
+
+
+def _compact_finance_numeric_repair_context_for_provider(value: object):
+    if isinstance(value, str):
+        if len(value) <= 512:
+            return value
+        return {"preview": _preview(value, 512), "hash": _hash_text(value), "chars": len(value)}
+    if isinstance(value, list):
+        return [_compact_finance_numeric_repair_context_for_provider(item) for item in value[:20]]
+    if isinstance(value, dict):
+        return {
+            key: _compact_finance_numeric_repair_context_for_provider(item)
+            for key, item in value.items()
+        }
+    return value
 
 
 def _compact_observation_for_provider(observation: Observation) -> JsonObject:

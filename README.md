@@ -124,7 +124,10 @@ The 2026-06-16 finance processor/cache progress is tracked in
 `docs/KERNEL_V3_PROGRESS_2026-06-16_PROCESSOR_USAGE_CACHE_METRICS.md`; recent
 sections cover model-owned slot-binding basis, competing fact clusters carried
 through synthesis and numeric judge, synthesizer unknown-reference repair, and
-unit-mismatch repair guidance for `finance.verify_numeric`.
+unit-mismatch repair guidance for `finance.verify_numeric`. The latest section
+also carries verifier repair context into compact finance synthesis repair, so
+the repair LLM sees unit/source-binding diagnostics instead of only a short
+repair instruction.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

@@ -3305,3 +3305,55 @@ FinanceBench / SEC filing题经常要求“从指定 source URL / target filing 
 py_compile passed
 309 passed in 2.95s
 ```
+
+---
+
+## 53. 追加落地：Finance Synthesis Repair Context
+
+第 50-52 节已经把 unit mismatch、repair guidance、target-document binding 和
+primary-source binding 传给 `finance.numeric_judge`。本节继续修复后半段链路：当
+numeric judge 决定需要 synthesis repair 时，真正负责重写答案的 compact synthesis packet
+也必须看到同一批 verifier 诊断。否则模型只知道“要修”，但缺少“哪个数字、哪个单位、哪个
+目标 filing/source 绑定状态导致失败”的上下文。
+
+变更：
+
+- 新增 `_latest_finance_numeric_verification_payload()`，从当前 run 的 journal 中取最新
+  `finance_numeric_verification` / `finance.verify_numeric` payload；
+- 新增 `_compact_finance_numeric_repair_context_for_synthesis()`，生成
+  `finance_numeric_repair_context`：
+  - `issue_codes`
+  - `missing_value_examples`
+  - `unit_mismatch_examples`
+  - `repair_options`
+  - `target_document_binding`
+  - `primary_source_numeric_binding`
+  - 明确 `semantic_decision_owner=model` 和 `host_role=diagnostic_carrier_only`
+- `_compact_finance_synthesis_rescue_packet()` 将该 context 放入 diagnostics；
+- `_compact_retrieval_report_for_provider()` 保留该字段；
+- adapter 对 finance repair context 使用专用压缩，保留短 numeric `raw` 字段，例如
+  `10%`，避免被通用长文本 compactor 改写成 `raw_preview`。
+
+边界：
+
+- host 不根据 repair context 自动改写答案；
+- host 不把 selected/rejected binding candidates 作为最终答案；
+- synthesis repair LLM 仍必须从 compact ClaimLedger、FormulaTrace、evidence、citation 中
+  做最终语义判断；
+- 这不是题目特例，也不包含公司/年份/答案表。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_compact_finance_synthesis_rescue_packet_exposes_numeric_repair_context_to_synthesizer -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_compact_finance_synthesis_rescue_packet_exposes_formula_trace_support tests/test_kernel_v3_finance_engine.py::test_compact_finance_synthesis_rescue_packet_exposes_competing_fact_clusters tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_exposes_unit_mismatch_examples tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_exposes_primary_source_binding_diagnostics -q
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/processors/adapters.py
+```
+
+结果：
+
+```text
+1 passed in 0.26s
+4 passed in 0.29s
+py_compile passed
+```

@@ -414,6 +414,127 @@ def test_compact_finance_synthesis_rescue_packet_exposes_competing_fact_clusters
     assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
 
 
+def test_compact_finance_synthesis_rescue_packet_exposes_numeric_repair_context_to_synthesizer() -> None:
+    journal = JournalStore.in_memory()
+    task_id = "task-compact-repair-context"
+    run_id = "run-1"
+    question = "What was Example Co FY2024 revenue from the 2024 10-K?"
+    target_url = "https://www.sec.gov/Archives/example/example-2024-10k.htm"
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "Example Co",
+            "doc_link": target_url,
+            "doc_period": "2024",
+            "doc_type": "10-K",
+            "required_statement": "income_statement",
+            "required_line_item": "revenue",
+            "primary_source_required": True,
+        }
+    )
+    facts = [
+        FinanceFact(
+            fact_id="target-revenue",
+            entity="Example Co",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="10",
+            unit="USD",
+            scale=None,
+            source_ref="target",
+            evidence_ref="ev-target",
+            citation_ref="cite-target",
+            metadata={
+                "source_uri": target_url,
+                "source_title": "Example Co 2024 10-K",
+                "statement": "income_statement",
+                "form": "10-K",
+                "context": "Revenue 10",
+            },
+        ),
+        FinanceFact(
+            fact_id="secondary-revenue",
+            entity="Example Co",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="11",
+            unit="USD",
+            scale=None,
+            source_ref="secondary",
+            evidence_ref="ev-secondary",
+            citation_ref="cite-secondary",
+            metadata={
+                "source_uri": "https://stockanalysis.com/stocks/exm/financials/",
+                "source_title": "Example Co Financials - StockAnalysis",
+                "context": "Revenue 11",
+            },
+        ),
+    ]
+    verification = verify_finance_answer(
+        answer="Example Co FY2024 revenue was 10%.",
+        facts=facts,
+        question=question,
+        target_binding=binding,
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=None,
+        kind="finance_numeric_verification",
+        data={**verification.to_dict(), "schema": "holo.kernel_v3.finance_numeric_verification.v1"},
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="ev-target",
+            uri=target_url,
+            title="Example Co 2024 10-K",
+            text="entityName=Example Co metric=revenue unit=USD fy=2024 form=10-K value=10",
+        ),
+        _finance_evidence(
+            evidence_id="ev-secondary",
+            uri="https://stockanalysis.com/stocks/exm/financials/",
+            title="Example Co Financials - StockAnalysis",
+            text="entityName=Example Co metric=revenue unit=USD fy=2024 value=11",
+        ),
+    ]
+    citations = [
+        _finance_citation(evidence[0], citation_id="cite-target"),
+        _finance_citation(evidence[1], citation_id="cite-secondary"),
+    ]
+    report = _retrieval_report(evidence=evidence, citations=citations)
+    recipe = task_recipe("retrieval_answer", metadata={"goal": question, "target_document_binding": binding})
+
+    rescue_report, rescue_evidence, rescue_citations = _compact_finance_synthesis_rescue_packet(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+        report=report,
+        evidence=evidence,
+        citations=citations,
+        synthesis_error="finance_numeric_judge_repair:test",
+    )
+    prompt_payload = json.loads(_synthesizer_prompt(rescue_report, rescue_evidence, rescue_citations))
+    repair_context = prompt_payload["retrieval_report"]["diagnostics"]["finance_numeric_repair_context"]
+
+    assert repair_context["status"] == "failed"
+    assert repair_context["semantic_decision_owner"] == "model"
+    assert repair_context["host_role"] == "diagnostic_carrier_only"
+    assert repair_context["unit_mismatch_examples"][0]["raw"] == "10%"
+    assert repair_context["unit_mismatch_examples"][0]["support_units"] == ["usd"]
+    assert "unit or scale wording" in " ".join(repair_context["repair_options"])
+    assert repair_context["target_document_binding"]["doc_period"] == "2024"
+    assert repair_context["target_document_binding"]["required_line_item"] == "revenue"
+    binding_context = repair_context["primary_source_numeric_binding"]
+    assert binding_context["status"] == "selected"
+    assert binding_context["selected_fact_ids"] == ["target-revenue"]
+    assert binding_context["rejected_count"] == 1
+    assert binding_context["rejected_candidates"][0]["fact_id"] == "secondary-revenue"
+
+
 def test_calculator_rejects_unsafe_expressions() -> None:
     registry = register_finance_tools(ToolRegistry.with_builtin_respond())
 
