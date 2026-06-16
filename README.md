@@ -142,8 +142,10 @@ without polluting raw facts.
 The FinanceBench snapshots for 2026-06-16 and 2026-06-17 also record generic
 formula scaffolds for DPO, multi-year average capex/revenue, effective-tax-rate
 change, positive working capital, interest coverage, and unadjusted EBITDA
-families. In question-only static coverage, recognized FinanceBench formula
-plans moved from `38/150` to `52/150`; this is code-regression evidence for the
+families, with the latest follow-up adding asset turnover, average COGS/revenue,
+liquidation value per share, debt-change, and component-percent-of-total
+programs. In question-only static coverage, recognized FinanceBench formula
+plans moved from `38/150` to `58/150`; this is code-regression evidence for the
 next live run, not a benchmark accuracy score.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the

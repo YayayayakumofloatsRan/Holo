@@ -41,7 +41,16 @@ task compiler now add generic evidence/slot/transform scaffolds for:
 - `interest_coverage_ratio`: adjusted EBIT or EBIT divided by interest expense;
 - `unadjusted_ebitda`: operating income plus depreciation and amortization;
 - `unadjusted_ebitda_less_capex`: operating income plus depreciation and
-  amortization less capital expenditures.
+  amortization less capital expenditures;
+- `asset_turnover`: revenue divided by average total assets;
+- `average_cogs_to_revenue`: average annual COGS or cost of sales divided by
+  annual revenue across the requested fiscal-year range;
+- `liquidation_value_per_share`: total assets less total liabilities divided by
+  shares outstanding;
+- `debt_change`: current debt less prior debt for balance-sheet debt-change
+  questions;
+- `component_percent_of_total`: component amount divided by total amount, for
+  patterns such as Q4 stock-repurchase spend as a percentage of total spend.
 
 This continues the 2026-06-16 DPO and multi-year average capex/revenue scaffold
 work. The host supplies auditable formulas, EvidenceSpec line-item targets, and
@@ -54,11 +63,11 @@ Current static question-only FinanceBench formula coverage:
 | Slice | Recognized formula rows | Rows with TransformSpec |
 | --- | ---: | ---: |
 | `debug50` | `19/50` | `19/50` |
-| `test100` | `33/100` | `33/100` |
-| `all150` | `52/150` | `52/150` |
+| `test100` | `39/100` | `39/100` |
+| `all150` | `58/150` | `58/150` |
 
 Compared with the 2026-06-16 common-formula baseline, all150 recognized formula
-coverage moved from `38/150` to `52/150`. This is only code-regression evidence
+coverage moved from `38/150` to `58/150`. This is only code-regression evidence
 for the next live run, not a live benchmark score.
 
 ## Verification
@@ -67,16 +76,16 @@ The following checks were run as code regression only:
 
 ```bash
 .venv/bin/python -m py_compile kernel_v3/finance/formula_planner.py kernel_v3/finance/substrate_adapter.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py
-.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "tax_working_capital_and_interest or unadjusted_ebitda_less_capex or tax_interest_and_unadjusted"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "asset_turnover_and_average_cogs or liquidation_debt_change_component or asset_liquidation_and_component"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
 git diff --check
 ```
 
 Latest result: py_compile passed; targeted finance-engine slice
-`3 passed, 259 deselected in 1.68s`; full finance engine
-`262 passed in 3.56s`; full FinanceBench harness
-`52 passed in 304.48s`; `git diff --check` passed.
+`3 passed, 262 deselected in 1.79s`; full finance engine
+`265 passed in 3.93s`; full FinanceBench harness
+`52 passed in 306.67s`; `git diff --check` passed.
 
 ## Next Honest Benchmark Step
 

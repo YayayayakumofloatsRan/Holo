@@ -259,6 +259,25 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "depreciation_and_amortization",
             "capital_expenditures",
         ],
+        "asset_turnover": [
+            "revenue",
+            "assets_current",
+            "assets_prior",
+        ],
+        "average_cogs_to_revenue": [],
+        "liquidation_value_per_share": [
+            "assets",
+            "liabilities",
+            "shares_outstanding",
+        ],
+        "debt_change": [
+            "prior_debt",
+            "current_debt",
+        ],
+        "component_percent_of_total": [
+            "component_amount",
+            "total_amount",
+        ],
         "average_capex_to_revenue": [],
         "fixed_charge_coverage": [
             "earnings_available_for_fixed_charges_or_pretax_income",
@@ -401,6 +420,8 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "equity_value_or_market_cap": ["equity value", "market cap", "market capitalization", "enterprise value", "transaction value"],
         "enterprise_value_or_market_cap": ["enterprise value", "market cap", "market capitalization", "transaction value"],
         "debt": ["debt", "long term debt", "short term debt"],
+        "prior_debt": ["debt", "long term debt", "short term debt", "borrowings"],
+        "current_debt": ["debt", "long term debt", "short term debt", "borrowings"],
         "cash": ["cash and equivalents", "cash and cash equivalents"],
         "revenue": ["revenue", "net sales", "net revenues", "total revenues"],
         "ebitda_or_ebitda_components": ["adjusted ebitda", "ebitda", "net income", "interest expense", "tax", "depreciation and amortization"],
@@ -449,6 +470,10 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "total_current_assets": ["total current assets", "current assets", "assets current"],
         "assets_current": ["assets", "total assets"],
         "assets_prior": ["assets", "total assets"],
+        "liabilities": ["liabilities", "total liabilities"],
+        "shares_outstanding": ["shares outstanding", "common shares outstanding", "weighted average shares"],
+        "component_amount": ["component amount", "quarterly amount", "share repurchases", "stock repurchases"],
+        "total_amount": ["total amount", "annual amount", "share repurchases", "stock repurchases"],
         "dividends_paid": ["dividends paid", "cash dividends paid", "dividends to shareholders"],
         "operating_cash_flow": [
             "operating cash flow",
@@ -535,6 +560,11 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "dividend_payout_ratio",
         "retention_ratio",
         "average_capex_to_revenue",
+        "asset_turnover",
+        "average_cogs_to_revenue",
+        "liquidation_value_per_share",
+        "debt_change",
+        "component_percent_of_total",
         "effective_tax_rate_change",
         "interest_coverage_ratio",
         "unadjusted_ebitda",
@@ -559,6 +589,8 @@ def _infer_formula_name(question: str) -> str:
         return "capital_intensity"
     if "fixed asset turnover" in text or "fixed-asset turnover" in text:
         return "fixed_asset_turnover"
+    if "asset turnover" in text:
+        return "asset_turnover"
     if (
         "operating cash flow ratio" in text
         or "cash flow ratio" in text
@@ -601,6 +633,18 @@ def _infer_formula_name(question: str) -> str:
         and ("average" in text or "avg" in text or "as a % of revenue" in text or "capex/revenue" in compact)
     ):
         return "average_capex_to_revenue"
+    if (
+        ("cost of goods sold" in text or "cost of sales" in text or "cost of revenue" in text or "cogs" in text)
+        and ("revenue" in text or "sales" in text)
+        and ("average" in text or "avg" in text or "as a % of revenue" in text or "as a percent of revenue" in text)
+    ):
+        return "average_cogs_to_revenue"
+    if "liquidated all" in text or "liquidation" in text or "pay its shareholders" in text:
+        return "liquidation_value_per_share"
+    if "debt" in text and any(marker in text for marker in ("increase", "increased", "decrease", "changed", "between")) and "balance sheet" in text:
+        return "debt_change"
+    if ("what percent" in text or "what percentage" in text) and "total" in text:
+        return "component_percent_of_total"
     if "effective tax rate" in text and any(marker in text for marker in ("change", "changed", "compare", "between", "increase", "decrease")):
         return "effective_tax_rate_change"
     if "positive working capital" in text:

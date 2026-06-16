@@ -72,6 +72,16 @@ def plan_finance_formula(
         return _plan_unadjusted_ebitda(question=question, facts=usable, less_capex=False)
     if formula == "unadjusted_ebitda_less_capex":
         return _plan_unadjusted_ebitda(question=question, facts=usable, less_capex=True)
+    if formula == "asset_turnover":
+        return _plan_asset_turnover(question=question, facts=usable)
+    if formula == "average_cogs_to_revenue":
+        return _plan_average_cogs_to_revenue(question=question, facts=usable)
+    if formula == "liquidation_value_per_share":
+        return _plan_liquidation_value_per_share(question=question, facts=usable)
+    if formula == "debt_change":
+        return _plan_debt_change(question=question, facts=usable)
+    if formula == "component_percent_of_total":
+        return _plan_component_percent_of_total(question=question, facts=usable)
     if formula == "yoy_growth":
         return _plan_yoy_growth(question=question, facts=usable)
     if formula == "debt_to_equity":
@@ -130,6 +140,16 @@ def _detect_formula(question: str) -> str | None:
         if "less capex" in text or "less capital expenditure" in text or "less capital expenditures" in text:
             return "unadjusted_ebitda_less_capex"
         return "unadjusted_ebitda"
+    if "asset turnover" in text and "fixed asset" not in text and "fixed-asset" not in text:
+        return "asset_turnover"
+    if _looks_like_average_cogs_to_revenue(text):
+        return "average_cogs_to_revenue"
+    if "liquidated all" in text or "liquidation" in text or "pay its shareholders" in text:
+        return "liquidation_value_per_share"
+    if "debt" in text and any(marker in text for marker in ("increase", "increased", "decrease", "changed", "between")) and "balance sheet" in text:
+        return "debt_change"
+    if _looks_like_component_percent_of_total(text):
+        return "component_percent_of_total"
     if "discounted cash flow" in text or re.search(r"\bdcf\b", text):
         return "dcf"
     if re.search(r"\blbo\b", text) or "leveraged buyout" in text:
@@ -245,6 +265,22 @@ def _looks_like_unadjusted_ebitda(text: str) -> bool:
         "operating income" in text
         and ("depreciation and amortization" in text or "depreciation & amortization" in text or "d&a" in text)
     )
+
+
+def _looks_like_average_cogs_to_revenue(text: str) -> bool:
+    if not ("cost of goods sold" in text or "cost of sales" in text or "cost of revenue" in text or "cogs" in text):
+        return False
+    if not ("revenue" in text or "sales" in text):
+        return False
+    return "average" in text or "avg" in text or "as a % of revenue" in text or "as a percent of revenue" in text
+
+
+def _looks_like_component_percent_of_total(text: str) -> bool:
+    if "what percent" not in text and "what percentage" not in text:
+        return False
+    if "total" not in text:
+        return False
+    return any(marker in text for marker in ("occurred in", "represented", "of total", "spend on", "stock repurchase", "share repurchase"))
 
 
 def _explicit_calculation_intent(text: str) -> bool:
@@ -2404,6 +2440,212 @@ def _plan_unadjusted_ebitda(*, question: str, facts: list[FinanceFact], less_cap
     )
 
 
+def _plan_asset_turnover(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    revenue = _latest_revenue_fact(facts, target_year=target_year)
+    assets_current = _latest_fact_for_year(facts, ("assets", "total assets"), target_year=target_year)
+    assets_prior = _latest_fact_for_year(
+        facts,
+        ("assets", "total assets"),
+        target_year=target_year - 1 if target_year is not None else None,
+        exclude_fact_ids={assets_current.fact_id} if assets_current is not None else None,
+    )
+    missing: list[str] = []
+    if revenue is None:
+        missing.append("revenue")
+    if assets_current is None:
+        missing.append("assets_current")
+    if assets_prior is None:
+        missing.append("assets_prior")
+    supporting = [fact for fact in (revenue, assets_current, assets_prior) if fact is not None]
+    if missing:
+        return _missing(
+            "asset_turnover",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "revenue divided by average total assets",
+            },
+        )
+    return _ready(
+        "asset_turnover",
+        "revenue / ((assets_current + assets_prior) / 2)",
+        {"revenue": revenue.value, "assets_current": assets_current.value, "assets_prior": assets_prior.value},
+        unit="x",
+        facts=supporting,
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "revenue divided by average total assets",
+        },
+    )
+
+
+def _plan_average_cogs_to_revenue(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    years = _target_fiscal_years(question)
+    if len(years) >= 2:
+        start, end = min(years), max(years)
+        if end - start <= 10:
+            years = list(range(start, end + 1))
+    elif len(years) == 1 and re.search(r"\b3\s*year\b|\bthree\s+year\b", question or "", re.IGNORECASE):
+        years = [years[0] - 2, years[0] - 1, years[0]]
+    variables: JsonObject = {}
+    input_facts: list[FinanceFact] = []
+    missing: list[str] = []
+    terms: list[str] = []
+    for year in years:
+        cogs = _dio_cogs_fact(facts, target_year=year)
+        revenue = _latest_revenue_fact(facts, target_year=year)
+        cogs_slot = f"cogs_{year}"
+        revenue_slot = f"revenue_{year}"
+        if cogs is None:
+            missing.append(cogs_slot)
+        else:
+            variables[cogs_slot] = _absolute_decimal_string(cogs.value)
+            input_facts.append(cogs)
+        if revenue is None:
+            missing.append(revenue_slot)
+        else:
+            variables[revenue_slot] = revenue.value
+            input_facts.append(revenue)
+        terms.append(f"({cogs_slot} / {revenue_slot})")
+    if not years:
+        missing.extend(["cogs_by_period", "revenue_by_period"])
+    expression = f"({' + '.join(terms)}) / {len(terms)}" if terms else "average(cogs / revenue)"
+    if missing:
+        return _missing(
+            "average_cogs_to_revenue",
+            _ordered_unique(missing),
+            facts=input_facts,
+            diagnostics={
+                "target_fiscal_years": years,
+                "formula_definition": "average of annual cost of goods sold divided by annual revenue",
+                "expression": expression,
+            },
+        )
+    return _ready(
+        "average_cogs_to_revenue",
+        expression,
+        variables,
+        unit="percent",
+        facts=input_facts,
+        diagnostics={
+            "target_fiscal_years": years,
+            "formula_definition": "average of annual cost of goods sold divided by annual revenue",
+        },
+    )
+
+
+def _plan_liquidation_value_per_share(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    assets = _latest_fact_for_year(facts, ("assets", "total assets"), target_year=target_year)
+    liabilities = _latest_fact_for_year(facts, ("liabilities", "total liabilities"), target_year=target_year)
+    shares = _latest_fact_for_year(
+        facts,
+        ("shares outstanding", "common shares outstanding", "weighted average shares"),
+        target_year=target_year,
+    )
+    missing: list[str] = []
+    if assets is None:
+        missing.append("assets")
+    if liabilities is None:
+        missing.append("liabilities")
+    if shares is None:
+        missing.append("shares_outstanding")
+    supporting = [fact for fact in (assets, liabilities, shares) if fact is not None]
+    if missing:
+        return _missing(
+            "liquidation_value_per_share",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "total assets less total liabilities divided by shares outstanding",
+            },
+        )
+    return _ready(
+        "liquidation_value_per_share",
+        "(assets - liabilities) / shares_outstanding",
+        {"assets": assets.value, "liabilities": liabilities.value, "shares_outstanding": shares.value},
+        unit="currency_per_share",
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year},
+    )
+
+
+def _plan_debt_change(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    years = _target_fiscal_years(question)
+    prior_year = min(years) if len(years) >= 2 else None
+    current_year = max(years) if len(years) >= 2 else _target_fiscal_year(question)
+    current = _latest_fact_for_year(facts, ("debt", "borrowings", "long term debt", "short term debt"), target_year=current_year)
+    prior = (
+        _latest_fact_for_year(facts, ("debt", "borrowings", "long term debt", "short term debt"), target_year=prior_year)
+        if prior_year is not None
+        else None
+    )
+    if prior is None and current is not None:
+        prior = _latest_fact_for_year(
+            facts,
+            ("debt", "borrowings", "long term debt", "short term debt"),
+            target_year=(current.fiscal_year - 1 if isinstance(current.fiscal_year, int) else None),
+            exclude_fact_ids={current.fact_id},
+        )
+    missing: list[str] = []
+    if prior is None:
+        missing.append("prior_debt")
+    if current is None:
+        missing.append("current_debt")
+    supporting = [fact for fact in (prior, current) if fact is not None]
+    if missing:
+        return _missing(
+            "debt_change",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_years": years,
+                "formula_definition": "current debt less prior debt",
+            },
+        )
+    return _ready(
+        "debt_change",
+        "current_debt - prior_debt",
+        {"prior_debt": prior.value, "current_debt": current.value},
+        unit=current.unit,
+        facts=supporting,
+        diagnostics={"target_fiscal_years": years},
+    )
+
+
+def _plan_component_percent_of_total(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    metric_markers = _component_percent_metric_markers(question)
+    component = _component_period_fact(facts, metric_markers=metric_markers, component_hint=_component_period_hint(question))
+    total = _latest_fact(facts, metric_markers, exclude_fact_ids={component.fact_id} if component is not None else None)
+    missing: list[str] = []
+    if component is None:
+        missing.append("component_amount")
+    if total is None:
+        missing.append("total_amount")
+    supporting = [fact for fact in (component, total) if fact is not None]
+    if missing:
+        return _missing(
+            "component_percent_of_total",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "formula_definition": "component amount divided by total amount",
+                "metric_markers": list(metric_markers),
+            },
+        )
+    return _ready(
+        "component_percent_of_total",
+        "component_amount / total_amount",
+        {"component_amount": _absolute_decimal_string(component.value), "total_amount": _absolute_decimal_string(total.value)},
+        unit="percent",
+        facts=supporting,
+        diagnostics={"metric_markers": list(metric_markers)},
+    )
+
+
 def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     candidate = _best_bridge_group(facts)
     if candidate is None:
@@ -3545,6 +3787,64 @@ def _is_effective_tax_rate_fact(fact: FinanceFact) -> bool:
     if "effectivetaxrate" in compact:
         return True
     return "effective tax rate" in text
+
+
+def _component_percent_metric_markers(question: str) -> tuple[str, ...]:
+    text = _metric_text(question)
+    if "stock repurchase" in text or "share repurchase" in text:
+        return ("share repurchases", "stock repurchases", "repurchases of common stock")
+    if "dividend" in text:
+        return ("dividends paid", "cash dividends paid", "dividends to shareholders")
+    if "capital expenditure" in text or "capex" in text:
+        return ("capital expenditures", "capex")
+    return ("amount", "total")
+
+
+def _component_period_hint(question: str) -> str | None:
+    text = _metric_text(question)
+    if "q4" in text or "fourth quarter" in text:
+        return "q4"
+    if "q3" in text or "third quarter" in text:
+        return "q3"
+    if "q2" in text or "second quarter" in text:
+        return "q2"
+    if "q1" in text or "first quarter" in text:
+        return "q1"
+    return None
+
+
+def _component_period_fact(
+    facts: list[FinanceFact],
+    *,
+    metric_markers: tuple[str, ...],
+    component_hint: str | None,
+) -> FinanceFact | None:
+    matches = _facts_for_metric(facts, metric_markers)
+    if not matches:
+        return None
+    if component_hint:
+        hinted = [
+            fact
+            for fact in matches
+            if component_hint in _metric_text(
+                " ".join(
+                    str(value or "")
+                    for value in (
+                        fact.period,
+                        fact.metadata.get("label"),
+                        fact.metadata.get("context"),
+                        fact.metadata.get("frame"),
+                        fact.metadata.get("fp"),
+                    )
+                )
+            )
+        ]
+        if hinted:
+            return _sort_target_year_facts(hinted)[-1]
+    quarterly = [fact for fact in matches if _fact_period_priority(fact) == 1]
+    if quarterly:
+        return _sort_target_year_facts(quarterly)[-1]
+    return None
 
 
 def _is_revenue_fact(fact: FinanceFact) -> bool:

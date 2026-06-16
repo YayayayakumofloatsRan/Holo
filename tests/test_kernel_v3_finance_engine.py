@@ -4086,6 +4086,83 @@ def test_finance_task_compiler_emits_average_capex_to_revenue_program() -> None:
     )
 
 
+def test_finance_task_compiler_emits_asset_turnover_and_average_cogs_programs() -> None:
+    asset_program = compile_finance_task_program(
+        question="What is Lockheed Martin's FY2020 asset turnover ratio using revenue divided by average total assets?",
+        facts=[],
+    )
+
+    assert asset_program.task_spec.task_type == "compute"
+    assert asset_program.task_spec.diagnostics["formula_name"] == "asset_turnover"
+    assert asset_program.slot_frame is not None
+    assert asset_program.slot_frame.missing_slots == ["revenue", "assets_current", "assets_prior"]
+    assert asset_program.transform_specs[0].expression == "revenue / ((assets_current + assets_prior) / 2)"
+    evidence_slots = {spec.slot_name: spec for spec in asset_program.evidence_specs}
+    assert evidence_slots["revenue"].statement == "income_statement"
+    assert evidence_slots["assets_current"].statement == "balance_sheet"
+    assert evidence_slots["assets_prior"].line_item == "total assets"
+
+    cogs_program = compile_finance_task_program(
+        question="What is Nike's FY2020 - FY2022 three year average COGS as a % of revenue?",
+        facts=[],
+    )
+
+    assert cogs_program.task_spec.task_type == "compute"
+    assert cogs_program.task_spec.diagnostics["formula_name"] == "average_cogs_to_revenue"
+    assert cogs_program.slot_frame is not None
+    assert cogs_program.slot_frame.missing_slots == [
+        "cogs_2020",
+        "revenue_2020",
+        "cogs_2021",
+        "revenue_2021",
+        "cogs_2022",
+        "revenue_2022",
+    ]
+    cogs_evidence_slots = {spec.slot_name: spec for spec in cogs_program.evidence_specs}
+    assert cogs_evidence_slots["cogs_2020"].statement == "income_statement"
+    assert cogs_evidence_slots["cogs_2020"].line_item == "cost of goods sold"
+    assert cogs_evidence_slots["revenue_2022"].line_item == "revenue"
+    assert cogs_program.transform_specs[0].expression == (
+        "((cogs_2020 / revenue_2020) + "
+        "(cogs_2021 / revenue_2021) + "
+        "(cogs_2022 / revenue_2022)) / 3"
+    )
+
+
+def test_finance_task_compiler_emits_liquidation_debt_change_component_programs() -> None:
+    cases = [
+        (
+            "If JPMorgan liquidated all of its assets and paid liabilities, how much could it pay per share in FY2022?",
+            "liquidation_value_per_share",
+            ["assets", "liabilities", "shares_outstanding"],
+            "(assets - liabilities) / shares_outstanding",
+        ),
+        (
+            "By how much did Verizon's total debt increase between FY2021 and FY2022 on the balance sheet?",
+            "debt_change",
+            ["prior_debt", "current_debt"],
+            "current_debt - prior_debt",
+        ),
+        (
+            "What percentage of total stock repurchase spend occurred in Q4?",
+            "component_percent_of_total",
+            ["component_amount", "total_amount"],
+            "component_amount / total_amount",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
+
+
 def test_finance_task_compiler_emits_tax_working_capital_and_interest_programs() -> None:
     cases = [
         (
@@ -4289,6 +4366,86 @@ def test_finance_formula_planner_computes_tax_interest_and_unadjusted_ebitda() -
         "depreciation_and_amortization": "200",
         "capital_expenditures": "300",
     }
+
+
+def test_finance_formula_planner_computes_asset_liquidation_and_component_formulas() -> None:
+    asset_plan = plan_finance_formula(
+        question="What is FY2020 asset turnover ratio using revenue divided by average total assets?",
+        facts=[
+            _year_fact("revenue", "1000", 2020, fact_id="revenue-2020"),
+            _year_fact("assets", "400", 2019, fact_id="assets-2019"),
+            _year_fact("assets", "600", 2020, fact_id="assets-2020"),
+        ],
+        existing_traces=[],
+    )
+
+    assert asset_plan.status == "ready"
+    assert asset_plan.formula_name == "asset_turnover"
+    assert asset_plan.payload["expression"] == "revenue / ((assets_current + assets_prior) / 2)"
+    assert asset_plan.payload["variables"] == {"revenue": "1000", "assets_current": "600", "assets_prior": "400"}
+
+    cogs_plan = plan_finance_formula(
+        question="What is the FY2020 - FY2022 three year average COGS as a % of revenue?",
+        facts=[
+            _year_fact("cost of sales", "50", 2020, fact_id="cogs-2020"),
+            _year_fact("revenue", "100", 2020, fact_id="sales-2020"),
+            _year_fact("cost of sales", "60", 2021, fact_id="cogs-2021"),
+            _year_fact("revenue", "120", 2021, fact_id="sales-2021"),
+            _year_fact("cost of sales", "70", 2022, fact_id="cogs-2022"),
+            _year_fact("revenue", "140", 2022, fact_id="sales-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert cogs_plan.status == "ready"
+    assert cogs_plan.formula_name == "average_cogs_to_revenue"
+    assert cogs_plan.payload["expression"] == (
+        "((cogs_2020 / revenue_2020) + "
+        "(cogs_2021 / revenue_2021) + "
+        "(cogs_2022 / revenue_2022)) / 3"
+    )
+    assert cogs_plan.payload["variables"]["cogs_2020"] == "50"
+    assert cogs_plan.payload["variables"]["revenue_2022"] == "140"
+
+    liquidation_plan = plan_finance_formula(
+        question="If the company liquidated all assets and paid liabilities, how much could it pay shareholders per share in FY2022?",
+        facts=[
+            _year_fact("assets", "100", 2022, fact_id="assets-2022"),
+            _year_fact("liabilities", "60", 2022, fact_id="liabilities-2022"),
+            _year_fact("shares outstanding", "2", 2022, fact_id="shares-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert liquidation_plan.status == "ready"
+    assert liquidation_plan.formula_name == "liquidation_value_per_share"
+    assert liquidation_plan.payload["variables"] == {"assets": "100", "liabilities": "60", "shares_outstanding": "2"}
+
+    debt_plan = plan_finance_formula(
+        question="By how much did total debt increase between FY2021 and FY2022 on the balance sheet?",
+        facts=[
+            _year_fact("debt", "70", 2021, fact_id="debt-2021"),
+            _year_fact("debt", "90", 2022, fact_id="debt-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert debt_plan.status == "ready"
+    assert debt_plan.formula_name == "debt_change"
+    assert debt_plan.payload["variables"] == {"prior_debt": "70", "current_debt": "90"}
+
+    component_plan = plan_finance_formula(
+        question="What percentage of total stock repurchase spend occurred in Q4?",
+        facts=[
+            _year_fact("share repurchases", "25", 2024, fact_id="repurchases-q4", metadata={"context": "Q4"}),
+            _year_fact("share repurchases", "100", 2024, fact_id="repurchases-year", metadata={"context": "total fiscal year"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert component_plan.status == "ready"
+    assert component_plan.formula_name == "component_percent_of_total"
+    assert component_plan.payload["variables"] == {"component_amount": "25", "total_amount": "100"}
 
 
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:

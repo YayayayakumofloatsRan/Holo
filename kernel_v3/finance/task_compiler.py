@@ -1337,12 +1337,19 @@ def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
         add("cash_and_equivalents", statement="balance_sheet", line_item="cash and cash equivalents")
     if "debt" in text and ("increased" in text or "balance sheet" in text or "largest investment" in text):
         add("debt", statement="balance_sheet", line_item="debt")
+    if "debt" in text and "balance sheet" in text and any(marker in text for marker in ("increased", "increase", "decreased", "decrease", "changed", "between")):
+        add("prior_debt", statement="balance_sheet", line_item="debt")
+        add("current_debt", statement="balance_sheet", line_item="debt")
     if "short term investments" in text or "short-term investments" in text:
         add("short_term_investments", statement="balance_sheet", line_item="short-term investments")
     if any(marker in text for marker in ("ppne", "pp and e", "net ppne", "net pp&e", "net property plant and equipment", "property, plant, and equipment")):
         add("property_plant_and_equipment_net", statement="balance_sheet", line_item="property plant and equipment net")
     if "total assets" in text:
         add("assets", statement="balance_sheet", line_item="total assets")
+    if "asset turnover" in text and "fixed asset" not in text and "fixed-asset" not in text:
+        add("revenue", statement="income_statement", line_item="revenue")
+        add("assets_current", statement="balance_sheet", line_item="total assets")
+        add("assets_prior", statement="balance_sheet", line_item="total assets")
     if "total current assets" in text:
         add("total_current_assets", statement="balance_sheet", line_item="total current assets")
     if "total current liabilities" in text:
@@ -1442,6 +1449,9 @@ def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
         add("credit_facility", statement="debt_or_liquidity_note", line_item="revolving credit agreement")
     if "stock repurchases" in text or "share repurchases" in text:
         add("share_repurchases", statement="equity_note_or_cash_flow_statement", line_item="share repurchases")
+        if "what percent" in text or "what percentage" in text:
+            add("component_amount", statement="equity_note_or_cash_flow_statement", line_item="share repurchases")
+            add("total_amount", statement="equity_note_or_cash_flow_statement", line_item="share repurchases")
     if "derivative instruments" in text or "notional value" in text:
         add("derivative_instruments", statement="derivatives_note_or_market_risk", line_item="derivative instruments notional value")
     if "retirees" in text or "pension" in text or "postretirement" in text:
@@ -1601,6 +1611,27 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             )
         ]
+    if name == "average_cogs_to_revenue":
+        payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        required_slots = list(variables.keys()) if variables else list(formula_plan.missing_facts or frame_missing_slots)
+        expression = _string(payload.get("expression")) or _string(formula_plan.diagnostics.get("expression"))
+        if not expression:
+            years = _years_from_period_slots(required_slots)
+            terms = [f"(cogs_{year} / revenue_{year})" for year in years]
+            expression = f"({' + '.join(terms)}) / {len(terms)}" if terms else "average(cogs / revenue)"
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, ",".join(required_slots), expression),
+                domain="finance",
+                name="average_cogs_to_revenue",
+                required_slots=required_slots,
+                expression=expression,
+                output_unit="percent",
+                output_attribute="average_cogs_to_revenue",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
     if name == "effective_tax_rate_change":
         return [
             TransformSpec(
@@ -1701,6 +1732,30 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
             "1 - dividends_paid / net_income",
             "ratio",
             "retention_ratio",
+        ),
+        "asset_turnover": (
+            ["revenue", "assets_current", "assets_prior"],
+            "revenue / ((assets_current + assets_prior) / 2)",
+            "x",
+            "asset_turnover",
+        ),
+        "liquidation_value_per_share": (
+            ["assets", "liabilities", "shares_outstanding"],
+            "(assets - liabilities) / shares_outstanding",
+            "currency_per_share",
+            "liquidation_value_per_share",
+        ),
+        "debt_change": (
+            ["prior_debt", "current_debt"],
+            "current_debt - prior_debt",
+            "currency",
+            "debt_change",
+        ),
+        "component_percent_of_total": (
+            ["component_amount", "total_amount"],
+            "component_amount / total_amount",
+            "percent",
+            "component_percent_of_total",
         ),
     }
     if name in simple_transforms:
@@ -1989,8 +2044,14 @@ def _statement_for_formula_slot(formula_name: str, slot_name: str, question: str
 def _statement_for_slot(slot_name: str) -> str | None:
     if re.fullmatch(r"capital_expenditures_(?:19|20)\d{2}", slot_name):
         return "cash_flow_statement"
+    if re.fullmatch(r"cogs_(?:19|20)\d{2}", slot_name):
+        return "income_statement"
     if re.fullmatch(r"revenue_(?:19|20)\d{2}", slot_name):
         return "income_statement"
+    if slot_name in {"component_amount", "total_amount", "share_repurchases"}:
+        return "equity_note_or_cash_flow_statement"
+    if slot_name == "shares_outstanding":
+        return "equity_or_cover_page"
     if slot_name in {"capital_expenditures", "operating_cash_flow", "dividends_paid", "cash_flow_activity_totals"}:
         return "cash_flow_statement"
     if slot_name == "depreciation_and_amortization":
@@ -2017,6 +2078,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         "inventory_begin",
         "inventory_end",
         "debt",
+        "prior_debt",
+        "current_debt",
         "cash",
     }:
         return "balance_sheet"
@@ -2051,6 +2114,8 @@ def _line_item_for_formula_slot(formula_name: str, slot_name: str, question: str
 def _line_item_for_slot(slot_name: str) -> str | None:
     if re.fullmatch(r"capital_expenditures_(?:19|20)\d{2}", slot_name):
         return "capital expenditures"
+    if re.fullmatch(r"cogs_(?:19|20)\d{2}", slot_name):
+        return "cost of goods sold"
     if re.fullmatch(r"revenue_(?:19|20)\d{2}", slot_name):
         return "revenue"
     mapping = {
@@ -2074,6 +2139,12 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "assets_current": "total assets",
         "assets_prior": "total assets",
         "liabilities": "liabilities",
+        "shares_outstanding": "shares outstanding",
+        "prior_debt": "debt",
+        "current_debt": "debt",
+        "component_amount": "component amount",
+        "total_amount": "total amount",
+        "share_repurchases": "share repurchases",
         "revenue": "revenue",
         "operating_income": "operating income",
         "depreciation_and_amortization": "depreciation and amortization",
@@ -2137,6 +2208,11 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         if line_item:
             values.insert(0, line_item)
         return _ordered_unique(values)
+    if re.fullmatch(r"cogs_(?:19|20)\d{2}", slot_name):
+        values = ["cost of goods sold", "cost of revenue", "cost of sales", "cogs"]
+        if line_item:
+            values.insert(0, line_item)
+        return _ordered_unique(values)
     if re.fullmatch(r"revenue_(?:19|20)\d{2}", slot_name):
         values = ["revenue", "revenues", "net sales", "net revenues", "sales"]
         if line_item:
@@ -2148,6 +2224,8 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "total_current_liabilities": ["total current liabilities", "current liabilities", "liabilities current"],
         "total_current_assets": ["total current assets", "current assets", "assets current"],
         "debt": ["debt", "short-term debt", "long-term debt", "borrowings"],
+        "prior_debt": ["debt", "short-term debt", "long-term debt", "borrowings", "prior debt"],
+        "current_debt": ["debt", "short-term debt", "long-term debt", "borrowings", "current debt"],
         "short_term_investments": ["short-term investments", "short term investments", "marketable securities"],
         "cash_and_equivalents": ["cash and cash equivalents", "cash equivalents", "cash"],
         "marketable_securities": ["marketable securities", "short-term investments"],
@@ -2207,6 +2285,8 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "derivative_instruments": ["derivative instruments", "notional value", "foreign currency derivatives", "interest rate derivatives"],
         "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],
         "shares_outstanding": ["shares outstanding", "common shares outstanding"],
+        "component_amount": ["component amount", "quarterly amount", "q4 amount", "share repurchases", "stock repurchases"],
+        "total_amount": ["total amount", "annual amount", "share repurchases", "stock repurchases"],
         "credit_facility": ["revolving credit agreement", "credit facility", "borrowings"],
         "share_repurchases": ["share repurchases", "stock repurchases", "treasury stock"],
     }
