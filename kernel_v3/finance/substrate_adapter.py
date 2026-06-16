@@ -197,6 +197,12 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "earnings_available_for_fixed_charges_or_pretax_income",
             "fixed_charges",
         ],
+        "mlr_rebate": [
+            "actual_mlr_or_complete_mlr_numerator",
+            "adjusted_premium_revenue_or_mlr_denominator",
+            "mlr_standard_or_market_segment",
+            "rebate_basis_or_adjusted_premium_revenue",
+        ],
     }
     names = slots_by_formula.get(str(formula_name or ""), [])
     return [
@@ -390,6 +396,24 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "pretax income",
         ],
         "fixed_charges": ["fixed charges"],
+        "actual_mlr_or_complete_mlr_numerator": [
+            "medical loss ratio",
+            "mlr numerator",
+            "medical claims",
+            "quality improvement expenses",
+        ],
+        "adjusted_premium_revenue_or_mlr_denominator": [
+            "adjusted premium revenue",
+            "mlr denominator",
+            "premium revenue",
+            "earned premiums",
+        ],
+        "mlr_standard_or_market_segment": ["mlr standard", "medical loss ratio standard"],
+        "rebate_basis_or_adjusted_premium_revenue": [
+            "adjusted premium revenue",
+            "mlr denominator",
+            "premium revenue",
+        ],
         "assets": ["assets", "total assets"],
     }
     return mapping.get(name, [name])
@@ -411,6 +435,7 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "capital_intensity",
         "fixed_asset_turnover",
         "fixed_charge_coverage",
+        "mlr_rebate",
     }:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
@@ -433,6 +458,8 @@ def _infer_formula_name(question: str) -> str:
         return "fixed_asset_turnover"
     if "fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text:
         return "fixed_charge_coverage"
+    if "medical loss ratio" in text or " mlr" in f" {text}":
+        return "mlr_rebate"
     if "dio" in text or "days inventory" in text:
         return "dio"
     if "cagr" in text:

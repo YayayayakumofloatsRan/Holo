@@ -5097,6 +5097,8 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
         return any(marker in text for marker in ("capital-intensive", "capital intensive", "capital intensity", "capex", "property plant", "assets"))
     if formula_name == "fixed_charge_coverage" and missing:
         return any(marker in text for marker in ("fixed charge", "fixed-charge", "coverage", "earnings to fixed charges"))
+    if formula_name == "mlr_rebate" and missing:
+        return any(marker in text for marker in ("mlr", "medical loss ratio", "rebate", "premium", "claims"))
     return False
 
 
@@ -5156,6 +5158,11 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             f"{base_query} SEC companyfacts 10-K fixed charges earnings available for fixed charges "
             "ratio of earnings to fixed charges Exhibit 12 pretax income"
         )
+    elif formula_name == "mlr_rebate":
+        query = (
+            f"{base_query} medical loss ratio MLR rebate premium revenue incurred claims "
+            "quality improvement expenses MLR standard CMS filing"
+        )
     elif formula_name == "fixed_asset_turnover":
         query = (
             f"{base_query} SEC companyfacts revenue PropertyPlantAndEquipmentNet PP&E net "
@@ -5186,6 +5193,9 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
     if formula_name == "fixed_charge_coverage":
         max_queries = min(5, max(3, len(queries)))
         max_fetches = 16
+    if formula_name == "mlr_rebate":
+        max_queries = min(6, max(4, len(queries)))
+        max_fetches = 18
     if formula_name == "dio":
         max_queries = min(6, max(4, len(queries)))
         max_fetches = 18
@@ -5214,6 +5224,7 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             "research_profile": "finance_fundamentals",
             **({"target_inventory_and_cogs_structured_source_required": True} if formula_name == "dio" else {}),
             **({"target_fixed_charge_coverage_structured_source_required": True} if formula_name == "fixed_charge_coverage" else {}),
+            **({"target_mlr_rebate_regulatory_source_required": True} if formula_name == "mlr_rebate" else {}),
             **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda", "dcf", "lbo"} else {}),
             **({"target_tickers": tickers} if tickers else {}),
         },
@@ -5240,6 +5251,7 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             "capital_intensity",
             "fixed_asset_turnover",
             "fixed_charge_coverage",
+            "mlr_rebate",
         }:
             urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
         if formula_name == "dio":
@@ -5448,6 +5460,11 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges pretax income")
             add(f"{ticker} 10-K Exhibit 12 ratio of earnings to fixed charges fixed charges")
+    elif formula_name == "mlr_rebate":
+        for ticker in tickers:
+            add(f"{ticker} medical loss ratio MLR rebate premium revenue incurred claims quality improvement expenses")
+            add(f"{ticker} annual report 10-K medical costs premium revenue medical loss ratio")
+        add(f"{goal} CMS medical loss ratio rebate MLR standard premium claims quality improvement")
     elif formula_name == "fixed_asset_turnover" and tickers:
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
@@ -5478,6 +5495,8 @@ def _finance_missing_fact_preferred_families(formula_name: str) -> list[str]:
         return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
     if formula_name == "fixed_charge_coverage":
         return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
+    if formula_name == "mlr_rebate":
+        return ["regulatory_disclosure", "structured_regulatory_data", "regulatory_filing", "company_ir"]
     if formula_name == "fixed_asset_turnover":
         return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
     return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
@@ -5509,6 +5528,8 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} annual report 10-K PP&E total assets capital expenditures operating cash flow revenue net income"
     if formula_name == "fixed_charge_coverage":
         return f"{goal} annual report 10-K Exhibit 12 fixed charges earnings available for fixed charges pretax income"
+    if formula_name == "mlr_rebate":
+        return f"{goal} medical loss ratio rebate premium revenue incurred claims quality improvement expenses MLR standard"
     if formula_name == "fixed_asset_turnover":
         return f"{goal} annual report 10-K revenue property plant equipment net fixed asset turnover"
     return f"{goal} SEC Archives 8-K 10-K consideration revenue"
@@ -5529,6 +5550,8 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} SEC companyfacts PropertyPlantAndEquipmentNet Assets PaymentsToAcquirePropertyPlantAndEquipment NetCashProvidedByUsedInOperatingActivities Revenues"
     if formula_name == "fixed_charge_coverage":
         return f"{goal} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
+    if formula_name == "mlr_rebate":
+        return f"{goal} CMS medical loss ratio rebate filing MLR numerator denominator premium revenue claims"
     if formula_name == "fixed_asset_turnover":
         return f"{goal} SEC companyfacts Revenues PropertyPlantAndEquipmentNet 10-K balance sheet statement of income"
     return f"{goal} official filing transaction value revenue"
@@ -5865,6 +5888,8 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         if ("days inventory outstanding" in text or "days inventory" in text or " dio" in f" {text}")
         else "fixed_charge_coverage"
         if ("fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text)
+        else "mlr_rebate"
+        if ("medical loss ratio" in text or " mlr" in f" {text}")
         else ""
     )
     if not formula_name:
@@ -5888,6 +5913,11 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         additions = (
             "SEC companyfacts companyconcept 10-K Exhibit 12 fixed charges earnings available for fixed charges "
             "ratio of earnings to fixed charges pretax income"
+        )
+    elif formula_name == "mlr_rebate":
+        additions = (
+            "medical loss ratio MLR rebate premium revenue incurred claims quality improvement expenses "
+            "MLR standard CMS regulatory filing"
         )
     elif formula_name == "fixed_asset_turnover":
         additions = "SEC companyfacts companyconcept 10-K annual revenue net sales property plant equipment net PP&E fixed asset turnover"
@@ -5927,6 +5957,11 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
             extra_queries.append(f"{ticker} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges pretax income")
             extra_queries.append(f"{ticker} 10-K Exhibit 12 ratio of earnings to fixed charges fixed charges")
         extra_queries.append(f"{root_goal} SEC filing fixed charges earnings available for fixed charges")
+    elif formula_name == "mlr_rebate":
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} medical loss ratio MLR rebate premium revenue incurred claims quality improvement expenses")
+            extra_queries.append(f"{ticker} annual report 10-K medical costs premium revenue medical loss ratio")
+        extra_queries.append(f"{root_goal} CMS medical loss ratio rebate MLR standard premium claims quality improvement")
     elif formula_name == "fixed_asset_turnover":
         for ticker in _finance_goal_tickers(root_goal):
             extra_queries.append(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
@@ -5964,7 +5999,7 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
             metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:16]
         metadata.setdefault("source_authority_requirement", "primary")
         metadata.setdefault("target_inventory_and_cogs_structured_source_required", True)
-    if formula_name in {"capital_intensity", "fixed_asset_turnover", "fixed_charge_coverage"}:
+    if formula_name in {"capital_intensity", "fixed_asset_turnover", "fixed_charge_coverage", "mlr_rebate"}:
         source_urls = _finance_issuer_seed_urls(root_goal, formula_name=formula_name)
         if source_urls:
             updated["source_urls"] = _ordered_unique([*_string_list(updated.get("source_urls")), *source_urls])[:24]
@@ -5976,12 +6011,14 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
             metadata.setdefault("target_fixed_asset_turnover_structured_source_required", True)
         if formula_name == "fixed_charge_coverage":
             metadata.setdefault("target_fixed_charge_coverage_structured_source_required", True)
+        if formula_name == "mlr_rebate":
+            metadata.setdefault("target_mlr_rebate_regulatory_source_required", True)
     metadata.setdefault("preferred_source_families", ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"])
     updated["metadata"] = metadata
     updated["max_sources"] = max(int(updated.get("max_sources") or 0), 24)
     updated["max_fetches"] = max(
         int(updated.get("max_fetches") or 0),
-        20 if formula_name == "capital_intensity" else 18 if formula_name in {"ev_revenue", "fixed_asset_turnover", "fixed_charge_coverage"} else 12,
+        20 if formula_name == "capital_intensity" else 18 if formula_name in {"ev_revenue", "fixed_asset_turnover", "fixed_charge_coverage", "mlr_rebate"} else 12,
     )
     updated["max_spans_per_document"] = max(int(updated.get("max_spans_per_document") or 0), 8)
     return updated
@@ -6038,6 +6075,8 @@ def _canonical_finance_formula_name(value: str) -> str:
         return "fixed_asset_turnover"
     if text.startswith("fixed_charge_coverage") or "fixed_charge" in text or "earnings_to_fixed_charges" in text:
         return "fixed_charge_coverage"
+    if text.startswith("mlr_rebate") or "medical_loss_ratio" in text or text == "mlr":
+        return "mlr_rebate"
     if text.startswith("dio") or "days_inventory" in text:
         return "dio"
     if text.startswith("ev_revenue") or "enterprise_value_to_revenue" in text:

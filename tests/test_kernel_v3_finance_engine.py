@@ -7949,6 +7949,150 @@ def test_finance_formula_planner_derives_fixed_charge_coverage_from_pretax_incom
     assert Decimal(trace.result_value) == Decimal("13")
 
 
+def test_finance_fact_ledger_extracts_mlr_rebate_line_items_from_structured_facts() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="mlr-ratio",
+            text=(
+                "entityName=HealthCo ticker=HLC concept=MedicalLossRatio "
+                "label='Medical loss ratio' unit=percent fy=2024 form=10-K value=82"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="mlr-standard",
+            text=(
+                "entityName=HealthCo ticker=HLC concept=MLRStandard "
+                "label='Minimum MLR' unit=percent fy=2024 form=regulatory value=85"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="mlr-premium",
+            text=(
+                "entityName=HealthCo ticker=HLC concept=AdjustedPremiumRevenue "
+                "label='Adjusted premium revenue' unit=USD fy=2024 form=regulatory value=10000000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="mlr-numerator",
+            text=(
+                "entityName=HealthCo ticker=HLC concept=ClaimsAndQualityImprovementExpenses "
+                "label='Claims and quality improvement expenses' unit=USD fy=2024 form=regulatory value=8200000000"
+            ),
+        ),
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence],
+    )
+
+    by_metric = {fact.metric: fact for fact in facts}
+    assert by_metric["medical loss ratio"].value == "82"
+    assert by_metric["mlr standard"].value == "85"
+    assert by_metric["adjusted premium revenue"].value == "10000000000"
+    assert by_metric["mlr numerator"].value == "8200000000"
+
+
+def test_finance_formula_planner_generates_mlr_rebate_from_reported_ratio() -> None:
+    facts = [
+        _year_fact("medical loss ratio", "82", 2024, fact_id="hlc-actual-mlr"),
+        _year_fact("mlr standard", "85", 2024, fact_id="hlc-mlr-standard"),
+        _year_fact("adjusted premium revenue", "10000000000", 2024, fact_id="hlc-adjusted-premium"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, calculate the MLR rebate owed using the reported medical loss ratio.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "mlr_rebate"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "(mlr_standard - actual_mlr) * adjusted_premium_revenue"
+    assert plan.payload["variables"] == {
+        "mlr_standard": "0.85",
+        "actual_mlr": "0.82",
+        "adjusted_premium_revenue": "10000000000",
+    }
+    assert plan.payload["diagnostics"]["standard_source"] == "fact"
+    assert plan.payload["diagnostics"]["model_outputs"]["mlr_rebate"] == "300000000"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("300000000")
+
+
+def test_finance_formula_planner_mlr_rebate_uses_labeled_question_standard() -> None:
+    facts = [
+        _year_fact("medical loss ratio", "82", 2024, fact_id="hlc-actual-mlr"),
+        _year_fact("adjusted premium revenue", "10000000000", 2024, fact_id="hlc-adjusted-premium"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, the actual MLR was 82%; calculate the rebate against the required standard of 85%.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["variables"]["mlr_standard"] == "0.85"
+    assert plan.payload["diagnostics"]["standard_source"] == "question"
+    assert plan.payload["diagnostics"]["model_outputs"]["mlr_rebate"] == "300000000"
+
+
+def test_finance_formula_planner_derives_mlr_rebate_from_claims_and_quality_expenses() -> None:
+    facts = [
+        _year_fact("medical claims", "7900000000", 2024, fact_id="hlc-medical-claims"),
+        _year_fact("quality improvement expenses", "300000000", 2024, fact_id="hlc-quality-improvement"),
+        _year_fact("adjusted premium revenue", "10000000000", 2024, fact_id="hlc-adjusted-premium"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024 large group coverage, estimate the MLR rebate from claims, QI expenses, and premiums.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "mlr_rebate"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "(mlr_standard - (mlr_numerator / adjusted_premium_revenue)) * adjusted_premium_revenue"
+    assert plan.payload["variables"] == {
+        "mlr_standard": "0.85",
+        "mlr_numerator": "8200000000",
+        "adjusted_premium_revenue": "10000000000",
+    }
+    assert plan.payload["diagnostics"]["standard_source"] == "question_market_segment"
+    assert plan.payload["diagnostics"]["numerator_basis"] == "derived_from_claims_plus_quality_improvement"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("300000000")
+
+
+def test_finance_formula_planner_mlr_rebate_is_zero_when_ratio_meets_standard() -> None:
+    facts = [
+        _year_fact("medical loss ratio", "88", 2024, fact_id="hlc-actual-mlr"),
+        _year_fact("mlr standard", "85", 2024, fact_id="hlc-mlr-standard"),
+        _year_fact("adjusted premium revenue", "10000000000", 2024, fact_id="hlc-adjusted-premium"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, calculate whether a medical loss ratio rebate is owed.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "mlr_rebate"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "adjusted_premium_revenue * 0"
+    assert plan.payload["diagnostics"]["rebate_required"] is False
+    assert plan.payload["diagnostics"]["model_outputs"]["mlr_rebate"] == "0"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("0")
+
+
 def test_finance_formula_planner_generates_purchase_price_allocation_payload() -> None:
     facts = [
         _year_fact("purchase consideration", "43000000000", 2023, fact_id="pfe-seagen-consideration"),
@@ -8625,6 +8769,41 @@ def test_finance_missing_fact_retrieval_action_supports_fixed_charge_coverage() 
     assert slot_specs[1]["accepted_attributes"] == ["fixed charges"]
     assert "fixed charges" in action.payload["query"].lower()
     assert any("EarningsAvailableForFixedCharges" in query for query in action.payload["queries"])
+
+
+def test_finance_missing_fact_retrieval_action_supports_mlr_rebate() -> None:
+    plan = plan_finance_formula(question="Calculate CNC's medical loss ratio rebate for FY2024.", facts=[])
+    source_action = CandidateAction(
+        action_id="act-source",
+        kind="respond",
+        name=None,
+        description="fallback",
+        score=0.1,
+        payload={"text": "fallback"},
+        reasons=["fallback"],
+        side_effect_class="none",
+    )
+
+    action = _finance_missing_fact_retrieval_action(
+        source_action,
+        plan=plan,
+        goal="Calculate CNC's medical loss ratio rebate for FY2024 using public filings and regulatory evidence.",
+        call_index=1,
+    )
+
+    assert action is not None
+    assert action.name == "retrieval.run"
+    assert action.payload["metadata"]["finance_formula_name"] == "mlr_rebate"
+    assert action.payload["metadata"]["target_mlr_rebate_regulatory_source_required"] is True
+    slot_specs = action.payload["metadata"]["slot_frame"]["required_slots"]
+    assert [slot["name"] for slot in slot_specs] == [
+        "actual_mlr_or_complete_mlr_numerator",
+        "adjusted_premium_revenue_or_mlr_denominator",
+        "mlr_standard_or_market_segment",
+        "rebate_basis_or_adjusted_premium_revenue",
+    ]
+    assert "medical loss ratio" in action.payload["query"].lower()
+    assert any("CMS medical loss ratio rebate" in query for query in action.payload["queries"])
 
 
 def test_finance_missing_fact_retrieval_action_preserves_target_document_binding() -> None:

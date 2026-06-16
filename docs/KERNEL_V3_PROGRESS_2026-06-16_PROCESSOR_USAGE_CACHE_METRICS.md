@@ -3780,3 +3780,73 @@ auditable FormulaTrace.
 4 passed, 233 deselected in 0.88s
 334 passed in 3.84s
 ```
+
+---
+
+## 62. 追加落地：MLR Rebate Formula Coverage
+
+MLR rebate tasks are regulatory-ratio questions rather than ordinary company
+margin calculations. The implementation follows the public 45 CFR Part 158
+structure: MLR is numerator divided by denominator, the numerator includes
+incurred claims and quality-improvement activity expenses, large-group issuers
+use an 85% minimum MLR standard, and individual/small-group issuers use an 80%
+minimum standard. The host exposes those mechanics as FormulaTrace support but
+does not decide ambiguous market segment or filing-definition issues when the
+evidence does not state them.
+
+变更：
+
+- `FinanceFactLedger` now canonicalizes:
+  - `medical loss ratio`;
+  - `mlr standard`;
+  - `mlr numerator`;
+  - `mlr denominator`;
+  - `adjusted premium revenue` / `premium revenue`;
+  - `medical claims`;
+  - `quality improvement expenses`;
+  - `mlr rebate`;
+- `FinanceFormulaPlanner` now detects `MLR` / `medical loss ratio` / rebate
+  questions;
+- if a reported actual MLR is present, rebate is calculated from reported MLR,
+  required MLR standard, and adjusted premium revenue;
+- if actual MLR is absent but a complete numerator/denominator is present, the
+  planner derives actual MLR first;
+- if actual MLR is absent and only component numerator facts are present, rebate
+  requires both medical claims and quality-improvement expenses;
+- if the actual MLR meets or exceeds the required standard, the trace returns a
+  zero rebate and exposes `rebate_required=false`;
+- MLR standard is only taken from:
+  - an explicit fact;
+  - an explicitly labeled standard/required/minimum percentage in the question;
+  - a clear individual/small-group/large-group market segment in the question;
+- runtime missing-fact retrieval now adds MLR-specific regulatory, CMS, premium,
+  claims, quality-improvement, and standard query terms;
+- `finance_slot_frame` now exposes MLR missing slots for actual MLR/numerator,
+  denominator, standard/market segment, and rebate basis.
+
+边界：
+
+- no company, benchmark row, or fixed answer was added;
+- host does not default every MLR task to 80% or 85%; ambiguous standards remain
+  missing facts for the model/retrieval loop;
+- final interpretation of special regulatory adjustments, credibility
+  adjustments, taxes, and filing-specific definitions remains with the LLM and
+  cited evidence.
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "mlr"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+6 passed, 237 deselected in 0.96s
+340 passed in 3.56s
+```
+
+参考：
+
+- https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-B/part-158

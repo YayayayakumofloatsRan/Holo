@@ -52,6 +52,8 @@ def plan_finance_formula(
         return _plan_ev_ebitda(usable)
     if formula == "fixed_charge_coverage":
         return _plan_fixed_charge_coverage(question=question, facts=usable)
+    if formula == "mlr_rebate":
+        return _plan_mlr_rebate(question=question, facts=usable)
     if formula == "purchase_price_allocation":
         return _plan_purchase_price_allocation(question=question, facts=usable)
     if formula == "dio":
@@ -94,6 +96,8 @@ def _detect_formula(question: str) -> str | None:
         return "ev_ebitda"
     if "fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text:
         return "fixed_charge_coverage"
+    if re.search(r"\bmlr\b", text) or "medical loss ratio" in text:
+        return "mlr_rebate"
     if (
         "purchase price allocation" in text
         or "purchase-price allocation" in text
@@ -945,6 +949,324 @@ def _fixed_charge_fact_text(fact: FinanceFact) -> str:
             )
         )
     )
+
+
+def _plan_mlr_rebate(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    needs_rebate = _mlr_question_needs_rebate(question)
+    actual_mlr = _mlr_actual_fact(facts, target_year=target_year)
+    numerator_fact = _mlr_numerator_fact(facts, target_year=target_year)
+    claims = _latest_fact_for_year(facts, ("medical claims",), target_year=target_year) if numerator_fact is None else None
+    quality_improvement = (
+        _latest_fact_for_year(facts, ("quality improvement expenses",), target_year=target_year)
+        if numerator_fact is None
+        else None
+    )
+    premium_basis = _mlr_premium_basis_fact(facts, target_year=target_year)
+    standard_fact = _mlr_standard_fact(facts, target_year=target_year)
+    standard_value, standard_source = _mlr_standard_value(question=question, fact=standard_fact)
+    numerator_facts = [fact for fact in (numerator_fact, claims, quality_improvement) if fact is not None]
+    supporting = [fact for fact in (actual_mlr, premium_basis, standard_fact, *numerator_facts) if fact is not None]
+    missing: list[str] = []
+    if actual_mlr is None and numerator_fact is None and not (claims is not None and quality_improvement is not None):
+        missing.append("actual_mlr_or_complete_mlr_numerator")
+    if actual_mlr is None and premium_basis is None:
+        missing.append("adjusted_premium_revenue_or_mlr_denominator")
+    if needs_rebate:
+        if premium_basis is None:
+            missing.append("rebate_basis_or_adjusted_premium_revenue")
+        if standard_value is None:
+            missing.append("mlr_standard_or_market_segment")
+    if missing:
+        return _missing(
+            "mlr_rebate",
+            _ordered_unique(missing),
+            facts=supporting,
+            diagnostics={
+                "reason": "mlr_rebate_requires_actual_mlr_or_components_standard_and_rebate_basis",
+                "target_fiscal_year": target_year,
+                "output_requested": "rebate" if needs_rebate else "medical_loss_ratio",
+            },
+        )
+    related_facts = supporting
+    premium_value = _decimal_or_none(_fact_value_for_formula(premium_basis, related_facts=related_facts)) if premium_basis else None
+    numerator_value: Decimal | None = None
+    numerator_basis = ""
+    formula_facts: list[FinanceFact] = []
+    if actual_mlr is not None:
+        actual_mlr_value = _decimal_or_none(_ratio_value(actual_mlr))
+        numerator_basis = "reported_actual_mlr"
+        formula_facts.append(actual_mlr)
+    else:
+        actual_mlr_value = None
+        if numerator_fact is not None:
+            numerator_value = _decimal_or_none(_fact_value_for_formula(numerator_fact, related_facts=related_facts))
+            numerator_basis = "reported_mlr_numerator"
+            formula_facts.append(numerator_fact)
+        elif claims is not None and quality_improvement is not None:
+            claims_value = _decimal_or_none(_fact_value_for_formula(claims, related_facts=related_facts))
+            quality_value = _decimal_or_none(_fact_value_for_formula(quality_improvement, related_facts=related_facts))
+            if claims_value is not None and quality_value is not None:
+                numerator_value = claims_value + quality_value
+                numerator_basis = "derived_from_claims_plus_quality_improvement"
+                formula_facts.extend([claims, quality_improvement])
+        if numerator_value is not None and premium_value is not None and premium_value != 0:
+            actual_mlr_value = numerator_value / premium_value
+    if actual_mlr_value is None:
+        return _missing(
+            "mlr_rebate",
+            ["computable_actual_mlr"],
+            facts=supporting,
+            diagnostics={"target_fiscal_year": target_year},
+        )
+    if not needs_rebate:
+        if actual_mlr is not None:
+            variables: JsonObject = {"actual_mlr": _decimal_string(actual_mlr_value)}
+            expression = "actual_mlr"
+        else:
+            if premium_value is None or premium_value == 0 or numerator_value is None:
+                return _missing("mlr_rebate", ["mlr_numerator", "adjusted_premium_revenue"], facts=supporting)
+            variables = {
+                "mlr_numerator": _decimal_string(numerator_value),
+                "adjusted_premium_revenue": _decimal_string(premium_value),
+            }
+            expression = "mlr_numerator / adjusted_premium_revenue"
+            if premium_basis is not None:
+                formula_facts.append(premium_basis)
+        return _ready(
+            "mlr_rebate",
+            expression,
+            variables,
+            unit="percent",
+            facts=_sort_unique_facts(formula_facts),
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "medical loss ratio numerator divided by adjusted premium revenue",
+                "output_attribute": "medical_loss_ratio",
+                "numerator_basis": numerator_basis,
+                "bound_line_items": _mlr_bound_line_items(
+                    actual_mlr=actual_mlr,
+                    numerator_fact=numerator_fact,
+                    claims=claims,
+                    quality_improvement=quality_improvement,
+                    premium_basis=premium_basis,
+                    standard_fact=standard_fact,
+                ),
+                "model_outputs": {"actual_mlr": _decimal_string(actual_mlr_value)},
+            },
+        )
+    if premium_value is None or premium_value == 0:
+        return _missing("mlr_rebate", ["positive_rebate_basis_or_adjusted_premium_revenue"], facts=supporting)
+    if standard_value is None:
+        return _missing("mlr_rebate", ["mlr_standard_or_market_segment"], facts=supporting)
+    rebate_gap = standard_value - actual_mlr_value
+    if rebate_gap > 0:
+        if actual_mlr is not None:
+            expression = "(mlr_standard - actual_mlr) * adjusted_premium_revenue"
+            variables = {
+                "mlr_standard": _decimal_string(standard_value),
+                "actual_mlr": _decimal_string(actual_mlr_value),
+                "adjusted_premium_revenue": _decimal_string(premium_value),
+            }
+        else:
+            expression = "(mlr_standard - (mlr_numerator / adjusted_premium_revenue)) * adjusted_premium_revenue"
+            variables = {
+                "mlr_standard": _decimal_string(standard_value),
+                "mlr_numerator": _decimal_string(numerator_value or Decimal(0)),
+                "adjusted_premium_revenue": _decimal_string(premium_value),
+            }
+    else:
+        expression = "adjusted_premium_revenue * 0"
+        variables = {
+            "mlr_standard": _decimal_string(standard_value),
+            "actual_mlr": _decimal_string(actual_mlr_value),
+            "adjusted_premium_revenue": _decimal_string(premium_value),
+        }
+    if premium_basis is not None:
+        formula_facts.append(premium_basis)
+    if standard_fact is not None:
+        formula_facts.append(standard_fact)
+    rebate_amount = max(rebate_gap, Decimal(0)) * premium_value
+    return _ready(
+        "mlr_rebate",
+        expression,
+        variables,
+        unit=str(premium_basis.unit or "USD") if premium_basis is not None else "USD",
+        facts=_sort_unique_facts(formula_facts),
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "max(required MLR - actual MLR, 0) multiplied by adjusted premium revenue",
+            "output_attribute": "mlr_rebate",
+            "numerator_basis": numerator_basis,
+            "standard_source": standard_source,
+            "rebate_required": rebate_gap > 0,
+            "bound_line_items": _mlr_bound_line_items(
+                actual_mlr=actual_mlr,
+                numerator_fact=numerator_fact,
+                claims=claims,
+                quality_improvement=quality_improvement,
+                premium_basis=premium_basis,
+                standard_fact=standard_fact,
+            ),
+            "model_outputs": {
+                "actual_mlr": _decimal_string(actual_mlr_value),
+                "mlr_standard": _decimal_string(standard_value),
+                "rebate_gap": _decimal_string(rebate_gap),
+                "rebate_gap_positive": _decimal_string(max(rebate_gap, Decimal(0))),
+                "adjusted_premium_revenue": _decimal_string(premium_value),
+                "mlr_rebate": _decimal_string(rebate_amount),
+            },
+        },
+    )
+
+
+def _mlr_question_needs_rebate(question: str) -> bool:
+    text = _metric_text(question)
+    return any(marker in text for marker in ("rebate", "refund", "owed", "owe", "shortfall", "amount due"))
+
+
+def _mlr_actual_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    candidates = [
+        fact
+        for fact in _facts_for_metric(facts, ("medical loss ratio",))
+        if not _is_mlr_standard_fact(fact) and not _is_mlr_rebate_fact(fact)
+    ]
+    candidates = _mlr_year_matches(candidates, target_year=target_year)
+    return _sort_facts(candidates)[-1] if candidates else None
+
+
+def _mlr_standard_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    candidates = [
+        fact
+        for fact in facts
+        if _is_mlr_standard_fact(fact)
+    ]
+    candidates = _mlr_year_matches(candidates, target_year=target_year)
+    return _sort_facts(candidates)[-1] if candidates else None
+
+
+def _mlr_numerator_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    candidates = _facts_for_metric(facts, ("mlr numerator",))
+    candidates = _mlr_year_matches(candidates, target_year=target_year)
+    return _sort_facts(candidates)[-1] if candidates else None
+
+
+def _mlr_premium_basis_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
+    for markers in (
+        ("mlr denominator", "adjusted premium revenue"),
+        ("premium revenue", "earned premium", "earned premiums"),
+    ):
+        candidates = _mlr_year_matches(_facts_for_metric(facts, markers), target_year=target_year)
+        if candidates:
+            return _sort_facts(candidates)[-1]
+    return None
+
+
+def _mlr_year_matches(facts: list[FinanceFact], *, target_year: int | None) -> list[FinanceFact]:
+    candidates = _sort_unique_facts(facts)
+    if target_year is None:
+        return candidates
+    return [
+        fact
+        for fact in candidates
+        if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+    ]
+
+
+def _mlr_standard_value(*, question: str, fact: FinanceFact | None) -> tuple[Decimal | None, str]:
+    if fact is not None:
+        value = _decimal_or_none(_ratio_value(fact))
+        if value is not None:
+            return value, "fact"
+    question_value = _mlr_standard_from_question(question)
+    if question_value is not None:
+        return question_value, "question"
+    segment_value = _mlr_standard_from_market_segment(question)
+    if segment_value is not None:
+        return segment_value, "question_market_segment"
+    return None, ""
+
+
+def _mlr_standard_from_question(question: str) -> Decimal | None:
+    text = str(question or "")
+    patterns = (
+        r"(?:standard|minimum|required|threshold|target)[^\d%]{0,40}(?P<number>\d+(?:\.\d+)?)\s*%",
+        r"(?P<number>\d+(?:\.\d+)?)\s*%[^\w%]{0,20}(?:standard|minimum|required|threshold|target)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            value = _decimal_or_none(match.group("number"))
+            if value is not None:
+                return value / Decimal(100)
+    return None
+
+
+def _mlr_standard_from_market_segment(question: str) -> Decimal | None:
+    text = _metric_text(question)
+    if "large group" in text:
+        return Decimal("0.85")
+    if "small group" in text or "individual market" in text or "individual health" in text:
+        return Decimal("0.80")
+    return None
+
+
+def _is_mlr_standard_fact(fact: FinanceFact) -> bool:
+    text = _mlr_fact_text(fact)
+    return "mlr standard" in text or any(
+        marker in text
+        for marker in (
+            "minimum medical loss ratio",
+            "medical loss ratio standard",
+            "minimum mlr",
+            "required mlr",
+            "required medical loss ratio",
+        )
+    )
+
+
+def _is_mlr_rebate_fact(fact: FinanceFact) -> bool:
+    text = _mlr_fact_text(fact)
+    return "mlr rebate" in text or "medical loss ratio rebate" in text or "rebate amount" in text
+
+
+def _mlr_fact_text(fact: FinanceFact) -> str:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    return _metric_text(
+        " ".join(
+            str(value or "")
+            for value in (
+                fact.metric,
+                metadata.get("label"),
+                metadata.get("concept"),
+                metadata.get("raw_metric"),
+                metadata.get("context"),
+            )
+        )
+    )
+
+
+def _mlr_bound_line_items(
+    *,
+    actual_mlr: FinanceFact | None,
+    numerator_fact: FinanceFact | None,
+    claims: FinanceFact | None,
+    quality_improvement: FinanceFact | None,
+    premium_basis: FinanceFact | None,
+    standard_fact: FinanceFact | None,
+) -> JsonObject:
+    return {
+        key: value
+        for key, value in {
+            "actual_mlr": _formula_bound_line_item(actual_mlr) if actual_mlr is not None else None,
+            "mlr_numerator": _formula_bound_line_item(numerator_fact) if numerator_fact is not None else None,
+            "medical_claims": _formula_bound_line_item(claims) if claims is not None else None,
+            "quality_improvement_expenses": _formula_bound_line_item(quality_improvement) if quality_improvement is not None else None,
+            "adjusted_premium_revenue": _formula_bound_line_item(premium_basis) if premium_basis is not None else None,
+            "mlr_standard": _formula_bound_line_item(standard_fact) if standard_fact is not None else None,
+        }.items()
+        if value is not None
+    }
 
 
 def _plan_purchase_price_allocation(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:

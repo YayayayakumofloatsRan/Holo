@@ -1917,9 +1917,9 @@ answer numeric support `0.7953`. At that checkpoint, the remaining failures were
 concentrated in harder modeling/valuation tasks such as CRM DCF, EPAM LBO,
 TGT/WMT fixed-charge coverage, LULU/VSCO EV/EBITDA, CNC MLR rebate, and
 PFE/Seagen purchase-price allocation. Subsequent passes have promoted
-EV/EBITDA, purchase-price allocation, and fixed-charge coverage into planner
-coverage; fresh live benchmark reruns are still required before treating those
-historical failures as closed in the benchmark score. That is the desired
+EV/EBITDA, purchase-price allocation, fixed-charge coverage, and MLR rebate into
+planner coverage; fresh live benchmark reruns are still required before treating
+those historical failures as closed in the benchmark score. That is the desired
 reliability posture: unsupported finance numbers should be stopped, not polished
 into a confident answer.
 
@@ -2052,13 +2052,14 @@ numeric-claim policy explicitly: material finance numbers must come from
 calculator traces, finance/claim ledger facts, or explicitly labeled
 assumptions; unsupported numbers must be omitted or moved into limitations
 before the host verifier checks them again.
-The main failure mode is still `required_trace_missing` on harder
-modeling/regulatory tasks, especially cases such as CRM DCF, EPAM LBO, and CNC
-MLR rebate. Fixed-charge coverage, EV/EBITDA, and purchase-price allocation now
-have host-side FormulaTrace coverage, but still need fresh live reruns to prove
-end-to-end benchmark closure. The next work is to expand `FinanceFormulaPlanner`,
-ledger extraction, and optional LLM-assisted fact/noise review for remaining
-task families while keeping the deterministic numeric gate intact.
+The main failure mode is still `required_trace_missing` on harder modeling and
+assumption-policy tasks, especially cases such as CRM DCF and EPAM LBO. The
+coverage families for fixed charges, EV/EBITDA, purchase-price allocation, and
+MLR rebate now have host-side FormulaTrace coverage, but still need fresh live
+reruns to prove end-to-end benchmark closure. The next work is to expand
+`FinanceFormulaPlanner`, ledger extraction, and optional LLM-assisted fact/noise
+review for remaining task families while keeping the deterministic numeric gate
+intact.
 
 EV/EBITDA has since been promoted into the formula planner. The host can now
 recognize EV/EBITDA intent, compute it from direct EBITDA or from complete
@@ -2275,6 +2276,13 @@ for fixed charges and total fixed charges, the planner computes the coverage
 multiple from direct disclosures or a pretax-income-plus-fixed-charges basis,
 and missing-fact retrieval seeds SEC companyfacts / Exhibit 12 terms instead of
 falling back to a generic search.
+MLR rebate questions now have a regulatory-ratio planner path. The ledger
+canonicalizes medical loss ratio, MLR standard, premium denominator, claims/QI
+numerator, and rebate line items; the planner computes actual MLR from reported
+ratio or complete numerator/denominator facts, then computes rebate as the
+positive shortfall versus the required standard times adjusted premium revenue.
+It does not default the standard unless the question or evidence states the
+standard or a clear individual/small-group/large-group market segment.
 
 ## Validation
 
