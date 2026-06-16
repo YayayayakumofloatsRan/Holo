@@ -1331,10 +1331,16 @@ def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
         add("capital_expenditures", statement="cash_flow_statement", line_item="capital expenditures")
     if "operations, investing, and financing" in text or "operating, investing, and financing" in text:
         add("cash_flow_activity_totals", statement="cash_flow_statement", line_item="net cash provided by operating investing financing activities")
+        add("operating_cash_flow", statement="cash_flow_statement", line_item="net cash provided by operating activities")
+        add("investing_cash_flow", statement="cash_flow_statement", line_item="net cash provided by investing activities")
+        add("financing_cash_flow", statement="cash_flow_statement", line_item="net cash provided by financing activities")
     if "dividend" in text:
         add("dividends_paid", statement="cash_flow_statement", line_item="dividends paid")
     if "cash and cash equivalents" in text or "cash equivalents" in text:
         add("cash_and_equivalents", statement="balance_sheet", line_item="cash and cash equivalents")
+        if any(marker in text for marker in ("drop", "dropped", "increase", "increased", "decrease", "decreased", "change", "changed", "between")):
+            add("cash_and_equivalents_prior", statement="balance_sheet", line_item="cash and cash equivalents")
+            add("cash_and_equivalents_current", statement="balance_sheet", line_item="cash and cash equivalents")
     if "debt" in text and ("increased" in text or "balance sheet" in text or "largest investment" in text):
         add("debt", statement="balance_sheet", line_item="debt")
     if "debt" in text and "balance sheet" in text and any(marker in text for marker in ("increased", "increase", "decreased", "decrease", "changed", "between")):
@@ -1344,6 +1350,9 @@ def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
         add("short_term_investments", statement="balance_sheet", line_item="short-term investments")
     if any(marker in text for marker in ("ppne", "pp and e", "net ppne", "net pp&e", "net property plant and equipment", "property, plant, and equipment")):
         add("property_plant_and_equipment_net", statement="balance_sheet", line_item="property plant and equipment net")
+        if any(marker in text for marker in ("grow", "grew", "increase", "increased", "decrease", "decreased", "change", "changed", "between")):
+            add("property_plant_and_equipment_net_prior", statement="balance_sheet", line_item="property plant and equipment net")
+            add("property_plant_and_equipment_net_current", statement="balance_sheet", line_item="property plant and equipment net")
     if "total assets" in text:
         add("assets", statement="balance_sheet", line_item="total assets")
     if "asset turnover" in text and "fixed asset" not in text and "fixed-asset" not in text:
@@ -1420,6 +1429,9 @@ def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
         add("business_cyclicality", statement="risk_factors_or_md&a", line_item="cyclicality")
     if "number of stores" in text or "stores between" in text:
         add("store_count", statement="business_or_properties", line_item="stores")
+        if any(marker in text for marker in ("change", "changed", "increase", "decrease", "between")):
+            add("store_count_prior", statement="business_or_properties", line_item="stores")
+            add("store_count_current", statement="business_or_properties", line_item="stores")
     if "production rate" in text:
         add("production_rates", statement="md&a_or_business_outlook", line_item="production rates")
     if "ceo" in text or "board member" in text or "nominees" in text:
@@ -1757,6 +1769,30 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
             "percent",
             "component_percent_of_total",
         ),
+        "cash_and_equivalents_change": (
+            ["cash_and_equivalents_prior", "cash_and_equivalents_current"],
+            "cash_and_equivalents_current - cash_and_equivalents_prior",
+            "currency",
+            "cash_and_equivalents_change",
+        ),
+        "property_plant_and_equipment_change": (
+            ["property_plant_and_equipment_net_prior", "property_plant_and_equipment_net_current"],
+            "property_plant_and_equipment_net_current - property_plant_and_equipment_net_prior",
+            "currency",
+            "property_plant_and_equipment_change",
+        ),
+        "store_count_change": (
+            ["store_count_prior", "store_count_current"],
+            "store_count_current - store_count_prior",
+            "count",
+            "store_count_change",
+        ),
+        "cash_flow_activity_comparison": (
+            ["operating_cash_flow", "investing_cash_flow", "financing_cash_flow"],
+            "max(operating_cash_flow, investing_cash_flow, financing_cash_flow)",
+            "currency",
+            "cash_flow_activity_comparison",
+        ),
     }
     if name in simple_transforms:
         default_slots, default_expression, default_unit, output_attribute = simple_transforms[name]
@@ -2052,7 +2088,14 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "equity_note_or_cash_flow_statement"
     if slot_name == "shares_outstanding":
         return "equity_or_cover_page"
-    if slot_name in {"capital_expenditures", "operating_cash_flow", "dividends_paid", "cash_flow_activity_totals"}:
+    if slot_name in {
+        "capital_expenditures",
+        "operating_cash_flow",
+        "investing_cash_flow",
+        "financing_cash_flow",
+        "dividends_paid",
+        "cash_flow_activity_totals",
+    }:
         return "cash_flow_statement"
     if slot_name == "depreciation_and_amortization":
         return "cash_flow_statement"
@@ -2069,6 +2112,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         "total_current_liabilities",
         "total_current_assets",
         "cash_and_equivalents",
+        "cash_and_equivalents_prior",
+        "cash_and_equivalents_current",
         "marketable_securities",
         "accounts_receivable",
         "accounts_payable",
@@ -2083,6 +2128,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         "cash",
     }:
         return "balance_sheet"
+    if slot_name in {"store_count", "store_count_prior", "store_count_current"}:
+        return "business_or_properties"
     if slot_name in {
         "revenue",
         "net_income",
@@ -2121,9 +2168,13 @@ def _line_item_for_slot(slot_name: str) -> str | None:
     mapping = {
         "capital_expenditures": "capital expenditures",
         "operating_cash_flow": "operating cash flow",
+        "investing_cash_flow": "investing cash flow",
+        "financing_cash_flow": "financing cash flow",
         "total_current_liabilities": "total current liabilities",
         "total_current_assets": "total current assets",
         "cash_and_equivalents": "cash and cash equivalents",
+        "cash_and_equivalents_prior": "cash and cash equivalents",
+        "cash_and_equivalents_current": "cash and cash equivalents",
         "marketable_securities": "marketable securities",
         "accounts_receivable": "accounts receivable",
         "accounts_payable": "accounts payable",
@@ -2163,6 +2214,9 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "dividends_paid": "dividends paid",
         "cash_flow_activity_totals": "net cash provided by operating investing financing activities",
         "restructuring_costs": "restructuring costs",
+        "store_count": "stores",
+        "store_count_prior": "stores",
+        "store_count_current": "stores",
     }
     return mapping.get(slot_name)
 
@@ -2221,6 +2275,18 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
     mapping = {
         "capital_expenditures": ["capital expenditures", "capex", "purchases of property plant and equipment"],
         "operating_cash_flow": ["operating cash flow", "cash flow from operations", "net cash provided by operating activities"],
+        "investing_cash_flow": [
+            "investing cash flow",
+            "cash flow from investing activities",
+            "net cash provided by investing activities",
+            "net cash used in investing activities",
+        ],
+        "financing_cash_flow": [
+            "financing cash flow",
+            "cash flow from financing activities",
+            "net cash provided by financing activities",
+            "net cash used in financing activities",
+        ],
         "total_current_liabilities": ["total current liabilities", "current liabilities", "liabilities current"],
         "total_current_assets": ["total current assets", "current assets", "assets current"],
         "debt": ["debt", "short-term debt", "long-term debt", "borrowings"],
@@ -2228,6 +2294,8 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "current_debt": ["debt", "short-term debt", "long-term debt", "borrowings", "current debt"],
         "short_term_investments": ["short-term investments", "short term investments", "marketable securities"],
         "cash_and_equivalents": ["cash and cash equivalents", "cash equivalents", "cash"],
+        "cash_and_equivalents_prior": ["cash and cash equivalents", "cash equivalents", "cash", "prior cash and cash equivalents"],
+        "cash_and_equivalents_current": ["cash and cash equivalents", "cash equivalents", "cash", "current cash and cash equivalents"],
         "marketable_securities": ["marketable securities", "short-term investments"],
         "accounts_receivable": ["accounts receivable", "net accounts receivable", "receivables"],
         "accounts_payable": ["accounts payable", "payables"],
@@ -2273,6 +2341,8 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "industry": ["industry", "business"],
         "business_cyclicality": ["cyclicality", "cyclical", "business cycle"],
         "store_count": ["stores", "store count", "number of stores"],
+        "store_count_prior": ["stores", "store count", "number of stores", "prior store count"],
+        "store_count_current": ["stores", "store count", "number of stores", "current store count"],
         "production_rates": ["production rate", "production rates", "forecast production"],
         "governance_disclosure": ["directors", "executive officers", "board nominees", "ceo"],
         "shareholder_vote_results": ["shareholder vote", "shareholder proposal", "voting results"],

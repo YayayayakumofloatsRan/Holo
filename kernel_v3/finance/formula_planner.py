@@ -82,6 +82,41 @@ def plan_finance_formula(
         return _plan_debt_change(question=question, facts=usable)
     if formula == "component_percent_of_total":
         return _plan_component_percent_of_total(question=question, facts=usable)
+    if formula == "cash_and_equivalents_change":
+        return _plan_period_change(
+            question=question,
+            facts=usable,
+            formula_name="cash_and_equivalents_change",
+            markers=("cash and cash equivalents", "cash equivalents", "cash and equivalents"),
+            prior_slot="cash_and_equivalents_prior",
+            current_slot="cash_and_equivalents_current",
+            unit="currency",
+            formula_definition="current cash and cash equivalents less prior cash and cash equivalents",
+        )
+    if formula == "property_plant_and_equipment_change":
+        return _plan_period_change(
+            question=question,
+            facts=usable,
+            formula_name="property_plant_and_equipment_change",
+            markers=_PPE_NET_METRICS,
+            prior_slot="property_plant_and_equipment_net_prior",
+            current_slot="property_plant_and_equipment_net_current",
+            unit="currency",
+            formula_definition="current net property, plant, and equipment less prior net property, plant, and equipment",
+        )
+    if formula == "store_count_change":
+        return _plan_period_change(
+            question=question,
+            facts=usable,
+            formula_name="store_count_change",
+            markers=("stores", "store count", "number of stores"),
+            prior_slot="store_count_prior",
+            current_slot="store_count_current",
+            unit="count",
+            formula_definition="current store count less prior store count",
+        )
+    if formula == "cash_flow_activity_comparison":
+        return _plan_cash_flow_activity_comparison(question=question, facts=usable)
     if formula == "yoy_growth":
         return _plan_yoy_growth(question=question, facts=usable)
     if formula == "debt_to_equity":
@@ -150,6 +185,14 @@ def _detect_formula(question: str) -> str | None:
         return "debt_change"
     if _looks_like_component_percent_of_total(text):
         return "component_percent_of_total"
+    if _looks_like_cash_and_equivalents_change(text):
+        return "cash_and_equivalents_change"
+    if _looks_like_property_plant_and_equipment_change(text):
+        return "property_plant_and_equipment_change"
+    if _looks_like_store_count_change(text):
+        return "store_count_change"
+    if _looks_like_cash_flow_activity_comparison(text):
+        return "cash_flow_activity_comparison"
     if "discounted cash flow" in text or re.search(r"\bdcf\b", text):
         return "dcf"
     if re.search(r"\blbo\b", text) or "leveraged buyout" in text:
@@ -281,6 +324,34 @@ def _looks_like_component_percent_of_total(text: str) -> bool:
     if "total" not in text:
         return False
     return any(marker in text for marker in ("occurred in", "represented", "of total", "spend on", "stock repurchase", "share repurchase"))
+
+
+def _looks_like_cash_and_equivalents_change(text: str) -> bool:
+    if not any(marker in text for marker in ("cash and cash equivalents", "cash & cash equivalents", "cash equivalents")):
+        return False
+    return any(marker in text for marker in ("drop", "dropped", "increase", "increased", "decrease", "decreased", "change", "changed", "between"))
+
+
+def _looks_like_property_plant_and_equipment_change(text: str) -> bool:
+    if "turnover" in text:
+        return False
+    if not any(marker in text for marker in ("ppne", "pp&e", "ppe", "property plant and equipment", "property, plant and equipment")):
+        return False
+    return any(marker in text for marker in ("grow", "grew", "increase", "increased", "decrease", "decreased", "change", "changed"))
+
+
+def _looks_like_store_count_change(text: str) -> bool:
+    if not any(marker in text for marker in ("number of stores", "store count", "stores between")):
+        return False
+    return any(marker in text for marker in ("change", "changed", "increase", "decrease", "between"))
+
+
+def _looks_like_cash_flow_activity_comparison(text: str) -> bool:
+    return (
+        ("operations, investing, and financing" in text or "operating, investing, and financing" in text)
+        and any(marker in text for marker in ("brought in the most", "lost the least", "which brought", "among"))
+        and "cash flow" in text
+    )
 
 
 def _explicit_calculation_intent(text: str) -> bool:
@@ -2646,6 +2717,114 @@ def _plan_component_percent_of_total(*, question: str, facts: list[FinanceFact])
     )
 
 
+def _plan_period_change(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    formula_name: str,
+    markers: tuple[str, ...],
+    prior_slot: str,
+    current_slot: str,
+    unit: str,
+    formula_definition: str,
+) -> FinanceFormulaPlan:
+    years = _target_fiscal_years(question)
+    prior_year = min(years) if len(years) >= 2 else None
+    current_year = max(years) if len(years) >= 2 else _target_fiscal_year(question)
+    current = _latest_fact_for_year(facts, markers, target_year=current_year)
+    prior = _latest_fact_for_year(facts, markers, target_year=prior_year) if prior_year is not None else None
+    if prior is None and current is not None:
+        prior = _latest_fact_for_year(
+            facts,
+            markers,
+            target_year=current.fiscal_year - 1 if isinstance(current.fiscal_year, int) else None,
+            exclude_fact_ids={current.fact_id},
+        )
+    missing: list[str] = []
+    if prior is None:
+        missing.append(prior_slot)
+    if current is None:
+        missing.append(current_slot)
+    supporting = [fact for fact in (prior, current) if fact is not None]
+    if missing:
+        return _missing(
+            formula_name,
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_years": years,
+                "formula_definition": formula_definition,
+                "comparison_policy": "LLM decides increase/decrease/growth wording from the signed change and cited facts.",
+            },
+        )
+    return _ready(
+        formula_name,
+        f"{current_slot} - {prior_slot}",
+        {prior_slot: prior.value, current_slot: current.value},
+        unit=unit,
+        facts=supporting,
+        diagnostics={
+            "target_fiscal_years": years,
+            "formula_definition": formula_definition,
+            "comparison_policy": "LLM decides increase/decrease/growth wording from the signed change and cited facts.",
+        },
+    )
+
+
+def _plan_cash_flow_activity_comparison(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    operating = _latest_fact_for_year(
+        facts,
+        ("operating cash flow", "cash flow from operations", "net cash provided by operating activities"),
+        target_year=target_year,
+    )
+    investing = _latest_fact_for_year(
+        facts,
+        ("investing cash flow", "cash flow from investing activities", "net cash provided by investing activities", "net cash used in investing activities"),
+        target_year=target_year,
+    )
+    financing = _latest_fact_for_year(
+        facts,
+        ("financing cash flow", "cash flow from financing activities", "net cash provided by financing activities", "net cash used in financing activities"),
+        target_year=target_year,
+    )
+    missing: list[str] = []
+    if operating is None:
+        missing.append("operating_cash_flow")
+    if investing is None:
+        missing.append("investing_cash_flow")
+    if financing is None:
+        missing.append("financing_cash_flow")
+    supporting = [fact for fact in (operating, investing, financing) if fact is not None]
+    if missing:
+        return _missing(
+            "cash_flow_activity_comparison",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "maximum of operating, investing, and financing cash flow activity amounts",
+                "comparison_policy": "LLM maps the maximum signed amount to the activity name and explains most cash brought in or least cash lost.",
+            },
+        )
+    return _ready(
+        "cash_flow_activity_comparison",
+        "max(operating_cash_flow, investing_cash_flow, financing_cash_flow)",
+        {
+            "operating_cash_flow": operating.value,
+            "investing_cash_flow": investing.value,
+            "financing_cash_flow": financing.value,
+        },
+        unit=operating.unit,
+        facts=supporting,
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "maximum of operating, investing, and financing cash flow activity amounts",
+            "comparison_policy": "LLM maps the maximum signed amount to the activity name and explains most cash brought in or least cash lost.",
+        },
+    )
+
+
 def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     candidate = _best_bridge_group(facts)
     if candidate is None:
@@ -4287,17 +4466,23 @@ def _fiscal_days(question: str) -> int:
 
 
 def _target_fiscal_year(question: str) -> int | None:
-    match = re.search(r"\b(?:FY|fiscal\s+year\s*)?(?P<year>20\d{2}|19\d{2})\b", question or "", re.IGNORECASE)
-    if not match:
-        return None
-    return int(match.group("year"))
+    years = _target_fiscal_years(question)
+    return years[0] if years else None
 
 
 def _target_fiscal_years(question: str) -> list[int]:
     years: list[int] = []
     seen: set[int] = set()
-    for match in re.finditer(r"\b(?:FY|fiscal\s+year\s*)?(?P<year>20\d{2}|19\d{2})\b", question or "", re.IGNORECASE):
+    text = str(question or "")
+    for match in re.finditer(r"\b(?:FY|fiscal\s+year\s*)?(?P<year>20\d{2}|19\d{2})\b", text, re.IGNORECASE):
         year = int(match.group("year"))
+        if year in seen:
+            continue
+        seen.add(year)
+        years.append(year)
+    for match in re.finditer(r"\bFY\s*'?(?P<year>\d{2})\b", text, re.IGNORECASE):
+        short_year = int(match.group("year"))
+        year = 1900 + short_year if short_year >= 70 else 2000 + short_year
         if year in seen:
             continue
         seen.add(year)

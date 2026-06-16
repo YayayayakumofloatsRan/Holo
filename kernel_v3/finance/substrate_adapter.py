@@ -278,6 +278,23 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "component_amount",
             "total_amount",
         ],
+        "cash_and_equivalents_change": [
+            "cash_and_equivalents_prior",
+            "cash_and_equivalents_current",
+        ],
+        "property_plant_and_equipment_change": [
+            "property_plant_and_equipment_net_prior",
+            "property_plant_and_equipment_net_current",
+        ],
+        "store_count_change": [
+            "store_count_prior",
+            "store_count_current",
+        ],
+        "cash_flow_activity_comparison": [
+            "operating_cash_flow",
+            "investing_cash_flow",
+            "financing_cash_flow",
+        ],
         "average_capex_to_revenue": [],
         "fixed_charge_coverage": [
             "earnings_available_for_fixed_charges_or_pretax_income",
@@ -465,6 +482,8 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "capital_expenditures": ["capital expenditures", "capex"],
         "net_income": ["net income", "net earnings", "profit"],
         "cash_and_equivalents": ["cash and cash equivalents", "cash equivalents", "cash"],
+        "cash_and_equivalents_prior": ["cash and cash equivalents", "cash equivalents", "cash"],
+        "cash_and_equivalents_current": ["cash and cash equivalents", "cash equivalents", "cash"],
         "marketable_securities": ["marketable securities", "short-term investments", "short term investments"],
         "accounts_receivable": ["accounts receivable", "net accounts receivable", "receivables"],
         "total_current_assets": ["total current assets", "current assets", "assets current"],
@@ -479,6 +498,18 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "operating cash flow",
             "cash flow from operations",
             "net cash provided by operating activities",
+        ],
+        "investing_cash_flow": [
+            "investing cash flow",
+            "cash flow from investing activities",
+            "net cash provided by investing activities",
+            "net cash used in investing activities",
+        ],
+        "financing_cash_flow": [
+            "financing cash flow",
+            "cash flow from financing activities",
+            "net cash provided by financing activities",
+            "net cash used in financing activities",
         ],
         "total_current_liabilities": [
             "total current liabilities",
@@ -503,6 +534,8 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "net ppne",
             "ppne",
         ],
+        "store_count_prior": ["stores", "store count", "number of stores"],
+        "store_count_current": ["stores", "store count", "number of stores"],
         "earnings_available_for_fixed_charges_or_pretax_income": [
             "earnings available for fixed charges",
             "pretax income",
@@ -565,6 +598,10 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "liquidation_value_per_share",
         "debt_change",
         "component_percent_of_total",
+        "cash_and_equivalents_change",
+        "property_plant_and_equipment_change",
+        "store_count_change",
+        "cash_flow_activity_comparison",
         "effective_tax_rate_change",
         "interest_coverage_ratio",
         "unadjusted_ebitda",
@@ -591,6 +628,25 @@ def _infer_formula_name(question: str) -> str:
         return "fixed_asset_turnover"
     if "asset turnover" in text:
         return "asset_turnover"
+    if any(marker in text for marker in ("cash and cash equivalents", "cash & cash equivalents", "cash equivalents")) and any(
+        marker in text for marker in ("drop", "dropped", "increase", "increased", "decrease", "decreased", "change", "changed", "between")
+    ):
+        return "cash_and_equivalents_change"
+    if "turnover" not in text and any(
+        marker in text for marker in ("ppne", "pp&e", "ppe", "property plant and equipment", "property, plant and equipment")
+    ) and any(
+        marker in text for marker in ("grow", "grew", "increase", "increased", "decrease", "decreased", "change", "changed")
+    ):
+        return "property_plant_and_equipment_change"
+    if any(marker in text for marker in ("number of stores", "store count", "stores between")) and any(
+        marker in text for marker in ("change", "changed", "increase", "decrease", "between")
+    ):
+        return "store_count_change"
+    if (
+        ("operations, investing, and financing" in text or "operating, investing, and financing" in text)
+        and "cash flow" in text
+    ):
+        return "cash_flow_activity_comparison"
     if (
         "operating cash flow ratio" in text
         or "cash flow ratio" in text

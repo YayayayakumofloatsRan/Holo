@@ -50,7 +50,19 @@ task compiler now add generic evidence/slot/transform scaffolds for:
 - `debt_change`: current debt less prior debt for balance-sheet debt-change
   questions;
 - `component_percent_of_total`: component amount divided by total amount, for
-  patterns such as Q4 stock-repurchase spend as a percentage of total spend.
+  patterns such as Q4 stock-repurchase spend as a percentage of total spend;
+- `cash_and_equivalents_change`: current cash and cash equivalents less prior
+  cash and cash equivalents for drop/increase questions;
+- `property_plant_and_equipment_change`: current net PP&E less prior net PP&E,
+  including FY20/FY21 shorthand parsing;
+- `store_count_change`: current store count less prior store count;
+- `cash_flow_activity_comparison`: maximum signed amount across operating,
+  investing, and financing cash-flow activities, leaving the activity-name
+  conclusion and explanation to the LLM.
+
+The fact ledger also now canonicalizes investing cash flow, financing cash
+flow, and store-count metrics, and splits inline `metric=... ; metric=...`
+fact segments even when the text does not include a `facts=` wrapper.
 
 This continues the 2026-06-16 DPO and multi-year average capex/revenue scaffold
 work. The host supplies auditable formulas, EvidenceSpec line-item targets, and
@@ -62,12 +74,12 @@ Current static question-only FinanceBench formula coverage:
 
 | Slice | Recognized formula rows | Rows with TransformSpec |
 | --- | ---: | ---: |
-| `debug50` | `19/50` | `19/50` |
-| `test100` | `39/100` | `39/100` |
-| `all150` | `58/150` | `58/150` |
+| `debug50` | `20/50` | `20/50` |
+| `test100` | `44/100` | `44/100` |
+| `all150` | `64/150` | `64/150` |
 
 Compared with the 2026-06-16 common-formula baseline, all150 recognized formula
-coverage moved from `38/150` to `58/150`. This is only code-regression evidence
+coverage moved from `38/150` to `64/150`. This is only code-regression evidence
 for the next live run, not a live benchmark score.
 
 ## Verification
@@ -75,17 +87,17 @@ for the next live run, not a live benchmark score.
 The following checks were run as code regression only:
 
 ```bash
-.venv/bin/python -m py_compile kernel_v3/finance/formula_planner.py kernel_v3/finance/substrate_adapter.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py
-.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "asset_turnover_and_average_cogs or liquidation_debt_change_component or asset_liquidation_and_component"
+.venv/bin/python -m py_compile kernel_v3/finance/formula_planner.py kernel_v3/finance/fact_ledger.py kernel_v3/finance/substrate_adapter.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "period_change_and_cash_flow_activity or cash_flow_activity_and_store_count"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
 git diff --check
 ```
 
 Latest result: py_compile passed; targeted finance-engine slice
-`3 passed, 262 deselected in 1.79s`; full finance engine
-`265 passed in 3.93s`; full FinanceBench harness
-`52 passed in 306.67s`; `git diff --check` passed.
+`3 passed, 265 deselected in 0.48s`; full finance engine
+`268 passed in 4.09s`; full FinanceBench harness
+`52 passed in 302.57s`; `git diff --check` passed.
 
 ## Next Honest Benchmark Step
 

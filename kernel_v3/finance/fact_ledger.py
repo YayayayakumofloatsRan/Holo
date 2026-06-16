@@ -80,6 +80,14 @@ SUPPORTED_FINANCE_METRICS = {
     "operating cash flow",
     "cash flow from operations",
     "net cash provided by operating activities",
+    "investing cash flow",
+    "cash flow from investing activities",
+    "net cash provided by investing activities",
+    "net cash used in investing activities",
+    "financing cash flow",
+    "cash flow from financing activities",
+    "net cash provided by financing activities",
+    "net cash used in financing activities",
     "free cash flow",
     "capital expenditures",
     "property plant and equipment net",
@@ -110,6 +118,8 @@ SUPPORTED_FINANCE_METRICS = {
     "add-back",
     "deduction",
     "one-time cost",
+    "store count",
+    "stores",
 }
 
 KEY_PATTERN = re.compile(
@@ -168,7 +178,28 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "operating cash flow",
             "cash flow from operations",
             "net cash provided by operating activities",
+            "net cash used in operating activities",
             "cash provided by operating activities",
+        ),
+    ),
+    (
+        "investing cash flow",
+        (
+            "investing cash flow",
+            "cash flow from investing activities",
+            "net cash provided by investing activities",
+            "net cash used in investing activities",
+            "net cash provided by used in investing activities",
+        ),
+    ),
+    (
+        "financing cash flow",
+        (
+            "financing cash flow",
+            "cash flow from financing activities",
+            "net cash provided by financing activities",
+            "net cash used in financing activities",
+            "net cash provided by used in financing activities",
         ),
     ),
     ("free cash flow", ("free cash flow",)),
@@ -282,6 +313,7 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("depreciation and amortization", ("depreciation and amortization", "d&a", "amortization")),
     ("deduction", ("divestiture-related license income", "license income", "gain on sale", "gains")),
     ("cash and cash equivalents", ("cash and cash equivalents", "cash equivalents", "cash and equivalents", "total cash")),
+    ("store count", ("number of stores", "store count", "stores")),
     ("debt", ("total debt", "debt", "borrowings", "notes payable")),
     (
         "shareholders equity",
@@ -751,6 +783,12 @@ def _metric_segments(text: str) -> tuple[str, list[str]]:
         before, after = text.split("facts=", 1)
         segments = [segment.strip() for segment in after.split(" ; ") if segment.strip()]
         return before, segments
+    metric_match = re.search(r"\bmetric=", text, re.IGNORECASE)
+    if metric_match is not None and " ; " in text[metric_match.start() :]:
+        before = text[: metric_match.start()]
+        after = text[metric_match.start() :]
+        segments = [segment.strip() for segment in after.split(" ; ") if segment.strip()]
+        return before, segments
     return text, [text]
 
 
@@ -928,8 +966,26 @@ def _canonical_metric(value: str) -> str:
         "net cash provided by used in operating activities": "operating cash flow",
         "net cash provided by operating activities": "operating cash flow",
         "netcashprovidedbyoperatingactivities": "operating cash flow",
+        "net cash used in operating activities": "operating cash flow",
+        "netcashusedinoperatingactivities": "operating cash flow",
         "net cash provided by operating activities continuing operations": "operating cash flow",
         "net cash provided by used in operating activities continuing operations": "operating cash flow",
+        "cash flow from investing activities": "investing cash flow",
+        "cashflowfrominvestingactivities": "investing cash flow",
+        "net cash provided by investing activities": "investing cash flow",
+        "netcashprovidedbyinvestingactivities": "investing cash flow",
+        "net cash used in investing activities": "investing cash flow",
+        "netcashusedininvestingactivities": "investing cash flow",
+        "net cash provided by used in investing activities": "investing cash flow",
+        "netcashprovidedbyusedininvestingactivities": "investing cash flow",
+        "cash flow from financing activities": "financing cash flow",
+        "cashflowfromfinancingactivities": "financing cash flow",
+        "net cash provided by financing activities": "financing cash flow",
+        "netcashprovidedbyfinancingactivities": "financing cash flow",
+        "net cash used in financing activities": "financing cash flow",
+        "netcashusedinfinancingactivities": "financing cash flow",
+        "net cash provided by used in financing activities": "financing cash flow",
+        "netcashprovidedbyusedinfinancingactivities": "financing cash flow",
         "grossprofit": "gross profit",
         "gross profit": "gross profit",
         "provisionforbenefitfromincometaxes": "tax",
@@ -1054,6 +1110,11 @@ def _canonical_metric(value: str) -> str:
         "net ppe": "property plant and equipment net",
         "net ppne": "property plant and equipment net",
         "ppne": "property plant and equipment net",
+        "number of stores": "store count",
+        "numberofstores": "store count",
+        "store count": "store count",
+        "storecount": "store count",
+        "stores": "store count",
         "assets": "assets",
         "totalassets": "assets",
         "total assets": "assets",

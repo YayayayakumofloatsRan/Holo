@@ -3425,6 +3425,30 @@ def test_finance_fact_ledger_extracts_html_column_cash_flow_rows() -> None:
     assert "column_4=(1,577)" in capex_by_year[2018].metadata["context"]
 
 
+def test_finance_fact_ledger_canonicalizes_cash_flow_activity_and_store_count_metrics() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="activity-and-store-facts",
+            text=(
+                "entityName=Retailer ticker=RTL metric=Net cash provided by investing activities "
+                "unit=USD fy=2022 value=-200 ; "
+                "metric=Net cash provided by financing activities unit=USD fy=2022 value=50 ; "
+                "metric=Number of stores unit=count fy=2022 value=120"
+            ),
+        )
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-activity-and-store-facts")],
+    )
+    metrics = {fact.metric: fact.value for fact in facts}
+
+    assert metrics["investing cash flow"] == "-200"
+    assert metrics["financing cash flow"] == "50"
+    assert metrics["store count"] == "120"
+
+
 def test_html_table_fact_lines_preserve_parenthesized_capex_values() -> None:
     document = FetchedDocument(
         document_id="doc-3m-2022",
@@ -4163,6 +4187,46 @@ def test_finance_task_compiler_emits_liquidation_debt_change_component_programs(
         assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
 
 
+def test_finance_task_compiler_emits_period_change_and_cash_flow_activity_programs() -> None:
+    cases = [
+        (
+            "Was there any drop in Cash & Cash equivalents between FY2023 and Q2 of FY2024?",
+            "cash_and_equivalents_change",
+            ["cash_and_equivalents_prior", "cash_and_equivalents_current"],
+            "cash_and_equivalents_current - cash_and_equivalents_prior",
+        ),
+        (
+            "Did Pfizer grow its PPNE between FY20 and FY21?",
+            "property_plant_and_equipment_change",
+            ["property_plant_and_equipment_net_prior", "property_plant_and_equipment_net_current"],
+            "property_plant_and_equipment_net_current - property_plant_and_equipment_net_prior",
+        ),
+        (
+            "Was there any change in the number of Best Buy stores between Q2 of FY2024 and FY2023?",
+            "store_count_change",
+            ["store_count_prior", "store_count_current"],
+            "store_count_current - store_count_prior",
+        ),
+        (
+            "Among operations, investing, and financing activities, which brought in the most (or lost the least) cash flow for AMD in FY22?",
+            "cash_flow_activity_comparison",
+            ["operating_cash_flow", "investing_cash_flow", "financing_cash_flow"],
+            "max(operating_cash_flow, investing_cash_flow, financing_cash_flow)",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
+
+
 def test_finance_task_compiler_emits_tax_working_capital_and_interest_programs() -> None:
     cases = [
         (
@@ -4446,6 +4510,59 @@ def test_finance_formula_planner_computes_asset_liquidation_and_component_formul
     assert component_plan.status == "ready"
     assert component_plan.formula_name == "component_percent_of_total"
     assert component_plan.payload["variables"] == {"component_amount": "25", "total_amount": "100"}
+
+
+def test_finance_formula_planner_computes_period_change_and_cash_flow_activity_formulas() -> None:
+    cash_plan = plan_finance_formula(
+        question="Was there any drop in Cash & Cash equivalents between FY2023 and Q2 of FY2024?",
+        facts=[
+            _year_fact("cash and cash equivalents", "500", 2023, fact_id="cash-2023"),
+            _year_fact("cash and cash equivalents", "450", 2024, fact_id="cash-2024", metadata={"fp": "Q2"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert cash_plan.status == "ready"
+    assert cash_plan.formula_name == "cash_and_equivalents_change"
+    assert cash_plan.payload["variables"] == {
+        "cash_and_equivalents_prior": "500",
+        "cash_and_equivalents_current": "450",
+    }
+
+    ppe_plan = plan_finance_formula(
+        question="Did Pfizer grow its PPNE between FY20 and FY21?",
+        facts=[
+            _year_fact("property plant and equipment net", "100", 2020, fact_id="ppe-2020"),
+            _year_fact("property plant and equipment net", "125", 2021, fact_id="ppe-2021"),
+        ],
+        existing_traces=[],
+    )
+
+    assert ppe_plan.status == "ready"
+    assert ppe_plan.formula_name == "property_plant_and_equipment_change"
+    assert ppe_plan.payload["variables"] == {
+        "property_plant_and_equipment_net_prior": "100",
+        "property_plant_and_equipment_net_current": "125",
+    }
+
+    activity_plan = plan_finance_formula(
+        question="Among operations, investing, and financing activities, which brought in the most cash flow in FY2022?",
+        facts=[
+            _year_fact("operating cash flow", "300", 2022, fact_id="operating-cf-2022"),
+            _year_fact("investing cash flow", "-200", 2022, fact_id="investing-cf-2022"),
+            _year_fact("financing cash flow", "50", 2022, fact_id="financing-cf-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert activity_plan.status == "ready"
+    assert activity_plan.formula_name == "cash_flow_activity_comparison"
+    assert activity_plan.payload["expression"] == "max(operating_cash_flow, investing_cash_flow, financing_cash_flow)"
+    assert activity_plan.payload["variables"] == {
+        "operating_cash_flow": "300",
+        "investing_cash_flow": "-200",
+        "financing_cash_flow": "50",
+    }
 
 
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:

@@ -144,9 +144,11 @@ formula scaffolds for DPO, multi-year average capex/revenue, effective-tax-rate
 change, positive working capital, interest coverage, and unadjusted EBITDA
 families, with the latest follow-up adding asset turnover, average COGS/revenue,
 liquidation value per share, debt-change, and component-percent-of-total
-programs. In question-only static coverage, recognized FinanceBench formula
-plans moved from `38/150` to `58/150`; this is code-regression evidence for the
-next live run, not a benchmark accuracy score.
+programs, plus cash-equivalents change, PP&E change, store-count change, and
+operating/investing/financing cash-flow activity comparison. In question-only
+static coverage, recognized FinanceBench formula plans moved from `38/150` to
+`64/150`; this is code-regression evidence for the next live run, not a
+benchmark accuracy score.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,
