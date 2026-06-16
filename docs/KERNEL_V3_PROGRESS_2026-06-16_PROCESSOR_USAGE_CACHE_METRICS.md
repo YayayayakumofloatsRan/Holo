@@ -3070,3 +3070,59 @@ revenues and other income、capex outflow vs PP&E net。模型原本可以从 `r
 py_compile passed
 244 passed in 3.29s
 ```
+
+---
+
+## 48. 追加落地：Competing Fact Clusters 贯通 Synthesis / Numeric Judge
+
+第 47 节只把 competing fact clusters 暴露给 `finance.slot_bind`。这对公式型任务有帮助，
+但 direct lookup 或 synthesis repair 路径仍可能只看到扁平 `finance_fact_ledger`，在
+revenue / assets / cash-flow 等相邻指标冲突时容易漏看候选差异。本节把同一套 attention
+index 贯通到最终综合和 numeric judge。
+
+变更：
+
+- `_report_with_finance_fact_context()` 新增：
+  - `finance_competing_fact_clusters`
+  - `finance_competing_fact_cluster_policy`
+- `_compact_finance_synthesis_rescue_packet()` 同步携带 compact clusters，避免 synthesis
+  失败救援时丢失竞争候选。
+- `_compact_retrieval_report_for_provider()` 将 clusters 和 policy 加入 synthesizer prompt
+  白名单。
+- `_synthesizer_prompt()` 的 finance answer requirements 明确：
+  - cluster 只是 raw fact attention index；
+  - 不是 host ranking；
+  - 不是 selected answer。
+- `finance.numeric_judge` 新增：
+  - `judge_packet.competing_fact_clusters`
+  - `judge_packet.competing_fact_cluster_policy`
+  - 当 report 没有预先携带 cluster 时，judge prompt 从本次 facts 生成同等结构。
+
+边界：
+
+- host 仍只按 entity / period / broad metric hint 聚类；
+- host 不选择或提升某个候选值；
+- candidate order 保持 source/raw facts 顺序；
+- 最终 line-item、period、semantic fit 判断仍由 LLM 在 synthesis / numeric judge 阶段完成。
+
+覆盖的能力缺口：
+
+- direct filing lookup 不走 formula slot bind 时，最终答案仍能看到竞争事实；
+- synthesis rescue 压缩上下文时，不会只留下扁平 ledger；
+- numeric judge 可在修复答案时指出“答案用了哪个 competing value，应该换成哪个 source-backed value 或继续取证”。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "competing_fact_clusters or finance_fact_context_exposes_competing_clusters or finance_numeric_judge_prompt_exposes_competing"
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/processors/adapters.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+3 passed, 212 deselected in 1.01s
+py_compile passed
+247 passed in 2.86s
+```

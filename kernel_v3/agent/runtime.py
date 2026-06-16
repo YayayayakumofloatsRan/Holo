@@ -14043,6 +14043,10 @@ def _report_with_finance_fact_context(
     diagnostics["finance_fact_ledger_count"] = len(facts)
     diagnostics["claim_ledger_present"] = bool(facts)
     diagnostics["finance_candidate_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
+    competing_clusters = _finance_competing_fact_clusters_for_model(facts[:FINANCE_SLOT_BIND_FACT_LIMIT])
+    if competing_clusters:
+        diagnostics["finance_competing_fact_clusters"] = competing_clusters
+        diagnostics["finance_competing_fact_cluster_policy"] = _finance_competing_fact_cluster_policy()
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
         "host_role": "expose raw candidate facts, concepts, labels, periods, provenance, and verification only",
@@ -14187,6 +14191,10 @@ def _compact_finance_synthesis_rescue_packet(
     diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:64]]
     diagnostics["finance_fact_ledger_count"] = len(facts)
     diagnostics["finance_candidate_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
+    competing_clusters = _finance_competing_fact_clusters_for_model(facts[:64])
+    if competing_clusters:
+        diagnostics["finance_competing_fact_clusters"] = competing_clusters
+        diagnostics["finance_competing_fact_cluster_policy"] = _finance_competing_fact_cluster_policy()
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
         "host_role": "expose compact raw candidate facts; the model chooses the answer",
@@ -15616,7 +15624,7 @@ def _finance_slot_bind_packet(
             _raw_fact_summary_for_slot_bind(fact)
             for fact in facts[:FINANCE_SLOT_BIND_FACT_LIMIT]
         ],
-        "competing_fact_clusters": _finance_slot_bind_competing_fact_clusters(facts[:FINANCE_SLOT_BIND_FACT_LIMIT]),
+        "competing_fact_clusters": _finance_competing_fact_clusters_for_model(facts[:FINANCE_SLOT_BIND_FACT_LIMIT]),
         "question": question,
         "slot_requirements": _slot_requirements_for_slot_bind(compiled_program),
         "compiled_program": _compact_compiled_program_for_slot_bind(compiled_program),
@@ -15629,6 +15637,37 @@ def _finance_slot_bind_packet(
             },
         },
     }
+
+
+def _finance_competing_fact_cluster_policy() -> JsonObject:
+    return {
+        "semantic_decision_owner": "model",
+        "host_role": "attention_grouping_only_no_semantic_preference",
+        "candidate_ordering": "source_order_from_raw_facts",
+        "instruction": (
+            "Use finance_competing_fact_clusters only to notice raw facts that share entity, period, and broad metric hints. "
+            "The cluster does not select, rank, or validate a value; inspect each candidate's raw label, SEC concept, statement, "
+            "form, fiscal period fields, source URI, evidence ref, and citation ref before making the line-item or period judgment."
+        ),
+    }
+
+
+def _finance_competing_fact_clusters_for_model(facts: list[FinanceFact]) -> list[JsonObject]:
+    return _finance_slot_bind_competing_fact_clusters(facts)
+
+
+def _finance_competing_fact_clusters_from_diagnostics_or_facts(
+    diagnostics: JsonObject,
+    facts: list[FinanceFact],
+) -> list[JsonObject]:
+    diagnostic_clusters = [
+        dict(item)
+        for item in list(diagnostics.get("finance_competing_fact_clusters") or [])
+        if isinstance(item, dict)
+    ][:16]
+    if diagnostic_clusters:
+        return diagnostic_clusters
+    return _finance_competing_fact_clusters_for_model(facts)
 
 
 def _finance_slot_bind_max_tokens(*, facts: list[FinanceFact], compiled_program: JsonObject) -> int:
@@ -16234,6 +16273,7 @@ FINANCE_NUMERIC_JUDGE_CONTRACT = (
     "You are the semantic verifier: decide whether the answer addresses the actual question, which numeric claims are core, which are incidental noise, and how synthesis should repair the answer. "
     "The host verifier diagnostics are evidence about provenance/arithmetic support, not the semantic decision owner. "
     "Use only the provided answer excerpt, facts, formula traces, evidence, citations, and host diagnostics. "
+    "If judge_packet.competing_fact_clusters is present, treat it as host-built attention grouping only: candidate order is source order, not semantic ranking, and you must inspect raw fields yourself. "
     "Use formula_trace_support to connect FormulaTrace outputs to their input facts, evidence refs, and citation refs when deciding whether a numeric claim is supported. "
     "Do not invent facts, citations, formulas, values, source ids, or unsupported calculations. "
     "If supported facts or formula traces are enough to answer, return repair_answer with a concrete repair_instruction instead of requiring more work. "
@@ -16275,6 +16315,10 @@ def _finance_numeric_judge_prompt(
     trace_support = _finance_formula_trace_support_index(synthesis_traces, fact_summaries)
     report_diagnostics = _json_object(report.diagnostics)
     slot_bind_state = _json_object(report_diagnostics.get("finance_slot_bind_state"))
+    competing_clusters = _finance_competing_fact_clusters_from_diagnostics_or_facts(
+        report_diagnostics,
+        facts[:FINANCE_NUMERIC_JUDGE_FACT_LIMIT],
+    )
     payload = {
         "contract": FINANCE_NUMERIC_JUDGE_CONTRACT,
         "output_schema": FINANCE_NUMERIC_JUDGE_OUTPUT_SCHEMA,
@@ -16296,6 +16340,11 @@ def _finance_numeric_judge_prompt(
             "finance_slot_bind_state": slot_bind_state,
             "finance_fact_count": len(facts),
             "finance_facts": fact_summaries,
+            "competing_fact_clusters": competing_clusters,
+            "competing_fact_cluster_policy": (
+                _json_object(report_diagnostics.get("finance_competing_fact_cluster_policy"))
+                or (_finance_competing_fact_cluster_policy() if competing_clusters else {})
+            ),
             "formula_trace_count": len(formula_traces),
             "formula_trace_ordering": "finance_slot_bind_model traces are listed first when present; prefer them over earlier exploratory calculator traces on conflicts.",
             "formula_trace_synthesis_policy": trace_policy,
@@ -16328,6 +16377,7 @@ def _legacy_finance_numeric_judge_prompt(
     trace_support = _finance_formula_trace_support_index(synthesis_traces, fact_summaries)
     report_diagnostics = _json_object(report.diagnostics)
     slot_bind_state = _json_object(report_diagnostics.get("finance_slot_bind_state"))
+    competing_clusters = _finance_competing_fact_clusters_from_diagnostics_or_facts(report_diagnostics, facts[:160])
     packet = {
         "schema": "holo.kernel_v3.finance_numeric_judge_input.v1",
         "instruction": (
@@ -16337,6 +16387,7 @@ def _legacy_finance_numeric_judge_prompt(
             "The host deterministic verifier diagnostics are advisory, not the semantic decision owner. "
             "Do not invent evidence, facts, citations, formulas, or values. Use only provided facts, formula traces, evidence, and citations. "
             "The finance_facts array is raw candidate evidence in source extraction order, not a semantic ranking. "
+            "If competing_fact_clusters is present, treat it as an attention index built from raw facts only, not as host ranking or answer selection. "
             "For competing facts with the same entity, period, and broad metric, inspect raw fields such as concept, label, statement, "
             "form, fp, period dates, source URI, and cited source text, then make the period and line-item judgment yourself. "
             "If the answer uses a value that the raw fields do not support for the requested slot, return repair_answer and name the supported value or missing slot. "
@@ -16371,6 +16422,11 @@ def _legacy_finance_numeric_judge_prompt(
         },
         "finance_slot_bind_state": slot_bind_state,
         "finance_facts": fact_summaries,
+        "competing_fact_clusters": competing_clusters,
+        "competing_fact_cluster_policy": (
+            _json_object(report_diagnostics.get("finance_competing_fact_cluster_policy"))
+            or (_finance_competing_fact_cluster_policy() if competing_clusters else {})
+        ),
         "formula_trace_ordering": "finance_slot_bind_model traces are listed first when present; prefer them over earlier exploratory calculator traces on conflicts.",
         "formula_trace_synthesis_policy": trace_policy,
         "formula_trace_support": trace_support,

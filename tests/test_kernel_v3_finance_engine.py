@@ -40,6 +40,7 @@ from kernel_v3.agent.runtime import (
     _planner_directive,
     _planner_allowed_tool_names,
     _candidate_fact_evidence_text,
+    _report_with_finance_fact_context,
     _retrieval_and_toolchain_grounding,
     _retrieval_payload,
     _retrieval_capability_args,
@@ -367,6 +368,50 @@ def test_compact_finance_synthesis_rescue_packet_exposes_formula_trace_support()
     assert "input_facts" in support
     assert rescue_report.diagnostics["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY bridge"
     assert rescue_report.diagnostics["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "add-back"
+
+
+def test_compact_finance_synthesis_rescue_packet_exposes_competing_fact_clusters() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-total-revenues",
+            text=(
+                "SEC companyfacts official financial statement entityName=Chevron Corp "
+                "concept=Revenues label=Revenues metric=revenue unit=USD period=annual fy=2024 "
+                "form=10-K value=202792000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="evidence-sales-revenues",
+            text=(
+                "SEC filing statement entityName=Chevron Corp concept=SalesAndOtherOperatingRevenue "
+                "label=Sales and Other Operating Revenues metric=sales and other operating revenues "
+                "unit=USD period=annual fy=2024 form=10-K value=193414000000"
+            ),
+        ),
+    ]
+    citations = [_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence]
+    report = _retrieval_report(evidence=evidence, citations=citations)
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"goal": "What was Chevron's total revenues for fiscal year 2024?"},
+    )
+
+    rescue_report, _rescue_evidence, _rescue_citations = _compact_finance_synthesis_rescue_packet(
+        JournalStore.in_memory(),
+        task_id="task-compact-clusters",
+        run_id="run-1",
+        recipe=recipe,
+        report=report,
+        evidence=evidence,
+        citations=citations,
+        synthesis_error="test_compaction",
+    )
+
+    clusters = rescue_report.diagnostics["finance_competing_fact_clusters"]
+    assert clusters
+    assert clusters[0]["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert clusters[0]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
 
 
 def test_calculator_rejects_unsafe_expressions() -> None:
@@ -799,6 +844,54 @@ def test_finance_fact_context_keeps_competing_facts_model_owned() -> None:
     assert "finance_metric_intent" not in summary["metadata"]
     assert "finance_question_period_scope" not in summary["metadata"]
     assert summary["metadata"]["concept"] == "Revenues"
+
+
+def test_finance_fact_context_exposes_competing_clusters_to_synthesizer_prompt() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-total-revenues",
+            title="Chevron 2024 Form 10-K companyfacts",
+            uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000093410.json",
+            text=(
+                "SEC companyfacts official financial statement entityName=Chevron Corp "
+                "concept=Revenues label=Revenues metric=revenue unit=USD period=annual fy=2024 "
+                "form=10-K value=202792000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="evidence-sales-revenues",
+            title="Chevron 2024 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/93410/000009341025000009/cvx-20241231.htm",
+            text=(
+                "SEC filing statement entityName=Chevron Corp concept=SalesAndOtherOperatingRevenue "
+                "label=Sales and Other Operating Revenues metric=sales and other operating revenues "
+                "unit=USD period=annual fy=2024 form=10-K value=193414000000"
+            ),
+        ),
+    ]
+    citations = [_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence]
+    report = _report_with_finance_fact_context(
+        _retrieval_report(evidence=evidence, citations=citations),
+        recipe=task_recipe(
+            "retrieval_answer",
+            metadata={"goal": "What was Chevron's total revenues for fiscal year 2024?"},
+        ),
+        evidence=evidence,
+        citations=citations,
+    )
+
+    prompt_payload = json.loads(_synthesizer_prompt(report, evidence, citations))
+    diagnostics = prompt_payload["retrieval_report"]["diagnostics"]
+    clusters = diagnostics["finance_competing_fact_clusters"]
+    policy = diagnostics["finance_competing_fact_cluster_policy"]
+
+    assert clusters
+    assert policy["semantic_decision_owner"] == "model"
+    assert policy["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert clusters[0]["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert clusters[0]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
+    assert any("not a host ranking" in item for item in prompt_payload["answer_requirements"])
 
 
 def test_finance_fact_context_does_not_host_prefer_annual_over_quarterly() -> None:
@@ -8772,6 +8865,79 @@ def test_finance_numeric_judge_prompt_compacts_dynamic_context_for_cache() -> No
     assert "finance_metric_intent" not in packet["finance_facts"][0]["metadata"]
     assert packet["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY2024"
     assert packet["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
+
+
+def test_finance_numeric_judge_prompt_exposes_competing_fact_clusters() -> None:
+    question = "What was Chevron's total revenues for fiscal year 2024?"
+    facts = [
+        FinanceFact(
+            fact_id="generic-revenues",
+            entity="Chevron Corp",
+            ticker="CVX",
+            period="annual",
+            fiscal_year=2024,
+            metric="revenue",
+            value="202792000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-companyfacts",
+            evidence_ref="evidence-total-revenues",
+            citation_ref="cite-total-revenues",
+            metadata={"concept": "Revenues", "label": "Revenues", "form": "10-K", "fp": "FY"},
+        ),
+        FinanceFact(
+            fact_id="sales-other-operating",
+            entity="Chevron Corp",
+            ticker="CVX",
+            period="annual",
+            fiscal_year=2024,
+            metric="sales and other operating revenues",
+            value="193414000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-filing",
+            evidence_ref="evidence-sales-revenues",
+            citation_ref="cite-sales-revenues",
+            metadata={
+                "concept": "SalesAndOtherOperatingRevenue",
+                "label": "Sales and Other Operating Revenues",
+                "form": "10-K",
+                "fp": "FY",
+            },
+        ),
+    ]
+    final = FinalAnswer(
+        answer="Chevron FY2024 total revenues were $202.792 billion.",
+        citation_refs=["cite-total-revenues"],
+        used_evidence=["evidence-total-revenues"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-clusters",
+        run_id="run-judge-clusters",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(answer=final.answer, facts=facts, question=question)
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    packet = json.loads(prompt)["judge_packet"]
+    clusters = packet["competing_fact_clusters"]
+
+    assert clusters
+    assert packet["competing_fact_cluster_policy"]["semantic_decision_owner"] == "model"
+    assert clusters[0]["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert clusters[0]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["fact_id"] for item in clusters[0]["candidates"]] == ["generic-revenues", "sales-other-operating"]
+    assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
 
 
 def test_finance_numeric_judge_prompt_preserves_capital_intensity_roa_trace_context() -> None:
