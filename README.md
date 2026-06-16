@@ -152,13 +152,16 @@ category-metric ranking scaffold for segment, region, product category,
 short-term investment type, liability-line, and derivative notional questions.
 The host prepares evidence slots and calculator-visible `max`/`min` transforms;
 the LLM still maps the extreme value to the cited category and explains the
-answer. The same line now includes a generic `metric_lookup` identity transform
-for direct filing line-item extraction such as capex, net PP&E, AR/AP,
-inventories, COGS, net income, adjusted EBITDA, operating cash flow, dividends,
-restructuring costs, assets/current assets/current liabilities, VaR, credit
-facilities, transaction proceeds/gains, expected benefit payments, and
-sales-change disclosures such as "real change in sales" excluding FX. The
-latest disclosure pass adds a generic `disclosure_lookup` scaffold for
+answer. The newest follow-up also routes "biggest drop"/decline-by-region
+questions through that ranking scaffold instead of treating them as plain
+geography disclosure. The same line now includes a generic `metric_lookup`
+identity transform for direct filing line-item extraction such as capex, net
+PP&E, AR/AP, inventories, COGS, net income, adjusted EBITDA, operating cash
+flow, dividends, restructuring costs, assets/current assets/current
+liabilities, VaR, credit facilities, transaction proceeds/gains, expected
+benefit payments, separation/spin-off expected payments, and sales-change
+disclosures such as "real change in sales" excluding FX. The latest disclosure
+pass adds a generic `disclosure_lookup` scaffold for
 registered securities, dividend history, 8-K summaries, acquisitions,
 industries, products/services, customers/geographies, legal proceedings,
 governance/proxy/vote items, guidance, separations/discontinued operations,

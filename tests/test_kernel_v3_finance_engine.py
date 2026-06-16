@@ -3943,6 +3943,22 @@ def test_finance_task_compiler_emits_direct_metric_evidence_for_capex_lookup() -
     assert program.diagnostics["tool_chain_plan"]["next_action_candidates"][0]["tool"] == "retrieval.run"
 
 
+def test_finance_task_compiler_emits_direct_metric_evidence_for_separation_payment() -> None:
+    program = compile_finance_task_program(
+        question="How much does Pfizer expect to pay to spin off Upjohn in the future in USD million?",
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "filing_metric_lookup"
+    assert program.task_spec.diagnostics["formula_name"] == "metric_lookup"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["separation_payment"]
+    spec = {item.slot_name: item for item in program.evidence_specs}["separation_payment"]
+    assert spec.statement == "transaction_or_separation_note"
+    assert spec.line_item == "expected separation payment"
+    assert "upjohn" in spec.accepted_attributes
+
+
 def test_finance_task_compiler_emits_direct_disclosure_evidence_for_legal_lookup() -> None:
     program = compile_finance_task_program(
         question="Has Boeing reported any materially important ongoing legal battles from FY2022?",
@@ -4362,6 +4378,12 @@ def test_finance_task_compiler_emits_category_metric_rank_programs() -> None:
             "max(category_metric_values)",
             "investment_or_fair_value_note",
             "short-term investments by debt security type",
+        ),
+        (
+            "For Pfizer, which geographic region had the biggest drop in Q2 2023 year over year revenues on a percentage basis?",
+            "min(category_metric_values)",
+            "segment_note",
+            "geographic revenue",
         ),
     ]
 
@@ -4857,6 +4879,16 @@ def test_finance_formula_planner_computes_direct_metric_lookup_formulas() -> Non
 
     assert net_income_plan.status == "ready"
     assert net_income_plan.payload["variables"] == {"net_income": "11588"}
+
+    separation_payment_plan = plan_finance_formula(
+        question="How much does Pfizer expect to pay to spin off Upjohn in the future in USD million?",
+        facts=[],
+        existing_traces=[],
+    )
+
+    assert separation_payment_plan.status == "missing_facts"
+    assert separation_payment_plan.formula_name == "metric_lookup"
+    assert separation_payment_plan.missing_facts == ["separation_payment"]
 
 
 def test_finance_formula_planner_routes_disclosure_lookup_slots() -> None:

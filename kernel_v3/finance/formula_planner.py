@@ -389,6 +389,10 @@ def _looks_like_category_metric_rank(text: str) -> bool:
         "most",
         "least",
         "dragged down",
+        "biggest drop",
+        "largest drop",
+        "largest decline",
+        "steepest decline",
         "proportionally increase",
         "proportionally increased",
         "performed the best",
@@ -1238,6 +1242,12 @@ def _metric_lookup_spec(question: str) -> JsonObject | None:
         return _lookup_spec("gain_on_separation", ("gain on separation", "gain", "separation"), unit="currency")
     if "cash proceeds" in text or ("proceeds" in text and ("separation" in text or "kenvue" in text or "consumer health" in text)):
         return _lookup_spec("cash_proceeds", ("cash proceeds", "proceeds"), unit="currency")
+    if "expect to pay" in text and ("spin off" in text or "spin-off" in text or "upjohn" in text or "separation" in text):
+        return _lookup_spec(
+            "separation_payment",
+            ("expected payment", "expect to pay", "spin-off payment", "separation payment", "upjohn"),
+            unit="currency",
+        )
     if "value at risk" in text or re.search(r"\bvar\b", text):
         return _lookup_spec("market_risk_var", ("value at risk", "var", "market risk"), unit="currency")
     if "revolving credit" in text or "credit agreement" in text:
@@ -1335,7 +1345,20 @@ def _disclosure_spec(slot_name: str, statement: str, line_item: str) -> JsonObje
 
 def _category_rank_direction(question: str) -> str:
     text = _metric_text(question)
-    if any(marker in text for marker in ("lowest", "smallest", "worst", "least", "dragged down")):
+    if any(
+        marker in text
+        for marker in (
+            "lowest",
+            "smallest",
+            "worst",
+            "least",
+            "dragged down",
+            "biggest drop",
+            "largest drop",
+            "largest decline",
+            "steepest decline",
+        )
+    ):
         return "min"
     return "max"
 
@@ -1345,6 +1368,10 @@ def _category_rank_mode(question: str) -> str:
     if "proportionally" in text and any(marker in text for marker in ("increase", "increased", "growth", "grew")):
         return "growth_rate"
     if "growth" in text and any(marker in text for marker in ("most", "least", "highest", "lowest")):
+        return "growth_rate"
+    if ("year over year" in text or "year-over-year" in text or "yoy" in text) and any(
+        marker in text for marker in ("percentage basis", "percent basis", "biggest drop", "largest drop", "largest decline")
+    ):
         return "growth_rate"
     return "value"
 

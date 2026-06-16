@@ -69,17 +69,19 @@ task compiler now add generic evidence/slot/transform scaffolds for:
 - `category_metric_rank`: a generic table-ranking scaffold for questions that
   ask which segment, region, product category, liability line, short-term
   investment type, or derivative instrument has the highest/lowest/largest/
-  worst metric. The host only prepares a ranked-category evidence slot and
-  calculator-visible `max`/`min` transform over cited numeric rows; the LLM
-  maps the extreme value back to the category, resolves ties or wording, and
-  explains the final answer from filing evidence;
+  worst metric, including "biggest drop" / largest-decline variants. The host
+  only prepares a ranked-category evidence slot and calculator-visible
+  `max`/`min` transform over cited numeric rows; the LLM maps the extreme value
+  back to the category, resolves ties or wording, and explains the final answer
+  from filing evidence;
 - `metric_lookup`: a generic filing-metric identity transform for direct
   line-item extraction questions. It covers requested single facts such as
   capital expenditures, net PP&E, accounts receivable/payable, inventories,
   COGS, net income, adjusted EBITDA, operating cash flow, dividends paid,
   restructuring costs, total assets/current assets/current liabilities, VaR,
-  credit facilities, transaction proceeds/gains, expected benefit payments, and
-  sales-change disclosures such as "real change in sales" excluding FX.
+  credit facilities, transaction proceeds/gains, expected benefit payments,
+  separation/spin-off expected payments, and sales-change disclosures such as
+  "real change in sales" excluding FX.
   The host binds the metric slot and optional calculator trace; the LLM still
   verifies the statement, period, unit, sign convention, and any explicit
   absence condition from cited evidence;
@@ -124,6 +126,16 @@ adding the generic disclosure scaffold and closing the remaining direct-metric
 punctuation/wording gaps. This is only code-regression evidence for the next
 live run, not a live benchmark score.
 
+The latest follow-up inspected the `150/150` covered rows for weak structures
+without consulting gold/reference answers. It moved Pfizer's "geographic region
+with the biggest Q2 2023 year-over-year revenue drop" from a broad geography
+disclosure slot to `category_metric_rank` with a `min(category_metric_values)`
+transform and `geographic revenue` evidence target. It also moved Pfizer/Upjohn
+"expect to pay to spin off" wording from generic spin-off disclosure to a direct
+`metric_lookup` slot, `separation_payment`, targeting transaction/separation
+note evidence. These changes improve live task structure; they are not answer
+tables.
+
 ## Verification
 
 The following checks were run as code regression only:
@@ -141,14 +153,15 @@ git diff --check
 Latest result: py_compile passed; targeted category-rank slice
 `2 passed, 270 deselected in 1.57s`; targeted metric-lookup / regression slice
 `4 passed, 269 deselected in 1.55s`; targeted disclosure/metric regression
-slice `5 passed, 270 deselected in 1.68s`; full finance engine
-`275 passed in 4.26s`; FinanceBench harness/report regression
-`59 passed in 392.77s`.
+slice `5 passed, 270 deselected in 1.68s`; latest targeted
+category/metric-lookup slice `5 passed, 271 deselected in 1.76s`; full finance
+engine `276 passed in 3.85s`; FinanceBench harness/report regression
+`59 passed in 406.37s`.
 
 The live model smoke was also attempted with the Windows `DEEPSEEK_API_KEY`
 injected into the WSL process and `HOLO_V3_LIVE_MODEL=1`. It reached the
-DeepSeek provider and failed with `deepseek HTTP 402: Insufficient Balance`.
-No live FinanceBench score was produced.
+DeepSeek provider and again failed with `deepseek HTTP 402: Insufficient
+Balance`. No live FinanceBench score was produced.
 
 ## Next Honest Benchmark Step
 

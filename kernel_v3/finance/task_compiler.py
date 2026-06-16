@@ -2227,6 +2227,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "md&a_or_note_table"
     if slot_name in {"gain_on_separation", "cash_proceeds"}:
         return "cash_flow_statement_or_transaction_note"
+    if slot_name == "separation_payment":
+        return "transaction_or_separation_note"
     if slot_name == "market_risk_var":
         return "market_risk_disclosures"
     if slot_name == "organic_sales_change":
@@ -2365,6 +2367,7 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "restructuring_costs": "restructuring costs",
         "gain_on_separation": "gain on separation",
         "cash_proceeds": "cash proceeds",
+        "separation_payment": "expected separation payment",
         "market_risk_var": "value at risk",
         "organic_sales_change": "organic sales change",
         "credit_facility": "revolving credit agreement",
@@ -2431,6 +2434,8 @@ def _category_rank_line_item(question: str) -> str:
         return "regional ebitdar contribution"
     if "net income" in text:
         return "segment net income"
+    if ("geographic" in text or "region" in text) and ("revenue" in text or "sales" in text):
+        return "geographic revenue"
     if "revenue" in text or "sales" in text or "topline" in text:
         return "segment revenue"
     return "ranked category metric table"
@@ -2447,6 +2452,10 @@ def _looks_like_category_metric_rank_question(text: str) -> bool:
         "most",
         "least",
         "dragged down",
+        "biggest drop",
+        "largest drop",
+        "largest decline",
+        "steepest decline",
         "proportionally increase",
         "proportionally increased",
         "performed the best",
@@ -2674,6 +2683,7 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "separation_or_discontinued_operation": ["separation", "spin-off", "discontinued operation", "subsequent events"],
         "gain_on_separation": ["gain on separation", "gain", "separation"],
         "cash_proceeds": ["cash proceeds", "proceeds"],
+        "separation_payment": ["expected payment", "expect to pay", "spin-off payment", "separation payment", "upjohn"],
         "segment_results": ["segment revenue", "segment income", "reportable segments", "business segments"],
         "market_risk_var": ["value at risk", "var", "market risk"],
         "organic_sales_change": ["organic sales change", "real change in sales", "sales change excluding fx", "foreign exchange"],

@@ -585,6 +585,7 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "assets": ["assets", "total assets"],
         "gain_on_separation": ["gain on separation", "gain", "separation"],
         "cash_proceeds": ["cash proceeds", "proceeds"],
+        "separation_payment": ["expected payment", "expect to pay", "spin-off payment", "separation payment", "upjohn"],
         "market_risk_var": ["value at risk", "var", "market risk"],
         "organic_sales_change": ["organic sales change", "real change in sales", "sales change excluding fx", "foreign exchange"],
         "credit_facility": ["revolving credit agreement", "credit facility", "borrowings"],
