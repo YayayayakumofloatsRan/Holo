@@ -3258,3 +3258,50 @@ support source 发生冲突。
 py_compile passed
 308 passed in 4.44s
 ```
+
+---
+
+## 52. 追加落地：Numeric Judge Primary Source Binding Visibility
+
+FinanceBench / SEC filing题经常要求“从指定 source URL / target filing 取数”。当
+`finance.verify_numeric` 出现 `primary_source_numeric_binding_failed` 时，旧的
+`finance.numeric_judge` packet 只能看到 issue code 和部分 missing values，无法看清：
+
+- target document binding 要求什么；
+- 哪些 fact 被 primary-source binding 拒绝；
+- rejected candidate 的 source URI / title / score / reasons 是什么。
+
+本节把 primary-source binding 诊断压缩后传入 numeric judge。
+
+变更：
+
+- `_compact_numeric_verifier_for_judge()` 新增：
+  - `target_document_binding`
+  - `primary_source_numeric_binding`
+- `_legacy_finance_numeric_judge_prompt()` 同步携带同样的 compact binding diagnostics；
+- 新增 compact helpers：
+  - `_compact_target_document_binding_for_judge()`
+  - `_compact_primary_source_binding_for_judge()`
+
+边界：
+
+- host 不改变 target binding 规则；
+- host 不替模型选择“应该接受哪个 rejected fact”；
+- numeric judge 只获得可解释诊断，用于决定 repair answer / continue retrieval / fail with limitations；
+- `selected_fact_ids=[]` 在 `no_binding_match` 时保留，因为它是模型判断下一步的重要信号。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "finance_numeric_judge_prompt_exposes_primary_source_binding_diagnostics or finance_numeric_judge_prompt_exposes_unit_mismatch_examples"
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+2 passed, 217 deselected in 0.26s
+py_compile passed
+309 passed in 2.95s
+```

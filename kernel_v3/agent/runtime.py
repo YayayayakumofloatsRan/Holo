@@ -16444,6 +16444,12 @@ def _legacy_finance_numeric_judge_prompt(
             "missing_values": list(getattr(verification, "missing_values", []) or [])[:48],
             "unit_mismatches": list(getattr(verification, "unit_mismatches", []) or [])[:16],
             "repair_guidance": finance_numeric_repair_guidance(verification),
+            "target_document_binding": _compact_target_document_binding_for_judge(
+                _json_object(_json_object(getattr(verification, "diagnostics", {})).get("target_document_binding"))
+            ),
+            "primary_source_numeric_binding": _compact_primary_source_binding_for_judge(
+                _json_object(_json_object(getattr(verification, "diagnostics", {})).get("primary_source_numeric_binding"))
+            ),
             "diagnostics": getattr(verification, "diagnostics", {}) or {},
         },
         "retrieval_report": {
@@ -16508,6 +16514,8 @@ def _compact_numeric_verifier_for_judge(verification) -> JsonObject:
         for item in list(guidance.get("unit_mismatch_examples") or [])
         if isinstance(item, dict)
     ][:8]
+    target_binding = _compact_target_document_binding_for_judge(_json_object(diagnostics.get("target_document_binding")))
+    primary_binding = _compact_primary_source_binding_for_judge(_json_object(diagnostics.get("primary_source_numeric_binding")))
     return {
         "status": getattr(verification, "status", None),
         "issues": [_compact_simple_dict(item, limit=12) for item in list(getattr(verification, "issues", []) or [])[:16] if isinstance(item, dict)],
@@ -16521,6 +16529,8 @@ def _compact_numeric_verifier_for_judge(verification) -> JsonObject:
         "unit_mismatch_examples": unit_mismatch_examples,
         "repair_options": _string_list(guidance.get("repair_options"))[:8],
         "host_boundary": _text_preview(guidance.get("host_boundary"), limit=240),
+        "target_document_binding": target_binding,
+        "primary_source_numeric_binding": primary_binding,
         "diagnostics": {
             key: diagnostics.get(key)
             for key in (
@@ -16532,6 +16542,57 @@ def _compact_numeric_verifier_for_judge(verification) -> JsonObject:
             )
             if diagnostics.get(key) is not None
         },
+    }
+
+
+def _compact_target_document_binding_for_judge(value: JsonObject) -> JsonObject:
+    if not value:
+        return {}
+    result: JsonObject = {}
+    for key in (
+        "company",
+        "doc_period",
+        "doc_type",
+        "doc_link",
+        "source_url",
+        "required_statement",
+        "required_line_item",
+        "primary_source_required",
+    ):
+        item = value.get(key)
+        if item not in (None, "", [], {}):
+            result[key] = _text_preview(item, limit=220) if isinstance(item, str) else item
+    return result
+
+
+def _compact_primary_source_binding_for_judge(value: JsonObject) -> JsonObject:
+    if not value:
+        return {}
+    rejected = []
+    for item in list(value.get("rejected_candidates") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        rejected.append(
+            {
+                key: _text_preview(raw, limit=220) if isinstance(raw, str) else raw
+                for key, raw in item.items()
+                if key in {"fact_id", "metric", "value", "source_uri", "source_title", "score", "reasons"}
+                and raw not in (None, "", [], {})
+            }
+        )
+    result = {
+        "schema": _text_preview(value.get("schema"), limit=120),
+        "status": _text_preview(value.get("status"), limit=80),
+        "selected_fact_ids": _string_list(value.get("selected_fact_ids"))[:16],
+        "selected_count": value.get("selected_count") if isinstance(value.get("selected_count"), int) else None,
+        "rejected_count": value.get("rejected_count") if isinstance(value.get("rejected_count"), int) else None,
+        "binding": _compact_target_document_binding_for_judge(_json_object(value.get("binding"))),
+        "rejected_candidates": rejected,
+    }
+    return {
+        key: item
+        for key, item in result.items()
+        if key == "selected_fact_ids" or item not in (None, "", [], {})
     }
 
 

@@ -9110,6 +9110,83 @@ def test_finance_numeric_judge_prompt_exposes_unit_mismatch_examples() -> None:
     assert "model still owns semantic repair" in verifier["host_boundary"]
 
 
+def test_finance_numeric_judge_prompt_exposes_primary_source_binding_diagnostics() -> None:
+    question = "What was Example Co FY2024 revenue from the 2024 10-K?"
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "Example Co",
+            "doc_link": "https://www.sec.gov/Archives/example/example-2024-10k.htm",
+            "doc_period": "2024",
+            "doc_type": "10-K",
+            "required_statement": "income_statement",
+            "required_line_item": "revenue",
+            "primary_source_required": True,
+        }
+    )
+    facts = [
+        FinanceFact(
+            fact_id="secondary-revenue",
+            entity="Example Co",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="10",
+            unit="USD",
+            scale=None,
+            source_ref="secondary",
+            evidence_ref="ev-secondary",
+            citation_ref="cite-secondary",
+            metadata={
+                "source_uri": "https://stockanalysis.com/stocks/exm/financials/",
+                "source_title": "Example Co Financials - StockAnalysis",
+                "context": "Revenue 10",
+            },
+        )
+    ]
+    final = FinalAnswer(
+        answer="Example Co FY2024 revenue was $10.",
+        citation_refs=["cite-secondary"],
+        used_evidence=["ev-secondary"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-binding",
+        run_id="run-judge-binding",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(
+        answer=final.answer,
+        facts=facts,
+        question=question,
+        target_binding=binding,
+    )
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    verifier = json.loads(prompt)["judge_packet"]["host_verifier_diagnostics"]
+
+    assert verifier["status"] == "failed"
+    assert "primary_source_numeric_binding_failed" in [item["code"] for item in verifier["issues"]]
+    assert verifier["target_document_binding"]["required_line_item"] == "revenue"
+    assert verifier["target_document_binding"]["doc_period"] == "2024"
+    binding_state = verifier["primary_source_numeric_binding"]
+    assert binding_state["status"] == "no_binding_match"
+    assert binding_state["selected_fact_ids"] == []
+    assert binding_state["rejected_count"] == 1
+    assert binding_state["rejected_candidates"][0]["fact_id"] == "secondary-revenue"
+    assert binding_state["rejected_candidates"][0]["source_uri"] == "https://stockanalysis.com/stocks/exm/financials/"
+    assert binding_state["binding"]["doc_link"] == "https://www.sec.gov/Archives/example/example-2024-10k.htm"
+
+
 def test_finance_numeric_judge_prompt_preserves_capital_intensity_roa_trace_context() -> None:
     question = "Is 3M a capital-intensive business based on FY2022 data?"
     answer_text = "3M does not appear capital-intensive: CapEx/revenue was 5.1%."
