@@ -89,7 +89,11 @@ rerun blocker, see
 `docs/KERNEL_V3_FINANCE_RESULTS_SNAPSHOT_2026-06-16.md`. It separates
 evidence-backed results, such as FinAgent full40 `38/40` live and `39/40`
 rescored, from FinanceBench held-out results that still require a fresh
-`test100` run after model credentials are available.
+`test100` run after a billable live provider is available. The latest row-0
+FinanceBench live smoke used the Windows `DEEPSEEK_API_KEY` and reached live
+retrieval, but DeepSeek returned `HTTP 402: Insufficient Balance` before any
+model tokens were produced, so it is recorded as provider/account blockage
+rather than capability evidence.
 The 2026-06-16 framework review is consolidated in
 `docs/KERNEL_V3_FRAMEWORK_LESSONS_FINAL_2026-06-16_ZH.md`; use it as the primary
 report and talk reference for what Holo should absorb from LangChain,
@@ -882,6 +886,10 @@ holo-v3 retrieve "sample topic"
 holo-v3 memory inspect --memory-log kernel_v3/.holo-v3-memory.jsonl
 holo-v3 resident status
 ```
+
+Finance capability progress must be measured with live model runs. Fake/offline
+commands are allowed only for code-regression, schema, compile, and safety
+guards; they must not be reported as benchmark problem-solving results.
 
 Interactive `holo-v3 chat` uses a human-readable terminal view when attached to
 a TTY: colored status headers, compact task/run refs, and the current

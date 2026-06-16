@@ -10,12 +10,22 @@ Finance problem-solving remains the core objective. The strongest local evidence
 is still the 2026-06-14 live FinAgent/FAB-family run record, not today's code
 changes alone.
 
-Current fresh live rerun status on 2026-06-16: blocked by missing model
-credentials. The latest smoke summary
+Current fresh live rerun status on 2026-06-16: blocked by provider account
+availability, not by retrieval and not by a solved benchmark result. The earlier
+smoke summary
 `.state/kernel_v3/bench/finance/run_live_smoke_current_o000_l001_20260616.summary.json`
-records `processor_error_counts={"missing_api_key_env": 1}`, `tokens=0`,
-`retrieval_runs=0`, and `0/1` pass. This is an environment/configuration block,
-not a capability score.
+recorded `processor_error_counts={"missing_api_key_env": 1}`, `tokens=0`,
+`retrieval_runs=0`, and `0/1` pass. After the Windows `DEEPSEEK_API_KEY` was
+made available to the WSL process, a new live FinanceBench row-0 smoke reached
+online retrieval but DeepSeek returned `HTTP 402: Insufficient Balance` before
+any model tokens were produced. This is a provider/account blockage, not a
+capability score.
+
+Fake/offline tests are permanently disallowed as finance capability evidence.
+They may still be used only as labeled code-regression, schema, compile, or
+safety checks. Any reported finance benchmark progress must come from an
+online/live model run with benchmark gold/reference material kept out of model
+context.
 
 ## Evidence-Backed Results
 
@@ -205,11 +215,46 @@ Latest result: targeted common-formula tests `4 passed, 252 deselected`;
 py_compile and `git diff --check` passed; full finance engine
 `256 passed in 4.06s`; full FinanceBench tests `52 passed in 297.24s`.
 
+## 2026-06-16 Live Provider Check
+
+The latest live FinanceBench smoke used Windows `DEEPSEEK_API_KEY` from the
+User environment, forced model-owned processor roles, enabled live retrieval,
+and kept gold/reference material out of model context:
+
+- output:
+  `.state/kernel_v3/bench/finance/run_fb_debug_o000_l001_live_20260616_v1.jsonl`
+- summary:
+  `.state/kernel_v3/bench/finance/run_fb_debug_o000_l001_live_20260616_v1.summary.json`
+- thread:
+  `.state/kernel_v3/threads/finance-bench-0001-financebench_id_03029/thread.jsonl`
+- item: `financebench_id_03029`
+- result: `0/1`, `status=failed`, `reason=failure_report_not_final_answer`
+- live retrieval telemetry: `fetches=48`, `download_mb=6.5`,
+  `cache_hits=18`, `retrieval_runs=4`
+- processor telemetry: `tokens=0`, `processor_ms=0`,
+  `processor_error_counts={"provider_circuit_open": 14, "processor_budget_exceeded": 2}`
+
+The root-cause processor journal entries are `ledger-117168`,
+`ledger-117170`, `ledger-117193`, and `ledger-117195`. Their redacted
+`previous_error_preview` is:
+
+```text
+deepseek HTTP 402: {"error":{"message":"Insufficient Balance","type":"unknown_error","param":null,"code":"invalid_request_error"}}
+```
+
+Windows environment presence was checked without printing secret values.
+`DEEPSEEK_API_KEY` was present in the User environment; `OPENAI_COMPATIBLE_*`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `DASHSCOPE_API_KEY`,
+`QWEN_API_KEY`, and `OPENROUTER_API_KEY` were absent. Therefore the next live
+benchmark requires either DeepSeek balance restoration or a configured
+OpenAI-compatible live provider.
+
 ## What Is Not Proven Yet
 
 - The post-2026-06-16 code changes do not yet have a fresh live accuracy number.
-  The current shell has no model API key, so a live smoke produced
-  `missing_api_key_env`.
+  The current Windows key is visible to WSL, but DeepSeek returned
+  `HTTP 402: Insufficient Balance`, so the latest live smoke produced no model
+  tokens and must be recorded as provider/account blockage.
 - FinanceBench public 150 has not produced a valid held-out `test100` score.
   The project policy is still: use rows `0-49` as `debug50`; freeze the system;
   then run rows `50-149` as `test100` / `holdout100`.
@@ -220,7 +265,8 @@ py_compile and `git diff --check` passed; full finance engine
 
 ## Next Real Benchmark Step
 
-When a model key is available again, run this as the next honest measurement:
+When a billable live provider is available again, run this as the next honest
+measurement:
 
 ```bash
 HOLO_V3_LIVE_MODEL=1 HOLO_V3_LIVE_FINANCE=1 \
