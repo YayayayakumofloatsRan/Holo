@@ -304,6 +304,10 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "market_risk_var_prior",
             "market_risk_var_current",
         ],
+        "percent_of_sales_change": [
+            "prior_percent_of_sales",
+            "current_percent_of_sales",
+        ],
         "property_plant_and_equipment_change": [
             "property_plant_and_equipment_net_prior",
             "property_plant_and_equipment_net_current",
@@ -593,6 +597,8 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "market_risk_var": ["value at risk", "var", "market risk"],
         "market_risk_var_prior": ["value at risk", "var", "market risk", "prior year"],
         "market_risk_var_current": ["value at risk", "var", "market risk", "current period"],
+        "prior_percent_of_sales": ["as a percent of sales", "as a percent of net sales", "percent of sales", "prior period"],
+        "current_percent_of_sales": ["as a percent of sales", "as a percent of net sales", "percent of sales", "current period"],
         "organic_sales_change": ["organic sales change", "real change in sales", "sales change excluding fx", "foreign exchange"],
         "credit_facility": ["revolving credit agreement", "credit facility", "borrowings"],
         "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],
@@ -680,6 +686,7 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "component_percent_of_total",
         "cash_and_equivalents_change",
         "market_risk_var_change",
+        "percent_of_sales_change",
         "property_plant_and_equipment_change",
         "store_count_change",
         "cash_flow_activity_comparison",
@@ -720,6 +727,13 @@ def _infer_formula_name(question: str) -> str:
         marker in text for marker in ("decrease", "decreased", "increase", "increased", "compared", "prior year", "year over year", "year-over-year")
     ):
         return "market_risk_var_change"
+    if (
+        "what drove" not in text
+        and "driver" not in text
+        and any(marker in text for marker in ("as a percent of sales", "as a percent of net sales", "percent of sales", "percent of net sales"))
+        and any(marker in text for marker in ("increase", "increased", "decrease", "decreased", "change", "changed", "compared"))
+    ):
+        return "percent_of_sales_change"
     if "turnover" not in text and any(
         marker in text for marker in ("ppne", "pp&e", "ppe", "property plant and equipment", "property, plant and equipment")
     ) and any(

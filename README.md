@@ -156,7 +156,9 @@ answer. The newest follow-up also routes "biggest drop"/decline-by-region
 questions through that ranking scaffold instead of treating them as plain
 geography disclosure, and upgrades VaR prior-year comparison questions to a
 `market_risk_var_change` period-change scaffold with prior/current VaR
-evidence slots. The same line now includes a generic `metric_lookup`
+evidence slots. It also adds `percent_of_sales_change` for questions that ask
+whether a metric as a percent of sales/net sales increased or decreased across
+periods. The same line now includes a generic `metric_lookup`
 identity transform for direct filing line-item extraction such as capex, net
 PP&E, AR/AP, inventories, COGS, net income, adjusted EBITDA, operating cash
 flow, dividends, restructuring costs, assets/current assets/current

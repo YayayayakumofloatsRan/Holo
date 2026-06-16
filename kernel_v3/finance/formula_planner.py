@@ -108,6 +108,17 @@ def plan_finance_formula(
             unit="currency",
             formula_definition="current value at risk less prior-period value at risk",
         )
+    if formula == "percent_of_sales_change":
+        return _plan_period_change(
+            question=question,
+            facts=usable,
+            formula_name="percent_of_sales_change",
+            markers=("as a percent of sales", "as a percent of net sales", "percent of sales", "percent of net sales"),
+            prior_slot="prior_percent_of_sales",
+            current_slot="current_percent_of_sales",
+            unit="percent",
+            formula_definition="current metric as a percent of sales less prior metric as a percent of sales",
+        )
     if formula == "property_plant_and_equipment_change":
         return _plan_period_change(
             question=question,
@@ -214,6 +225,8 @@ def _detect_formula(question: str) -> str | None:
         return "cash_and_equivalents_change"
     if _looks_like_market_risk_var_change(text):
         return "market_risk_var_change"
+    if _looks_like_percent_of_sales_change(text):
+        return "percent_of_sales_change"
     if _looks_like_property_plant_and_equipment_change(text):
         return "property_plant_and_equipment_change"
     if _looks_like_store_count_change(text):
@@ -373,6 +386,14 @@ def _looks_like_market_risk_var_change(text: str) -> bool:
     if not ("value at risk" in text or re.search(r"\bvar\b", text)):
         return False
     return any(marker in text for marker in ("decrease", "decreased", "increase", "increased", "compared", "prior year", "year over year", "year-over-year"))
+
+
+def _looks_like_percent_of_sales_change(text: str) -> bool:
+    if "what drove" in text or "driver" in text:
+        return False
+    if not any(marker in text for marker in ("as a percent of sales", "as a percent of net sales", "percent of sales", "percent of net sales")):
+        return False
+    return any(marker in text for marker in ("increase", "increased", "decrease", "decreased", "change", "changed", "compared"))
 
 
 def _looks_like_property_plant_and_equipment_change(text: str) -> bool:

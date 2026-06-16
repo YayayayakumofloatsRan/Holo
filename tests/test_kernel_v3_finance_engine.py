@@ -4280,6 +4280,12 @@ def test_finance_task_compiler_emits_period_change_and_cash_flow_activity_progra
             "market_risk_var_current - market_risk_var_prior",
         ),
         (
+            "Did JnJ's net earnings as a percent of sales increase in Q2 of FY2023 compared to Q2 of FY2022?",
+            "percent_of_sales_change",
+            ["prior_percent_of_sales", "current_percent_of_sales"],
+            "current_percent_of_sales - prior_percent_of_sales",
+        ),
+        (
             "Did Pfizer grow its PPNE between FY20 and FY21?",
             "property_plant_and_equipment_change",
             ["property_plant_and_equipment_net_prior", "property_plant_and_equipment_net_current"],
@@ -4302,7 +4308,7 @@ def test_finance_task_compiler_emits_period_change_and_cash_flow_activity_progra
     for question, formula_name, missing_slots, expression in cases:
         program = compile_finance_task_program(question=question, facts=[])
 
-        expected_task_type = "compare_compute" if formula_name == "market_risk_var_change" else "compute"
+        expected_task_type = "compare_compute" if formula_name in {"market_risk_var_change", "percent_of_sales_change"} else "compute"
         assert program.task_spec.task_type == expected_task_type
         assert program.task_spec.diagnostics["formula_name"] == formula_name
         assert program.slot_frame is not None
@@ -4740,6 +4746,22 @@ def test_finance_formula_planner_computes_period_change_and_cash_flow_activity_f
     assert var_plan.payload["variables"] == {
         "market_risk_var_prior": "90",
         "market_risk_var_current": "75",
+    }
+
+    percent_plan = plan_finance_formula(
+        question="Did net earnings as a percent of sales increase in Q2 of FY2023 compared to Q2 of FY2022?",
+        facts=[
+            _year_fact("net earnings as a percent of sales", "9.0", 2022, fact_id="net-earnings-sales-2022"),
+            _year_fact("net earnings as a percent of sales", "11.0", 2023, fact_id="net-earnings-sales-2023"),
+        ],
+        existing_traces=[],
+    )
+
+    assert percent_plan.status == "ready"
+    assert percent_plan.formula_name == "percent_of_sales_change"
+    assert percent_plan.payload["variables"] == {
+        "prior_percent_of_sales": "9.0",
+        "current_percent_of_sales": "11.0",
     }
 
     activity_plan = plan_finance_formula(

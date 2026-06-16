@@ -1863,6 +1863,12 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
             "currency",
             "market_risk_var_change",
         ),
+        "percent_of_sales_change": (
+            ["prior_percent_of_sales", "current_percent_of_sales"],
+            "current_percent_of_sales - prior_percent_of_sales",
+            "percent",
+            "percent_of_sales_change",
+        ),
         "property_plant_and_equipment_change": (
             ["property_plant_and_equipment_net_prior", "property_plant_and_equipment_net_current"],
             "property_plant_and_equipment_net_current - property_plant_and_equipment_net_prior",
@@ -2239,6 +2245,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "market_risk_disclosures"
     if slot_name in {"market_risk_var_prior", "market_risk_var_current"}:
         return "market_risk_disclosures"
+    if slot_name in {"prior_percent_of_sales", "current_percent_of_sales"}:
+        return "md&a_or_income_statement"
     if slot_name == "organic_sales_change":
         return "md&a_or_segment_note"
     if slot_name == "credit_facility":
@@ -2306,6 +2314,8 @@ def _line_item_for_formula_slot(formula_name: str, slot_name: str, question: str
         return _line_item_for_slot(slot_name)
     if formula_name == "category_metric_rank" and slot_name == "ranked_category_metric_table":
         return _category_rank_line_item(question)
+    if formula_name == "percent_of_sales_change" and slot_name in {"prior_percent_of_sales", "current_percent_of_sales"}:
+        return _percent_of_sales_line_item(question)
     if formula_name == "yoy_growth" and slot_name in {"prior_period_value", "current_period_value"}:
         return _yoy_growth_line_item(question)
     if formula_name == "margin":
@@ -2379,6 +2389,8 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "market_risk_var": "value at risk",
         "market_risk_var_prior": "value at risk",
         "market_risk_var_current": "value at risk",
+        "prior_percent_of_sales": "metric as percent of sales",
+        "current_percent_of_sales": "metric as percent of sales",
         "organic_sales_change": "organic sales change",
         "credit_facility": "revolving credit agreement",
         "pension_postretirement_payments": "expected benefit payments",
@@ -2449,6 +2461,20 @@ def _category_rank_line_item(question: str) -> str:
     if "revenue" in text or "sales" in text or "topline" in text:
         return "segment revenue"
     return "ranked category metric table"
+
+
+def _percent_of_sales_line_item(question: str) -> str:
+    text = _normalized_question(question)
+    denominator = "net sales" if "net sales" in text else "sales"
+    if "net earnings" in text:
+        return f"net earnings as percent of {denominator}"
+    if "net income" in text:
+        return f"net income as percent of {denominator}"
+    if "wages expense" in text or "wage expense" in text:
+        return f"wages expense as percent of {denominator}"
+    if "sg&a" in text or "selling general" in text:
+        return f"sg&a expense as percent of {denominator}"
+    return f"metric as percent of {denominator}"
 
 
 def _looks_like_category_metric_rank_question(text: str) -> bool:
@@ -2698,6 +2724,8 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "market_risk_var": ["value at risk", "var", "market risk"],
         "market_risk_var_prior": ["value at risk", "var", "market risk", "prior year"],
         "market_risk_var_current": ["value at risk", "var", "market risk", "current period"],
+        "prior_percent_of_sales": ["as a percent of sales", "as a percent of net sales", "percent of sales", "prior period"],
+        "current_percent_of_sales": ["as a percent of sales", "as a percent of net sales", "percent of sales", "current period"],
         "organic_sales_change": ["organic sales change", "real change in sales", "sales change excluding fx", "foreign exchange"],
         "derivative_instruments": ["derivative instruments", "notional value", "foreign currency derivatives", "interest rate derivatives"],
         "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],
