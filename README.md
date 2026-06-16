@@ -140,6 +140,11 @@ the repair LLM sees unit/source-binding diagnostics instead of only a short
 repair instruction, and exposes retrieval metric-intent diagnostics as weak
 model-visible hints for finance slot binding, synthesis, and numeric judge
 without polluting raw facts.
+The FinanceBench snapshot for the same date now also records the generic DPO
+and multi-year average capex/revenue formula scaffold. In question-only static
+coverage, recognized FinanceBench formula plans moved from `38/150` to
+`43/150`; this is code-regression evidence for the next live run, not a
+benchmark accuracy score.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

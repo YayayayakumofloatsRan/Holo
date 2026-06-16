@@ -58,6 +58,12 @@ def plan_finance_formula(
         return _plan_purchase_price_allocation(question=question, facts=usable)
     if formula == "dio":
         return _plan_dio(question=question, facts=usable)
+    if formula == "dpo":
+        return _plan_dpo(question=question, facts=usable, inventory_adjusted=False)
+    if formula == "dpo_inventory_adjusted":
+        return _plan_dpo(question=question, facts=usable, inventory_adjusted=True)
+    if formula == "average_capex_to_revenue":
+        return _plan_average_capex_to_revenue(question=question, facts=usable)
     if formula == "yoy_growth":
         return _plan_yoy_growth(question=question, facts=usable)
     if formula == "debt_to_equity":
@@ -100,6 +106,12 @@ def _detect_formula(question: str) -> str | None:
         return "cagr"
     if "dio" in text or "days inventory" in text or "days inventory outstanding" in text:
         return "dio"
+    if "dpo" in text or "days payable" in text or "days payable outstanding" in text:
+        if "change in inventory" in text or "change in inventories" in text:
+            return "dpo_inventory_adjusted"
+        return "dpo"
+    if _looks_like_average_capex_to_revenue(text):
+        return "average_capex_to_revenue"
     if "discounted cash flow" in text or re.search(r"\bdcf\b", text):
         return "dcf"
     if re.search(r"\blbo\b", text) or "leveraged buyout" in text:
@@ -189,6 +201,23 @@ def _source_grounded_explanation_intent(text: str) -> bool:
             "为什么",
         )
     )
+
+
+def _looks_like_average_capex_to_revenue(text: str) -> bool:
+    if not ("capex" in text or "capital expenditure" in text or "capital expenditures" in text):
+        return False
+    if not ("revenue" in text or "sales" in text):
+        return False
+    if not (
+        "average" in text
+        or "avg" in text
+        or "as a % of revenue" in text
+        or "as percent of revenue" in text
+        or "as percentage of revenue" in text
+        or "capex/revenue" in text.replace(" ", "")
+    ):
+        return False
+    return True
 
 
 def _explicit_calculation_intent(text: str) -> bool:
@@ -2087,6 +2116,129 @@ def _plan_dio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
     )
 
 
+def _plan_dpo(*, question: str, facts: list[FinanceFact], inventory_adjusted: bool) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    accounts_payable_used = _dpo_accounts_payable_pair(_dpo_accounts_payable_facts(facts), target_year=target_year)
+    cogs = _dio_cogs_fact(facts, target_year=target_year)
+    inventory_used = _dio_inventory_pair(_dio_inventory_facts(facts), target_year=target_year) if inventory_adjusted else []
+    missing: list[str] = []
+    if len(accounts_payable_used) < 2:
+        missing.extend(["accounts_payable_begin", "accounts_payable_end"] if not accounts_payable_used else ["accounts_payable_begin_or_end"])
+    if cogs is None:
+        missing.append("cogs")
+    if inventory_adjusted and len(inventory_used) < 2:
+        missing.extend(["inventory_begin", "inventory_end"] if not inventory_used else ["inventory_begin_or_end"])
+    supporting = [
+        *accounts_payable_used,
+        *inventory_used,
+        *([cogs] if cogs is not None else []),
+    ]
+    formula_name = "dpo_inventory_adjusted" if inventory_adjusted else "dpo"
+    fiscal_days = _fiscal_days(question)
+    if missing:
+        return _missing(
+            formula_name,
+            _ordered_unique(missing),
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "fiscal_days": fiscal_days,
+                "formula_definition": (
+                    "days payable outstanding using average accounts payable divided by COGS plus change in inventory"
+                    if inventory_adjusted
+                    else "days payable outstanding using average accounts payable divided by COGS"
+                ),
+            },
+        )
+    variables: JsonObject = {
+        "fiscal_days": fiscal_days,
+        "accounts_payable_begin": accounts_payable_used[0].value,
+        "accounts_payable_end": accounts_payable_used[1].value,
+        "cogs": cogs.value,
+    }
+    expression = "fiscal_days * ((accounts_payable_begin + accounts_payable_end) / 2) / cogs"
+    if inventory_adjusted:
+        variables["inventory_begin"] = inventory_used[0].value
+        variables["inventory_end"] = inventory_used[1].value
+        expression = (
+            "fiscal_days * ((accounts_payable_begin + accounts_payable_end) / 2) / "
+            "(cogs + (inventory_end - inventory_begin))"
+        )
+    return _ready(
+        formula_name,
+        expression,
+        variables,
+        unit="days",
+        facts=supporting,
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "fiscal_days": fiscal_days,
+            "fiscal_days_source": "question_or_default",
+            "uses_inventory_change_adjustment": inventory_adjusted,
+        },
+    )
+
+
+def _plan_average_capex_to_revenue(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    years = _target_fiscal_years(question)
+    if len(years) >= 2:
+        start, end = min(years), max(years)
+        if end - start <= 10:
+            years = list(range(start, end + 1))
+    elif len(years) == 1 and re.search(r"\b3\s*year\b|\bthree\s+year\b", question or "", re.IGNORECASE):
+        years = [years[0] - 2, years[0] - 1, years[0]]
+    target_year = _target_fiscal_year(question)
+    if not years and target_year is not None:
+        years = [target_year]
+    if not years:
+        years = []
+    variables: JsonObject = {}
+    input_facts: list[FinanceFact] = []
+    missing: list[str] = []
+    terms: list[str] = []
+    for year in years:
+        capex = _latest_fact_for_year(facts, ("capital expenditures", "capex"), target_year=year)
+        revenue = _latest_revenue_fact(facts, target_year=year)
+        capex_slot = f"capital_expenditures_{year}"
+        revenue_slot = f"revenue_{year}"
+        if capex is None:
+            missing.append(capex_slot)
+        else:
+            variables[capex_slot] = _absolute_decimal_string(capex.value)
+            input_facts.append(capex)
+        if revenue is None:
+            missing.append(revenue_slot)
+        else:
+            variables[revenue_slot] = revenue.value
+            input_facts.append(revenue)
+        terms.append(f"({capex_slot} / {revenue_slot})")
+    if not years:
+        missing.extend(["capital_expenditures_by_period", "revenue_by_period"])
+    expression = f"({' + '.join(terms)}) / {len(terms)}" if terms else "average(capital_expenditures / revenue)"
+    if missing:
+        return _missing(
+            "average_capex_to_revenue",
+            _ordered_unique(missing),
+            facts=input_facts,
+            diagnostics={
+                "target_fiscal_years": years,
+                "formula_definition": "average of annual capital expenditures divided by annual revenue",
+                "expression": expression,
+            },
+        )
+    return _ready(
+        "average_capex_to_revenue",
+        expression,
+        variables,
+        unit="percent",
+        facts=input_facts,
+        diagnostics={
+            "target_fiscal_years": years,
+            "formula_definition": "average of annual capital expenditures divided by annual revenue",
+        },
+    )
+
+
 def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     candidate = _best_bridge_group(facts)
     if candidate is None:
@@ -3389,6 +3541,31 @@ def _dio_inventory_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
     return _sort_unique_facts(result)
 
 
+def _dpo_accounts_payable_facts(facts: list[FinanceFact]) -> list[FinanceFact]:
+    return _sort_unique_facts([fact for fact in facts if _dpo_accounts_payable_eligible(fact)])
+
+
+def _dpo_accounts_payable_pair(facts: list[FinanceFact], *, target_year: int | None) -> list[FinanceFact]:
+    ordered = _sort_unique_facts(facts)
+    if not ordered:
+        return []
+    if target_year is not None:
+        period_begin = [fact for fact in ordered if _fact_end_year(fact) == target_year]
+        period_end = [fact for fact in ordered if _fact_end_year(fact) == target_year + 1]
+        if period_begin and period_end:
+            return [period_begin[-1], period_end[-1]]
+        target = [fact for fact in ordered if fact.fiscal_year == target_year]
+        prior = [fact for fact in ordered if fact.fiscal_year == target_year - 1]
+        if prior and target:
+            return [prior[-1], target[-1]]
+        current_or_prior = [fact for fact in ordered if isinstance(fact.fiscal_year, int) and fact.fiscal_year <= target_year]
+        if len(current_or_prior) >= 2:
+            return current_or_prior[-2:]
+        if target:
+            return [target[-1]]
+    return ordered[-2:] if len(ordered) >= 2 else ordered[-1:]
+
+
 def _dio_cogs_fact(facts: list[FinanceFact], *, target_year: int | None) -> FinanceFact | None:
     matches = _sort_unique_facts([fact for fact in facts if _dio_cogs_eligible(fact)])
     if not matches:
@@ -3437,6 +3614,15 @@ def _dio_inventory_eligible(fact: FinanceFact) -> bool:
         return True
     metric = _metric_text(fact.metric)
     return metric in {"inventory", "inventories"}
+
+
+def _dpo_accounts_payable_eligible(fact: FinanceFact) -> bool:
+    text = _fact_text(fact)
+    compact = "".join(ch for ch in text if ch.isalnum())
+    if any(marker in compact for marker in ("tradeaccountspayable", "accountspayablecurrent", "accountspayable")):
+        return True
+    metric = _metric_text(fact.metric)
+    return metric in {"accounts payable", "account payable", "trade accounts payable", "payables"}
 
 
 def _dio_cogs_eligible(fact: FinanceFact) -> bool:
@@ -3607,6 +3793,18 @@ def _target_fiscal_year(question: str) -> int | None:
     if not match:
         return None
     return int(match.group("year"))
+
+
+def _target_fiscal_years(question: str) -> list[int]:
+    years: list[int] = []
+    seen: set[int] = set()
+    for match in re.finditer(r"\b(?:FY|fiscal\s+year\s*)?(?P<year>20\d{2}|19\d{2})\b", question or "", re.IGNORECASE):
+        year = int(match.group("year"))
+        if year in seen:
+            continue
+        seen.add(year)
+        years.append(year)
+    return years
 
 
 def _ratio_value(fact: FinanceFact) -> str:

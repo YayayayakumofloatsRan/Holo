@@ -215,6 +215,54 @@ Latest result: targeted common-formula tests `4 passed, 252 deselected`;
 py_compile and `git diff --check` passed; full finance engine
 `256 passed in 4.06s`; full FinanceBench tests `52 passed in 297.24s`.
 
+## 2026-06-16 DPO And Capex/Revenue Average Follow-Up
+
+The next question-only debug50 scan, with `gold_answer` / `evidence_excerpt`
+excluded from implementation review, showed two common compute families still
+compiled as lookup-only:
+
+- days payable outstanding, including the FinanceBench definition using
+  average accounts payable divided by `COGS + change in inventory`;
+- multi-year average capex as a percent of revenue.
+
+The planner/compiler now support these generic formula families:
+
+- `dpo`: `fiscal_days * average accounts payable / COGS`
+- `dpo_inventory_adjusted`:
+  `fiscal_days * average accounts payable / (COGS + change in inventory)`
+- `average_capex_to_revenue`: average of annual
+  `capital_expenditures / revenue` over the target fiscal-year range
+
+This adds formula-name detection, missing-slot plans, EvidenceSpec statement /
+line-item targets, TransformSpec expressions, slot accepted attributes, and
+ready-plan payloads when facts are already available. It is not a row-answer
+table and does not contain benchmark answers.
+
+Static question-only FinanceBench `financebench_doc_retrieval.jsonl` formula
+coverage changed:
+
+| Slice | Before | After |
+| --- | ---: | ---: |
+| `debug50` rows with recognized formula plan | `14/50` | `16/50` |
+| `all150` rows with recognized formula plan | `38/150` | `43/150` |
+| `all150` rows with at least one `EvidenceSpec` | `150/150` | `150/150` |
+
+Verification, labeled as code-regression only:
+
+```bash
+.venv/bin/python -m py_compile kernel_v3/finance/formula_planner.py kernel_v3/finance/substrate_adapter.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "dpo_inventory_adjusted or average_capex_to_revenue"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+git diff --check
+```
+
+Latest result: py_compile passed; targeted finance-engine slice
+`3 passed, 256 deselected in 1.66s`; full finance engine
+`259 passed in 3.88s`; full FinanceBench harness
+`52 passed in 321.67s`; `git diff --check` passed. These are not live
+benchmark scores.
+
 ## 2026-06-16 Live Provider Check
 
 The latest live FinanceBench smoke used Windows `DEEPSEEK_API_KEY` from the

@@ -1349,6 +1349,13 @@ def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
         add("total_current_liabilities", statement="balance_sheet", line_item="total current liabilities")
     if "accounts payable" in text:
         add("accounts_payable", statement="balance_sheet", line_item="accounts payable")
+    if "days payable" in text or "dpo" in text:
+        add("accounts_payable_begin", statement="balance_sheet", line_item="accounts payable")
+        add("accounts_payable_end", statement="balance_sheet", line_item="accounts payable")
+        add("cogs", statement="income_statement", line_item="cost of goods sold")
+        if "change in inventory" in text or "change in inventories" in text:
+            add("inventory_begin", statement="balance_sheet", line_item="inventories")
+            add("inventory_end", statement="balance_sheet", line_item="inventories")
     if "accounts receivable" in text or "net ar" in text:
         add("accounts_receivable", statement="balance_sheet", line_item="accounts receivable")
     if "inventor" in text:
@@ -1527,6 +1534,63 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             )
         ]
+    if name == "dpo":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "average_ap_cogs"),
+                domain="finance",
+                name="dpo",
+                required_slots=["accounts_payable_begin", "accounts_payable_end", "cogs", "fiscal_days"],
+                expression="fiscal_days * ((accounts_payable_begin + accounts_payable_end) / 2) / cogs",
+                output_unit="days",
+                output_attribute="days_payable_outstanding",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
+    if name == "dpo_inventory_adjusted":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "average_ap_cogs_inventory_change"),
+                domain="finance",
+                name="dpo_inventory_adjusted",
+                required_slots=[
+                    "accounts_payable_begin",
+                    "accounts_payable_end",
+                    "cogs",
+                    "inventory_begin",
+                    "inventory_end",
+                    "fiscal_days",
+                ],
+                expression=(
+                    "fiscal_days * ((accounts_payable_begin + accounts_payable_end) / 2) / "
+                    "(cogs + (inventory_end - inventory_begin))"
+                ),
+                output_unit="days",
+                output_attribute="days_payable_outstanding",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
+    if name == "average_capex_to_revenue":
+        payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        required_slots = list(variables.keys()) if variables else list(formula_plan.missing_facts or frame_missing_slots)
+        expression = _string(payload.get("expression")) or _string(formula_plan.diagnostics.get("expression"))
+        if not expression:
+            years = _years_from_period_slots(required_slots)
+            terms = [f"(capital_expenditures_{year} / revenue_{year})" for year in years]
+            expression = f"({' + '.join(terms)}) / {len(terms)}" if terms else "average(capital_expenditures / revenue)"
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, ",".join(required_slots), expression),
+                domain="finance",
+                name="average_capex_to_revenue",
+                required_slots=required_slots,
+                expression=expression,
+                output_unit="percent",
+                output_attribute="average_capex_to_revenue",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
     simple_transforms: dict[str, tuple[list[str], str, str, str]] = {
         "quick_ratio": (
             ["cash_and_equivalents", "marketable_securities", "accounts_receivable", "total_current_liabilities"],
@@ -1620,6 +1684,21 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
             diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
         )
     ]
+
+
+def _years_from_period_slots(slots: list[str]) -> list[int]:
+    years: list[int] = []
+    seen: set[int] = set()
+    for slot in slots:
+        match = re.search(r"_(?P<year>19\d{2}|20\d{2})$", slot)
+        if not match:
+            continue
+        year = int(match.group("year"))
+        if year in seen:
+            continue
+        seen.add(year)
+        years.append(year)
+    return sorted(years)
 
 
 def _tool_chain_plan(
@@ -1846,6 +1925,10 @@ def _statement_for_formula_slot(formula_name: str, slot_name: str, question: str
 
 
 def _statement_for_slot(slot_name: str) -> str | None:
+    if re.fullmatch(r"capital_expenditures_(?:19|20)\d{2}", slot_name):
+        return "cash_flow_statement"
+    if re.fullmatch(r"revenue_(?:19|20)\d{2}", slot_name):
+        return "income_statement"
     if slot_name in {"capital_expenditures", "operating_cash_flow", "dividends_paid", "cash_flow_activity_totals"}:
         return "cash_flow_statement"
     if slot_name in {
@@ -1862,6 +1945,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         "marketable_securities",
         "accounts_receivable",
         "accounts_payable",
+        "accounts_payable_begin",
+        "accounts_payable_end",
         "inventory",
         "inventory_begin",
         "inventory_end",
@@ -1896,6 +1981,10 @@ def _line_item_for_formula_slot(formula_name: str, slot_name: str, question: str
 
 
 def _line_item_for_slot(slot_name: str) -> str | None:
+    if re.fullmatch(r"capital_expenditures_(?:19|20)\d{2}", slot_name):
+        return "capital expenditures"
+    if re.fullmatch(r"revenue_(?:19|20)\d{2}", slot_name):
+        return "revenue"
     mapping = {
         "capital_expenditures": "capital expenditures",
         "operating_cash_flow": "operating cash flow",
@@ -1905,6 +1994,8 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "marketable_securities": "marketable securities",
         "accounts_receivable": "accounts receivable",
         "accounts_payable": "accounts payable",
+        "accounts_payable_begin": "accounts payable",
+        "accounts_payable_end": "accounts payable",
         "inventory": "inventories",
         "inventory_begin": "inventories",
         "inventory_end": "inventories",
@@ -1968,6 +2059,16 @@ def _margin_numerator_slot(required_slots: list[str], *, question: str = "") -> 
 
 
 def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None = None) -> list[str]:
+    if re.fullmatch(r"capital_expenditures_(?:19|20)\d{2}", slot_name):
+        values = ["capital expenditures", "capex", "purchases of property plant and equipment"]
+        if line_item:
+            values.insert(0, line_item)
+        return _ordered_unique(values)
+    if re.fullmatch(r"revenue_(?:19|20)\d{2}", slot_name):
+        values = ["revenue", "revenues", "net sales", "net revenues", "sales"]
+        if line_item:
+            values.insert(0, line_item)
+        return _ordered_unique(values)
     mapping = {
         "capital_expenditures": ["capital expenditures", "capex", "purchases of property plant and equipment"],
         "operating_cash_flow": ["operating cash flow", "cash flow from operations", "net cash provided by operating activities"],
@@ -1979,6 +2080,8 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "marketable_securities": ["marketable securities", "short-term investments"],
         "accounts_receivable": ["accounts receivable", "net accounts receivable", "receivables"],
         "accounts_payable": ["accounts payable", "payables"],
+        "accounts_payable_begin": ["accounts payable", "trade accounts payable", "payables", "beginning accounts payable"],
+        "accounts_payable_end": ["accounts payable", "trade accounts payable", "payables", "ending accounts payable"],
         "inventory": ["inventories", "inventory"],
         "inventory_begin": ["inventories", "inventory", "beginning inventory"],
         "inventory_end": ["inventories", "inventory", "ending inventory"],

@@ -166,6 +166,15 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
     slots_by_formula: dict[str, list[str]] = {
         "cagr": ["beginning_value", "ending_value", "years"],
         "dio": ["inventory_begin", "inventory_end", "cogs", "fiscal_days"],
+        "dpo": ["accounts_payable_begin", "accounts_payable_end", "cogs", "fiscal_days"],
+        "dpo_inventory_adjusted": [
+            "accounts_payable_begin",
+            "accounts_payable_end",
+            "cogs",
+            "inventory_begin",
+            "inventory_end",
+            "fiscal_days",
+        ],
         "ev_revenue": ["equity_value_or_market_cap", "debt", "cash", "revenue"],
         "ev_ebitda": ["enterprise_value_or_market_cap", "debt", "cash", "ebitda_or_ebitda_components"],
         "bridge_subtotal": [
@@ -233,6 +242,7 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "dividends_paid",
             "net_income",
         ],
+        "average_capex_to_revenue": [],
         "fixed_charge_coverage": [
             "earnings_available_for_fixed_charges_or_pretax_income",
             "fixed_charges",
@@ -367,6 +377,8 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "years": [],
         "inventory_begin": ["inventory", "inventories"],
         "inventory_end": ["inventory", "inventories"],
+        "accounts_payable_begin": ["accounts payable", "trade accounts payable", "payables"],
+        "accounts_payable_end": ["accounts payable", "trade accounts payable", "payables"],
         "cogs": ["cogs", "cost of sales", "cost of revenue"],
         "fiscal_days": [],
         "equity_value_or_market_cap": ["equity value", "market cap", "market capitalization", "enterprise value", "transaction value"],
@@ -478,6 +490,8 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         return "model"
     if formula_name in {
         "dio",
+        "dpo",
+        "dpo_inventory_adjusted",
         "ev_revenue",
         "ev_ebitda",
         "cagr",
@@ -497,6 +511,7 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "inventory_turnover",
         "dividend_payout_ratio",
         "retention_ratio",
+        "average_capex_to_revenue",
     }:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
@@ -549,6 +564,16 @@ def _infer_formula_name(question: str) -> str:
         return "mlr_rebate"
     if "dio" in text or "days inventory" in text:
         return "dio"
+    if "dpo" in text or "days payable" in text:
+        if "change in inventory" in text or "change in inventories" in text:
+            return "dpo_inventory_adjusted"
+        return "dpo"
+    if (
+        ("capex" in text or "capital expenditure" in text or "capital expenditures" in text)
+        and ("revenue" in text or "sales" in text)
+        and ("average" in text or "avg" in text or "as a % of revenue" in text or "capex/revenue" in compact)
+    ):
+        return "average_capex_to_revenue"
     if "cagr" in text:
         return "cagr"
     if "add-back" in text or "addback" in text or "bridge" in text or "reconciliation" in text:

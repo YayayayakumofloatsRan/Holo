@@ -4022,6 +4022,70 @@ def test_finance_task_compiler_emits_common_cash_flow_and_turnover_programs() ->
         assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
 
 
+def test_finance_task_compiler_emits_dpo_inventory_adjusted_program() -> None:
+    question = (
+        "What is Amazon's FY2017 days payable outstanding (DPO)? DPO is defined as: "
+        "365 * (average accounts payable between FY2016 and FY2017) / "
+        "(FY2017 COGS + change in inventory between FY2016 and FY2017)."
+    )
+    program = compile_finance_task_program(question=question, facts=[])
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "dpo_inventory_adjusted"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == [
+        "accounts_payable_begin",
+        "accounts_payable_end",
+        "cogs",
+        "inventory_begin",
+        "inventory_end",
+    ]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["accounts_payable_begin"].statement == "balance_sheet"
+    assert evidence_slots["accounts_payable_end"].line_item == "accounts payable"
+    assert evidence_slots["cogs"].statement == "income_statement"
+    assert evidence_slots["inventory_end"].statement == "balance_sheet"
+    transform = program.transform_specs[0]
+    assert transform.name == "dpo_inventory_adjusted"
+    assert transform.expression == (
+        "fiscal_days * ((accounts_payable_begin + accounts_payable_end) / 2) / "
+        "(cogs + (inventory_end - inventory_begin))"
+    )
+
+
+def test_finance_task_compiler_emits_average_capex_to_revenue_program() -> None:
+    question = (
+        "What is the FY2017 - FY2019 3 year average of capex as a % of revenue for Activision Blizzard? "
+        "Answer in units of percents and round to one decimal place."
+    )
+    program = compile_finance_task_program(question=question, facts=[])
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "average_capex_to_revenue"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == [
+        "capital_expenditures_2017",
+        "revenue_2017",
+        "capital_expenditures_2018",
+        "revenue_2018",
+        "capital_expenditures_2019",
+        "revenue_2019",
+    ]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["capital_expenditures_2017"].statement == "cash_flow_statement"
+    assert evidence_slots["capital_expenditures_2017"].line_item == "capital expenditures"
+    assert evidence_slots["revenue_2019"].statement == "income_statement"
+    assert evidence_slots["revenue_2019"].line_item == "revenue"
+    transform = program.transform_specs[0]
+    assert transform.name == "average_capex_to_revenue"
+    assert transform.required_slots == program.slot_frame.missing_slots
+    assert transform.expression == (
+        "((capital_expenditures_2017 / revenue_2017) + "
+        "(capital_expenditures_2018 / revenue_2018) + "
+        "(capital_expenditures_2019 / revenue_2019)) / 3"
+    )
+
+
 def test_finance_formula_planner_computes_free_cash_flow_and_return_on_assets() -> None:
     fcf_plan = plan_finance_formula(
         question="What is FY2020 free cash flow? FCF is operating cash flow less capex.",
@@ -4051,6 +4115,66 @@ def test_finance_formula_planner_computes_free_cash_flow_and_return_on_assets() 
     assert roa_plan.formula_name == "return_on_assets"
     assert roa_plan.payload["expression"] == "net_income / ((assets_current + assets_prior) / 2)"
     assert roa_plan.payload["variables"] == {"net_income": "120", "assets_current": "1100", "assets_prior": "900"}
+
+
+def test_finance_formula_planner_computes_dpo_and_average_capex_to_revenue() -> None:
+    dpo_question = (
+        "What is Amazon's FY2017 days payable outstanding (DPO)? DPO is defined as: "
+        "365 * (average accounts payable between FY2016 and FY2017) / "
+        "(FY2017 COGS + change in inventory between FY2016 and FY2017)."
+    )
+    dpo_plan = plan_finance_formula(
+        question=dpo_question,
+        facts=[
+            _year_fact("accounts payable", "200", 2016, fact_id="ap-2016", metadata={"end": "2016-12-31"}),
+            _year_fact("accounts payable", "260", 2017, fact_id="ap-2017", metadata={"end": "2017-12-31"}),
+            _year_fact("cost of sales", "1200", 2017, fact_id="cogs-2017"),
+            _year_fact("inventories", "300", 2016, fact_id="inventory-2016", metadata={"end": "2016-12-31"}),
+            _year_fact("inventories", "330", 2017, fact_id="inventory-2017", metadata={"end": "2017-12-31"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert dpo_plan.status == "ready"
+    assert dpo_plan.formula_name == "dpo_inventory_adjusted"
+    assert dpo_plan.payload["expression"] == (
+        "fiscal_days * ((accounts_payable_begin + accounts_payable_end) / 2) / "
+        "(cogs + (inventory_end - inventory_begin))"
+    )
+    assert dpo_plan.payload["variables"] == {
+        "fiscal_days": 365,
+        "accounts_payable_begin": "200",
+        "accounts_payable_end": "260",
+        "cogs": "1200",
+        "inventory_begin": "300",
+        "inventory_end": "330",
+    }
+
+    capex_question = (
+        "What is the FY2017 - FY2019 3 year average of capex as a % of revenue for Activision Blizzard?"
+    )
+    capex_plan = plan_finance_formula(
+        question=capex_question,
+        facts=[
+            _year_fact("capital expenditures", "-10", 2017, fact_id="capex-2017"),
+            _year_fact("revenue", "100", 2017, fact_id="revenue-2017"),
+            _year_fact("capital expenditures", "-20", 2018, fact_id="capex-2018"),
+            _year_fact("revenue", "200", 2018, fact_id="revenue-2018"),
+            _year_fact("capital expenditures", "-30", 2019, fact_id="capex-2019"),
+            _year_fact("revenue", "300", 2019, fact_id="revenue-2019"),
+        ],
+        existing_traces=[],
+    )
+
+    assert capex_plan.status == "ready"
+    assert capex_plan.formula_name == "average_capex_to_revenue"
+    assert capex_plan.payload["expression"] == (
+        "((capital_expenditures_2017 / revenue_2017) + "
+        "(capital_expenditures_2018 / revenue_2018) + "
+        "(capital_expenditures_2019 / revenue_2019)) / 3"
+    )
+    assert capex_plan.payload["variables"]["capital_expenditures_2017"] == "10"
+    assert capex_plan.payload["variables"]["revenue_2019"] == "300"
 
 
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:
