@@ -705,6 +705,31 @@ def test_financebench_doc_retrieval_payload_parses_inline_prompt_labels() -> Non
     assert payload["metadata"]["compiled_task_hint"]["evidence_specs"][0]["line_item"] == "capital expenditures"
 
 
+def test_financebench_doc_retrieval_payload_unwraps_adobe_pdf_target() -> None:
+    wrapper_url = (
+        "https://www.adobe.com/pdf-page.html?pdfTarget="
+        "aHR0cHM6Ly93d3cuYWRvYmUuY29tL2NvbnRlbnQvZGFtL2NjL2VuL2ludmVzdG9yLXJlbGF0aW9ucy9wZGZzL0FEQkUtMTBLLUZZMTUtRklOQUwucGRm"
+    )
+    pdf_url = "https://www.adobe.com/content/dam/cc/en/investor-relations/pdfs/ADBE-10K-FY15-FINAL.pdf"
+    prompt = (
+        "FinanceBench target document metadata follows. Use it to acquire evidence; it is not answer evidence by itself.\n"
+        "Company: Adobe\n"
+        "Document: ADOBE_2015_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2015\n"
+        f"Document link: {wrapper_url}\n"
+        "What is the FY2015 operating cash flow ratio for Adobe?"
+    )
+
+    payload = _benchmark_doc_retrieval_payload(prompt)
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert source_urls[0] == pdf_url
+    assert wrapper_url in source_urls
+    assert payload["metadata"]["preferred_source_urls"][0] == pdf_url
+    assert payload["metadata"]["target_document_binding"]["doc_link"] == wrapper_url
+
+
 def test_financebench_doc_retrieval_payload_stops_inline_period_before_assume_question() -> None:
     prompt = (
         "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "

@@ -100,6 +100,7 @@ from kernel_v3.retrieval import (
 )
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
 from kernel_v3.retrieval.source_directory_rank import rank_source_directory_entries
+from kernel_v3.retrieval.url_utils import expanded_url_targets
 from kernel_v3.runtime_graph import is_terminal_record
 from kernel_v3.session import TaskState
 from kernel_v3.substrate import Claim, EvidencePolicy, SlotFill, SlotFrame, SlotSpec, TransformPlan
@@ -10900,11 +10901,12 @@ def _normalize_for_benchmark_doc_query(value: object) -> str:
 
 
 def _benchmark_doc_retrieval_target(goal: str) -> JsonObject:
-    if "Benchmark target source follows." not in goal or "Source URL:" not in goal:
+    if not _benchmark_doc_retrieval_marker_present(goal):
         return {}
     result: JsonObject = {}
     labels = {
         "Source URL": "source_url",
+        "Document link": "source_url",
         "Company": "company",
         "Document": "doc_name",
         "Document type": "doc_type",
@@ -10927,27 +10929,37 @@ def _benchmark_doc_retrieval_target(goal: str) -> JsonObject:
 
 
 def _benchmark_doc_retrieval_question(goal: str) -> str | None:
-    if "Benchmark target source follows." not in goal:
+    if not _benchmark_doc_retrieval_marker_present(goal):
         return None
     paragraphs = [part.strip() for part in str(goal or "").split("\n\n") if part.strip()]
     if paragraphs:
         question = paragraphs[-1]
-        if not question.startswith("Benchmark target source follows."):
+        if not question.startswith(("Benchmark target source follows.", "FinanceBench target document metadata follows.")):
             return question
     inline = _benchmark_doc_retrieval_inline_question(goal)
     return inline or None
+
+
+def _benchmark_doc_retrieval_marker_present(goal: str) -> bool:
+    text = str(goal or "")
+    if "Benchmark target source follows." in text and "Source URL:" in text:
+        return True
+    return "FinanceBench target document metadata follows." in text and (
+        "Document link:" in text or "Source URL:" in text
+    )
 
 
 def _benchmark_doc_retrieval_inline_labels(goal: str) -> JsonObject:
     text = str(goal or "").replace("\n", " ")
     labels = {
         "Source URL": "source_url",
+        "Document link": "source_url",
         "Company": "company",
         "Document type": "doc_type",
         "Document period": "doc_period",
         "Document": "doc_name",
     }
-    label_pattern = "Source URL|Document type|Document period|Company|Document"
+    label_pattern = "Source URL|Document link|Document type|Document period|Company|Document"
     question_start = _benchmark_doc_retrieval_question_start_pattern()
     result: JsonObject = {}
     for match in re.finditer(
@@ -10972,6 +10984,9 @@ def _benchmark_doc_retrieval_inline_question(goal: str) -> str:
     if match:
         return " ".join(match.group(1).split())
     match = re.search(rf"(?:Document period\s*:\s*\S+)\s+((?:{question_start})\b.+)$", text, flags=re.IGNORECASE)
+    if match:
+        return " ".join(match.group(1).split())
+    match = re.search(rf"(?:Document link\s*:\s*\S+)\s+((?:{question_start})\b.+)$", text, flags=re.IGNORECASE)
     if match:
         return " ".join(match.group(1).split())
     return ""
@@ -11542,8 +11557,14 @@ def _benchmark_doc_source_urls(source_url: str) -> list[str]:
     url = _string_value(source_url)
     if not url:
         return []
-    derived = _sec_archive_urls_from_accession_url(url)
-    return _ordered_unique([*derived, url])
+    targets = [candidate for candidate, _ in expanded_url_targets(url, prefer_unwrapped=True)]
+    if not targets:
+        targets = [url]
+    expanded: list[str] = []
+    for target in targets:
+        expanded.extend(_sec_archive_urls_from_accession_url(target))
+        expanded.append(target)
+    return _ordered_unique(expanded)
 
 
 def _source_grounded_trace_required(recipe: TaskRecipe) -> bool:

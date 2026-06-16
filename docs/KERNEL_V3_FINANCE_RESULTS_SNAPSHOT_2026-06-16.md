@@ -31,6 +31,43 @@ not a capability score.
 | `run_fb_debug_o000_l001_wide_slotbind_20260615_v1` | FinanceBench debug row 0 rerun | `1/1` | Same row, annotation overall `1.0000`; useful smoke, not broad FinanceBench proof. |
 | `run_fb_eval_o010_l003_htmlcol_fact_20260615_v1` | FinanceBench offset 10 limit 3 probe | `0/3` | Exposes Adobe-source acquisition/binding failures; annotation overall `0.2929`, numeric `0.0000`. |
 
+## 2026-06-16 Capability Iteration
+
+The `run_fb_eval_o010_l003_htmlcol_fact_20260615_v1` failure cluster was traced
+to a generic target-document acquisition issue. Adobe FinanceBench rows use
+`https://www.adobe.com/pdf-page.html?pdfTarget=...` wrapper URLs. The old
+FinanceBench runtime payload preserved that wrapper as the visible
+`source_url`, so the loop could try to fetch the wrapper page and then spend
+budget on broad search pages instead of the actual 10-K PDF.
+
+The runtime now reuses the existing retrieval URL utility expansion and emits
+the unwrapped PDF URL first in FinanceBench `source_urls` /
+`preferred_source_urls`, while keeping the original wrapper URL as provenance.
+The same parser now accepts both runtime prompt forms:
+`Benchmark target source follows` / `Source URL`, and
+`FinanceBench target document metadata follows` / `Document link`.
+
+Static verification on the three failing Adobe rows now maps:
+
+| Offset | Item | First acquisition URL |
+| ---: | --- | --- |
+| `10` | `financebench_id_04735` | `https://www.adobe.com/content/dam/cc/en/investor-relations/pdfs/ADBE-10K-FY15-FINAL.pdf` |
+| `11` | `financebench_id_07507` | `https://www.adobe.com/content/dam/cc/en/investor-relations/pdfs/ADBE-10K-FY16-FINAL.pdf` |
+| `12` | `financebench_id_03856` | `https://www.adobe.com/content/dam/cc/en/investor-relations/pdfs/ADBE-10K-FY17-FINAL.pdf` |
+
+This is a source-acquisition capability fix, not a new live accuracy claim.
+Fresh live scoring still requires model credentials.
+
+Verification:
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q -k "financebench_doc_retrieval_payload_unwraps_adobe_pdf_target or financebench_doc_retrieval_payload_parses_inline_prompt_labels or financebench_doc_retrieval_payload_stops_inline_period_before_assume_question or financebench_import_modes_keep_gold_out_of_prompt"
+.venv/bin/python -m pytest tests/test_kernel_v3_retrieval_document_expansion.py -q -k "adobe_pdf_target_wrapper or direct_url_source_is_fetched_before_profile_discovery_sources or target_document_binding_doc_link_is_fetched_before_search_noise"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py tests/test_kernel_v3_retrieval_document_expansion.py -q
+```
+
+Latest result: `102 passed in 273.27s`.
+
 ## What Is Not Proven Yet
 
 - The post-2026-06-16 code changes do not yet have a fresh live accuracy number.
