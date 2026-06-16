@@ -8931,9 +8931,19 @@ def test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels() ->
     assert "target_document_binding_accepted=true" in payload["contract"]
     assert "later-filed restatement" in payload["contract"]
     assert "For revenue/net sales slots" in payload["contract"]
+    assert "competing_fact_clusters" in payload["contract"]
     assert prompt.index('"raw_facts"') < prompt.index('"question"')
     assert prompt.index('"raw_facts"') < prompt.index('"compiled_program"')
     assert [item["fact_id"] for item in payload["slot_bind_packet"]["raw_facts"]] == ["fact-q", "fact-a"]
+    clusters = payload["slot_bind_packet"]["competing_fact_clusters"]
+    assert clusters
+    cluster = clusters[0]
+    assert cluster["metric_family_hint"] == "inventory"
+    assert cluster["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert cluster["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["fact_id"] for item in cluster["candidates"]] == ["fact-q", "fact-a"]
+    assert cluster["candidates"][0]["raw_fields"]["form"] == "10-Q"
+    assert cluster["candidates"][1]["raw_fields"]["form"] == "10-K"
     assert raw_fact["raw_fields"]["form"] == "10-Q"
     assert raw_fact["raw_fields"]["fp"] == "Q2"
     assert raw_fact["raw_fields"]["duration_days"] == 90

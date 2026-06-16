@@ -15439,6 +15439,7 @@ FINANCE_SLOT_BIND_CONTRACT = (
     "Use only fact_ids present in raw_facts. Do not invent values, facts, citations, periods, or formulas. "
     "Inspect raw SEC fields such as period, fiscal_year, form, fp, start, end, frame, accn, concept, label, and source_uri yourself. "
     "Treat extracted metric, period, and scale labels as noisy hints, not authority: inspect raw_fields.raw/context/row_marker/label/concept/source metadata and bind an imperfectly labeled fact when those raw fields clearly answer the slot. "
+    "If slot_bind_packet.competing_fact_clusters is present, treat it as a host-built attention index only: candidate order is source order, not semantic ranking, and you must decide from raw fields yourself. "
     "If raw_fields include target_document_binding hints, treat them as provenance hints only; still inspect raw/context before selecting a fact_id. "
     "When the task names a specific target filing or source document, compare raw_fields.accn, filed, form, source_uri, target_document_binding_accepted, and target_document_binding_score. "
     "For competing facts with the same company, fiscal year, metric, and period, a fact from the target filing accession or with target_document_binding_accepted=true is usually the better candidate than a later-filed restatement or spin-off-era filing; "
@@ -15615,6 +15616,7 @@ def _finance_slot_bind_packet(
             _raw_fact_summary_for_slot_bind(fact)
             for fact in facts[:FINANCE_SLOT_BIND_FACT_LIMIT]
         ],
+        "competing_fact_clusters": _finance_slot_bind_competing_fact_clusters(facts[:FINANCE_SLOT_BIND_FACT_LIMIT]),
         "question": question,
         "slot_requirements": _slot_requirements_for_slot_bind(compiled_program),
         "compiled_program": _compact_compiled_program_for_slot_bind(compiled_program),
@@ -15827,6 +15829,135 @@ def _raw_fact_summary_for_slot_bind(fact: FinanceFact) -> JsonObject:
             }
         },
     }
+
+
+def _finance_slot_bind_competing_fact_clusters(facts: list[FinanceFact]) -> list[JsonObject]:
+    groups: dict[tuple[str, str, str], list[FinanceFact]] = {}
+    for fact in facts:
+        entity_key = _slot_bind_fact_entity_key(fact)
+        period_key = _slot_bind_fact_period_key(fact)
+        metric_key = _slot_bind_fact_metric_key(fact)
+        if not entity_key or not period_key or not metric_key:
+            continue
+        groups.setdefault((entity_key, period_key, metric_key), []).append(fact)
+
+    clusters: list[JsonObject] = []
+    for (entity_key, period_key, metric_key), items in groups.items():
+        if len(items) < 2:
+            continue
+        distinct_values = _ordered_unique(str(item.value or "").strip() for item in items if str(item.value or "").strip())
+        distinct_raw_labels = _ordered_unique(
+            str(_slot_bind_fact_raw_label(item) or "").strip().casefold()
+            for item in items
+            if str(_slot_bind_fact_raw_label(item) or "").strip()
+        )
+        distinct_sources = _ordered_unique(
+            str((item.metadata if isinstance(item.metadata, dict) else {}).get("source_uri") or item.source_ref or "").strip()
+            for item in items
+            if str((item.metadata if isinstance(item.metadata, dict) else {}).get("source_uri") or item.source_ref or "").strip()
+        )
+        if len(distinct_values) < 2 and len(distinct_raw_labels) < 2 and len(distinct_sources) < 2:
+            continue
+        clusters.append(
+            {
+                "entity_key": entity_key,
+                "period_key": period_key,
+                "metric_family_hint": metric_key,
+                "candidate_count": len(items),
+                "distinct_value_count": len(distinct_values),
+                "host_role": "attention_grouping_only_no_semantic_preference",
+                "candidate_ordering": "source_order_from_raw_facts",
+                "candidates": [_slot_bind_competing_candidate(item) for item in items[:8]],
+            }
+        )
+    clusters.sort(key=lambda item: (int(item.get("candidate_count") or 0), int(item.get("distinct_value_count") or 0)), reverse=True)
+    return clusters[:16]
+
+
+def _slot_bind_competing_candidate(fact: FinanceFact) -> JsonObject:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    raw_fields = {
+        key: _slot_bind_raw_field_value(key, value)
+        for key, value in metadata.items()
+        if key
+        in {
+            "accn",
+            "concept",
+            "context",
+            "end",
+            "filed",
+            "form",
+            "fp",
+            "label",
+            "line_item",
+            "raw",
+            "source_uri",
+            "start",
+            "statement",
+            "target_document_binding_accepted",
+            "target_document_binding_reasons",
+            "target_document_binding_score",
+        }
+    }
+    return {
+        "fact_id": _text_preview(fact.fact_id, limit=120),
+        "metric": _text_preview(fact.metric, limit=160),
+        "value": _text_preview(fact.value, limit=120),
+        "unit": _text_preview(fact.unit, limit=80),
+        "period": _text_preview(fact.period, limit=80),
+        "fiscal_year": fact.fiscal_year,
+        "citation_ref": _text_preview(fact.citation_ref, limit=120),
+        "raw_fields": raw_fields,
+    }
+
+
+def _slot_bind_fact_entity_key(fact: FinanceFact) -> str:
+    ticker = str(fact.ticker or "").strip().casefold()
+    if ticker:
+        return ticker
+    return " ".join(str(fact.entity or "").strip().casefold().split())
+
+
+def _slot_bind_fact_period_key(fact: FinanceFact) -> str:
+    if fact.fiscal_year is not None:
+        return f"fy{fact.fiscal_year}"
+    return " ".join(str(fact.period or "").strip().casefold().split())
+
+
+def _slot_bind_fact_metric_key(fact: FinanceFact) -> str:
+    text = " ".join(
+        str(value or "")
+        for value in (
+            fact.metric,
+            _slot_bind_fact_raw_label(fact),
+        )
+    ).casefold()
+    normalized = re.sub(r"[^a-z0-9]+", " ", text)
+    if any(term in normalized for term in ("revenue", "revenues", "sales", "net sales")):
+        return "revenue_or_sales"
+    if any(term in normalized for term in ("cost of revenue", "cost of sales", "cogs")):
+        return "cost_of_sales"
+    if "inventory" in normalized or "inventories" in normalized:
+        return "inventory"
+    if "capital expenditure" in normalized or "capex" in normalized or "property plant and equipment" in normalized:
+        return "capital_expenditure_or_ppe"
+    if "asset" in normalized:
+        return "assets"
+    if "cash flow" in normalized or "operating activities" in normalized:
+        return "cash_flow"
+    if "income" in normalized or "earnings" in normalized or "profit" in normalized:
+        return "income_or_profit"
+    compact = " ".join(normalized.split())
+    return compact[:80]
+
+
+def _slot_bind_fact_raw_label(fact: FinanceFact) -> str:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    for key in ("label", "line_item", "concept", "raw_metric", "target_line_item"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return str(fact.metric or "").strip()
 
 
 def _finance_slot_bind_semantic_basis(parsed: JsonObject | None, *, key: str) -> list[JsonObject]:

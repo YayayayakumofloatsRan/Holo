@@ -3018,3 +3018,55 @@ py_compile passed
 21 passed, 248 deselected in 0.68s
 244 passed in 3.40s
 ```
+
+---
+
+## 47. 追加落地：Slot-Bind Competing Fact Clusters
+
+本节针对 noisy SEC companyfacts / filing table 的通用问题：同一公司、同一期间、相近
+指标下经常出现多个候选值，例如季度库存 vs 年度库存、operating revenue vs total
+revenues and other income、capex outflow vs PP&E net。模型原本可以从 `raw_facts`
+中自己发现冲突，但长列表下容易漏看。本节增加 compact attention index，不改变语义
+决策归属。
+
+变更：
+
+- `finance.slot_bind` prompt contract 明确：
+  - `slot_bind_packet.competing_fact_clusters` 是 host-built attention index；
+  - candidate order 是 raw facts source order，不是 semantic ranking；
+  - 模型必须仍从 raw fields 自己做 period/line-item 判断。
+- `_finance_slot_bind_packet()` 新增：
+  - `competing_fact_clusters`
+- cluster 内容包括：
+  - `entity_key`
+  - `period_key`
+  - `metric_family_hint`
+  - `candidate_count`
+  - `distinct_value_count`
+  - `host_role = attention_grouping_only_no_semantic_preference`
+  - `candidate_ordering = source_order_from_raw_facts`
+  - compact candidates with fact_id, value, period, citation_ref, raw_fields。
+
+边界：
+
+- host 只按实体/期间/粗粒度指标聚类；
+- host 不选择 best fact；
+- host 不改变 raw facts 顺序；
+- host 不把 cluster 当答案依据；
+- cluster 的唯一目标是让 LLM 更容易发现“这里有冲突候选，需要显式判断”。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels tests/test_kernel_v3_finance_engine.py::test_finance_slot_bind_prompt_keeps_late_large_ledger_candidates_visible -q
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+2 passed in 1.04s
+py_compile passed
+244 passed in 3.29s
+```
