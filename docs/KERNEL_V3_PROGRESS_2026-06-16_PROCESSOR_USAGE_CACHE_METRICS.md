@@ -3216,3 +3216,45 @@ source-backed 数值写成了不匹配的单位或比例表达，例如把金额
 py_compile passed
 307 passed in 3.18s
 ```
+
+---
+
+## 51. 追加落地：Numeric Judge Unit Mismatch Visibility
+
+第 50 节把 `unit_mismatch_examples` 加到了 `finance.verify_numeric` tool observation 和
+`finance_working_state`。本节继续把同一诊断贯通到 `finance.numeric_judge` prompt，避免最终
+语义验算阶段只看到 `unit_mismatch` issue code，却看不到哪个 answer number、候选单位和
+support source 发生冲突。
+
+变更：
+
+- `_compact_numeric_verifier_for_judge()` 新增：
+  - `unit_mismatches`
+  - `unit_mismatch_examples`
+  - `repair_options`
+  - `host_boundary`
+- `_legacy_finance_numeric_judge_prompt()` 的 `host_verifier_diagnostics` 同步携带：
+  - `unit_mismatches`
+  - `repair_guidance`
+
+边界：
+
+- host verifier diagnostics 仍是 advisory；
+- `finance.numeric_judge` 仍由 LLM 判断该修单位、删非核心数字、继续取证，还是要求 synthesis repair；
+- host 不把 unit mismatch 自动改写成通过。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "finance_numeric_judge_prompt_exposes_unit_mismatch_examples or finance_numeric_judge_prompt_exposes_competing_fact_clusters or finance_numeric_judge_prompt_compacts_dynamic_context"
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+3 passed, 215 deselected in 0.97s
+py_compile passed
+308 passed in 4.44s
+```

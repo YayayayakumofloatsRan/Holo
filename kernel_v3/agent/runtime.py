@@ -16442,6 +16442,8 @@ def _legacy_finance_numeric_judge_prompt(
             "issues": list(getattr(verification, "issues", []) or [])[:24],
             "matched_values": list(getattr(verification, "matched_values", []) or [])[:48],
             "missing_values": list(getattr(verification, "missing_values", []) or [])[:48],
+            "unit_mismatches": list(getattr(verification, "unit_mismatches", []) or [])[:16],
+            "repair_guidance": finance_numeric_repair_guidance(verification),
             "diagnostics": getattr(verification, "diagnostics", {}) or {},
         },
         "retrieval_report": {
@@ -16500,11 +16502,25 @@ def _compact_answer_for_numeric_judge(answer: FinalAnswer) -> JsonObject:
 def _compact_numeric_verifier_for_judge(verification) -> JsonObject:
     diagnostics = getattr(verification, "diagnostics", {}) or {}
     diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    guidance = finance_numeric_repair_guidance(verification)
+    unit_mismatch_examples = [
+        dict(item)
+        for item in list(guidance.get("unit_mismatch_examples") or [])
+        if isinstance(item, dict)
+    ][:8]
     return {
         "status": getattr(verification, "status", None),
         "issues": [_compact_simple_dict(item, limit=12) for item in list(getattr(verification, "issues", []) or [])[:16] if isinstance(item, dict)],
         "matched_values": [_compact_simple_dict(item, limit=12) for item in list(getattr(verification, "matched_values", []) or [])[:32] if isinstance(item, dict)],
         "missing_values": [_compact_simple_dict(item, limit=12) for item in list(getattr(verification, "missing_values", []) or [])[:32] if isinstance(item, dict)],
+        "unit_mismatches": [
+            _compact_simple_dict(item, limit=12)
+            for item in list(getattr(verification, "unit_mismatches", []) or [])[:16]
+            if isinstance(item, dict)
+        ],
+        "unit_mismatch_examples": unit_mismatch_examples,
+        "repair_options": _string_list(guidance.get("repair_options"))[:8],
+        "host_boundary": _text_preview(guidance.get("host_boundary"), limit=240),
         "diagnostics": {
             key: diagnostics.get(key)
             for key in (

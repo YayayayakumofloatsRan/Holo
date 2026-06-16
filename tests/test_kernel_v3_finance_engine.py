@@ -9050,6 +9050,66 @@ def test_finance_numeric_judge_prompt_exposes_competing_fact_clusters() -> None:
     assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
 
 
+def test_finance_numeric_judge_prompt_exposes_unit_mismatch_examples() -> None:
+    question = "What was Example Co FY2024 revenue?"
+    facts = [
+        FinanceFact(
+            fact_id="fact-revenue",
+            entity="Example Co",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="10",
+            unit="USD",
+            scale=None,
+            source_ref="src-1",
+            evidence_ref="ev-1",
+            citation_ref="cite-1",
+            metadata={},
+        )
+    ]
+    final = FinalAnswer(
+        answer="Example Co FY2024 revenue was 10%.",
+        citation_refs=["cite-1"],
+        used_evidence=["ev-1"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-unit",
+        run_id="run-judge-unit",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(answer=final.answer, facts=facts, question=question)
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    verifier = json.loads(prompt)["judge_packet"]["host_verifier_diagnostics"]
+
+    assert verifier["status"] == "failed"
+    assert verifier["unit_mismatches"][0]["value"]["raw"] == "10%"
+    assert verifier["unit_mismatch_examples"] == [
+        {
+            "raw": "10%",
+            "value": "10",
+            "unit": "percent",
+            "support_units": ["usd"],
+            "support_kinds": ["finance_fact"],
+            "support_refs": ["fact-revenue"],
+        }
+    ]
+    assert "unit or scale wording" in " ".join(verifier["repair_options"])
+    assert "model still owns semantic repair" in verifier["host_boundary"]
+
+
 def test_finance_numeric_judge_prompt_preserves_capital_intensity_roa_trace_context() -> None:
     question = "Is 3M a capital-intensive business based on FY2022 data?"
     answer_text = "3M does not appear capital-intensive: CapEx/revenue was 5.1%."
