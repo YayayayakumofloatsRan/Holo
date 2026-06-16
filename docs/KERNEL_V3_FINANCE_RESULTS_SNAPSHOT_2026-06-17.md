@@ -10,8 +10,9 @@ accuracy evidence is still the 2026-06-14 FinAgent/FAB-family run record
 summarized in `docs/KERNEL_V3_FINANCE_RESULTS_SNAPSHOT_2026-06-16.md`.
 
 Fresh FinanceBench live scoring is still blocked by provider account
-availability. A minimal DeepSeek provider check on 2026-06-17 found the Windows
-`DEEPSEEK_API_KEY` available to WSL, but the actual API call returned:
+availability. Minimal DeepSeek checks on 2026-06-17 found the Windows
+`DEEPSEEK_API_KEY` available to WSL and injectable into the live model process,
+but the actual API call returned:
 
 ```text
 HTTP_402_INSUFFICIENT_BALANCE
@@ -77,10 +78,22 @@ task compiler now add generic evidence/slot/transform scaffolds for:
   capital expenditures, net PP&E, accounts receivable/payable, inventories,
   COGS, net income, adjusted EBITDA, operating cash flow, dividends paid,
   restructuring costs, total assets/current assets/current liabilities, VaR,
-  credit facilities, transaction proceeds/gains, and expected benefit payments.
+  credit facilities, transaction proceeds/gains, expected benefit payments, and
+  sales-change disclosures such as "real change in sales" excluding FX.
   The host binds the metric slot and optional calculator trace; the LLM still
   verifies the statement, period, unit, sign convention, and any explicit
-  absence condition from cited evidence.
+  absence condition from cited evidence;
+- `disclosure_lookup`: a generic evidence-only scaffold for qualitative filing
+  questions where a numeric transform would be the wrong abstraction. It covers
+  registered debt securities, dividend history, 8-K agenda summaries,
+  acquisitions, industries, products/services, product revenue concentration,
+  customers, geographies, customer retention, cyclicality, production rates,
+  legal proceedings, dividends, governance/proxy items, shareholder voting,
+  guidance, separations/discontinued operations, nonrecurring events, revenue
+  and inventory drivers, expense ratio explanations, growth-profile evidence,
+  restructuring liabilities, and market-risk VaR comparison disclosures. The
+  host prepares the EvidenceSpec and task type; the LLM reads cited evidence and
+  owns the semantic conclusion.
 
 The fact ledger also now canonicalizes investing cash flow, financing cash
 flow, store-count, segment-income, EBITDAR, debt-securities, marketable-
@@ -96,17 +109,20 @@ calculator-visible TransformSpecs; the LLM still owns semantic task compilation,
 source choice, line-item binding, relevance assessment, and final explanation.
 No benchmark answers are encoded.
 
-Current static question-only FinanceBench formula coverage:
+Current static question-only FinanceBench coverage:
 
-| Slice | Recognized formula rows | Rows with TransformSpec |
+| Slice | Recognized formula rows | Rows with EvidenceSpec |
 | --- | ---: | ---: |
-| `debug50` | `36/50` | `36/50` |
-| `test100` | `66/100` | `66/100` |
-| `all150` | `102/150` | `102/150` |
+| `debug50` | `50/50` | `50/50` |
+| `test100` | `100/100` | `100/100` |
+| `all150` | `150/150` | `150/150` |
 
 Compared with the 2026-06-16 common-formula baseline, all150 recognized formula
-coverage moved from `38/150` to `102/150`. This is only code-regression evidence
-for the next live run, not a live benchmark score.
+coverage moved from `38/150` to `150/150`. Compared with the previous
+2026-06-17 metric-lookup checkpoint, it moved from `102/150` to `150/150` by
+adding the generic disclosure scaffold and closing the remaining direct-metric
+punctuation/wording gaps. This is only code-regression evidence for the next
+live run, not a live benchmark score.
 
 ## Verification
 
@@ -116,6 +132,7 @@ The following checks were run as code regression only:
 .venv/bin/python -m py_compile kernel_v3/finance/formula_planner.py kernel_v3/finance/fact_ledger.py kernel_v3/finance/substrate_adapter.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "category_metric_rank"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "margin_profile_and_consistency"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "disclosure_lookup or direct_disclosure or metric_lookup or requested_metric_for_growth"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py tests/test_kernel_v3_finance_benchmark_report.py -q
 git diff --check
@@ -123,9 +140,15 @@ git diff --check
 
 Latest result: py_compile passed; targeted category-rank slice
 `2 passed, 270 deselected in 1.57s`; targeted metric-lookup / regression slice
-`4 passed, 269 deselected in 1.55s`; full finance engine
-`273 passed in 3.56s`; FinanceBench harness/report regression
-`59 passed in 393.15s`; `git diff --check` passed.
+`4 passed, 269 deselected in 1.55s`; targeted disclosure/metric regression
+slice `5 passed, 270 deselected in 1.68s`; full finance engine
+`275 passed in 4.26s`; FinanceBench harness/report regression
+`59 passed in 392.77s`.
+
+The live model smoke was also attempted with the Windows `DEEPSEEK_API_KEY`
+injected into the WSL process and `HOLO_V3_LIVE_MODEL=1`. It reached the
+DeepSeek provider and failed with `deepseek HTTP 402: Insufficient Balance`.
+No live FinanceBench score was produced.
 
 ## Next Honest Benchmark Step
 

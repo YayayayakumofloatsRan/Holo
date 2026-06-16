@@ -95,7 +95,7 @@ def finance_slot_frame(
         resolved_formula = _infer_formula_name(question)
     task_type = _task_type_for_formula(resolved_formula, question)
     required = _slot_specs_for_formula(resolved_formula)
-    if resolved_formula == "metric_lookup":
+    if resolved_formula in {"metric_lookup", "disclosure_lookup"}:
         dynamic_slots: list[str] = []
         if missing_slots is not None:
             dynamic_slots.extend(str(item) for item in missing_slots if str(item))
@@ -586,8 +586,36 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "gain_on_separation": ["gain on separation", "gain", "separation"],
         "cash_proceeds": ["cash proceeds", "proceeds"],
         "market_risk_var": ["value at risk", "var", "market risk"],
+        "organic_sales_change": ["organic sales change", "real change in sales", "sales change excluding fx", "foreign exchange"],
         "credit_facility": ["revolving credit agreement", "credit facility", "borrowings"],
         "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],
+        "registered_debt_securities": ["registered securities", "debt securities", "national securities exchange"],
+        "dividend_distribution_history": ["dividend distribution", "dividend history", "dividends declared", "dividends paid"],
+        "filing_event_summary": ["8-k", "8k", "filing event", "key agenda"],
+        "acquisitions": ["acquisitions", "business combinations", "companies acquired"],
+        "industry": ["industry", "business"],
+        "products_and_services": ["products", "services", "product categories", "service categories"],
+        "product_revenue_concentration": ["product categories", "service categories", "revenue concentration", "more than 20% of revenue"],
+        "customers": ["customers", "customer concentration", "primary customers"],
+        "operating_geographies": ["geographies", "geographic areas", "regions"],
+        "customer_retention": ["customer retention", "card member retention", "card members"],
+        "business_cyclicality": ["cyclicality", "cyclical", "business cycle"],
+        "production_rates": ["production rate", "production rates", "forecast production"],
+        "material_legal_proceedings": ["legal proceedings", "litigation", "material legal proceedings"],
+        "dividends_disclosure": ["dividends", "common shareholders", "dividends to common shareholders"],
+        "governance_disclosure": ["directors", "executive officers", "board nominees", "ceo"],
+        "shareholder_vote_results": ["shareholder vote", "shareholder proposal", "voting results"],
+        "guidance": ["guidance", "outlook", "forecast"],
+        "guidance_change": ["guidance change", "full year guidance", "core constant currency eps growth", "percentage points"],
+        "separation_or_discontinued_operation": ["separation", "spin-off", "discontinued operation", "subsequent events"],
+        "nonrecurring_events": ["nonrecurring events", "special items", "standard business operations", "net income drivers"],
+        "revenue_driver_discussion": ["revenue drivers", "sales drivers", "revenue change", "net sales change"],
+        "inventory_driver_discussion": ["inventory drivers", "merchandise inventories", "inventory balance", "inventory increase"],
+        "expense_driver_discussion": ["expense drivers", "sg&a", "selling general and administrative", "wages expense"],
+        "geographic_sales_growth": ["us sales growth", "international sales growth", "geographic sales"],
+        "expense_ratio_change": ["as a percent of sales", "as a percent of net sales", "expense ratio"],
+        "growth_profile_evidence": ["growth profile", "revenue growth", "net income growth", "high growth company"],
+        "restructuring_liability": ["restructuring liability", "restructuring reserve", "restructuring accrual", "nature and purpose"],
         "ranked_category_metric_table": [
             "category",
             "segment revenue",
@@ -612,6 +640,8 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         return "model"
     if formula_name == "metric_lookup":
         return "filing_metric_lookup"
+    if formula_name == "disclosure_lookup":
+        return "disclosure_analysis"
     if formula_name in {
         "dio",
         "dpo",

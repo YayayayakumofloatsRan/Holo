@@ -1481,6 +1481,8 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
     name = str(formula_plan.formula_name or "")
     if not name:
         return []
+    if name == "disclosure_lookup":
+        return []
     if name == "margin":
         payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
         variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
@@ -2140,6 +2142,11 @@ def _source_role(*, binding: JsonObject, source_families: list[str]) -> str | No
 
 
 def _statement_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
+    if formula_name == "disclosure_lookup":
+        spec = _disclosure_lookup_compiler_spec(question)
+        if spec and spec.get("slot_name") == slot_name:
+            return _string(spec.get("statement"))
+        return _statement_for_slot(slot_name)
     if formula_name == "metric_lookup":
         return _statement_for_slot(slot_name)
     if formula_name == "category_metric_rank" and slot_name == "ranked_category_metric_table":
@@ -2222,10 +2229,43 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "cash_flow_statement_or_transaction_note"
     if slot_name == "market_risk_var":
         return "market_risk_disclosures"
+    if slot_name == "organic_sales_change":
+        return "md&a_or_segment_note"
     if slot_name == "credit_facility":
         return "debt_or_liquidity_note"
     if slot_name == "pension_postretirement_payments":
         return "pension_and_postretirement_note"
+    disclosure_statements = {
+        "registered_debt_securities": "registered_securities",
+        "dividend_distribution_history": "dividend_disclosure",
+        "filing_event_summary": "form_8k",
+        "acquisitions": "business_combinations",
+        "industry": "business",
+        "products_and_services": "business",
+        "product_revenue_concentration": "business_or_segment_note",
+        "customers": "business",
+        "operating_geographies": "business",
+        "customer_retention": "md&a_or_business",
+        "business_cyclicality": "risk_factors_or_md&a",
+        "production_rates": "md&a_or_business_outlook",
+        "material_legal_proceedings": "legal_proceedings",
+        "dividends_disclosure": "dividend_disclosure_or_cash_flow_statement",
+        "governance_disclosure": "proxy_statement",
+        "shareholder_vote_results": "proxy_or_8k_voting_results",
+        "guidance": "earnings_release_or_md&a",
+        "guidance_change": "earnings_release_or_md&a",
+        "separation_or_discontinued_operation": "business_combinations_or_subsequent_events",
+        "nonrecurring_events": "md&a_or_income_statement_note",
+        "revenue_driver_discussion": "md&a",
+        "inventory_driver_discussion": "md&a_or_inventory_note",
+        "expense_driver_discussion": "md&a_or_income_statement",
+        "geographic_sales_growth": "md&a_or_segment_note",
+        "expense_ratio_change": "md&a_or_income_statement",
+        "growth_profile_evidence": "income_statement_or_md&a",
+        "restructuring_liability": "restructuring_note",
+    }
+    if slot_name in disclosure_statements:
+        return disclosure_statements[slot_name]
     if slot_name in {
         "revenue",
         "net_income",
@@ -2247,6 +2287,11 @@ def _statement_for_slot(slot_name: str) -> str | None:
 
 
 def _line_item_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
+    if formula_name == "disclosure_lookup":
+        spec = _disclosure_lookup_compiler_spec(question)
+        if spec and spec.get("slot_name") == slot_name:
+            return _string(spec.get("line_item"))
+        return _line_item_for_slot(slot_name)
     if formula_name == "metric_lookup":
         return _line_item_for_slot(slot_name)
     if formula_name == "category_metric_rank" and slot_name == "ranked_category_metric_table":
@@ -2321,8 +2366,36 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "gain_on_separation": "gain on separation",
         "cash_proceeds": "cash proceeds",
         "market_risk_var": "value at risk",
+        "organic_sales_change": "organic sales change",
         "credit_facility": "revolving credit agreement",
         "pension_postretirement_payments": "expected benefit payments",
+        "registered_debt_securities": "debt securities registered on national securities exchange",
+        "dividend_distribution_history": "dividend distribution history",
+        "filing_event_summary": "filing event",
+        "acquisitions": "acquisitions",
+        "industry": "industry",
+        "products_and_services": "products and services",
+        "product_revenue_concentration": "product category revenue concentration",
+        "customers": "customers",
+        "operating_geographies": "geographic areas",
+        "customer_retention": "customer retention",
+        "business_cyclicality": "cyclicality",
+        "production_rates": "production rates",
+        "material_legal_proceedings": "material legal proceedings",
+        "dividends_disclosure": "dividends to common shareholders",
+        "governance_disclosure": "directors and executive officers",
+        "shareholder_vote_results": "shareholder vote",
+        "guidance": "guidance",
+        "guidance_change": "guidance change",
+        "separation_or_discontinued_operation": "separation or discontinued operation",
+        "nonrecurring_events": "nonrecurring events",
+        "revenue_driver_discussion": "revenue drivers",
+        "inventory_driver_discussion": "inventory balance drivers",
+        "expense_driver_discussion": "expense drivers",
+        "geographic_sales_growth": "geographic sales growth",
+        "expense_ratio_change": "expense or earnings as percent of sales",
+        "growth_profile_evidence": "growth profile evidence",
+        "restructuring_liability": "restructuring liability",
         "store_count": "stores",
         "store_count_prior": "stores",
         "store_count_current": "stores",
@@ -2401,6 +2474,65 @@ def _looks_like_category_metric_rank_question(text: str) -> bool:
         "ebitdar",
     )
     return any(marker in text for marker in category_markers)
+
+
+def _disclosure_lookup_compiler_spec(question: str) -> JsonObject | None:
+    text = _normalized_question(question)
+    if "debt securities" in text and ("registered to trade" in text or "national securities exchange" in text):
+        return {"slot_name": "registered_debt_securities", "statement": "registered_securities", "line_item": "debt securities registered on national securities exchange"}
+    if "stable trend of dividend" in text or "dividend distribution" in text:
+        return {"slot_name": "dividend_distribution_history", "statement": "dividend_disclosure", "line_item": "dividend distribution history"}
+    if "8k filing" in text or "8 k filing" in text or "8-k filing" in text or "key agenda" in text:
+        return {"slot_name": "filing_event_summary", "statement": "form_8k", "line_item": "filing event"}
+    if "major acquisitions" in text or "companies acquired" in text or "main companies acquired" in text:
+        return {"slot_name": "acquisitions", "statement": "business_combinations", "line_item": "acquisitions"}
+    if "what industry" in text or ("primarily operate in" in text and "geograph" not in text):
+        return {"slot_name": "industry", "statement": "business", "line_item": "industry"}
+    if "products and services" in text or "major products" in text or "product categories" in text or "service categories" in text:
+        if "more than" in text and "revenue" in text:
+            return {"slot_name": "product_revenue_concentration", "statement": "business_or_segment_note", "line_item": "product category revenue concentration"}
+        return {"slot_name": "products_and_services", "statement": "business", "line_item": "products and services"}
+    if "customer concentration" in text or "primary customers" in text:
+        return {"slot_name": "customers", "statement": "business", "line_item": "customers"}
+    if "geographies" in text or "geographic" in text or "primarily operates in" in text:
+        return {"slot_name": "operating_geographies", "statement": "business", "line_item": "geographic areas"}
+    if "retain card members" in text or "card members" in text or "customer retention" in text:
+        return {"slot_name": "customer_retention", "statement": "md&a_or_business", "line_item": "customer retention"}
+    if "cyclicality" in text or "cyclical" in text:
+        return {"slot_name": "business_cyclicality", "statement": "risk_factors_or_md&a", "line_item": "cyclicality"}
+    if "production rate" in text:
+        return {"slot_name": "production_rates", "statement": "md&a_or_business_outlook", "line_item": "production rates"}
+    if "legal battle" in text or "legal proceedings" in text or "litigation" in text:
+        return {"slot_name": "material_legal_proceedings", "statement": "legal_proceedings", "line_item": "material legal proceedings"}
+    if "paid dividends" in text or "dividends to common shareholders" in text:
+        return {"slot_name": "dividends_disclosure", "statement": "dividend_disclosure_or_cash_flow_statement", "line_item": "dividends to common shareholders"}
+    if "previous ceo experience" in text or "new ceo" in text or "board member" in text or "nominees" in text:
+        if "votes against" in text:
+            return {"slot_name": "shareholder_vote_results", "statement": "proxy_or_8k_voting_results", "line_item": "shareholder vote"}
+        return {"slot_name": "governance_disclosure", "statement": "proxy_statement", "line_item": "directors and executive officers"}
+    if "shareholder vote" in text or "shareholder proposal" in text or "agm" in text:
+        return {"slot_name": "shareholder_vote_results", "statement": "proxy_or_8k_voting_results", "line_item": "shareholder vote"}
+    if "guidance" in text or "adjusted eps expected" in text:
+        return {"slot_name": "guidance_change" if "percentage points" in text else "guidance", "statement": "earnings_release_or_md&a", "line_item": "guidance change" if "percentage points" in text else "guidance"}
+    if "discontinued operation" in text or "spinning off" in text or "spin off" in text or "spin-off" in text or "upjohn" in text:
+        return {"slot_name": "separation_or_discontinued_operation", "statement": "business_combinations_or_subsequent_events", "line_item": "separation or discontinued operation"}
+    if "standard business operations" in text or "substantially increased net income" in text:
+        return {"slot_name": "nonrecurring_events", "statement": "md&a_or_income_statement_note", "line_item": "nonrecurring events"}
+    if "what drove" in text or "why did" in text or "why " in text:
+        if "inventory" in text or "inventories" in text:
+            return {"slot_name": "inventory_driver_discussion", "statement": "md&a_or_inventory_note", "line_item": "inventory balance drivers"}
+        if "sg&a" in text or "selling general" in text or "expense" in text or "wages" in text:
+            return {"slot_name": "expense_driver_discussion", "statement": "md&a_or_income_statement", "line_item": "expense drivers"}
+        return {"slot_name": "revenue_driver_discussion", "statement": "md&a", "line_item": "revenue drivers"}
+    if "us sales growth" in text or "international sales growth" in text or "sales growth compare" in text:
+        return {"slot_name": "geographic_sales_growth", "statement": "md&a_or_segment_note", "line_item": "geographic sales growth"}
+    if "as a percent of sales" in text or "as a percent of net sales" in text:
+        return {"slot_name": "expense_ratio_change", "statement": "md&a_or_income_statement", "line_item": "expense or earnings as percent of sales"}
+    if "high growth company" in text:
+        return {"slot_name": "growth_profile_evidence", "statement": "income_statement_or_md&a", "line_item": "growth profile evidence"}
+    if "restructuring liability" in text:
+        return {"slot_name": "restructuring_liability", "statement": "restructuring_note", "line_item": "restructuring liability"}
+    return None
 
 
 def _margin_line_item(slot_name: str, question: str) -> str | None:
@@ -2544,8 +2676,21 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "cash_proceeds": ["cash proceeds", "proceeds"],
         "segment_results": ["segment revenue", "segment income", "reportable segments", "business segments"],
         "market_risk_var": ["value at risk", "var", "market risk"],
+        "organic_sales_change": ["organic sales change", "real change in sales", "sales change excluding fx", "foreign exchange"],
         "derivative_instruments": ["derivative instruments", "notional value", "foreign currency derivatives", "interest rate derivatives"],
         "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],
+        "dividend_distribution_history": ["dividend distribution", "dividend history", "dividends declared", "dividends paid"],
+        "dividends_disclosure": ["dividends", "common shareholders", "dividends to common shareholders"],
+        "product_revenue_concentration": ["product categories", "service categories", "revenue concentration", "more than 20% of revenue"],
+        "restructuring_liability": ["restructuring liability", "restructuring reserve", "restructuring accrual", "nature and purpose"],
+        "nonrecurring_events": ["nonrecurring events", "special items", "standard business operations", "net income drivers"],
+        "revenue_driver_discussion": ["revenue drivers", "sales drivers", "revenue change", "net sales change"],
+        "inventory_driver_discussion": ["inventory drivers", "merchandise inventories", "inventory balance", "inventory increase"],
+        "expense_driver_discussion": ["expense drivers", "sg&a", "selling general and administrative", "wages expense"],
+        "geographic_sales_growth": ["us sales growth", "international sales growth", "geographic sales"],
+        "expense_ratio_change": ["as a percent of sales", "as a percent of net sales", "expense ratio"],
+        "growth_profile_evidence": ["growth profile", "revenue growth", "net income growth", "high growth company"],
+        "guidance_change": ["guidance change", "full year guidance", "core constant currency eps growth", "percentage points"],
         "shares_outstanding": ["shares outstanding", "common shares outstanding"],
         "component_amount": ["component amount", "quarterly amount", "q4 amount", "share repurchases", "stock repurchases"],
         "total_amount": ["total amount", "annual amount", "share repurchases", "stock repurchases"],

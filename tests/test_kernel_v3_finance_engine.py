@@ -3949,12 +3949,67 @@ def test_finance_task_compiler_emits_direct_disclosure_evidence_for_legal_lookup
         facts=[],
     )
 
-    assert program.task_spec.task_type == "lookup"
+    assert program.task_spec.task_type == "disclosure_analysis"
+    assert program.task_spec.diagnostics["formula_name"] == "disclosure_lookup"
     assert program.transform_specs == []
     evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
     assert evidence_slots["material_legal_proceedings"].statement == "legal_proceedings"
     assert evidence_slots["material_legal_proceedings"].line_item == "material legal proceedings"
     assert "litigation" in evidence_slots["material_legal_proceedings"].accepted_attributes
+
+
+def test_finance_task_compiler_emits_disclosure_lookup_programs() -> None:
+    cases = [
+        (
+            "Which debt securities are registered to trade on a national securities exchange under 3M's name as of Q2 of 2023?",
+            "registered_debt_securities",
+            "registered_securities",
+            "debt securities registered on national securities exchange",
+        ),
+        (
+            "What are major acquisitions that Best Buy has done in FY2023, FY2022 and FY2021?",
+            "acquisitions",
+            "business_combinations",
+            "acquisitions",
+        ),
+        (
+            "Did AMD report customer concentration in FY22?",
+            "customers",
+            "business",
+            "customers",
+        ),
+        (
+            "As of FY2023Q1, why did Pepsico raise full year guidance for FY2023?",
+            "guidance",
+            "earnings_release_or_md&a",
+            "guidance",
+        ),
+        (
+            "What drove the increase in Ulta Beauty's merchandise inventories balance at end of FY2023?",
+            "inventory_driver_discussion",
+            "md&a_or_inventory_note",
+            "inventory balance drivers",
+        ),
+        (
+            "As of Q2'2023, is Pfizer spinning off any large business segments?",
+            "separation_or_discontinued_operation",
+            "business_combinations_or_subsequent_events",
+            "separation or discontinued operation",
+        ),
+    ]
+
+    for question, slot_name, statement, line_item in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "disclosure_analysis"
+        assert program.task_spec.diagnostics["formula_name"] == "disclosure_lookup"
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == [slot_name]
+        assert program.transform_specs == []
+        spec = {item.slot_name: item for item in program.evidence_specs}[slot_name]
+        assert spec.statement == statement
+        assert spec.line_item == line_item
+        assert spec.accepted_attributes
 
 
 def test_finance_task_compiler_emits_cogs_margin_transform_and_specific_evidence() -> None:
@@ -4802,6 +4857,39 @@ def test_finance_formula_planner_computes_direct_metric_lookup_formulas() -> Non
 
     assert net_income_plan.status == "ready"
     assert net_income_plan.payload["variables"] == {"net_income": "11588"}
+
+
+def test_finance_formula_planner_routes_disclosure_lookup_slots() -> None:
+    cases = [
+        (
+            "Which debt securities are registered to trade on a national securities exchange under 3M's name as of Q2 of 2023?",
+            "registered_debt_securities",
+        ),
+        (
+            "What are the major products and services that AMD sells as of FY22?",
+            "products_and_services",
+        ),
+        (
+            "Has Boeing reported any materially important ongoing legal battles from FY2022?",
+            "material_legal_proceedings",
+        ),
+        (
+            "Were there any board member nominees who had substantially more votes against joining than the other nominees?",
+            "shareholder_vote_results",
+        ),
+        (
+            "What drove revenue change as of the FY22 for AMD?",
+            "revenue_driver_discussion",
+        ),
+    ]
+
+    for question, slot_name in cases:
+        plan = plan_finance_formula(question=question, facts=[], existing_traces=[])
+
+        assert plan.status == "missing_facts"
+        assert plan.formula_name == "disclosure_lookup"
+        assert plan.missing_facts == [slot_name]
+        assert "LLM must read cited filing evidence" in plan.diagnostics["semantic_decision_policy"]
 
 
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:

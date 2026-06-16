@@ -156,13 +156,21 @@ answer. The same line now includes a generic `metric_lookup` identity transform
 for direct filing line-item extraction such as capex, net PP&E, AR/AP,
 inventories, COGS, net income, adjusted EBITDA, operating cash flow, dividends,
 restructuring costs, assets/current assets/current liabilities, VaR, credit
-facilities, transaction proceeds/gains, and expected benefit payments. In
-question-only static coverage, recognized FinanceBench formula plans moved from
-`38/150` to `102/150`; this is code-regression evidence for the next live run,
+facilities, transaction proceeds/gains, expected benefit payments, and
+sales-change disclosures such as "real change in sales" excluding FX. The
+latest disclosure pass adds a generic `disclosure_lookup` scaffold for
+registered securities, dividend history, 8-K summaries, acquisitions,
+industries, products/services, customers/geographies, legal proceedings,
+governance/proxy/vote items, guidance, separations/discontinued operations,
+nonrecurring events, revenue/inventory/expense drivers, restructuring
+liabilities, and market-risk VaR comparison disclosures. In question-only
+static coverage, recognized FinanceBench formula plans and EvidenceSpec rows
+now reach `150/150`; this is code-regression evidence for the next live run,
 not a benchmark accuracy score. A fresh live attempt on 2026-06-17 again found
-only `DEEPSEEK_API_KEY` in Windows environment variables, and the minimal model
-call returned HTTP `402`, so no new live FinanceBench accuracy score is
-reported.
+only `DEEPSEEK_API_KEY` in Windows environment variables, successfully injected
+it into the WSL live model process, and reached DeepSeek, but the provider
+returned HTTP `402` insufficient balance, so no new live FinanceBench accuracy
+score is reported.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

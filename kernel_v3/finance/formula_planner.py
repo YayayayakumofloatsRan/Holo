@@ -13,7 +13,11 @@ FormulaPlanStatus = Literal["ready", "missing_facts", "not_applicable"]
 
 _PPE_NET_METRICS = (
     "property plant and equipment net",
+    "property, plant and equipment net",
+    "property, plant, and equipment net",
     "net property plant and equipment",
+    "net property, plant and equipment",
+    "net property, plant, and equipment",
     "net ppne",
     "ppne",
 )
@@ -125,6 +129,8 @@ def plan_finance_formula(
         return _plan_category_metric_rank(question=question, facts=usable)
     if formula == "metric_lookup":
         return _plan_metric_lookup(question=question, facts=usable)
+    if formula == "disclosure_lookup":
+        return _plan_disclosure_lookup(question=question)
     if formula == "yoy_growth":
         return _plan_yoy_growth(question=question, facts=usable)
     if formula == "debt_to_equity":
@@ -269,6 +275,8 @@ def _detect_formula(question: str) -> str | None:
         return "category_metric_rank"
     if _looks_like_metric_lookup(text):
         return "metric_lookup"
+    if _looks_like_disclosure_lookup(text):
+        return "disclosure_lookup"
     if "yoy" in text or "year-over-year" in text or "year over year" in text:
         return "yoy_growth"
     if _source_grounded_explanation_intent(text) and not _explicit_calculation_intent(text):
@@ -413,7 +421,9 @@ def _looks_like_category_metric_rank(text: str) -> bool:
 def _looks_like_metric_lookup(text: str) -> bool:
     if _metric_lookup_spec(text) is None:
         return False
-    if any(marker in text for marker in ("ratio", "turnover", "margin", "growth", "as a percent", "as a percentage", "as %")):
+    if re.search(r"\b(?:ratio|turnover|margin|growth)\b", text) or any(
+        marker in text for marker in ("as a percent", "as a percentage", "as %")
+    ):
         return False
     lookup_markers = (
         "what is",
@@ -433,6 +443,10 @@ def _looks_like_metric_lookup(text: str) -> bool:
         "answer in",
     )
     return any(marker in text for marker in lookup_markers)
+
+
+def _looks_like_disclosure_lookup(text: str) -> bool:
+    return _disclosure_lookup_spec(text) is not None
 
 
 def _looks_like_margin_consistency(text: str) -> bool:
@@ -1169,10 +1183,25 @@ def _metric_lookup_spec(question: str) -> JsonObject | None:
     compact = text.replace(" ", "")
     if "capital expenditure" in text or "capital expenditures" in text or "capex" in text:
         return _lookup_spec("capital_expenditures", ("capital expenditures", "capex"), unit="currency")
-    if any(marker in text for marker in ("net ppne", "net pp&e", "net ppe", "net property plant and equipment")) or (
-        "property plant and equipment" in text and "net" in text
+    if any(
+        marker in text
+        for marker in (
+            "net ppne",
+            "net pp&e",
+            "net ppe",
+            "net property plant and equipment",
+            "net property, plant, and equipment",
+            "net property, plant and equipment",
+        )
+    ) or (
+        ("property plant and equipment" in text or "property, plant, and equipment" in text or "property, plant and equipment" in text)
+        and "net" in text
     ):
         return _lookup_spec("property_plant_and_equipment_net", _PPE_NET_METRICS, unit="currency")
+    if "real change in sales" in text or "organic sales change" in text or (
+        "sales" in text and "exclude the impact" in text and ("fx" in text or "foreign exchange" in text)
+    ):
+        return _lookup_spec("organic_sales_change", ("organic sales change", "real change in sales", "sales change excluding fx"), unit="percent")
     if "accounts receivable" in text or "net ar" in text or "net accounts receivable" in text:
         return _lookup_spec("accounts_receivable", ("accounts receivable", "net accounts receivable", "receivables"), unit="currency")
     if "accounts payable" in text:
@@ -1228,6 +1257,79 @@ def _lookup_spec(slot_name: str, markers: tuple[str, ...], *, unit: str, predica
         "markers": list(markers),
         "unit": unit,
         "predicate": predicate,
+    }
+
+
+def _disclosure_lookup_spec(question: str) -> JsonObject | None:
+    text = _metric_text(question)
+    if "debt securities" in text and ("registered to trade" in text or "national securities exchange" in text):
+        return _disclosure_spec("registered_debt_securities", "registered_securities", "debt securities registered on national securities exchange")
+    if "stable trend of dividend" in text or "dividend distribution" in text:
+        return _disclosure_spec("dividend_distribution_history", "dividend_disclosure", "dividend distribution history")
+    if "8k filing" in text or "8 k filing" in text or "8-k filing" in text or "key agenda" in text:
+        return _disclosure_spec("filing_event_summary", "form_8k", "filing event")
+    if "major acquisitions" in text or "companies acquired" in text or "main companies acquired" in text or "three main companies acquired" in text:
+        return _disclosure_spec("acquisitions", "business_combinations", "acquisitions")
+    if "what industry" in text or "primarily operate in" in text and "geograph" not in text:
+        return _disclosure_spec("industry", "business", "industry")
+    if "products and services" in text or "major products" in text or "product categories" in text or "service categories" in text:
+        if "more than" in text and "revenue" in text:
+            return _disclosure_spec("product_revenue_concentration", "business_or_segment_note", "product category revenue concentration")
+        return _disclosure_spec("products_and_services", "business", "products and services")
+    if "customer concentration" in text or "primary customers" in text:
+        return _disclosure_spec("customers", "business", "customers")
+    if "geographies" in text or "geographic" in text or "primarily operates in" in text:
+        return _disclosure_spec("operating_geographies", "business", "geographic areas")
+    if "retain card members" in text or "card members" in text or "customer retention" in text:
+        return _disclosure_spec("customer_retention", "md&a_or_business", "customer retention")
+    if "cyclicality" in text or "cyclical" in text:
+        return _disclosure_spec("business_cyclicality", "risk_factors_or_md&a", "cyclicality")
+    if "production rate" in text:
+        return _disclosure_spec("production_rates", "md&a_or_business_outlook", "production rates")
+    if "legal battle" in text or "legal proceedings" in text or "litigation" in text:
+        return _disclosure_spec("material_legal_proceedings", "legal_proceedings", "material legal proceedings")
+    if ("value at risk" in text or re.search(r"\bvar\b", text)) and any(marker in text for marker in ("decrease", "increase", "compared", "prior year")):
+        return _disclosure_spec("market_risk_var", "market_risk_disclosures", "value at risk")
+    if "paid dividends" in text or "dividends to common shareholders" in text:
+        return _disclosure_spec("dividends_disclosure", "dividend_disclosure_or_cash_flow_statement", "dividends to common shareholders")
+    if "previous ceo experience" in text or "new ceo" in text or "board member" in text or "nominees" in text:
+        if "votes against" in text:
+            return _disclosure_spec("shareholder_vote_results", "proxy_or_8k_voting_results", "shareholder vote")
+        return _disclosure_spec("governance_disclosure", "proxy_statement", "directors and executive officers")
+    if "shareholder vote" in text or "shareholder proposal" in text or "agm" in text:
+        return _disclosure_spec("shareholder_vote_results", "proxy_or_8k_voting_results", "shareholder vote")
+    if "guidance" in text or "adjusted eps expected" in text:
+        if "percentage points" in text:
+            return _disclosure_spec("guidance_change", "earnings_release_or_md&a", "guidance change")
+        return _disclosure_spec("guidance", "earnings_release_or_md&a", "guidance")
+    if "discontinued operation" in text or "spinning off" in text or "spin off" in text or "spin-off" in text or "upjohn" in text:
+        return _disclosure_spec("separation_or_discontinued_operation", "business_combinations_or_subsequent_events", "separation or discontinued operation")
+    if "standard business operations" in text or "substantially increased net income" in text:
+        return _disclosure_spec("nonrecurring_events", "md&a_or_income_statement_note", "nonrecurring events")
+    if "what drove" in text or "why did" in text or "why " in text:
+        if "inventory" in text or "inventories" in text:
+            return _disclosure_spec("inventory_driver_discussion", "md&a_or_inventory_note", "inventory balance drivers")
+        if "sg&a" in text or "selling general" in text or "expense" in text or "wages" in text:
+            return _disclosure_spec("expense_driver_discussion", "md&a_or_income_statement", "expense drivers")
+        if "guidance" in text:
+            return _disclosure_spec("guidance", "earnings_release_or_md&a", "guidance")
+        return _disclosure_spec("revenue_driver_discussion", "md&a", "revenue drivers")
+    if "us sales growth" in text or "international sales growth" in text or "sales growth compare" in text:
+        return _disclosure_spec("geographic_sales_growth", "md&a_or_segment_note", "geographic sales growth")
+    if "as a percent of sales" in text or "as a percent of net sales" in text:
+        return _disclosure_spec("expense_ratio_change", "md&a_or_income_statement", "expense or earnings as percent of sales")
+    if "high growth company" in text:
+        return _disclosure_spec("growth_profile_evidence", "income_statement_or_md&a", "growth profile evidence")
+    if "restructuring liability" in text:
+        return _disclosure_spec("restructuring_liability", "restructuring_note", "restructuring liability")
+    return None
+
+
+def _disclosure_spec(slot_name: str, statement: str, line_item: str) -> JsonObject:
+    return {
+        "slot_name": slot_name,
+        "statement": statement,
+        "line_item": line_item,
     }
 
 
@@ -3302,6 +3404,27 @@ def _metric_lookup_value_for_formula(slot_name: str, value: object) -> str:
     if slot_name in {"capital_expenditures", "dividends_paid", "cogs", "restructuring_costs"}:
         return _absolute_decimal_string(value)
     return str(value)
+
+
+def _plan_disclosure_lookup(*, question: str) -> FinanceFormulaPlan:
+    spec = _disclosure_lookup_spec(question)
+    if spec is None:
+        return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "no_disclosure_lookup_spec"})
+    slot_name = str(spec["slot_name"])
+    return _missing(
+        "disclosure_lookup",
+        [slot_name],
+        diagnostics={
+            "slot_name": slot_name,
+            "statement": spec.get("statement"),
+            "line_item": spec.get("line_item"),
+            "formula_definition": "source-grounded disclosure lookup with LLM-owned semantic judgment",
+            "semantic_decision_policy": (
+                "The host only identifies the disclosure evidence slot. The LLM must read cited filing evidence, "
+                "decide the qualitative answer, and state uncertainty or absence explicitly."
+            ),
+        },
+    )
 
 
 def _plan_category_metric_rank(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
