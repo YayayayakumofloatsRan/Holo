@@ -84,16 +84,15 @@ evidence, demo status, known gaps, and near-term roadmap, see
 `docs/KERNEL_V3_PROJECT_STATUS_2026-06-14_ZH.md`. For a compact Chinese talk
 track and Q&A notes prepared for the recorded Windows browser demo, see
 `docs/KERNEL_V3_DEMO_TALK_NOTES_2026-06-14_ZH.md`.
-For the current 2026-06-16 finance problem-solving scoreboard and the live
+For the current 2026-06-17 finance problem-solving scoreboard and the live
 rerun blocker, see
-`docs/KERNEL_V3_FINANCE_RESULTS_SNAPSHOT_2026-06-16.md`. It separates
+`docs/KERNEL_V3_FINANCE_RESULTS_SNAPSHOT_2026-06-17.md`. It separates
 evidence-backed results, such as FinAgent full40 `38/40` live and `39/40`
 rescored, from FinanceBench held-out results that still require a fresh
-`test100` run after a billable live provider is available. The latest row-0
-FinanceBench live smoke used the Windows `DEEPSEEK_API_KEY` and reached live
-retrieval, but DeepSeek returned `HTTP 402: Insufficient Balance` before any
-model tokens were produced, so it is recorded as provider/account blockage
-rather than capability evidence.
+`test100` run after a billable live provider is available. The 2026-06-17
+minimal DeepSeek provider check saw the Windows `DEEPSEEK_API_KEY`, but the API
+still returned `HTTP_402_INSUFFICIENT_BALANCE`, so no live finance benchmark
+score can be reported from that run.
 The 2026-06-16 framework review is consolidated in
 `docs/KERNEL_V3_FRAMEWORK_LESSONS_FINAL_2026-06-16_ZH.md`; use it as the primary
 report and talk reference for what Holo should absorb from LangChain,
@@ -140,11 +139,12 @@ the repair LLM sees unit/source-binding diagnostics instead of only a short
 repair instruction, and exposes retrieval metric-intent diagnostics as weak
 model-visible hints for finance slot binding, synthesis, and numeric judge
 without polluting raw facts.
-The FinanceBench snapshot for the same date now also records the generic DPO
-and multi-year average capex/revenue formula scaffold. In question-only static
-coverage, recognized FinanceBench formula plans moved from `38/150` to
-`43/150`; this is code-regression evidence for the next live run, not a
-benchmark accuracy score.
+The FinanceBench snapshots for 2026-06-16 and 2026-06-17 also record generic
+formula scaffolds for DPO, multi-year average capex/revenue, effective-tax-rate
+change, positive working capital, interest coverage, and unadjusted EBITDA
+families. In question-only static coverage, recognized FinanceBench formula
+plans moved from `38/150` to `52/150`; this is code-regression evidence for the
+next live run, not a benchmark accuracy score.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

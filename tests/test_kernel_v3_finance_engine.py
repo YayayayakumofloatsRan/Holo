@@ -4086,6 +4086,66 @@ def test_finance_task_compiler_emits_average_capex_to_revenue_program() -> None:
     )
 
 
+def test_finance_task_compiler_emits_tax_working_capital_and_interest_programs() -> None:
+    cases = [
+        (
+            "How much has the effective tax rate of American Express changed between FY2021 and FY2022?",
+            "effective_tax_rate_change",
+            ["prior_effective_tax_rate", "current_effective_tax_rate"],
+            "(current_effective_tax_rate - prior_effective_tax_rate) * 100",
+        ),
+        (
+            "Does Corning have positive working capital based on FY2022 data?",
+            "net_working_capital",
+            ["total_current_assets", "total_current_liabilities"],
+            "total_current_assets - total_current_liabilities",
+        ),
+        (
+            "What was MGM's interest coverage ratio using FY2022 Adjusted EBIT as the numerator and annual Interest Expense as the denominator?",
+            "interest_coverage_ratio",
+            ["adjusted_ebit_or_ebit", "interest_expense"],
+            "adjusted_ebit_or_ebit / interest_expense",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
+
+
+def test_finance_task_compiler_emits_unadjusted_ebitda_less_capex_program() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is the FY2022 unadjusted EBITDA less capex for PepsiCo? Define unadjusted EBITDA "
+            "as unadjusted operating income + depreciation and amortization from the cash flow statement."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "unadjusted_ebitda_less_capex"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == [
+        "operating_income",
+        "depreciation_and_amortization",
+        "capital_expenditures",
+    ]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["operating_income"].statement == "income_statement"
+    assert evidence_slots["depreciation_and_amortization"].statement == "cash_flow_statement"
+    assert evidence_slots["capital_expenditures"].statement == "cash_flow_statement"
+    assert program.transform_specs[0].expression == (
+        "operating_income + depreciation_and_amortization - capital_expenditures"
+    )
+
+
 def test_finance_formula_planner_computes_free_cash_flow_and_return_on_assets() -> None:
     fcf_plan = plan_finance_formula(
         question="What is FY2020 free cash flow? FCF is operating cash flow less capex.",
@@ -4175,6 +4235,60 @@ def test_finance_formula_planner_computes_dpo_and_average_capex_to_revenue() -> 
     )
     assert capex_plan.payload["variables"]["capital_expenditures_2017"] == "10"
     assert capex_plan.payload["variables"]["revenue_2019"] == "300"
+
+
+def test_finance_formula_planner_computes_tax_interest_and_unadjusted_ebitda() -> None:
+    tax_plan = plan_finance_formula(
+        question="How much has the effective tax rate changed between FY2021 and FY2022?",
+        facts=[
+            _year_fact("effective tax rate", "18", 2021, fact_id="tax-2021"),
+            _year_fact("effective tax rate", "21", 2022, fact_id="tax-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert tax_plan.status == "ready"
+    assert tax_plan.formula_name == "effective_tax_rate_change"
+    assert tax_plan.payload["expression"] == "(current_effective_tax_rate - prior_effective_tax_rate) * 100"
+    assert tax_plan.payload["variables"] == {
+        "prior_effective_tax_rate": "0.18",
+        "current_effective_tax_rate": "0.21",
+    }
+
+    coverage_plan = plan_finance_formula(
+        question="What was FY2022 interest coverage ratio using Adjusted EBIT / Interest Expense?",
+        facts=[
+            _year_fact("adjusted ebit", "900", 2022, fact_id="ebit-2022"),
+            _year_fact("interest expense", "-150", 2022, fact_id="interest-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert coverage_plan.status == "ready"
+    assert coverage_plan.formula_name == "interest_coverage_ratio"
+    assert coverage_plan.payload["variables"] == {
+        "adjusted_ebit_or_ebit": "900",
+        "interest_expense": "150",
+    }
+
+    ebitda_plan = plan_finance_formula(
+        question="What is FY2022 unadjusted EBITDA less capex?",
+        facts=[
+            _year_fact("operating income", "1000", 2022, fact_id="op-income-2022"),
+            _year_fact("depreciation and amortization", "200", 2022, fact_id="da-2022"),
+            _year_fact("capital expenditures", "-300", 2022, fact_id="capex-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert ebitda_plan.status == "ready"
+    assert ebitda_plan.formula_name == "unadjusted_ebitda_less_capex"
+    assert ebitda_plan.payload["expression"] == "operating_income + depreciation_and_amortization - capital_expenditures"
+    assert ebitda_plan.payload["variables"] == {
+        "operating_income": "1000",
+        "depreciation_and_amortization": "200",
+        "capital_expenditures": "300",
+    }
 
 
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:

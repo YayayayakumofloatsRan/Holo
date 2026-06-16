@@ -64,6 +64,14 @@ def plan_finance_formula(
         return _plan_dpo(question=question, facts=usable, inventory_adjusted=True)
     if formula == "average_capex_to_revenue":
         return _plan_average_capex_to_revenue(question=question, facts=usable)
+    if formula == "effective_tax_rate_change":
+        return _plan_effective_tax_rate_change(question=question, facts=usable)
+    if formula == "interest_coverage_ratio":
+        return _plan_interest_coverage_ratio(question=question, facts=usable)
+    if formula == "unadjusted_ebitda":
+        return _plan_unadjusted_ebitda(question=question, facts=usable, less_capex=False)
+    if formula == "unadjusted_ebitda_less_capex":
+        return _plan_unadjusted_ebitda(question=question, facts=usable, less_capex=True)
     if formula == "yoy_growth":
         return _plan_yoy_growth(question=question, facts=usable)
     if formula == "debt_to_equity":
@@ -112,6 +120,16 @@ def _detect_formula(question: str) -> str | None:
         return "dpo"
     if _looks_like_average_capex_to_revenue(text):
         return "average_capex_to_revenue"
+    if "effective tax rate" in text and any(marker in text for marker in ("change", "changed", "compare", "between", "increase", "decrease")):
+        return "effective_tax_rate_change"
+    if "positive working capital" in text:
+        return "net_working_capital"
+    if "interest coverage ratio" in text or "interest coverage" in text:
+        return "interest_coverage_ratio"
+    if _looks_like_unadjusted_ebitda(text):
+        if "less capex" in text or "less capital expenditure" in text or "less capital expenditures" in text:
+            return "unadjusted_ebitda_less_capex"
+        return "unadjusted_ebitda"
     if "discounted cash flow" in text or re.search(r"\bdcf\b", text):
         return "dcf"
     if re.search(r"\blbo\b", text) or "leveraged buyout" in text:
@@ -218,6 +236,15 @@ def _looks_like_average_capex_to_revenue(text: str) -> bool:
     ):
         return False
     return True
+
+
+def _looks_like_unadjusted_ebitda(text: str) -> bool:
+    if "unadjusted ebitda" in text:
+        return True
+    return (
+        "operating income" in text
+        and ("depreciation and amortization" in text or "depreciation & amortization" in text or "d&a" in text)
+    )
 
 
 def _explicit_calculation_intent(text: str) -> bool:
@@ -2239,6 +2266,144 @@ def _plan_average_capex_to_revenue(*, question: str, facts: list[FinanceFact]) -
     )
 
 
+def _plan_effective_tax_rate_change(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    years = _target_fiscal_years(question)
+    prior_year = min(years) if len(years) >= 2 else None
+    current_year = max(years) if len(years) >= 2 else _target_fiscal_year(question)
+    prior = (
+        _latest_effective_tax_rate_fact(facts, target_year=prior_year)
+        if prior_year is not None
+        else None
+    )
+    current = _latest_effective_tax_rate_fact(facts, target_year=current_year)
+    if prior is None and current is not None:
+        prior = _latest_effective_tax_rate_fact(
+            facts,
+            target_year=(current.fiscal_year - 1 if isinstance(current.fiscal_year, int) else None),
+            exclude_fact_ids={current.fact_id},
+        )
+    missing: list[str] = []
+    if prior is None:
+        missing.append("prior_effective_tax_rate")
+    if current is None:
+        missing.append("current_effective_tax_rate")
+    supporting = [fact for fact in (prior, current) if fact is not None]
+    if missing:
+        return _missing(
+            "effective_tax_rate_change",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_years": years,
+                "formula_definition": "current effective tax rate less prior effective tax rate",
+            },
+        )
+    return _ready(
+        "effective_tax_rate_change",
+        "(current_effective_tax_rate - prior_effective_tax_rate) * 100",
+        {
+            "prior_effective_tax_rate": _ratio_value(prior),
+            "current_effective_tax_rate": _ratio_value(current),
+        },
+        unit="percentage_points",
+        facts=supporting,
+        diagnostics={
+            "target_fiscal_years": years,
+            "formula_definition": "current effective tax rate less prior effective tax rate",
+        },
+    )
+
+
+def _plan_interest_coverage_ratio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    numerator = _latest_fact_for_year(
+        facts,
+        ("adjusted ebit", "ebit", "operating income"),
+        target_year=target_year,
+    )
+    interest_expense = _latest_fact_for_year(facts, ("interest expense", "interest"), target_year=target_year)
+    missing: list[str] = []
+    if numerator is None:
+        missing.append("adjusted_ebit_or_ebit")
+    if interest_expense is None:
+        missing.append("interest_expense")
+    supporting = [fact for fact in (numerator, interest_expense) if fact is not None]
+    if missing:
+        return _missing(
+            "interest_coverage_ratio",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": "adjusted EBIT or EBIT divided by interest expense",
+            },
+        )
+    return _ready(
+        "interest_coverage_ratio",
+        "adjusted_ebit_or_ebit / interest_expense",
+        {
+            "adjusted_ebit_or_ebit": numerator.value,
+            "interest_expense": _absolute_decimal_string(interest_expense.value),
+        },
+        unit="x",
+        facts=supporting,
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "adjusted EBIT or EBIT divided by interest expense",
+        },
+    )
+
+
+def _plan_unadjusted_ebitda(*, question: str, facts: list[FinanceFact], less_capex: bool) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    operating_income = _latest_fact_for_year(facts, ("operating income", "income from operations"), target_year=target_year)
+    depreciation_amortization = _latest_fact_for_year(
+        facts,
+        ("depreciation and amortization", "depreciation amortization", "d&a"),
+        target_year=target_year,
+    )
+    capex = _latest_fact_for_year(facts, ("capital expenditures", "capex"), target_year=target_year) if less_capex else None
+    missing: list[str] = []
+    if operating_income is None:
+        missing.append("operating_income")
+    if depreciation_amortization is None:
+        missing.append("depreciation_and_amortization")
+    if less_capex and capex is None:
+        missing.append("capital_expenditures")
+    supporting = [fact for fact in (operating_income, depreciation_amortization, capex) if fact is not None]
+    formula_name = "unadjusted_ebitda_less_capex" if less_capex else "unadjusted_ebitda"
+    if missing:
+        return _missing(
+            formula_name,
+            missing,
+            facts=supporting,
+            diagnostics={
+                "target_fiscal_year": target_year,
+                "formula_definition": (
+                    "operating income plus depreciation and amortization less capital expenditures"
+                    if less_capex
+                    else "operating income plus depreciation and amortization"
+                ),
+            },
+        )
+    variables: JsonObject = {
+        "operating_income": operating_income.value,
+        "depreciation_and_amortization": depreciation_amortization.value,
+    }
+    expression = "operating_income + depreciation_and_amortization"
+    if less_capex:
+        variables["capital_expenditures"] = _absolute_decimal_string(capex.value)
+        expression = "operating_income + depreciation_and_amortization - capital_expenditures"
+    return _ready(
+        formula_name,
+        expression,
+        variables,
+        unit=operating_income.unit,
+        facts=supporting,
+        diagnostics={"target_fiscal_year": target_year},
+    )
+
+
 def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:
     candidate = _best_bridge_group(facts)
     if candidate is None:
@@ -3347,6 +3512,39 @@ def _latest_revenue_fact(facts: list[FinanceFact], *, target_year: int | None) -
         if not matches:
             return None
     return sorted(matches, key=_revenue_fact_sort_key)[-1]
+
+
+def _latest_effective_tax_rate_fact(
+    facts: list[FinanceFact],
+    *,
+    target_year: int | None,
+    exclude_fact_ids: set[str] | None = None,
+) -> FinanceFact | None:
+    excluded = exclude_fact_ids or set()
+    matches = [
+        fact
+        for fact in _facts_for_metric(facts, ("effective tax rate", "income tax rate", "tax rate"))
+        if fact.fact_id not in excluded and _is_effective_tax_rate_fact(fact)
+    ]
+    if not matches:
+        return None
+    if target_year is not None:
+        matches = [
+            fact
+            for fact in matches
+            if fact.fiscal_year == target_year or _fact_end_year(fact) == target_year
+        ]
+        if not matches:
+            return None
+    return _sort_target_year_facts(matches)[-1]
+
+
+def _is_effective_tax_rate_fact(fact: FinanceFact) -> bool:
+    text = _fact_text(fact)
+    compact = "".join(ch for ch in text if ch.isalnum())
+    if "effectivetaxrate" in compact:
+        return True
+    return "effective tax rate" in text
 
 
 def _is_revenue_fact(fact: FinanceFact) -> bool:

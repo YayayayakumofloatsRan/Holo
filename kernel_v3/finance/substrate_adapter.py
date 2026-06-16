@@ -242,6 +242,23 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "dividends_paid",
             "net_income",
         ],
+        "effective_tax_rate_change": [
+            "prior_effective_tax_rate",
+            "current_effective_tax_rate",
+        ],
+        "interest_coverage_ratio": [
+            "adjusted_ebit_or_ebit",
+            "interest_expense",
+        ],
+        "unadjusted_ebitda": [
+            "operating_income",
+            "depreciation_and_amortization",
+        ],
+        "unadjusted_ebitda_less_capex": [
+            "operating_income",
+            "depreciation_and_amortization",
+            "capital_expenditures",
+        ],
         "average_capex_to_revenue": [],
         "fixed_charge_coverage": [
             "earnings_available_for_fixed_charges_or_pretax_income",
@@ -397,8 +414,14 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "revenue_denominator": ["revenue", "net sales", "net revenues", "total revenues"],
         "prior_rate_or_margin": ["margin", "rate", "yield"],
         "current_rate_or_margin": ["margin", "rate", "yield"],
+        "prior_effective_tax_rate": ["effective tax rate", "income tax rate", "tax rate"],
+        "current_effective_tax_rate": ["effective tax rate", "income tax rate", "tax rate"],
         "prior_period_value": ["revenue", "net sales", "net income", "operating income", "ebitda"],
         "current_period_value": ["revenue", "net sales", "net income", "operating income", "ebitda"],
+        "adjusted_ebit_or_ebit": ["adjusted ebit", "ebit", "operating income"],
+        "interest_expense": ["interest expense", "interest"],
+        "operating_income": ["operating income", "income from operations"],
+        "depreciation_and_amortization": ["depreciation and amortization", "depreciation amortization", "d&a"],
         "entity": ["entity", "ticker"],
         "base_cash_flow": [
             "free cash flow",
@@ -512,6 +535,10 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "dividend_payout_ratio",
         "retention_ratio",
         "average_capex_to_revenue",
+        "effective_tax_rate_change",
+        "interest_coverage_ratio",
+        "unadjusted_ebitda",
+        "unadjusted_ebitda_less_capex",
     }:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
@@ -574,6 +601,18 @@ def _infer_formula_name(question: str) -> str:
         and ("average" in text or "avg" in text or "as a % of revenue" in text or "capex/revenue" in compact)
     ):
         return "average_capex_to_revenue"
+    if "effective tax rate" in text and any(marker in text for marker in ("change", "changed", "compare", "between", "increase", "decrease")):
+        return "effective_tax_rate_change"
+    if "positive working capital" in text:
+        return "net_working_capital"
+    if "interest coverage ratio" in text or "interest coverage" in text:
+        return "interest_coverage_ratio"
+    if "unadjusted ebitda" in text or (
+        "operating income" in text and ("depreciation and amortization" in text or "depreciation & amortization" in text or "d&a" in text)
+    ):
+        if "less capex" in text or "less capital expenditure" in text or "less capital expenditures" in text:
+            return "unadjusted_ebitda_less_capex"
+        return "unadjusted_ebitda"
     if "cagr" in text:
         return "cagr"
     if "add-back" in text or "addback" in text or "bridge" in text or "reconciliation" in text:

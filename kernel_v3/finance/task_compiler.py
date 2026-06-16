@@ -1371,6 +1371,16 @@ def _direct_evidence_blueprints(question: str) -> list[JsonObject]:
     if "interest coverage" in text:
         add("adjusted_ebit", statement="non_gaap_reconciliation_or_income_statement", line_item="adjusted ebit")
         add("interest_expense", statement="income_statement_or_debt_note", line_item="interest expense")
+    if "effective tax rate" in text:
+        add("prior_effective_tax_rate", statement="income_tax_note", line_item="effective tax rate")
+        add("current_effective_tax_rate", statement="income_tax_note", line_item="effective tax rate")
+    if "unadjusted ebitda" in text or (
+        "operating income" in text and ("depreciation and amortization" in text or "depreciation & amortization" in text or "d&a" in text)
+    ):
+        add("operating_income", statement="income_statement", line_item="operating income")
+        add("depreciation_and_amortization", statement="cash_flow_statement", line_item="depreciation and amortization")
+        if "less capex" in text or "less capital expenditure" in text or "less capital expenditures" in text:
+            add("capital_expenditures", statement="cash_flow_statement", line_item="capital expenditures")
     if "revenue" in text or "sales" in text:
         add("revenue", statement="income_statement", line_item="revenue")
     if "restructuring" in text:
@@ -1588,6 +1598,58 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 expression=expression,
                 output_unit="percent",
                 output_attribute="average_capex_to_revenue",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
+    if name == "effective_tax_rate_change":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "prior_current"),
+                domain="finance",
+                name="effective_tax_rate_change",
+                required_slots=["prior_effective_tax_rate", "current_effective_tax_rate"],
+                expression="(current_effective_tax_rate - prior_effective_tax_rate) * 100",
+                output_unit="percentage_points",
+                output_attribute="effective_tax_rate_change",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
+    if name == "interest_coverage_ratio":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "ebit_interest"),
+                domain="finance",
+                name="interest_coverage_ratio",
+                required_slots=["adjusted_ebit_or_ebit", "interest_expense"],
+                expression="adjusted_ebit_or_ebit / interest_expense",
+                output_unit="x",
+                output_attribute="interest_coverage_ratio",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
+    if name == "unadjusted_ebitda":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "operating_income_da"),
+                domain="finance",
+                name="unadjusted_ebitda",
+                required_slots=["operating_income", "depreciation_and_amortization"],
+                expression="operating_income + depreciation_and_amortization",
+                output_unit="currency",
+                output_attribute="unadjusted_ebitda",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
+    if name == "unadjusted_ebitda_less_capex":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "operating_income_da_capex"),
+                domain="finance",
+                name="unadjusted_ebitda_less_capex",
+                required_slots=["operating_income", "depreciation_and_amortization", "capital_expenditures"],
+                expression="operating_income + depreciation_and_amortization - capital_expenditures",
+                output_unit="currency",
+                output_attribute="unadjusted_ebitda_less_capex",
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             )
         ]
@@ -1931,6 +1993,10 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "income_statement"
     if slot_name in {"capital_expenditures", "operating_cash_flow", "dividends_paid", "cash_flow_activity_totals"}:
         return "cash_flow_statement"
+    if slot_name == "depreciation_and_amortization":
+        return "cash_flow_statement"
+    if slot_name in {"prior_effective_tax_rate", "current_effective_tax_rate"}:
+        return "income_tax_note"
     if slot_name in {
         "assets",
         "assets_current",
@@ -1967,6 +2033,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         "revenue_denominator",
         "restructuring_costs",
         "ebitda_or_ebitda_components",
+        "adjusted_ebit_or_ebit",
+        "interest_expense",
     }:
         return "income_statement"
     return None
@@ -2008,7 +2076,12 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "liabilities": "liabilities",
         "revenue": "revenue",
         "operating_income": "operating income",
+        "depreciation_and_amortization": "depreciation and amortization",
+        "prior_effective_tax_rate": "effective tax rate",
+        "current_effective_tax_rate": "effective tax rate",
+        "adjusted_ebit_or_ebit": "adjusted ebit",
         "net_income": "net income",
+        "interest_expense": "interest expense",
         "cogs": "cost of goods sold",
         "cogs_numerator": "cost of goods sold",
         "gross_profit_numerator": "gross profit",
@@ -2106,6 +2179,10 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         "cash_flow_activity_totals": ["operating activities", "investing activities", "financing activities"],
         "restructuring_costs": ["restructuring costs", "restructuring expenses", "restructuring charges"],
         "effective_tax_rate": ["effective tax rate", "tax rate", "income tax rate"],
+        "prior_effective_tax_rate": ["effective tax rate", "tax rate", "income tax rate", "prior effective tax rate"],
+        "current_effective_tax_rate": ["effective tax rate", "tax rate", "income tax rate", "current effective tax rate"],
+        "adjusted_ebit_or_ebit": ["adjusted ebit", "ebit", "operating income"],
+        "depreciation_and_amortization": ["depreciation and amortization", "depreciation amortization", "d&a"],
         "liabilities": ["liabilities", "total liabilities"],
         "material_legal_proceedings": ["legal proceedings", "litigation", "material legal proceedings"],
         "registered_debt_securities": ["registered securities", "debt securities", "national securities exchange"],
