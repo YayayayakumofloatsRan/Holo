@@ -3415,3 +3415,50 @@ that performs finance slot binding or final synthesis.
 py_compile passed
 318 passed in 3.31s
 ```
+
+---
+
+## 55. 追加落地：Metric Intent Hints in Numeric Judge
+
+第 54 节把 `finance_metric_intent_hints` 暴露给 slot binder 和 synthesizer。本节继续把同一
+弱诊断贯通到 `finance.numeric_judge`，因为最终 answer gate 也需要判断答案是否用了正确的
+收入口径、行项目和候选事实，而不仅仅是数字是否能在 ledger 中找到。
+
+变更：
+
+- `FINANCE_NUMERIC_JUDGE_CONTRACT` 明确说明：
+  `judge_packet.metric_intent_hints` 是 weak retrieval/extraction diagnostics，
+  不是 host answer selection；
+- `_finance_numeric_judge_prompt()` 新增：
+  - `metric_intent_hints`
+  - `metric_intent_hint_policy`
+- `_legacy_finance_numeric_judge_prompt()` 同步携带同样字段；
+- 新增 `_finance_metric_intent_hints_from_diagnostics_or_facts()`：
+  优先读取 report diagnostics 中已经构造的 hints，否则从 facts metadata 生成；
+- `_finance_metric_intent_hints_for_model()` 对重复 hints 做 source-order 去重，保留第一个
+  代表候选，避免 long-context / cache prompt 被大量重复 fact 诊断放大。
+
+边界：
+
+- `finance_facts` metadata 继续不携带 `finance_metric_intent`；
+- hints 不改变 fact 顺序、不选择答案、不替代 raw SEC concept/label/statement；
+- numeric judge 必须继续把 hints 视为 advisory，并从 facts、FormulaTrace、evidence、
+  citations 和 host verifier diagnostics 中做最终语义判断。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_exposes_metric_intent_hints_without_polluting_facts tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_exposes_competing_fact_clusters tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_exposes_unit_mismatch_examples tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_exposes_primary_source_binding_diagnostics -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_compacts_dynamic_context_for_cache tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_exposes_metric_intent_hints_without_polluting_facts -q
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+4 passed in 1.16s
+2 passed in 0.40s
+py_compile passed
+319 passed in 3.59s
+```

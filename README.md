@@ -128,8 +128,8 @@ unit-mismatch repair guidance for `finance.verify_numeric`. The latest section
 also carries verifier repair context into compact finance synthesis repair, so
 the repair LLM sees unit/source-binding diagnostics instead of only a short
 repair instruction, and exposes retrieval metric-intent diagnostics as weak
-model-visible hints for finance slot binding and synthesis without polluting
-raw facts.
+model-visible hints for finance slot binding, synthesis, and numeric judge
+without polluting raw facts.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

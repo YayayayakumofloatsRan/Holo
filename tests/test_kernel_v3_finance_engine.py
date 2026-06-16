@@ -9231,6 +9231,105 @@ def test_finance_numeric_judge_prompt_exposes_competing_fact_clusters() -> None:
     assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
 
 
+def test_finance_numeric_judge_prompt_exposes_metric_intent_hints_without_polluting_facts() -> None:
+    question = "What was Chevron's total revenues for fiscal year 2024?"
+    facts = [
+        FinanceFact(
+            fact_id="generic-revenues",
+            entity="Chevron Corp",
+            ticker="CVX",
+            period="annual",
+            fiscal_year=2024,
+            metric="revenue",
+            value="202792000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-companyfacts",
+            evidence_ref="evidence-total-revenues",
+            citation_ref="cite-total-revenues",
+            metadata={
+                "concept": "Revenues",
+                "label": "Revenues",
+                "form": "10-K",
+                "fp": "FY",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 2.5,
+                    "matched_preferred": ["metric=revenue"],
+                    "matched_demoted": [],
+                },
+            },
+        ),
+        FinanceFact(
+            fact_id="sales-other-operating",
+            entity="Chevron Corp",
+            ticker="CVX",
+            period="annual",
+            fiscal_year=2024,
+            metric="sales and other operating revenues",
+            value="193414000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-filing",
+            evidence_ref="evidence-sales-revenues",
+            citation_ref="cite-sales-revenues",
+            metadata={
+                "concept": "SalesAndOtherOperatingRevenue",
+                "label": "Sales and Other Operating Revenues",
+                "form": "10-K",
+                "fp": "FY",
+                "target_line_item": "total revenues",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 13.5,
+                    "matched_preferred": ["metric=sales and other operating revenues"],
+                    "matched_demoted": [],
+                },
+            },
+        ),
+    ]
+    final = FinalAnswer(
+        answer="Chevron FY2024 total revenues were $202.792 billion.",
+        citation_refs=["cite-total-revenues"],
+        used_evidence=["evidence-total-revenues"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-intent",
+        run_id="run-judge-intent",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(answer=final.answer, facts=facts, question=question)
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    payload = json.loads(prompt)
+    packet = payload["judge_packet"]
+
+    assert "metric_intent_hints" in payload["contract"]
+    assert packet["metric_intent_hint_policy"]["semantic_decision_owner"] == "model"
+    assert packet["metric_intent_hint_policy"]["host_role"] == "weak_attention_hint_carrier_only"
+    assert packet["metric_intent_hint_policy"]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["fact_id"] for item in packet["metric_intent_hints"]] == ["generic-revenues", "sales-other-operating"]
+    assert [item["value"] for item in packet["metric_intent_hints"]] == ["202792000000", "193414000000"]
+    assert packet["metric_intent_hints"][1]["target_line_item"] == "total revenues"
+    assert packet["metric_intent_hints"][1]["intent"]["matched_preferred"] == [
+        "metric=sales and other operating revenues"
+    ]
+    assert "finance_metric_intent" not in packet["finance_facts"][0]["metadata"]
+    assert "finance_metric_intent" not in packet["finance_facts"][1]["metadata"]
+
+
 def test_finance_numeric_judge_prompt_exposes_unit_mismatch_examples() -> None:
     question = "What was Example Co FY2024 revenue?"
     facts = [
