@@ -282,6 +282,21 @@ def _plan_debt_to_equity(*, question: str, facts: list[FinanceFact]) -> FinanceF
         {"liabilities_or_debt": numerator.value, "shareholders_equity": denominator.value},
         unit="ratio",
         facts=[numerator, denominator],
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "selected balance-sheet numerator divided by shareholders' equity",
+            "numerator_slot": _debt_to_equity_numerator_slot(numerator),
+            "denominator_slot": "shareholders_equity",
+            "bound_line_items": {
+                "numerator": _formula_bound_line_item(numerator),
+                "denominator": _formula_bound_line_item(denominator),
+            },
+            "answer_wording_policy": (
+                "Name the selected numerator line item when presenting the ratio. "
+                "If the numerator is total liabilities, describe the calculation as liabilities-to-equity or debt-to-equity using total liabilities; "
+                "do not silently present it as debt-only."
+            ),
+        },
     )
 
 
@@ -422,6 +437,36 @@ def _absolute_decimal_string(value: object) -> str:
     if decimal is None:
         return str(value)
     return str(abs(decimal))
+
+
+def _debt_to_equity_numerator_slot(fact: FinanceFact) -> str:
+    text = _metric_text(
+        f"{fact.metric} {fact.metadata.get('label') or ''} {fact.metadata.get('concept') or ''}"
+    )
+    compact = text.replace(" ", "")
+    if "liabilit" in text:
+        return "total_liabilities"
+    if "long term debt" in text or "longtermdebt" in compact:
+        return "long_term_debt"
+    if "short term debt" in text or "shorttermdebt" in compact:
+        return "short_term_debt"
+    return "debt"
+
+
+def _formula_bound_line_item(fact: FinanceFact) -> JsonObject:
+    return {
+        key: value
+        for key, value in {
+            "fact_id": fact.fact_id,
+            "metric": fact.metric,
+            "label": fact.metadata.get("label"),
+            "concept": fact.metadata.get("concept"),
+            "value": fact.value,
+            "unit": fact.unit,
+            "fiscal_year": fact.fiscal_year,
+        }.items()
+        if value not in (None, "", [], {})
+    }
 
 
 def _ratio_decimal_string(numerator: Decimal | None, denominator: Decimal | None) -> str | None:

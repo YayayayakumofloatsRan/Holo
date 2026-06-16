@@ -16933,7 +16933,19 @@ def _compact_formula_trace_for_judge(trace: FormulaTrace) -> JsonObject:
         "formatted_value": diagnostics.get("formatted_value"),
         "diagnostics": {
             key: diagnostics.get(key)
-            for key in ("source", "formula_status", "method", "output_attribute", "question_hash")
+            for key in (
+                "source",
+                "formula_status",
+                "method",
+                "output_attribute",
+                "question_hash",
+                "target_fiscal_year",
+                "formula_definition",
+                "numerator_slot",
+                "denominator_slot",
+                "bound_line_items",
+                "answer_wording_policy",
+            )
             if diagnostics.get(key) is not None
         },
     }

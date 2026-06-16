@@ -5396,8 +5396,20 @@ def test_finance_formula_planner_supports_debt_to_equity_ratio() -> None:
     plan = plan_finance_formula(
         question="What was JPMorgan Chase's debt-to-equity ratio as of year-end 2024?",
         facts=[
-            _year_fact("liabilities", "3658056000000", 2024, fact_id="jpm-liabilities"),
-            _year_fact("shareholders equity", "344758000000", 2024, fact_id="jpm-equity"),
+            _year_fact(
+                "liabilities",
+                "3658056000000",
+                2024,
+                fact_id="jpm-liabilities",
+                metadata={"label": "Total liabilities", "concept": "Liabilities"},
+            ),
+            _year_fact(
+                "shareholders equity",
+                "344758000000",
+                2024,
+                fact_id="jpm-equity",
+                metadata={"label": "Total stockholders' equity", "concept": "StockholdersEquity"},
+            ),
         ],
     )
 
@@ -5407,6 +5419,10 @@ def test_finance_formula_planner_supports_debt_to_equity_ratio() -> None:
         "liabilities_or_debt": "3658056000000",
         "shareholders_equity": "344758000000",
     }
+    assert plan.payload["diagnostics"]["numerator_slot"] == "total_liabilities"
+    assert plan.payload["diagnostics"]["denominator_slot"] == "shareholders_equity"
+    assert plan.payload["diagnostics"]["bound_line_items"]["numerator"]["label"] == "Total liabilities"
+    assert "do not silently present it as debt-only" in plan.payload["diagnostics"]["answer_wording_policy"]
 
 
 def test_finance_formula_planner_generates_capital_intensity_payload() -> None:
@@ -9655,6 +9671,66 @@ def test_finance_numeric_judge_prompt_exposes_model_trace_context_for_assumption
     assert support["support_status"] == "trace_only"
     assert support["model_context"]["model_outputs"]["equity_value"] == "114000000000"
     assert "model_context" in payload["contract"]
+
+
+def test_finance_numeric_judge_prompt_exposes_debt_to_equity_line_item_semantics() -> None:
+    question = "What was JPMorgan Chase's debt-to-equity ratio as of year-end 2024?"
+    facts = [
+        _year_fact(
+            "liabilities",
+            "3658056000000",
+            2024,
+            fact_id="jpm-liabilities",
+            metadata={"label": "Total liabilities", "concept": "Liabilities"},
+        ),
+        _year_fact(
+            "shareholders equity",
+            "344758000000",
+            2024,
+            fact_id="jpm-equity",
+            metadata={"label": "Total stockholders' equity", "concept": "StockholdersEquity"},
+        ),
+    ]
+    plan = plan_finance_formula(question=question, facts=facts)
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    trace = compute_formula(**plan.payload)
+    final = FinalAnswer(
+        answer="JPMorgan Chase's year-end 2024 debt-to-equity ratio was 10.61x.",
+        citation_refs=[],
+        used_evidence=[],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-debt-equity",
+        run_id="run-judge-debt-equity",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(
+        answer=final.answer,
+        facts=facts,
+        formula_traces=[trace],
+        question=question,
+    )
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[trace],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    diagnostics = json.loads(prompt)["judge_packet"]["formula_traces"][0]["diagnostics"]
+
+    assert diagnostics["formula_definition"] == "selected balance-sheet numerator divided by shareholders' equity"
+    assert diagnostics["numerator_slot"] == "total_liabilities"
+    assert diagnostics["denominator_slot"] == "shareholders_equity"
+    assert diagnostics["bound_line_items"]["numerator"]["label"] == "Total liabilities"
+    assert diagnostics["bound_line_items"]["denominator"]["label"] == "Total stockholders' equity"
+    assert "do not silently present it as debt-only" in diagnostics["answer_wording_policy"]
 
 
 def test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels() -> None:

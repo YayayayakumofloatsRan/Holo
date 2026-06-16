@@ -3518,3 +3518,49 @@ supported model outputs as unsupported numeric noise.
 6 passed, 218 deselected in 0.69s
 321 passed in 3.88s
 ```
+
+---
+
+## 57. 追加落地：Debt-to-Equity Line-Item Semantics
+
+FinAgent/FAB-style debt-to-equity tasks had formula intent support, but the
+final answer path could still blur the numerator: a trace using total
+liabilities could be described as generic debt-only. That is not an arithmetic
+bug; it is a formula-semantics visibility bug. The model needs to see which
+balance-sheet line item the planner bound into the numerator and denominator.
+
+变更：
+
+- `_plan_debt_to_equity()` now writes formula diagnostics:
+  - `numerator_slot`
+  - `denominator_slot`
+  - `bound_line_items`
+  - `formula_definition`
+  - `answer_wording_policy`
+- `_compact_formula_trace_for_judge()` preserves those diagnostics in the
+  modern `finance.numeric_judge` packet;
+- synthesizer prompt requirements now say that ratio answers must use actual
+  selected numerator/denominator line items when trace diagnostics expose them.
+
+边界：
+
+- no answer table was added;
+- the host still does not decide final wording or semantic correctness;
+- the LLM receives source-bound formula semantics and must decide how to state
+  the ratio accurately;
+- if the selected numerator is total liabilities, the answer should say that
+  explicitly instead of silently presenting the result as debt-only.
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py -q -k "debt_to_equity or debt-to-equity"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+3 passed, 229 deselected in 1.01s
+322 passed in 3.06s
+```

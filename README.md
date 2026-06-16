@@ -2249,6 +2249,9 @@ summaries to the LLM judge and synthesizer, while the host policy states that
 assumptions are not filing facts and unsupported model drivers or comparison
 thresholds must not be invented. This improves general modeling-task repair
 without adding answer tables or host-side semantic selection.
+Debt-to-equity traces now also carry selected numerator/denominator line-item
+semantics, so a ratio computed with total liabilities can be stated as such
+instead of being silently rewritten as debt-only.
 
 ## Validation
 
