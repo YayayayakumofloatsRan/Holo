@@ -1,7 +1,11 @@
 # Kernel v3 Finance Results Snapshot - 2026-06-17
 
 Purpose: record today's finance problem-solving progress without mixing code
-regression evidence with live benchmark accuracy.
+regression evidence with live benchmark accuracy. Permanent rule from
+2026-06-17: fake/offline tests are forbidden as finance capability evidence;
+they may only guard code contracts. FinanceBench, FAB/FinAgent, FinQA, and
+finance problem-solving accuracy claims require real provider/live runs, with
+gold/reference material used only after completion for scoring.
 
 ## Bottom Line
 
@@ -18,10 +22,25 @@ but the actual API call returned:
 HTTP_402_INSUFFICIENT_BALANCE
 ```
 
-GitHub push is also still blocked by SSH authentication:
+A follow-up live smoke on 2026-06-17 again read the key from Windows
+environment variables, injected it only into the child process environment, and
+reached DeepSeek with provider `deepseek` / model `deepseek-v4-flash`. The
+provider response remained:
 
 ```text
-git@github.com: Permission denied (publickey).
+deepseek HTTP 402: Insufficient Balance
+```
+
+Therefore no new live FinanceBench/FAB/FinQA capability score exists from this
+run.
+
+GitHub push is also still blocked, but the observed failure mode has changed:
+remote reads succeed while `git push --verbose github kernel-v3:kernel-v3`
+hangs in the transfer phase and leaves the remote branch unchanged. The latest
+confirmed remote `kernel-v3` head is:
+
+```text
+cea001a96b01efe01339af56f9ddfc17c21dbd4b
 ```
 
 These are external blockers. They are not finance capability scores.
@@ -162,7 +181,8 @@ of sales and Ulta wages expense as a percent of net sales now compile to
 
 ## Verification
 
-The following checks were run as code regression only:
+The following checks were run as code regression only. They are not capability
+scores under the permanent live-only finance benchmark rule:
 
 ```bash
 .venv/bin/python -m py_compile kernel_v3/finance/formula_planner.py kernel_v3/finance/fact_ledger.py kernel_v3/finance/substrate_adapter.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py

@@ -925,9 +925,12 @@ holo-v3 memory inspect --memory-log kernel_v3/.holo-v3-memory.jsonl
 holo-v3 resident status
 ```
 
-Finance capability progress must be measured with live model runs. Fake/offline
-commands are allowed only for code-regression, schema, compile, and safety
-guards; they must not be reported as benchmark problem-solving results.
+Finance capability progress must be measured with live model runs. Permanent
+rule from 2026-06-17: fake/offline commands are allowed only for
+code-regression, schema, compile, and safety guards. They must never be reported
+as FinanceBench, FAB/FinAgent, FinQA, or finance problem-solving accuracy.
+Any score or ability claim needs a real provider/live retrieval run, with
+gold/reference material used only for post-run scoring.
 
 Interactive `holo-v3 chat` uses a human-readable terminal view when attached to
 a TTY: colored status headers, compact task/run refs, and the current
