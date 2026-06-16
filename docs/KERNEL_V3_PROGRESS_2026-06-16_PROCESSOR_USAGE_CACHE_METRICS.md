@@ -2961,3 +2961,60 @@ py_compile passed
 11 passed, 258 deselected in 0.45s
 244 passed in 2.63s
 ```
+
+---
+
+## 46. 追加落地：Slot-Bind Basis Reaches Synthesis and Numeric Judge
+
+上一节让 `finance_working_state` 能把模型的 slot-bind basis 交给下一轮
+planner/evaluator。本节继续补齐最后一段链路：普通 synthesizer、compact synthesis
+rescue packet、以及 `finance.numeric_judge` 都能看到同一份 period/line-item basis。
+
+问题：
+
+- 最终回答阶段最容易丢失“为什么选择这个 FY / line item”的口径；
+- Numeric verifier 失败后的 LLM judge/repair 如果只看到 unsupported numbers 和
+  FormulaTrace，而看不到 slot-bind basis，容易修掉正确口径或引入新口径；
+- `finance_slot_bind_state` 已经是模型自己的判断依据，应该贯穿最终合成和修复链路。
+
+变更：
+
+- `_report_with_finance_formula_traces()` 新增：
+  - `finance_slot_bind_state`
+  - `finance_slot_bind_basis_policy`
+- `_compact_finance_synthesis_rescue_packet()` 同步携带上述字段；
+- `_finance_numeric_judge_prompt()` 和 legacy prompt 从 report diagnostics 读取
+  `finance_slot_bind_state` 并放入 judge packet；
+- `_synthesizer_prompt()` 的 compact retrieval report 白名单新增：
+  - `finance_slot_bind_state`
+  - `finance_slot_bind_basis_policy`
+- synthesizer answer requirements 增加说明：
+  - 把 `finance_slot_bind_state.period_basis` / `line_item_basis` 视为模型先前的
+    binding rationale；
+  - 后续证据仍支持时保留；
+  - 后续证据冲突时显式修正，而不是静默丢弃。
+
+边界：
+
+- host 不把 basis 当成答案真值；
+- host 不根据 basis 做 fact selection；
+- basis 进入 prompt 是为了让模型连续地管理自己的 period/line-item 判断；
+- 后续模型仍可根据新的 facts/citations 修正 basis。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_formula_trace_support_links_traces_to_fact_citations_in_synthesizer_prompt tests/test_kernel_v3_finance_engine.py::test_compact_finance_synthesis_rescue_packet_exposes_formula_trace_support tests/test_kernel_v3_finance_engine.py::test_finance_numeric_judge_prompt_compacts_dynamic_context_for_cache -q
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py kernel_v3/processors/adapters.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py -q -k "finance_formula_trace_support or compact_finance_synthesis_rescue_packet or finance_numeric_judge_prompt or finance_working_state or synthesizer"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+3 passed in 0.36s
+py_compile passed
+21 passed, 248 deselected in 0.68s
+244 passed in 3.40s
+```

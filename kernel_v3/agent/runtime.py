@@ -4260,6 +4260,17 @@ def _compact_finance_slot_bind_state(data: object) -> JsonObject:
     }
 
 
+def _latest_finance_slot_bind_state(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    records = [
+        record
+        for record in journal.records(task_id=task_id, kind="finance_slot_bind")
+        if record.run_id == run_id
+    ]
+    if not records:
+        return {}
+    return _compact_finance_slot_bind_state(records[-1].data)
+
+
 def _compact_slot_frame_state(data: object) -> JsonObject:
     payload = data if isinstance(data, dict) else {}
     if not payload:
@@ -13964,6 +13975,17 @@ def _report_with_finance_formula_traces(
         return report
     synthesis_traces = _finance_formula_traces_for_synthesis(traces)
     diagnostics = dict(report.diagnostics)
+    slot_bind_state = _latest_finance_slot_bind_state(journal, task_id=task_id, run_id=run_id)
+    if slot_bind_state:
+        diagnostics["finance_slot_bind_state"] = slot_bind_state
+        diagnostics["finance_slot_bind_basis_policy"] = {
+            "semantic_decision_owner": "model",
+            "host_role": "carry_forward_model_slot_binding_basis_only",
+            "instruction": (
+                "Use finance_slot_bind_state period_basis and line_item_basis as the model's prior binding rationale. "
+                "Preserve it when still supported by the compact facts and citations; revise it explicitly if later evidence conflicts."
+            ),
+        }
     diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in synthesis_traces[:16]]
     diagnostics["finance_formula_trace_count"] = len(traces)
     diagnostics["finance_formula_trace_ordering"] = (
@@ -14151,6 +14173,17 @@ def _compact_finance_synthesis_rescue_packet(
         "host_role": "compact_context_builder_and_provenance_validator",
         "instruction": "write the best supported answer rather than a failure report when compact facts/traces/citations are enough",
     }
+    slot_bind_state = _latest_finance_slot_bind_state(journal, task_id=task_id, run_id=run_id)
+    if slot_bind_state:
+        diagnostics["finance_slot_bind_state"] = slot_bind_state
+        diagnostics["finance_slot_bind_basis_policy"] = {
+            "semantic_decision_owner": "model",
+            "host_role": "carry_forward_model_slot_binding_basis_only",
+            "instruction": (
+                "Use finance_slot_bind_state period_basis and line_item_basis as prior model rationale, not as host-authored truth. "
+                "If compact facts/citations conflict with it, explain the revised period or line-item basis."
+            ),
+        }
     diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:64]]
     diagnostics["finance_fact_ledger_count"] = len(facts)
     diagnostics["finance_candidate_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
@@ -16109,6 +16142,8 @@ def _finance_numeric_judge_prompt(
     trace_policy = _finance_formula_trace_synthesis_policy(synthesis_traces)
     fact_summaries = [_finance_fact_judge_summary(fact) for fact in facts[:FINANCE_NUMERIC_JUDGE_FACT_LIMIT]]
     trace_support = _finance_formula_trace_support_index(synthesis_traces, fact_summaries)
+    report_diagnostics = _json_object(report.diagnostics)
+    slot_bind_state = _json_object(report_diagnostics.get("finance_slot_bind_state"))
     payload = {
         "contract": FINANCE_NUMERIC_JUDGE_CONTRACT,
         "output_schema": FINANCE_NUMERIC_JUDGE_OUTPUT_SCHEMA,
@@ -16123,10 +16158,11 @@ def _finance_numeric_judge_prompt(
                 "preview": _text_preview(report.preview, limit=720),
                 "diagnostics": {
                     "goal_query": _json_object(report.diagnostics).get("goal_query"),
-                    "task_goal": _json_object(report.diagnostics).get("task_goal"),
-                    "finance_formula_trace_count": _json_object(report.diagnostics).get("finance_formula_trace_count"),
+                    "task_goal": report_diagnostics.get("task_goal"),
+                    "finance_formula_trace_count": report_diagnostics.get("finance_formula_trace_count"),
                 },
             },
+            "finance_slot_bind_state": slot_bind_state,
             "finance_fact_count": len(facts),
             "finance_facts": fact_summaries,
             "formula_trace_count": len(formula_traces),
@@ -16159,6 +16195,8 @@ def _legacy_finance_numeric_judge_prompt(
     trace_policy = _finance_formula_trace_synthesis_policy(synthesis_traces)
     fact_summaries = [_finance_fact_judge_summary(fact) for fact in facts[:160]]
     trace_support = _finance_formula_trace_support_index(synthesis_traces, fact_summaries)
+    report_diagnostics = _json_object(report.diagnostics)
+    slot_bind_state = _json_object(report_diagnostics.get("finance_slot_bind_state"))
     packet = {
         "schema": "holo.kernel_v3.finance_numeric_judge_input.v1",
         "instruction": (
@@ -16196,10 +16234,11 @@ def _legacy_finance_numeric_judge_prompt(
             "preview": _text_preview(report.preview, limit=720),
             "diagnostics": {
                 "goal_query": _json_object(report.diagnostics).get("goal_query"),
-                "task_goal": _json_object(report.diagnostics).get("task_goal"),
-                "finance_formula_trace_count": _json_object(report.diagnostics).get("finance_formula_trace_count"),
+                "task_goal": report_diagnostics.get("task_goal"),
+                "finance_formula_trace_count": report_diagnostics.get("finance_formula_trace_count"),
             },
         },
+        "finance_slot_bind_state": slot_bind_state,
         "finance_facts": fact_summaries,
         "formula_trace_ordering": "finance_slot_bind_model traces are listed first when present; prefer them over earlier exploratory calculator traces on conflicts.",
         "formula_trace_synthesis_policy": trace_policy,

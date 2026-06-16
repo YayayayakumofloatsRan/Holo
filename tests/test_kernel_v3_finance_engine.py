@@ -209,6 +209,30 @@ def test_finance_formula_trace_support_links_traces_to_fact_citations_in_synthes
             "content": {"formula_trace": trace.to_dict()},
         },
     )
+    journal.append(
+        task_id="task-trace-support",
+        run_id="run-1",
+        step_id=None,
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "ready",
+            "decision": "ready",
+            "accepted_formula_plan_count": 1,
+            "period_basis": [
+                {"slot_name": "capex", "fact_id": "fact-capex", "selected_period": "FY2022", "reason": "10-K FY fact"}
+            ],
+            "line_item_basis": [
+                {
+                    "slot_name": "capex",
+                    "fact_id": "fact-capex",
+                    "selected_line_item": "capital expenditures",
+                    "reason": "cash-flow PP&E purchases row",
+                }
+            ],
+            "reason_summary": "Model bound capex and net sales from FY2022 filing facts.",
+        },
+    )
     report = replace(
         _retrieval_report(evidence=[], citations=[]),
         diagnostics={
@@ -260,6 +284,9 @@ def test_finance_formula_trace_support_links_traces_to_fact_citations_in_synthes
     assert support["evidence_refs"] == ["evidence-capex", "evidence-revenue"]
     assert [item["fact_id"] for item in support["input_facts"]] == ["fact-capex", "fact-revenue"]
     assert support["input_facts"][0]["raw_fields"]["concept"] == "PaymentsToAcquirePropertyPlantAndEquipment"
+    assert diagnostics["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY2022"
+    assert diagnostics["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "capital expenditures"
+    assert diagnostics["finance_slot_bind_basis_policy"]["semantic_decision_owner"] == "model"
 
 
 def test_compact_finance_synthesis_rescue_packet_exposes_formula_trace_support() -> None:
@@ -282,6 +309,25 @@ def test_compact_finance_synthesis_rescue_packet_exposes_formula_trace_support()
             "source": f"tool:{CALCULATOR_TOOL_NAME}",
             "status": "ok",
             "content": {"formula_trace": trace.to_dict()},
+        },
+    )
+    journal.append(
+        task_id="task-compact-trace-support",
+        run_id="run-1",
+        step_id=None,
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "ready",
+            "decision": "ready",
+            "accepted_formula_plan_count": 1,
+            "period_basis": [
+                {"slot_name": "base", "fact_id": "fact-base", "selected_period": "FY bridge", "reason": "same bridge table"}
+            ],
+            "line_item_basis": [
+                {"slot_name": "addback", "fact_id": "fact-addback", "selected_line_item": "add-back", "reason": "bridge row label"}
+            ],
+            "reason_summary": "Model bound the bridge subtotal inputs.",
         },
     )
     evidence = [
@@ -319,6 +365,8 @@ def test_compact_finance_synthesis_rescue_packet_exposes_formula_trace_support()
     assert support["support_status"] in {"linked_to_fact_ledger", "trace_only"}
     assert "citation_refs" in support
     assert "input_facts" in support
+    assert rescue_report.diagnostics["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY bridge"
+    assert rescue_report.diagnostics["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "add-back"
 
 
 def test_calculator_rejects_unsafe_expressions() -> None:
@@ -8687,11 +8735,22 @@ def test_finance_numeric_judge_prompt_compacts_dynamic_context_for_cache() -> No
         trace_refs=[],
     )
 
+    report = replace(
+        _retrieval_report(evidence=evidence, citations=citations),
+        diagnostics={
+            "finance_slot_bind_state": {
+                "decision": "ready",
+                "period_basis": [{"slot_name": "revenue", "fact_id": "fact-0", "selected_period": "FY2024"}],
+                "line_item_basis": [{"slot_name": "revenue", "fact_id": "fact-0", "selected_line_item": "Revenue"}],
+            }
+        },
+    )
+
     prompt = _finance_numeric_judge_prompt(
         question=question,
         answer=final,
         verification=verification,
-        report=_retrieval_report(evidence=evidence, citations=citations),
+        report=report,
         facts=facts,
         formula_traces=[],
         evidence=evidence,
@@ -8711,6 +8770,8 @@ def test_finance_numeric_judge_prompt_compacts_dynamic_context_for_cache() -> No
     assert len(packet["citations"]) == 16
     assert packet["finance_fact_count"] == len(facts)
     assert "finance_metric_intent" not in packet["finance_facts"][0]["metadata"]
+    assert packet["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert packet["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
 
 
 def test_finance_numeric_judge_prompt_preserves_capital_intensity_roa_trace_context() -> None:
