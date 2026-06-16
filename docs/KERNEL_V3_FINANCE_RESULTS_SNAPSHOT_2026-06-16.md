@@ -68,6 +68,49 @@ Verification:
 
 Latest result: `102 passed in 273.27s`.
 
+## 2026-06-16 Formula/Slot Follow-Up
+
+After URL unwrapping, the same Adobe FinanceBench failure cluster exposed the
+next layer:
+
+- `financebench_id_04735` and `financebench_id_03856` ask for operating cash
+  flow ratio, explicitly defined as `cash from operations / total current
+  liabilities`. Before this follow-up, the planner returned `not_applicable`.
+- `financebench_id_07507` already compiled to `yoy_growth`, but its
+  prior/current evidence slots did not carry the income-statement line item.
+
+The finance stack now supports the generic `operating_cash_flow_ratio` formula:
+
+- missing slots: `operating_cash_flow`, `total_current_liabilities`
+- expression: `operating_cash_flow / total_current_liabilities`
+- evidence specs: cash flow statement for operating cash flow, balance sheet for
+  total current liabilities
+- SEC concept seeds for known issuers:
+  `NetCashProvidedByUsedInOperatingActivities` and `LiabilitiesCurrent`
+
+The `yoy_growth` compiler now binds prior/current operating-income slots to
+`income_statement` / `operating income` when the question asks for operating
+income growth.
+
+Static verification on the same Adobe rows now shows:
+
+| Offset | Item | Formula | Evidence slots |
+| ---: | --- | --- | --- |
+| `10` | `financebench_id_04735` | `operating_cash_flow_ratio` | `operating_cash_flow` -> cash flow statement; `total_current_liabilities` -> balance sheet |
+| `11` | `financebench_id_07507` | `yoy_growth` | prior/current values -> income statement / operating income |
+| `12` | `financebench_id_03856` | `operating_cash_flow_ratio` | `operating_cash_flow` -> cash flow statement; `total_current_liabilities` -> balance sheet |
+
+Verification:
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "operating_cash_flow_ratio or current_liabilities_metric or yoy_operating_income_evidence_specs"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+```
+
+Latest result: `248 passed in 2.53s` for finance engine and
+`51 passed in 205.27s` for FinanceBench tests.
+
 ## What Is Not Proven Yet
 
 - The post-2026-06-16 code changes do not yet have a fresh live accuracy number.

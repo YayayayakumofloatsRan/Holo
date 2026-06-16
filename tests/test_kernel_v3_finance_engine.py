@@ -3345,6 +3345,28 @@ def test_finance_fact_ledger_extracts_modeling_cash_flow_metrics() -> None:
     assert by_metric["capital expenditures"] == "710000000"
 
 
+def test_finance_fact_ledger_preserves_current_liabilities_metric() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="adbe-current-liabilities",
+            text=(
+                "entityName=Adobe ticker=ADBE facts="
+                "concept=LiabilitiesCurrent metric=total current liabilities unit=USD fy=2017 form=10-K value=3527457000 ; "
+                "concept=Liabilities metric=total liabilities unit=USD fy=2017 form=10-K value=6075687000"
+            ),
+        )
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-adbe-liabilities")],
+    )
+    by_metric = {fact.metric: fact.value for fact in facts}
+
+    assert by_metric["current liabilities"] == "3527457000"
+    assert by_metric["liabilities"] == "6075687000"
+
+
 def test_finance_fact_ledger_extracts_ppe_purchase_rows_with_millions_header() -> None:
     evidence = [
         _finance_evidence(
@@ -3867,6 +3889,108 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
     assert "host.verifier_gate" in tool_names
     assert tool_chain["next_action_candidates"][0]["tool"] == "retrieval.run"
     assert tool_chain["recommended_steps"][-1]["tool"] == "host.verifier_gate"
+
+
+def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:
+    question = (
+        "What is the FY2017 operating cash flow ratio for Adobe? Operating cash flow ratio is defined as: "
+        "cash from operations / total current liabilities. Round your answer to two decimal places."
+    )
+
+    missing_plan = plan_finance_formula(question=question, facts=[], existing_traces=[])
+
+    assert missing_plan.status == "missing_facts"
+    assert missing_plan.formula_name == "operating_cash_flow_ratio"
+    assert missing_plan.missing_facts == ["operating_cash_flow", "total_current_liabilities"]
+
+    ready_plan = plan_finance_formula(
+        question=question,
+        facts=[
+            FinanceFact(
+                fact_id="adbe-ocf-2017",
+                entity="Adobe",
+                ticker="ADBE",
+                period="FY2017",
+                fiscal_year=2017,
+                metric="operating cash flow",
+                value="2912853",
+                unit="USD thousands",
+                scale="thousand",
+                source_ref="cite-cash-flow",
+                evidence_ref="ev-cash-flow",
+                citation_ref="cite-cash-flow",
+                metadata={"label": "Net cash provided by operating activities"},
+            ),
+            FinanceFact(
+                fact_id="adbe-current-liabilities-2017",
+                entity="Adobe",
+                ticker="ADBE",
+                period="FY2017",
+                fiscal_year=2017,
+                metric="liabilities",
+                value="3527457",
+                unit="USD thousands",
+                scale="thousand",
+                source_ref="cite-balance-sheet",
+                evidence_ref="ev-balance-sheet",
+                citation_ref="cite-balance-sheet",
+                metadata={"label": "Total current liabilities", "concept": "LiabilitiesCurrent"},
+            ),
+        ],
+        existing_traces=[],
+    )
+
+    assert ready_plan.status == "ready"
+    assert ready_plan.payload["expression"] == "operating_cash_flow / total_current_liabilities"
+    assert ready_plan.payload["variables"] == {
+        "operating_cash_flow": "2912853",
+        "total_current_liabilities": "3527457",
+    }
+    assert ready_plan.input_fact_ids == ["adbe-ocf-2017", "adbe-current-liabilities-2017"]
+
+
+def test_finance_task_compiler_emits_operating_cash_flow_ratio_program() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is the FY2017 operating cash flow ratio for Adobe? Operating cash flow ratio is defined as: "
+            "cash from operations / total current liabilities."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "operating_cash_flow_ratio"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["operating_cash_flow", "total_current_liabilities"]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["operating_cash_flow"].statement == "cash_flow_statement"
+    assert evidence_slots["operating_cash_flow"].line_item == "operating cash flow"
+    assert evidence_slots["total_current_liabilities"].statement == "balance_sheet"
+    assert evidence_slots["total_current_liabilities"].line_item == "total current liabilities"
+    assert [spec.name for spec in program.transform_specs] == ["operating_cash_flow_ratio"]
+    assert program.transform_specs[0].expression == "operating_cash_flow / total_current_liabilities"
+    assert program.diagnostics["tool_chain_plan"]["decision_owner"] == "model"
+
+
+def test_finance_task_compiler_emits_yoy_operating_income_evidence_specs() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is Adobe's year-over-year change in unadjusted operating income from FY2015 to FY2016 "
+            "(in units of percents and round to one decimal place)? Give a solution by using the income statement."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "yoy_growth"
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["prior_period_value"].statement == "income_statement"
+    assert evidence_slots["prior_period_value"].line_item == "operating income"
+    assert evidence_slots["current_period_value"].statement == "income_statement"
+    assert evidence_slots["current_period_value"].line_item == "operating income"
+    assert program.transform_specs[0].name == "yoy_growth"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["prior_period_value", "current_period_value"]
 
 
 def test_finance_task_compiler_emits_fixed_asset_turnover_program_missing_slots() -> None:
@@ -6708,6 +6832,27 @@ def test_finance_missing_fact_payload_for_capital_intensity_seeds_companyfacts()
         "assets",
         "net_income",
     ]
+
+
+def test_finance_missing_fact_payload_for_operating_cash_flow_ratio_seeds_companyfacts() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="operating_cash_flow_ratio",
+        missing=["operating_cash_flow", "total_current_liabilities"],
+        goal="3M FY2022 operating cash flow ratio cash from operations total current liabilities",
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/submissions/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in source_urls
+    assert (
+        "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/NetCashProvidedByUsedInOperatingActivities.json"
+        in source_urls
+    )
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/LiabilitiesCurrent.json" in source_urls
+    assert payload["source_urls"] == source_urls
+    assert payload["metadata"]["target_operating_cash_flow_ratio_structured_source_required"] is True
+    assert payload["metadata"]["missing_slots"] == ["operating_cash_flow", "total_current_liabilities"]
+    assert any("LiabilitiesCurrent" in query for query in payload["queries"])
 
 
 def test_finance_modeling_payload_uses_model_compiled_capital_intensity_program_for_source_urls() -> None:

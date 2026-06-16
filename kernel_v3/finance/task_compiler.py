@@ -243,6 +243,8 @@ def compile_finance_task_program(
         frame=frame,
         binding=binding,
         target_period=task_spec.target_periods[0] if task_spec.target_periods else None,
+        formula_plan=formula_plan,
+        question=question,
     )
     transform_specs = _transform_specs(formula_plan=formula_plan, frame_missing_slots=frame.missing_slots)
     tool_chain_plan = _tool_chain_plan(
@@ -1163,13 +1165,30 @@ def _empty_model_value(value: object) -> bool:
     return False
 
 
-def _evidence_specs(*, frame, binding: JsonObject, target_period: str | None) -> list[EvidenceSpec]:
+def _evidence_specs(
+    *,
+    frame,
+    binding: JsonObject,
+    target_period: str | None,
+    formula_plan: FinanceFormulaPlan | None = None,
+    question: str = "",
+) -> list[EvidenceSpec]:
     specs: list[EvidenceSpec] = []
     policy = frame.evidence_policy
     source_families = list(policy.required_source_families) if policy is not None else []
     statement = _string(binding.get("required_statement"))
     line_item = _string(binding.get("required_line_item"))
     for slot in frame.required_slots:
+        formula_line_item = _line_item_for_formula_slot(
+            str(formula_plan.formula_name or "") if formula_plan is not None else "",
+            slot.name,
+            question,
+        )
+        formula_statement = _statement_for_formula_slot(
+            str(formula_plan.formula_name or "") if formula_plan is not None else "",
+            slot.name,
+            question,
+        )
         specs.append(
             EvidenceSpec(
                 spec_id="evidence-spec-" + _short_hash(frame.frame_id, slot.name),
@@ -1179,8 +1198,8 @@ def _evidence_specs(*, frame, binding: JsonObject, target_period: str | None) ->
                 source_role=_source_role(binding=binding, source_families=source_families),
                 required_source_families=source_families,
                 target_period=target_period,
-                statement=statement or _statement_for_slot(slot.name),
-                line_item=line_item if _slot_matches_target_line(slot.name, line_item) else _line_item_for_slot(slot.name),
+                statement=statement or formula_statement or _statement_for_slot(slot.name),
+                line_item=line_item if _slot_matches_target_line(slot.name, line_item) else formula_line_item or _line_item_for_slot(slot.name),
                 required=slot.requirement == "required",
                 diagnostics={"source": "finance_task_compiler"},
             )
@@ -1265,6 +1284,19 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 expression="revenue / ((property_plant_and_equipment_net_current + property_plant_and_equipment_net_prior) / 2)",
                 output_unit="x",
                 output_attribute="fixed_asset_turnover",
+                diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
+            )
+        ]
+    if name == "operating_cash_flow_ratio":
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, "ocf_current_liabilities"),
+                domain="finance",
+                name="operating_cash_flow_ratio",
+                required_slots=["operating_cash_flow", "total_current_liabilities"],
+                expression="operating_cash_flow / total_current_liabilities",
+                output_unit="ratio",
+                output_attribute="operating_cash_flow_ratio",
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             )
         ]
@@ -1488,6 +1520,14 @@ def _source_role(*, binding: JsonObject, source_families: list[str]) -> str | No
     return None
 
 
+def _statement_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
+    if formula_name == "yoy_growth" and slot_name in {"prior_period_value", "current_period_value"}:
+        line_item = _yoy_growth_line_item(question)
+        if line_item in {"revenue", "net sales", "net revenues", "total revenues", "operating income", "net income", "ebitda"}:
+            return "income_statement"
+    return None
+
+
 def _statement_for_slot(slot_name: str) -> str | None:
     if slot_name in {"capital_expenditures", "operating_cash_flow"}:
         return "cash_flow_statement"
@@ -1496,6 +1536,7 @@ def _statement_for_slot(slot_name: str) -> str | None:
         "property_plant_and_equipment_net",
         "property_plant_and_equipment_net_current",
         "property_plant_and_equipment_net_prior",
+        "total_current_liabilities",
         "debt",
         "cash",
     }:
@@ -1505,10 +1546,17 @@ def _statement_for_slot(slot_name: str) -> str | None:
     return None
 
 
+def _line_item_for_formula_slot(formula_name: str, slot_name: str, question: str) -> str | None:
+    if formula_name == "yoy_growth" and slot_name in {"prior_period_value", "current_period_value"}:
+        return _yoy_growth_line_item(question)
+    return None
+
+
 def _line_item_for_slot(slot_name: str) -> str | None:
     mapping = {
         "capital_expenditures": "capital expenditures",
         "operating_cash_flow": "operating cash flow",
+        "total_current_liabilities": "total current liabilities",
         "property_plant_and_equipment_net": "property plant and equipment net",
         "property_plant_and_equipment_net_current": "property plant and equipment net",
         "property_plant_and_equipment_net_prior": "property plant and equipment net",
@@ -1517,6 +1565,25 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         "net_income": "net income",
     }
     return mapping.get(slot_name)
+
+
+def _yoy_growth_line_item(question: str) -> str | None:
+    normalized = " ".join(str(question or "").lower().replace("-", " ").split())
+    if "operating income" in normalized:
+        return "operating income"
+    if "net income" in normalized or "net earnings" in normalized:
+        return "net income"
+    if "ebitda" in normalized:
+        return "ebitda"
+    if "net sales" in normalized:
+        return "net sales"
+    if "net revenues" in normalized or "net revenue" in normalized:
+        return "net revenues"
+    if "total revenues" in normalized or "total revenue" in normalized:
+        return "total revenues"
+    if "revenue" in normalized or "revenues" in normalized:
+        return "revenue"
+    return None
 
 
 def _slot_matches_target_line(slot_name: str, line_item: str) -> bool:

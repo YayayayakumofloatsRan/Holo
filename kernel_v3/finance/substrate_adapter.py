@@ -193,6 +193,10 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "property_plant_and_equipment_net_current",
             "property_plant_and_equipment_net_prior",
         ],
+        "operating_cash_flow_ratio": [
+            "operating_cash_flow",
+            "total_current_liabilities",
+        ],
         "fixed_charge_coverage": [
             "earnings_available_for_fixed_charges_or_pretax_income",
             "fixed_charges",
@@ -373,6 +377,11 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "cash flow from operations",
             "net cash provided by operating activities",
         ],
+        "total_current_liabilities": [
+            "total current liabilities",
+            "current liabilities",
+            "liabilities current",
+        ],
         "property_plant_and_equipment_net": [
             "property plant and equipment net",
             "net property plant and equipment",
@@ -436,6 +445,7 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "fixed_asset_turnover",
         "fixed_charge_coverage",
         "mlr_rebate",
+        "operating_cash_flow_ratio",
     }:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
@@ -456,6 +466,16 @@ def _infer_formula_name(question: str) -> str:
         return "capital_intensity"
     if "fixed asset turnover" in text or "fixed-asset turnover" in text:
         return "fixed_asset_turnover"
+    if (
+        "operating cash flow ratio" in text
+        or "cash flow ratio" in text
+        or (
+            any(marker in text for marker in ("cash from operations", "cash flow from operations", "operating cash flow"))
+            and "current liabilities" in text
+            and "ratio" in text
+        )
+    ):
+        return "operating_cash_flow_ratio"
     if "fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text:
         return "fixed_charge_coverage"
     if "medical loss ratio" in text or " mlr" in f" {text}":

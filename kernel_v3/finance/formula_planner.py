@@ -72,6 +72,8 @@ def plan_finance_formula(
         return _plan_capital_intensity(question=question, facts=usable)
     if formula == "fixed_asset_turnover":
         return _plan_fixed_asset_turnover(question=question, facts=usable)
+    if formula == "operating_cash_flow_ratio":
+        return _plan_operating_cash_flow_ratio(question=question, facts=usable)
     return FinanceFormulaPlan(status="not_applicable", diagnostics={"reason": "unsupported_formula", "formula": formula})
 
 
@@ -90,6 +92,16 @@ def _detect_formula(question: str) -> str | None:
         return "capital_intensity"
     if "fixed asset turnover" in text or "fixed-asset turnover" in text:
         return "fixed_asset_turnover"
+    if (
+        "operating cash flow ratio" in text
+        or "cash flow ratio" in text
+        or (
+            any(marker in text for marker in ("cash from operations", "cash flow from operations", "operating cash flow"))
+            and "current liabilities" in text
+            and "ratio" in text
+        )
+    ):
+        return "operating_cash_flow_ratio"
     if "ev/revenue" in compact or "ev/rev" in compact or "enterprise value to revenue" in text:
         return "ev_revenue"
     if "ev/ebitda" in compact or "enterprise value to ebitda" in text:
@@ -450,6 +462,64 @@ def _plan_fixed_asset_turnover(*, question: str, facts: list[FinanceFact]) -> Fi
         diagnostics={
             "target_fiscal_year": target_year,
             "formula_definition": "revenue divided by average net property, plant, and equipment",
+        },
+    )
+
+
+def _plan_operating_cash_flow_ratio(*, question: str, facts: list[FinanceFact]) -> FinanceFormulaPlan:
+    target_year = _target_fiscal_year(question)
+    operating_cash_flow = _latest_fact_for_year(
+        facts,
+        (
+            "operating cash flow",
+            "cash flow from operations",
+            "cash from operations",
+            "net cash provided by operating activities",
+        ),
+        target_year=target_year,
+    )
+    current_liabilities = _latest_fact_for_year(
+        facts,
+        (
+            "total current liabilities",
+            "current liabilities",
+            "liabilities current",
+        ),
+        target_year=target_year,
+    )
+    missing: list[str] = []
+    supporting = [item for item in (operating_cash_flow, current_liabilities) if item is not None]
+    if operating_cash_flow is None:
+        missing.append("operating_cash_flow")
+    if current_liabilities is None:
+        missing.append("total_current_liabilities")
+    if missing:
+        return _missing(
+            "operating_cash_flow_ratio",
+            missing,
+            facts=supporting,
+            diagnostics={
+                "reason": "operating_cash_flow_ratio_requires_cash_flow_and_current_liabilities",
+                "target_fiscal_year": target_year,
+                "formula_definition": "cash from operations divided by total current liabilities",
+            },
+        )
+    return _ready(
+        "operating_cash_flow_ratio",
+        "operating_cash_flow / total_current_liabilities",
+        {
+            "operating_cash_flow": operating_cash_flow.value,
+            "total_current_liabilities": current_liabilities.value,
+        },
+        unit="ratio",
+        facts=supporting,
+        diagnostics={
+            "target_fiscal_year": target_year,
+            "formula_definition": "cash from operations divided by total current liabilities",
+            "bound_line_items": {
+                "numerator": _formula_bound_line_item(operating_cash_flow),
+                "denominator": _formula_bound_line_item(current_liabilities),
+            },
         },
     )
 
