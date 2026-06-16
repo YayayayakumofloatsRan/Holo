@@ -120,6 +120,11 @@ The 2026-06-15 prompt-economy follow-up keeps full journal trace state while
 using a lighter provider prompt for direct/semantic/system turns; the low-cost
 DeepSeek live smoke passed 2/2 with total tokens reduced from 60,616 to 47,412
 and cache hit ratio improved from 26.9195% to 59.4381%.
+The 2026-06-16 finance processor/cache progress is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-16_PROCESSOR_USAGE_CACHE_METRICS.md`; recent
+sections cover model-owned slot-binding basis, competing fact clusters carried
+through synthesis and numeric judge, synthesizer unknown-reference repair, and
+unit-mismatch repair guidance for `finance.verify_numeric`.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

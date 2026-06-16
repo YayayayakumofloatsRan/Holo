@@ -539,6 +539,64 @@ def test_finance_numeric_verifier_tool_observation_exposes_repair_guidance() -> 
     assert "model still owns semantic repair" in observation.content["repair_guidance"]["host_boundary"]
 
 
+def test_finance_numeric_verifier_tool_observation_exposes_unit_mismatch_examples() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    fact = FinanceFact(
+        fact_id="fact-revenue",
+        entity="Example Co",
+        ticker="EXM",
+        period="FY2024",
+        fiscal_year=2024,
+        metric="revenue",
+        value="10",
+        unit="USD",
+        scale=None,
+        source_ref="src-1",
+        evidence_ref="ev-1",
+        citation_ref="cite-1",
+        metadata={},
+    )
+    action = CandidateAction(
+        action_id="act-verify-unit-repair",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify model answer numeric support",
+        score=0.9,
+        payload={
+            "answer": "Example Co FY2024 revenue was 10%.",
+            "facts": [fact.to_dict()],
+            "question": "What was Example Co FY2024 revenue?",
+        },
+        reasons=["the answer has a material numeric finance claim"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_only").validate(
+        run_id="run-finance-verify",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert observation.status == "ok"
+    assert observation.content["verifier_status"] == "failed"
+    assert observation.content["repair_guidance"]["issue_codes"] == ["unit_mismatch"]
+    assert observation.content["missing_value_examples"] == []
+    assert observation.content["unit_mismatch_examples"] == [
+        {
+            "raw": "10%",
+            "value": "10",
+            "unit": "percent",
+            "support_units": ["usd"],
+            "support_kinds": ["finance_fact"],
+            "support_refs": ["fact-revenue"],
+        }
+    ]
+    repair_options = " ".join(observation.content["repair_options"])
+    assert "unit or scale wording" in repair_options
+    assert "model still owns semantic repair" in observation.content["repair_guidance"]["host_boundary"]
+
+
 def test_finance_numeric_verifier_tool_schema_rejects_non_object_fact_rows() -> None:
     registry = register_finance_tools(ToolRegistry.with_builtin_respond())
     action = CandidateAction(
@@ -1612,6 +1670,58 @@ def test_finance_working_state_verifier_repair_options_are_model_visible_without
     assert "remove or replace unsupported answer numbers" in repair_options
     assert "calculator.compute" in repair_options
     assert "target document" in repair_options
+    assert "model owns metric binding" in state["host_boundary"]
+
+
+def test_finance_working_state_exposes_unit_mismatch_examples_without_deciding_answer() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-finance-unit-repair",
+        run_id="run-1",
+        step_id="step-verify",
+        kind="finance_numeric_verification",
+        data={
+            "schema": "holo.kernel_v3.finance_numeric_verification.v1",
+            "status": "failed",
+            "issues": [{"code": "unit_mismatch"}],
+            "matched_values": [
+                {
+                    "raw": "10%",
+                    "value": "10",
+                    "unit": "percent",
+                    "support": {"kind": "finance_fact", "ref": "fact-revenue", "unit": "usd"},
+                }
+            ],
+            "missing_values": [],
+            "unit_mismatches": [
+                {
+                    "code": "unit_mismatch",
+                    "value": {"raw": "10%", "value": "10", "unit": "percent"},
+                    "support_units": ["usd"],
+                    "support_kinds": ["finance_fact"],
+                    "support_refs": ["fact-revenue"],
+                }
+            ],
+            "formula_traces": [],
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-unit-repair", run_id="run-1")
+
+    verification = state["numeric_verification"]
+    assert verification["issue_codes"] == ["unit_mismatch"]
+    assert verification["missing_value_examples"] == []
+    assert verification["unit_mismatch_examples"] == [
+        {
+            "raw": "10%",
+            "value": "10",
+            "unit": "percent",
+            "support_units": ["usd"],
+            "support_kinds": ["finance_fact"],
+            "support_refs": ["fact-revenue"],
+        }
+    ]
+    assert "unit or scale wording" in " ".join(verification["repair_options"])
     assert "model owns metric binding" in state["host_boundary"]
 
 

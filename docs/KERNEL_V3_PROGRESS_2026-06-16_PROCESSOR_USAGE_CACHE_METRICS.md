@@ -3172,3 +3172,47 @@ py_compile passed
 py_compile passed
 305 passed in 3.17s
 ```
+
+---
+
+## 50. 追加落地：Unit Mismatch Repair Guidance
+
+本地 debug 输出中出现过 `unit_mismatch`，这类失败通常不是“没有事实”，而是答案把一个
+source-backed 数值写成了不匹配的单位或比例表达，例如把金额写成百分比、把比例/百分比/规模
+词混用。此前 verifier 只返回 `unit_mismatch` issue code；模型能看到“单位有问题”，但看不到
+哪个 answer number、候选单位、附近支持值单位和来源 ref。
+
+本节增强 `finance.verify_numeric` 的诊断输出，而不改变 host 的语义边界：
+
+- `finance_numeric_repair_guidance()` 新增：
+  - `unit_mismatch_examples`
+- `_unit_mismatches()` 的 issue payload 新增：
+  - `support_kinds`
+  - `support_refs`
+- `finance.verify_numeric` tool observation 新增顶层：
+  - `unit_mismatch_examples`
+- `_compact_tool_observation_diagnostics()` 透传 compact unit mismatch examples；
+- `_finance_working_state_for_prompt()` 的 `numeric_verification` 也携带同一字段。
+
+边界：
+
+- host 不自动把 percent / bps / USD / million / billion 做语义改写；
+- host 不替模型判断该保留、删除还是改写某个数字；
+- verifier 只说明“这个 answer number 的单位和可支持值单位冲突”；
+- planner / numeric judge / synthesizer 仍由 LLM 决定 repair 策略。
+
+验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "unit_mismatch_examples or numeric_verifier_tool_observation_exposes_repair_guidance or finance_working_state_verifier_repair_options"
+.venv/bin/python -m py_compile kernel_v3/finance/numeric_verifier.py kernel_v3/finance/calculator.py kernel_v3/agent/runtime.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_retrieval_workbench.py -q
+```
+
+结果：
+
+```text
+4 passed, 213 deselected in 0.82s
+py_compile passed
+307 passed in 3.18s
+```

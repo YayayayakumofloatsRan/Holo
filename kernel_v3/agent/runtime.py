@@ -3960,6 +3960,11 @@ def _compact_tool_observation_diagnostics(content: JsonObject) -> JsonObject:
     )
     if missing_examples:
         result["missing_value_examples"] = missing_examples
+    unit_examples = _compact_tool_unit_mismatch_examples(
+        guidance_source.get("unit_mismatch_examples") if isinstance(guidance_source, dict) else []
+    )
+    if unit_examples:
+        result["unit_mismatch_examples"] = unit_examples
     boundary = guidance_source.get("host_boundary") if isinstance(guidance_source, dict) else None
     if boundary:
         result["host_boundary"] = _bounded_text(boundary, limit=180)
@@ -4087,6 +4092,28 @@ def _compact_tool_missing_value_examples(values: object) -> list[JsonObject]:
             }
         )
     return result
+
+
+def _compact_tool_unit_mismatch_examples(values: object) -> list[JsonObject]:
+    items = values if isinstance(values, list) else []
+    result: list[JsonObject] = []
+    for item in items[:4]:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "raw": _bounded_text(item.get("raw"), limit=64),
+                "value": _bounded_text(item.get("value"), limit=48),
+                "unit": _bounded_text(item.get("unit"), limit=32),
+                "support_units": _string_list(item.get("support_units"))[:6],
+                "support_kinds": _string_list(item.get("support_kinds"))[:6],
+                "support_refs": _string_list(item.get("support_refs"))[:6],
+            }
+        )
+    return [
+        {key: value for key, value in item.items() if value not in (None, "", [])}
+        for item in result
+    ]
 
 
 def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
@@ -4328,6 +4355,11 @@ def _compact_finance_verification_state(data: object) -> JsonObject:
         for item in guidance.get("missing_value_examples", [])
         if isinstance(item, dict)
     ][:8]
+    unit_mismatch_examples = [
+        dict(item)
+        for item in guidance.get("unit_mismatch_examples", [])
+        if isinstance(item, dict)
+    ][:8]
     return {
         "status": _bounded_text(payload.get("status"), limit=64),
         "issue_codes": issue_codes,
@@ -4335,6 +4367,7 @@ def _compact_finance_verification_state(data: object) -> JsonObject:
         "matched_value_count": len(matched_values),
         "missing_value_count": len(missing_values),
         "missing_value_examples": missing_value_examples,
+        "unit_mismatch_examples": unit_mismatch_examples,
         "missing_slots": _ordered_unique(
             [
                 str(item.get("slot") or item.get("metric") or item.get("name") or "").strip()

@@ -181,6 +181,7 @@ def finance_numeric_repair_guidance(verification: NumericVerification | JsonObje
     data = payload if isinstance(payload, dict) else {}
     issues = data.get("issues") if isinstance(data.get("issues"), list) else []
     missing_values = data.get("missing_values") if isinstance(data.get("missing_values"), list) else []
+    unit_mismatches = data.get("unit_mismatches") if isinstance(data.get("unit_mismatches"), list) else []
     issue_codes = _ordered_unique_text(
         [
             str(item.get("code") or item.get("reason") or "").strip()
@@ -189,11 +190,13 @@ def finance_numeric_repair_guidance(verification: NumericVerification | JsonObje
         ]
     )[:12]
     missing_examples = _compact_missing_value_examples(missing_values)
+    unit_mismatch_examples = _compact_unit_mismatch_examples(unit_mismatches)
     return {
         "schema": "holo.kernel_v3.finance_numeric_repair_guidance.v1",
         "status": _bounded_text(data.get("status"), limit=64),
         "issue_codes": issue_codes,
         "missing_value_examples": missing_examples,
+        "unit_mismatch_examples": unit_mismatch_examples,
         "repair_options": _verification_repair_options(issue_codes, missing_values=missing_values),
         "host_boundary": (
             "diagnostic verifier guidance only; the model still owns semantic repair, "
@@ -217,6 +220,47 @@ def _compact_missing_value_examples(values: object) -> list[JsonObject]:
             }
         )
     return result
+
+
+def _compact_unit_mismatch_examples(values: object) -> list[JsonObject]:
+    items = values if isinstance(values, list) else []
+    result: list[JsonObject] = []
+    for item in items[:8]:
+        if not isinstance(item, dict):
+            continue
+        candidate = item.get("value") if isinstance(item.get("value"), dict) else {}
+        result.append(
+            {
+                "raw": _bounded_text(candidate.get("raw"), limit=80),
+                "value": _bounded_text(candidate.get("value"), limit=64),
+                "unit": _bounded_text(candidate.get("unit"), limit=32),
+                "support_units": _ordered_unique_text(
+                    [
+                        str(unit or "").strip()
+                        for unit in list(item.get("support_units") or [])
+                        if str(unit or "").strip()
+                    ]
+                )[:8],
+                "support_kinds": _ordered_unique_text(
+                    [
+                        str(kind or "").strip()
+                        for kind in list(item.get("support_kinds") or [])
+                        if str(kind or "").strip()
+                    ]
+                )[:8],
+                "support_refs": _ordered_unique_text(
+                    [
+                        str(ref or "").strip()
+                        for ref in list(item.get("support_refs") or [])
+                        if str(ref or "").strip()
+                    ]
+                )[:8],
+            }
+        )
+    return [
+        {key: value for key, value in item.items() if value not in (None, "", [])}
+        for item in result
+    ]
 
 
 def _verification_repair_options(issue_codes: list[str], *, missing_values: object) -> list[str]:
@@ -736,6 +780,10 @@ def _unit_mismatches(candidates: list[JsonObject], support_values: list[JsonObje
                     "code": "unit_mismatch",
                     "value": candidate,
                     "support_units": sorted({str(item.get("unit") or "") for item in nearby}),
+                    "support_kinds": sorted({str(item.get("kind") or "") for item in nearby if str(item.get("kind") or "")}),
+                    "support_refs": _ordered_unique_text(
+                        [str(item.get("ref") or "").strip() for item in nearby if str(item.get("ref") or "").strip()]
+                    )[:8],
                 }
             )
     return issues

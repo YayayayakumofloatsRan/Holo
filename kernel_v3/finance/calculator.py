@@ -212,6 +212,7 @@ def _execute_finance_verify_numeric(action: CandidateAction) -> Observation:
             "repair_guidance": guidance,
             "repair_options": guidance.get("repair_options", []),
             "missing_value_examples": guidance.get("missing_value_examples", []),
+            "unit_mismatch_examples": guidance.get("unit_mismatch_examples", []),
         },
         observed_at_ms=0,
         action_id=action.action_id,
