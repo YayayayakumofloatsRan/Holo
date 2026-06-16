@@ -117,6 +117,10 @@ def plan_finance_formula(
         )
     if formula == "cash_flow_activity_comparison":
         return _plan_cash_flow_activity_comparison(question=question, facts=usable)
+    if formula == "margin_profile_change":
+        return _plan_margin_series(question=question, facts=usable, formula_name="margin_profile_change", mode="change")
+    if formula == "margin_consistency_range":
+        return _plan_margin_series(question=question, facts=usable, formula_name="margin_consistency_range", mode="range")
     if formula == "yoy_growth":
         return _plan_yoy_growth(question=question, facts=usable)
     if formula == "debt_to_equity":
@@ -193,6 +197,10 @@ def _detect_formula(question: str) -> str | None:
         return "store_count_change"
     if _looks_like_cash_flow_activity_comparison(text):
         return "cash_flow_activity_comparison"
+    if _looks_like_margin_consistency(text):
+        return "margin_consistency_range"
+    if _looks_like_margin_profile_change(text):
+        return "margin_profile_change"
     if "discounted cash flow" in text or re.search(r"\bdcf\b", text):
         return "dcf"
     if re.search(r"\blbo\b", text) or "leveraged buyout" in text:
@@ -351,6 +359,27 @@ def _looks_like_cash_flow_activity_comparison(text: str) -> bool:
         ("operations, investing, and financing" in text or "operating, investing, and financing" in text)
         and any(marker in text for marker in ("brought in the most", "lost the least", "which brought", "among"))
         and "cash flow" in text
+    )
+
+
+def _looks_like_margin_consistency(text: str) -> bool:
+    if not _mentions_operating_or_gross_margin(text):
+        return False
+    return "historically consistent" in text or "consistent" in text or "fluctuat" in text
+
+
+def _looks_like_margin_profile_change(text: str) -> bool:
+    if not _mentions_operating_or_gross_margin(text):
+        return False
+    return any(marker in text for marker in ("profile", "what drove", "drove", "driver", "change as of", "improving"))
+
+
+def _mentions_operating_or_gross_margin(text: str) -> bool:
+    return (
+        "operating margin" in text
+        or "gross margin" in text
+        or "gross margins" in text
+        or "operating margins" in text
     )
 
 
@@ -2823,6 +2852,129 @@ def _plan_cash_flow_activity_comparison(*, question: str, facts: list[FinanceFac
             "comparison_policy": "LLM maps the maximum signed amount to the activity name and explains most cash brought in or least cash lost.",
         },
     )
+
+
+def _plan_margin_series(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    formula_name: str,
+    mode: str,
+) -> FinanceFormulaPlan:
+    years = _margin_series_years(question)
+    margin_kind = _margin_series_kind(question)
+    variables: JsonObject = {}
+    input_facts: list[FinanceFact] = []
+    missing: list[str] = []
+    terms: list[tuple[int, str]] = []
+    for year in years:
+        revenue = _latest_revenue_fact(facts, target_year=year)
+        revenue_slot = f"revenue_{year}"
+        revenue_missing = revenue is None
+        if revenue is not None:
+            variables[revenue_slot] = revenue.value
+            input_facts.append(revenue)
+        if margin_kind == "operating":
+            numerator = _latest_fact_for_year(facts, ("operating income", "income from operations"), target_year=year)
+            numerator_slot = f"operating_income_{year}"
+            if numerator is None:
+                missing.append(numerator_slot)
+            else:
+                variables[numerator_slot] = numerator.value
+                input_facts.append(numerator)
+            if revenue_missing:
+                missing.append(revenue_slot)
+            terms.append((year, f"({numerator_slot} / {revenue_slot})"))
+            continue
+        gross_profit = _latest_fact_for_year(facts, ("gross profit",), target_year=year)
+        if gross_profit is not None:
+            numerator_slot = f"gross_profit_{year}"
+            variables[numerator_slot] = gross_profit.value
+            input_facts.append(gross_profit)
+            if revenue_missing:
+                missing.append(revenue_slot)
+            terms.append((year, f"({numerator_slot} / {revenue_slot})"))
+            continue
+        cogs = _dio_cogs_fact(facts, target_year=year)
+        cogs_slot = f"cogs_{year}"
+        if cogs is None:
+            gross_profit_slot = f"gross_profit_{year}"
+            missing.append(gross_profit_slot)
+            if revenue_missing:
+                missing.append(revenue_slot)
+            terms.append((year, f"({gross_profit_slot} / {revenue_slot})"))
+            continue
+        else:
+            variables[cogs_slot] = _absolute_decimal_string(cogs.value)
+            input_facts.append(cogs)
+        if revenue_missing:
+            missing.append(revenue_slot)
+        terms.append((year, f"(({revenue_slot} - {cogs_slot}) / {revenue_slot})"))
+    if not years:
+        base = "operating_income" if margin_kind == "operating" else "gross_profit_or_cogs"
+        missing.extend([f"{base}_by_period", "revenue_by_period"])
+    expression = _margin_series_expression(terms, mode=mode)
+    formula_definition = (
+        "range between maximum and minimum annual margin in the requested period"
+        if mode == "range"
+        else "ending annual margin less beginning annual margin in the requested period"
+    )
+    diagnostics = {
+        "target_fiscal_years": years,
+        "margin_kind": margin_kind,
+        "formula_definition": formula_definition,
+        "semantic_decision_policy": (
+            "The host computes margin movement or range only. The LLM decides whether the margin is useful, improving, "
+            "stable, or source-driven from cited evidence and any explicit threshold in the question."
+        ),
+        "expression": expression,
+    }
+    if missing:
+        return _missing(
+            formula_name,
+            _ordered_unique(missing),
+            facts=input_facts,
+            diagnostics=diagnostics,
+        )
+    return _ready(
+        formula_name,
+        expression,
+        variables,
+        unit="percent",
+        facts=input_facts,
+        diagnostics=diagnostics,
+    )
+
+
+def _margin_series_years(question: str) -> list[int]:
+    years = _target_fiscal_years(question)
+    if len(years) >= 2:
+        start, end = min(years), max(years)
+        if end - start <= 10:
+            return list(range(start, end + 1))
+        return years
+    if len(years) == 1:
+        return [years[0] - 2, years[0] - 1, years[0]]
+    return []
+
+
+def _margin_series_kind(question: str) -> str:
+    text = _metric_text(question)
+    if "operating margin" in text or "operating margins" in text:
+        return "operating"
+    return "gross"
+
+
+def _margin_series_expression(terms: list[tuple[int, str]], *, mode: str) -> str:
+    ordered_terms = [term for _year, term in sorted(terms)]
+    if not ordered_terms:
+        return "margin_range" if mode == "range" else "ending_margin - beginning_margin"
+    if mode == "range":
+        joined = ", ".join(ordered_terms)
+        return f"max({joined}) - min({joined})"
+    if len(ordered_terms) == 1:
+        return ordered_terms[0]
+    return f"{ordered_terms[-1]} - {ordered_terms[0]}"
 
 
 def _plan_bridge_subtotal(facts: list[FinanceFact]) -> FinanceFormulaPlan:

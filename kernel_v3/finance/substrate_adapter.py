@@ -295,6 +295,8 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "investing_cash_flow",
             "financing_cash_flow",
         ],
+        "margin_profile_change": [],
+        "margin_consistency_range": [],
         "average_capex_to_revenue": [],
         "fixed_charge_coverage": [
             "earnings_available_for_fixed_charges_or_pretax_income",
@@ -602,6 +604,8 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "property_plant_and_equipment_change",
         "store_count_change",
         "cash_flow_activity_comparison",
+        "margin_profile_change",
+        "margin_consistency_range",
         "effective_tax_rate_change",
         "interest_coverage_ratio",
         "unadjusted_ebitda",
@@ -647,6 +651,16 @@ def _infer_formula_name(question: str) -> str:
         and "cash flow" in text
     ):
         return "cash_flow_activity_comparison"
+    if (
+        ("operating margin" in text or "gross margin" in text or "gross margins" in text or "operating margins" in text)
+        and ("historically consistent" in text or "consistent" in text or "fluctuat" in text)
+    ):
+        return "margin_consistency_range"
+    if (
+        ("operating margin" in text or "gross margin" in text or "gross margins" in text or "operating margins" in text)
+        and any(marker in text for marker in ("profile", "what drove", "drove", "driver", "change as of", "improving"))
+    ):
+        return "margin_profile_change"
     if (
         "operating cash flow ratio" in text
         or "cash flow ratio" in text

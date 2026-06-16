@@ -4227,6 +4227,54 @@ def test_finance_task_compiler_emits_period_change_and_cash_flow_activity_progra
         assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
 
 
+def test_finance_task_compiler_emits_margin_profile_and_consistency_programs() -> None:
+    cases = [
+        (
+            "Does Adobe have an improving operating margin profile as of FY2022? If operating margin is not a useful metric for a company like this, then state that and explain why.",
+            "margin_profile_change",
+            [
+                "operating_income_2020",
+                "revenue_2020",
+                "operating_income_2021",
+                "revenue_2021",
+                "operating_income_2022",
+                "revenue_2022",
+            ],
+            "(operating_income_2022 / revenue_2022) - (operating_income_2020 / revenue_2020)",
+        ),
+        (
+            "Are Best Buy's gross margins historically consistent (not fluctuating more than roughly 2% each year) as of FY2022?",
+            "margin_consistency_range",
+            [
+                "gross_profit_2020",
+                "revenue_2020",
+                "gross_profit_2021",
+                "revenue_2021",
+                "gross_profit_2022",
+                "revenue_2022",
+            ],
+            (
+                "max((gross_profit_2020 / revenue_2020), (gross_profit_2021 / revenue_2021), "
+                "(gross_profit_2022 / revenue_2022)) - min((gross_profit_2020 / revenue_2020), "
+                "(gross_profit_2021 / revenue_2021), (gross_profit_2022 / revenue_2022))"
+            ),
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+        assert evidence_slots[missing_slots[0]].statement == "income_statement"
+        assert evidence_slots[missing_slots[1]].line_item == "revenue"
+
+
 def test_finance_task_compiler_emits_tax_working_capital_and_interest_programs() -> None:
     cases = [
         (
@@ -4563,6 +4611,50 @@ def test_finance_formula_planner_computes_period_change_and_cash_flow_activity_f
         "investing_cash_flow": "-200",
         "financing_cash_flow": "50",
     }
+
+
+def test_finance_formula_planner_computes_margin_profile_and_consistency_formulas() -> None:
+    operating_plan = plan_finance_formula(
+        question="What drove operating margin change as of FY2022?",
+        facts=[
+            _year_fact("operating income", "20", 2020, fact_id="op-income-2020"),
+            _year_fact("revenue", "100", 2020, fact_id="revenue-2020"),
+            _year_fact("operating income", "30", 2021, fact_id="op-income-2021"),
+            _year_fact("revenue", "120", 2021, fact_id="revenue-2021"),
+            _year_fact("operating income", "40", 2022, fact_id="op-income-2022"),
+            _year_fact("revenue", "160", 2022, fact_id="revenue-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert operating_plan.status == "ready"
+    assert operating_plan.formula_name == "margin_profile_change"
+    assert operating_plan.payload["expression"] == "(operating_income_2022 / revenue_2022) - (operating_income_2020 / revenue_2020)"
+    assert operating_plan.payload["variables"]["operating_income_2020"] == "20"
+    assert operating_plan.payload["variables"]["revenue_2022"] == "160"
+
+    gross_plan = plan_finance_formula(
+        question="Are gross margins historically consistent as of FY2022?",
+        facts=[
+            _year_fact("cost of sales", "60", 2020, fact_id="cogs-2020"),
+            _year_fact("revenue", "100", 2020, fact_id="gross-revenue-2020"),
+            _year_fact("gross profit", "44", 2021, fact_id="gross-profit-2021"),
+            _year_fact("revenue", "110", 2021, fact_id="gross-revenue-2021"),
+            _year_fact("cost of sales", "72", 2022, fact_id="cogs-2022"),
+            _year_fact("revenue", "120", 2022, fact_id="gross-revenue-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert gross_plan.status == "ready"
+    assert gross_plan.formula_name == "margin_consistency_range"
+    assert gross_plan.payload["expression"] == (
+        "max(((revenue_2020 - cogs_2020) / revenue_2020), (gross_profit_2021 / revenue_2021), "
+        "((revenue_2022 - cogs_2022) / revenue_2022)) - min(((revenue_2020 - cogs_2020) / revenue_2020), "
+        "(gross_profit_2021 / revenue_2021), ((revenue_2022 - cogs_2022) / revenue_2022))"
+    )
+    assert gross_plan.payload["variables"]["cogs_2020"] == "60"
+    assert gross_plan.payload["variables"]["gross_profit_2021"] == "44"
 
 
 def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:
@@ -6069,7 +6161,7 @@ def test_toolchain_grounding_journals_failed_script_observation_for_replanning()
     assert executed[-1].data["status"] == "failed"
 
 
-def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_formula() -> None:
+def test_finance_formula_planner_scaffolds_margin_driver_without_claiming_driver() -> None:
     plan = plan_finance_formula(
         question=(
             "What drove operating margin change as of FY2022 for 3M? "
@@ -6078,7 +6170,17 @@ def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_fo
         facts=[],
     )
 
-    assert plan.status == "not_applicable"
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "margin_profile_change"
+    assert plan.missing_facts == [
+        "operating_income_2020",
+        "revenue_2020",
+        "operating_income_2021",
+        "revenue_2021",
+        "operating_income_2022",
+        "revenue_2022",
+    ]
+    assert "LLM decides" in plan.diagnostics["semantic_decision_policy"]
 
 
 def test_finance_formula_planner_still_allows_explicit_margin_calculation() -> None:

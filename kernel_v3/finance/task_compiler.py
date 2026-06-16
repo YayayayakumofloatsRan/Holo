@@ -1644,6 +1644,29 @@ def _transform_specs(*, formula_plan: FinanceFormulaPlan, frame_missing_slots: l
                 diagnostics={"source": "finance_task_compiler", "formula_status": formula_plan.status},
             )
         ]
+    if name in {"margin_profile_change", "margin_consistency_range"}:
+        payload = formula_plan.payload if isinstance(formula_plan.payload, dict) else {}
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        required_slots = list(variables.keys()) if variables else list(formula_plan.missing_facts or frame_missing_slots)
+        expression = _string(payload.get("expression")) or _string(formula_plan.diagnostics.get("expression"))
+        if not expression:
+            expression = "max(period_margins) - min(period_margins)" if name == "margin_consistency_range" else "ending_margin - beginning_margin"
+        return [
+            TransformSpec(
+                spec_id="transform-spec-" + _short_hash(name, ",".join(required_slots), expression),
+                domain="finance",
+                name=name,
+                required_slots=required_slots,
+                expression=expression,
+                output_unit="percent",
+                output_attribute=name,
+                diagnostics={
+                    "source": "finance_task_compiler",
+                    "formula_status": formula_plan.status,
+                    "semantic_decision_policy": "LLM decides margin usefulness, improvement, stability, or drivers from evidence and explicit question criteria.",
+                },
+            )
+        ]
     if name == "effective_tax_rate_change":
         return [
             TransformSpec(
@@ -2082,6 +2105,8 @@ def _statement_for_slot(slot_name: str) -> str | None:
         return "cash_flow_statement"
     if re.fullmatch(r"cogs_(?:19|20)\d{2}", slot_name):
         return "income_statement"
+    if re.fullmatch(r"(?:gross_profit|operating_income)_(?:19|20)\d{2}", slot_name):
+        return "income_statement"
     if re.fullmatch(r"revenue_(?:19|20)\d{2}", slot_name):
         return "income_statement"
     if slot_name in {"component_amount", "total_amount", "share_repurchases"}:
@@ -2163,6 +2188,10 @@ def _line_item_for_slot(slot_name: str) -> str | None:
         return "capital expenditures"
     if re.fullmatch(r"cogs_(?:19|20)\d{2}", slot_name):
         return "cost of goods sold"
+    if re.fullmatch(r"gross_profit_(?:19|20)\d{2}", slot_name):
+        return "gross profit"
+    if re.fullmatch(r"operating_income_(?:19|20)\d{2}", slot_name):
+        return "operating income"
     if re.fullmatch(r"revenue_(?:19|20)\d{2}", slot_name):
         return "revenue"
     mapping = {
@@ -2264,6 +2293,16 @@ def _accepted_attributes_for_evidence_slot(slot_name: str, line_item: str | None
         return _ordered_unique(values)
     if re.fullmatch(r"cogs_(?:19|20)\d{2}", slot_name):
         values = ["cost of goods sold", "cost of revenue", "cost of sales", "cogs"]
+        if line_item:
+            values.insert(0, line_item)
+        return _ordered_unique(values)
+    if re.fullmatch(r"gross_profit_(?:19|20)\d{2}", slot_name):
+        values = ["gross profit", "gross income"]
+        if line_item:
+            values.insert(0, line_item)
+        return _ordered_unique(values)
+    if re.fullmatch(r"operating_income_(?:19|20)\d{2}", slot_name):
+        values = ["operating income", "income from operations", "operating profit"]
         if line_item:
             values.insert(0, line_item)
         return _ordered_unique(values)

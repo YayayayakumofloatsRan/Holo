@@ -58,7 +58,13 @@ task compiler now add generic evidence/slot/transform scaffolds for:
 - `store_count_change`: current store count less prior store count;
 - `cash_flow_activity_comparison`: maximum signed amount across operating,
   investing, and financing cash-flow activities, leaving the activity-name
-  conclusion and explanation to the LLM.
+  conclusion and explanation to the LLM;
+- `margin_profile_change`: ending annual margin less beginning annual margin
+  for operating/gross margin profile and margin-driver questions;
+- `margin_consistency_range`: maximum annual margin less minimum annual margin
+  for historical gross-margin consistency questions. The host computes the
+  range only; the LLM applies any explicit question criterion such as "roughly
+  2%" and decides whether the metric is useful in context.
 
 The fact ledger also now canonicalizes investing cash flow, financing cash
 flow, and store-count metrics, and splits inline `metric=... ; metric=...`
@@ -74,12 +80,12 @@ Current static question-only FinanceBench formula coverage:
 
 | Slice | Recognized formula rows | Rows with TransformSpec |
 | --- | ---: | ---: |
-| `debug50` | `20/50` | `20/50` |
-| `test100` | `44/100` | `44/100` |
-| `all150` | `64/150` | `64/150` |
+| `debug50` | `26/50` | `26/50` |
+| `test100` | `48/100` | `48/100` |
+| `all150` | `74/150` | `74/150` |
 
 Compared with the 2026-06-16 common-formula baseline, all150 recognized formula
-coverage moved from `38/150` to `64/150`. This is only code-regression evidence
+coverage moved from `38/150` to `74/150`. This is only code-regression evidence
 for the next live run, not a live benchmark score.
 
 ## Verification
@@ -88,16 +94,16 @@ The following checks were run as code regression only:
 
 ```bash
 .venv/bin/python -m py_compile kernel_v3/finance/formula_planner.py kernel_v3/finance/fact_ledger.py kernel_v3/finance/substrate_adapter.py kernel_v3/finance/task_compiler.py tests/test_kernel_v3_finance_engine.py
-.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "period_change_and_cash_flow_activity or cash_flow_activity_and_store_count"
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q -k "margin_profile_and_consistency"
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
 git diff --check
 ```
 
 Latest result: py_compile passed; targeted finance-engine slice
-`3 passed, 265 deselected in 0.48s`; full finance engine
-`268 passed in 4.09s`; full FinanceBench harness
-`52 passed in 302.57s`; `git diff --check` passed.
+`2 passed, 268 deselected in 0.46s`; full finance engine
+`270 passed in 5.17s`; full FinanceBench harness
+`52 passed in 296.78s`; `git diff --check` passed.
 
 ## Next Honest Benchmark Step
 
