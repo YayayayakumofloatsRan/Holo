@@ -98,3 +98,46 @@ fb_debug50_stream_followup_o001_l001_20260618.*
 3. 将 `finance.slot_bind` 的 `next_action` 结果接回主循环，而不是只停留在后处理。
 4. 把 artifact 工作台升级为字段级查询接口，减少整包 `artifact.read`。
 5. 再按 debug50 类型簇做 live 调试，不做长回归，不做 fake accuracy。
+
+## 7. Mature-loop trace parity checkpoint
+
+用户继续要求优先照搬成熟 agent loop 的实现思想。本轮重新对照本地
+TypeScript 项目的 `QueryEngine` / `queryLoop` / `StreamingToolExecutor`：
+成熟实现不是只把工具结果写进日志，而是把 assistant turn、tool use、
+tool result、feedback、恢复/继续状态组成下一轮模型可见的稳定轨迹。
+
+本轮补齐：
+
+- `ContextPackCompiler` 新增预算感知 `agent_trace` section，保留最近的
+  assistant turn、action、非普通 allowed policy block、tool execution event、
+  observation、feedback、guard、result 的模型可见轨迹。
+- `agent_trace` 不复制完整工具结果；observation 在 trace 中只保留索引式
+  outline，详细工具结果仍由 `recent_observations`、`ArtifactStore` 和
+  `artifact.read` 承担，避免上下文重复膨胀。
+- `agent_trace` 会过滤低价值 progress event 和普通 allowed policy decision，
+  保留影响下一步推理的记录；小预算 context 自动关闭或缩小 trace 窗口。
+- `_assistant_turn_prompt(...)` 将 `agent_trace` 从 sections 中提升为显式
+  `context.state.agent_trace`，让模型 one-shot 下一步工具调用时能直接看到
+  最近 tool_call_id、工具名、状态、feedback 和 artifact 引用。
+- `ProcessorFabric` 的 provider availability circuit 已从 provider 级改为
+  provider+model 级。一个 DeepSeek pro timeout 不再把同 provider 的 flash
+  synthesizer/slot_bind 一并短路，避免单模型故障破坏后续 loop 恢复。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase1_context_trace.py tests/test_kernel_v3_phase3_context_compiler.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_processor_fabric_short_circuits_repeated_provider_availability_failure tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_provider_circuit_is_scoped_by_model_not_whole_provider tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_processor_streaming.py -q
+```
+
+结果：
+
+- `24 passed in 3.32s`
+- `22 passed in 0.54s`
+- `18 passed in 0.87s`
+
+说明：这是通用 agent loop 成熟度修复，不是 FinanceBench/FinQA 准确率成绩。
+本轮没有新增可报告的 held-out finance benchmark 分数。下一步应继续用 live
+debug50 类型簇验证：模型是否能利用 `agent_trace` 和工具 surface 自主恢复失败、
+补齐证据、计算并通过 verifier。

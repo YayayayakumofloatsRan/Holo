@@ -1227,6 +1227,49 @@ def test_assistant_turn_prompt_applies_provider_message_replacement_view() -> No
     assert "PROJECTED-" not in prompt
 
 
+def test_assistant_turn_prompt_lifts_agent_trace_for_next_turn() -> None:
+    context = ContextBundle(
+        context_id="ctx-agent-trace",
+        thread_key="local:default",
+        event_ids=[],
+        memory_refs=[],
+        token_budget=4096,
+        state={
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "sections": [
+                {
+                    "name": "agent_trace",
+                    "records": [
+                        {
+                            "record_id": "ledger-10",
+                            "step_id": "step-1",
+                            "kind": "assistant_turn",
+                            "assistant_turn": {
+                                "turn_id": "turn-1",
+                                "tool_calls": [
+                                    {
+                                        "tool_call_id": "tc-search",
+                                        "name": "retrieval.run",
+                                        "arguments": {"query": "3M FY2022 10-K"},
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    prompt = _assistant_turn_prompt(context, None, allowed_tool_names={"retrieval.run"})
+    payload = json.loads(prompt)
+
+    trace = payload["context"]["state"]["agent_trace"]
+    assert trace["records"][0]["kind"] == "assistant_turn"
+    assert trace["records"][0]["assistant_turn"]["tool_calls"][0]["name"] == "retrieval.run"
+
+
 def test_deep_agent_loop_persists_full_tool_result_artifact_for_replaced_batch() -> None:
     registry = ToolRegistry()
     registry.register("large.read", _large_read_tool())

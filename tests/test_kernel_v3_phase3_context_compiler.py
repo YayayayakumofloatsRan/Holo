@@ -268,6 +268,93 @@ def test_context_pack_compacts_tool_batch_results_with_projection_not_raw_previe
     assert "x" * 200 not in encoded
 
 
+def test_context_pack_exposes_agent_trace_for_model_tool_loop():
+    journal = JournalStore.in_memory()
+    task = SessionEngine.from_journal(journal).start("trace loop", thread_id="thread-a", journal=journal)
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id=task.step_id,
+        kind="event",
+        data={"event_id": "evt-1", "payload": {"text": "trace loop"}},
+        event_ref="evt-1",
+    )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="assistant_turn",
+        data={
+            "turn_id": "turn-1",
+            "tool_calls": [
+                {
+                    "tool_call_id": "tc-calc",
+                    "name": "calculator.compute",
+                    "arguments": {"expression": "a+b", "variables": {"a": "1", "b": "2"}},
+                    "reason": "need arithmetic",
+                }
+            ],
+            "tool_call_count": 1,
+        },
+    )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="action",
+        data={
+            "action_id": "act-calc",
+            "kind": "tool",
+            "name": "calculator.compute",
+            "payload": {"expression": "a+b", "variables": {"a": "1", "b": "2"}},
+            "reasons": ["need arithmetic"],
+            "side_effect_class": "read",
+        },
+        action_ref="act-calc",
+    )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="observation",
+        data={
+            "observation_id": "obs-calc",
+            "kind": "tool_result",
+            "status": "ok",
+            "source": "tool:calculator.compute",
+            "content": {"result": "3", "formula_trace": {"formula_name": "sum"}},
+        },
+        action_ref="act-calc",
+        observation_ref="obs-calc",
+    )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="feedback",
+        data={
+            "feedback_id": "fb-continue",
+            "status": "continue",
+            "missing_evidence": ["need_final_answer"],
+        },
+        feedback_ref="fb-continue",
+    )
+
+    pack = ContextPackCompiler(token_budget=4096, section_budget=1024).compile(task, journal, step_id="step-1")
+
+    trace = next(section for section in pack.sections if section["name"] == "agent_trace")
+    assert [record["kind"] for record in trace["records"]] == [
+        "assistant_turn",
+        "action",
+        "observation",
+        "feedback",
+    ]
+    assert trace["records"][0]["assistant_turn"]["tool_calls"][0]["name"] == "calculator.compute"
+    assert trace["records"][1]["action"]["payload_keys"] == ["expression", "variables"]
+    assert trace["records"][2]["observation"]["status"] == "ok"
+    assert trace["records"][3]["feedback"]["missing_evidence"] == ["need_final_answer"]
+
+
 def test_context_pack_budget_view_compacts_large_individual_tool_result():
     journal = JournalStore.in_memory()
     task = SessionEngine.from_journal(journal).start("inspect large tool result", thread_id="thread-a", journal=journal)

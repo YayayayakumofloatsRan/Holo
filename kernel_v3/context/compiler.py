@@ -8,7 +8,7 @@ from kernel_v3.context.budgeter import BudgetExceeded, measure_units, validate_s
 from kernel_v3.context.memory_read import MemoryRead
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.context.validator import deterministic_hash
-from kernel_v3.contracts import ContextBundle, JsonObject
+from kernel_v3.contracts import ContextBundle, JsonObject, LedgerRecord
 from kernel_v3.journal import JournalStore
 from kernel_v3.memory import MemoryStore
 from kernel_v3.memory.structured import structured_memory_summary
@@ -16,6 +16,17 @@ from kernel_v3.session import TaskState
 
 
 CONTEXT_DURABLE_MEMORY_LIMIT_CAP = 10
+AGENT_TRACE_RECORD_LIMIT = 16
+AGENT_TRACE_KINDS = {
+    "assistant_turn",
+    "action",
+    "policy_decision",
+    "tool_execution_event",
+    "observation",
+    "feedback",
+    "guard",
+    "result",
+}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -97,6 +108,11 @@ class ContextPackCompiler:
         records = journal.records(task_id=task.task_id)
         event_records = [record for record in records if record.kind in {"event", "resume"}]
         observation_records = [record for record in records if record.kind == "observation"][-3:]
+        agent_trace_limit = _agent_trace_record_limit(
+            token_budget=self.token_budget,
+            section_budget=self.section_budget,
+        )
+        agent_trace_records = _recent_agent_trace_records(records, limit=agent_trace_limit)
         artifact_ids: list[str] = []
         for record in observation_records:
             artifact_ids.extend(record.artifact_refs)
@@ -146,6 +162,16 @@ class ContextPackCompiler:
             {"name": "tool_briefs", "tools": [_compact_tool_brief(item) for item in list(tool_briefs or [])]},
             {"name": "permission_state", "permission": _compact_permission_state(self.permission_state)},
         ]
+        if agent_trace_limit > 0:
+            sections.insert(
+                3,
+                {
+                    "name": "agent_trace",
+                    "records": [_compact_agent_trace_record(record) for record in agent_trace_records],
+                    "record_limit": agent_trace_limit,
+                    "purpose": "model-visible assistant/tool/result trajectory for the next agent turn",
+                },
+            )
         if durable_memory_enabled:
             sections.insert(
                 7,
@@ -181,6 +207,11 @@ class ContextPackCompiler:
             "tool_briefs": {"tools": [_compact_tool_brief(item) for item in list(tool_briefs or [])]},
             "permission_state": {"permission": _compact_permission_state(self.permission_state)},
         }
+        if agent_trace_limit > 0:
+            budget_views["agent_trace"] = {
+                "records": [_agent_trace_budget_view(record) for record in agent_trace_records],
+                "record_limit": agent_trace_limit,
+            }
         if durable_memory_enabled:
             budget_views["durable_memory"] = {
                 "items": [_durable_memory_budget_view(item) for item in durable_memory_items],
@@ -274,7 +305,15 @@ class ContextPackCompiler:
         total_units: int,
         compacted_section_names: list[str],
     ) -> int:
-        droppable = ["tool_briefs", "citations", "durable_memory", "memory_refs", "recent_observations", "project_profile"]
+        droppable = [
+            "tool_briefs",
+            "citations",
+            "durable_memory",
+            "memory_refs",
+            "agent_trace",
+            "recent_observations",
+            "project_profile",
+        ]
         for name in droppable:
             if total_units <= self.token_budget:
                 break
@@ -358,6 +397,10 @@ class ContextPackCompiler:
             tools = section.get("tools")
             if isinstance(tools, list):
                 del tools[1:]
+        elif name == "agent_trace":
+            records = section.get("records")
+            if isinstance(records, list):
+                del records[4:]
         _truncate_text_values(section, limit=8)
         if name == "recent_observations":
             records = section.get("records")
@@ -397,6 +440,16 @@ class ContextPackCompiler:
                 for item in items:
                     if isinstance(item, dict):
                         item["quote"] = _compact_text(str(item.get("quote", "")), limit=8)
+        elif name == "agent_trace":
+            records = section.get("records")
+            if isinstance(records, list):
+                for record in records:
+                    if not isinstance(record, dict):
+                        continue
+                    for key in ("assistant_turn", "action", "observation", "feedback"):
+                        payload = record.get(key)
+                        if isinstance(payload, dict):
+                            record[key] = _compact_nested_content(payload)
 
     @staticmethod
     def from_dict(data: JsonObject) -> ContextPack:
@@ -512,6 +565,210 @@ def _compact_project_profile(profile: JsonObject) -> JsonObject:
         "constraints": list(profile.get("constraints", [])),
         "redaction_markers": list(profile.get("redaction_markers", [])),
     }
+
+
+def _recent_agent_trace_records(records: list[LedgerRecord], *, limit: int) -> list[LedgerRecord]:
+    trace = [record for record in records if _include_agent_trace_record(record)]
+    return trace[-max(0, int(limit)) :]
+
+
+def _include_agent_trace_record(record: LedgerRecord) -> bool:
+    if record.kind not in AGENT_TRACE_KINDS:
+        return False
+    data = record.data if isinstance(record.data, dict) else {}
+    if record.kind == "policy_decision" and data.get("allowed") is True:
+        return False
+    if record.kind == "tool_execution_event" and data.get("event_type") == "progress":
+        return False
+    return True
+
+
+def _agent_trace_record_limit(*, token_budget: int, section_budget: int) -> int:
+    if token_budget < 2048 or section_budget < 192:
+        return 0
+    if section_budget < 384:
+        return min(2, AGENT_TRACE_RECORD_LIMIT)
+    if section_budget < 1536:
+        return min(4, AGENT_TRACE_RECORD_LIMIT)
+    return AGENT_TRACE_RECORD_LIMIT
+
+
+def _compact_agent_trace_record(record: LedgerRecord) -> JsonObject:
+    data = record.data if isinstance(record.data, dict) else {}
+    compacted: JsonObject = {
+        "record_id": record.record_id,
+        "run_id": record.run_id,
+        "step_id": record.step_id,
+        "kind": record.kind,
+    }
+    if record.action_ref:
+        compacted["action_ref"] = record.action_ref
+    if record.observation_ref:
+        compacted["observation_ref"] = record.observation_ref
+    if record.feedback_ref:
+        compacted["feedback_ref"] = record.feedback_ref
+    if record.artifact_refs:
+        compacted["artifact_refs"] = record.artifact_refs[:8]
+
+    if record.kind == "assistant_turn":
+        compacted["assistant_turn"] = _compact_agent_trace_assistant_turn(data)
+    elif record.kind == "action":
+        compacted["action"] = _compact_agent_trace_action(data)
+    elif record.kind == "policy_decision":
+        compacted["policy_decision"] = _compact_agent_trace_policy(data)
+    elif record.kind == "tool_execution_event":
+        compacted["tool_execution_event"] = _compact_agent_trace_tool_event(data)
+    elif record.kind == "observation":
+        compacted["observation"] = _compact_agent_trace_observation(data)
+    elif record.kind == "feedback":
+        compacted["feedback"] = _compact_agent_trace_feedback(data)
+    elif record.kind == "guard":
+        compacted["guard"] = _compact_nested_content(data)
+    elif record.kind == "result":
+        compacted["result"] = _compact_agent_trace_result(data)
+    else:
+        compacted["data"] = _compact_nested_content(data)
+    return compacted
+
+
+def _compact_agent_trace_assistant_turn(data: JsonObject) -> JsonObject:
+    raw_tool_calls = data.get("tool_calls")
+    tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+    raw_parse_errors = data.get("parse_errors")
+    parse_errors = raw_parse_errors if isinstance(raw_parse_errors, list) else []
+    return {
+        "turn_id": data.get("turn_id"),
+        "message": _compact_optional_text(data.get("message"), limit=320),
+        "tool_call_count": data.get("tool_call_count", len(tool_calls)),
+        "tool_calls": [
+            _compact_agent_trace_tool_call(item)
+            for item in tool_calls[:8]
+            if isinstance(item, dict)
+        ],
+        "final_answer": _compact_optional_text(data.get("final_answer"), limit=360),
+        "stop_reason": data.get("stop_reason"),
+        "reasons": _string_list(data.get("reasons"))[:8],
+        "parse_errors": [
+            _compact_nested_content(item)
+            for item in parse_errors[:4]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _compact_agent_trace_tool_call(item: JsonObject) -> JsonObject:
+    arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+    return {
+        "tool_call_id": item.get("tool_call_id") or item.get("id"),
+        "name": item.get("name") or item.get("tool"),
+        "arguments": _compact_nested_content(arguments),
+        "reason": _compact_optional_text(item.get("reason") or item.get("description"), limit=200),
+        "side_effect_class": item.get("side_effect_class"),
+    }
+
+
+def _compact_agent_trace_action(data: JsonObject) -> JsonObject:
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    return {
+        "action_id": data.get("action_id"),
+        "kind": data.get("kind"),
+        "name": data.get("name"),
+        "description": _compact_optional_text(data.get("description"), limit=240),
+        "payload": _compact_nested_content(payload),
+        "payload_keys": [str(key) for key in payload.keys()][:24],
+        "reasons": _string_list(data.get("reasons"))[:8],
+        "side_effect_class": data.get("side_effect_class"),
+    }
+
+
+def _compact_agent_trace_policy(data: JsonObject) -> JsonObject:
+    return {
+        "action_id": data.get("action_id"),
+        "allowed": data.get("allowed"),
+        "reason": data.get("reason"),
+        "permissions_required": list(data.get("permissions_required", []))
+        if isinstance(data.get("permissions_required"), list)
+        else [],
+        "side_effect_class": data.get("side_effect_class"),
+    }
+
+
+def _compact_agent_trace_tool_event(data: JsonObject) -> JsonObject:
+    detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+    return {
+        "event_type": data.get("event_type"),
+        "tool_call_id": data.get("tool_call_id"),
+        "action_id": data.get("action_id"),
+        "tool_name": data.get("tool_name"),
+        "status": data.get("status"),
+        "detail": _compact_nested_content(detail),
+    }
+
+
+def _compact_agent_trace_observation(data: JsonObject) -> JsonObject:
+    content = data.get("content") if isinstance(data.get("content"), dict) else {}
+    compacted: JsonObject = {
+        "observation_id": data.get("observation_id"),
+        "kind": data.get("kind"),
+        "status": data.get("status"),
+        "source": data.get("source"),
+    }
+    if data.get("action_id") is not None:
+        compacted["action_id"] = data.get("action_id")
+    if data.get("tool_call_id") is not None:
+        compacted["tool_call_id"] = data.get("tool_call_id")
+    if data.get("kind") == "tool_batch_result":
+        raw_results = content.get("results")
+        results = raw_results if isinstance(raw_results, list) else []
+        compacted["tool_batch"] = {
+            "turn_id": content.get("turn_id"),
+            "tool_call_count": content.get("tool_call_count"),
+            "results": [
+                {
+                    "tool_call_id": item.get("tool_call_id"),
+                    "tool": item.get("tool"),
+                    "status": item.get("status"),
+                    "kind": item.get("kind"),
+                    "observation_id": item.get("observation_id"),
+                    "artifact_refs": [str(ref) for ref in item.get("artifact_refs", [])[:4]]
+                    if isinstance(item.get("artifact_refs"), list)
+                    else [],
+                }
+                for item in results[:8]
+                if isinstance(item, dict)
+            ],
+        }
+    elif content:
+        compacted["content_keys"] = [str(key) for key in content.keys() if not str(key).startswith("_host_")][:16]
+    elif data.get("content") is not None:
+        compacted["content_preview"] = _compact_text(str(data.get("content")), limit=160)
+    return compacted
+
+
+def _compact_agent_trace_feedback(data: JsonObject) -> JsonObject:
+    return {
+        "feedback_id": data.get("feedback_id"),
+        "status": data.get("status"),
+        "stop_reason": data.get("stop_reason"),
+        "answer": _compact_optional_text(data.get("answer"), limit=360),
+        "missing_evidence": _string_list(data.get("missing_evidence"))[:24],
+    }
+
+
+def _compact_agent_trace_result(data: JsonObject) -> JsonObject:
+    return {
+        "task_id": data.get("task_id"),
+        "run_id": data.get("run_id"),
+        "status": data.get("status"),
+        "answer": _compact_optional_text(data.get("answer"), limit=360),
+        "stop_reason": data.get("stop_reason"),
+    }
+
+
+def _compact_optional_text(value: object, *, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return _compact_text(value, limit=limit)
 
 
 def _compact_observation(data: JsonObject) -> JsonObject:
@@ -1007,6 +1264,52 @@ def _event_budget_view(data: JsonObject) -> JsonObject:
     if isinstance(data.get("text"), str):
         return {"event_id": data.get("event_id"), "payload": {"text": data.get("text")}}
     return {"event_id": data.get("event_id"), "payload": payload}
+
+
+def _agent_trace_budget_view(record: LedgerRecord) -> JsonObject:
+    data = record.data if isinstance(record.data, dict) else {}
+    kind = record.kind
+    budget_view: JsonObject = {
+        "r": record.record_id,
+        "s": record.step_id,
+        "k": kind,
+    }
+    if record.action_ref:
+        budget_view["a"] = record.action_ref
+    if record.observation_ref:
+        budget_view["o"] = record.observation_ref
+    if record.feedback_ref:
+        budget_view["f"] = record.feedback_ref
+    if kind == "assistant_turn":
+        raw_calls = data.get("tool_calls") if isinstance(data.get("tool_calls"), list) else []
+        budget_view["t"] = [
+            {
+                "id": item.get("tool_call_id") or item.get("id"),
+                "n": item.get("name") or item.get("tool"),
+            }
+            for item in raw_calls[:6]
+            if isinstance(item, dict)
+        ]
+    elif kind == "action":
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        budget_view["n"] = data.get("name")
+        budget_view["pk"] = [str(key) for key in payload.keys()][:12]
+    elif kind == "observation":
+        budget_view["st"] = data.get("status")
+        budget_view["src"] = data.get("source")
+    elif kind == "feedback":
+        budget_view["st"] = data.get("status")
+        missing = data.get("missing_evidence") if isinstance(data.get("missing_evidence"), list) else []
+        budget_view["m"] = [str(item) for item in missing[:8]]
+    elif kind == "tool_execution_event":
+        budget_view["e"] = data.get("event_type")
+        budget_view["tc"] = data.get("tool_call_id")
+        budget_view["tn"] = data.get("tool_name")
+        budget_view["st"] = data.get("status")
+    elif kind in {"policy_decision", "result", "guard"}:
+        budget_view["st"] = data.get("status")
+        budget_view["reason"] = data.get("reason") or data.get("stop_reason")
+    return budget_view
 
 
 def _observation_budget_view(data: JsonObject) -> JsonObject:

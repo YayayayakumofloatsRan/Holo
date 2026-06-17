@@ -2140,12 +2140,25 @@ def _compact_context_for_turn(context: ContextBundle) -> JsonObject:
         "sections",
     ]
     compact = {key: state.get(key) for key in selected_keys if key in state}
+    agent_trace = _agent_trace_section_from_state(state)
+    if agent_trace:
+        compact["agent_trace"] = agent_trace
     return {
         "context_id": context.context_id,
         "thread_key": context.thread_key,
         "token_budget": context.token_budget,
         "state": _json_object(compact),
     }
+
+
+def _agent_trace_section_from_state(state: JsonObject) -> JsonObject:
+    sections = state.get("sections")
+    if not isinstance(sections, list):
+        return {}
+    for section in sections:
+        if isinstance(section, dict) and section.get("name") == "agent_trace":
+            return dict(section)
+    return {}
 
 
 def _processor_budget_parameters_from_context(context: ContextBundle) -> JsonObject:

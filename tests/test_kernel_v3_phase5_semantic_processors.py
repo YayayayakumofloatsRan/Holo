@@ -759,6 +759,91 @@ def test_phase5_processor_fabric_short_circuits_repeated_provider_availability_f
     assert result_records[-1].data["duration_ms"] == 0
 
 
+def test_phase5_provider_circuit_is_scoped_by_model_not_whole_provider():
+    class MixedModelProvider:
+        name = "deepseek"
+        model = DEEPSEEK_V4_FLASH
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def run(self, request: ProcessorRequest) -> ProcessorResult:
+            model = str(request.parameters.get("model") or self.model)
+            self.calls.append(model)
+            if model == DEEPSEEK_V4_PRO:
+                return ProcessorResult(
+                    result_id=f"result-{request.request_id}",
+                    request_id=request.request_id,
+                    status="failed",
+                    output={
+                        "provider": self.name,
+                        "model": model,
+                        "error_message_preview": "deepseek timeout after 30s while reading response",
+                    },
+                    usage={},
+                    error="RuntimeError",
+                )
+            text = json.dumps(
+                {
+                    "status": "final_answer_ready",
+                    "answer": "flash recovered",
+                    "stop_reason": "completed",
+                    "missing_evidence": [],
+                },
+                ensure_ascii=False,
+            )
+            return ProcessorResult(
+                result_id=f"result-{request.request_id}",
+                request_id=request.request_id,
+                status="ok",
+                output={"text": text, "provider": self.name, "model": model},
+                usage={},
+                error=None,
+            )
+
+    provider = MixedModelProvider()
+    router = ProcessorRouter(default_provider="deepseek", default_model=DEEPSEEK_V4_FLASH)
+    router.set_route("task.compile", model=DEEPSEEK_V4_PRO)
+    router.set_route("finance.slot_bind", model=DEEPSEEK_V4_FLASH)
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(providers={"deepseek": provider}, router=router, journal=journal)
+
+    first = fabric.run_json(
+        task_type="task.compile",
+        task_id="task-circuit-model",
+        run_id="run-circuit-model",
+        context_id="ctx-pro",
+        prompt="pro call times out",
+        schema=PLANNER_SCHEMA,
+    )
+    second = fabric.run_json(
+        task_type="finance.slot_bind",
+        task_id="task-circuit-model",
+        run_id="run-circuit-model",
+        context_id="ctx-flash",
+        prompt="flash call should still run",
+        schema=EVALUATOR_SCHEMA,
+    )
+    third = fabric.run_json(
+        task_type="task.compile",
+        task_id="task-circuit-model",
+        run_id="run-circuit-model",
+        context_id="ctx-pro-2",
+        prompt="same pro model should short circuit",
+        schema=PLANNER_SCHEMA,
+    )
+
+    assert first.result.status == "failed"
+    assert first.result.error == "RuntimeError"
+    assert second.result.status == "ok"
+    assert second.parsed["answer"] == "flash recovered"
+    assert third.result.status == "failed"
+    assert third.result.error == "provider_circuit_open"
+    assert provider.calls == [DEEPSEEK_V4_PRO, DEEPSEEK_V4_FLASH]
+    result_records = journal.records(task_id="task-circuit-model", kind="processor_result")
+    assert result_records[-1].data["output"]["previous_model"] == DEEPSEEK_V4_PRO
+
+
 def test_phase5_evaluator_prompt_uses_observation_previews_not_raw_bodies():
     raw = "RAW_PROVIDER_EGRESS_OBSERVATION_" + ("x" * 900)
     provider = CapturingFakeJsonProvider(

@@ -253,6 +253,19 @@ it does not select answer facts or hard-code benchmark rows. Targeted structural
 tests pass (`23` deep-loop tests, `298` finance-engine tests, `31` workloop
 tests). This is still a loop-contract improvement, not a FinanceBench/FinQA
 score claim.
+The next mature-loop parity checkpoint adds a budget-aware `agent_trace`
+section to the context pack and lifts it into `assistant.turn` prompts as
+`context.state.agent_trace`. The model now sees a stable recent trajectory of
+assistant turns, tool calls, observations, feedback, guards, and results without
+duplicating large tool payloads; detailed outputs remain in `recent_observations`
+and artifacts readable through `artifact.read`. Low-information progress events
+and ordinary allowed policy decisions are filtered, and small context budgets
+shrink or disable the trace window. Provider availability circuit breaking is
+also scoped by provider+model, so a timeout on one DeepSeek model does not
+short-circuit a different model on the same provider later in the run. Targeted
+structural tests pass (`24` deep-loop tests, `22` context/tool-surface tests,
+`18` processor/fabric tests). This is architecture evidence, not a new finance
+benchmark score.
 The streaming path now also mirrors the inspected TypeScript
 `StreamingToolExecutor` scheduling rule: a streamed tool starts immediately
 when possible, explicitly concurrency-safe tools may run together, and exclusive

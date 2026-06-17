@@ -121,7 +121,7 @@ class ProcessorFabric:
                 delta={"budget": budget_error.get("budget", {}), "budget_state": budget_error.get("state", {})},
             )
             return
-        circuit = self._provider_circuit.get(route.provider)
+        circuit = self._provider_circuit.get(_provider_circuit_key(route.provider, provider_model))
         if circuit is not None:
             yield from self._stream_error(
                 request,
@@ -166,6 +166,7 @@ class ProcessorFabric:
             error_preview = _preview(str(exc) or type(exc).__name__, 240)
             self._open_provider_circuit(
                 route.provider,
+                model=provider_model,
                 task_type=task_type,
                 error=type(exc).__name__,
                 error_preview=error_preview,
@@ -301,7 +302,7 @@ class ProcessorFabric:
                 task_type=task_type,
                 duration_ms=0,
             )
-        circuit = self._provider_circuit.get(route.provider)
+        circuit = self._provider_circuit.get(_provider_circuit_key(route.provider, provider_model))
         if circuit is not None:
             result = ProcessorResult(
                 result_id=f"result-{request.request_id}",
@@ -314,6 +315,7 @@ class ProcessorFabric:
                     "previous_error": circuit.get("error"),
                     "previous_error_preview": circuit.get("error_preview"),
                     "previous_task_type": circuit.get("task_type"),
+                    "previous_model": circuit.get("model"),
                 },
                 usage={},
                 error="provider_circuit_open",
@@ -396,6 +398,7 @@ class ProcessorFabric:
             self._record_processor_budget_usage(request, task_id=task_id, result=result)
             self._open_provider_circuit(
                 route.provider,
+                model=provider_model,
                 task_type=task_type,
                 error=type(exc).__name__,
                 error_preview=error_preview,
@@ -436,6 +439,7 @@ class ProcessorFabric:
             if _is_provider_availability_error(provider_result.error or "", output):
                 self._open_provider_circuit(
                     route.provider,
+                    model=provider_model,
                     task_type=task_type,
                     error=provider_result.error or "provider_failed",
                     error_preview=_provider_error_preview(output),
@@ -555,10 +559,20 @@ class ProcessorFabric:
         state["calls"] = int(state.get("calls") or 0) + 1
         state["total_tokens"] = int(state.get("total_tokens") or 0) + _usage_total_tokens(result.usage)
 
-    def _open_provider_circuit(self, provider: str, *, task_type: str, error: str, error_preview: str | None) -> None:
+    def _open_provider_circuit(
+        self,
+        provider: str,
+        *,
+        model: str,
+        task_type: str,
+        error: str,
+        error_preview: str | None,
+    ) -> None:
         self._provider_circuit.setdefault(
-            provider,
+            _provider_circuit_key(provider, model),
             {
+                "provider": provider,
+                "model": model,
                 "task_type": task_type,
                 "error": error,
                 "error_preview": error_preview,
@@ -890,6 +904,10 @@ def _processor_budget_key(request: ProcessorRequest, *, task_id: str | None) -> 
     if request.run_id:
         return f"run:{request.run_id}"
     return f"request:{request.request_id}"
+
+
+def _provider_circuit_key(provider: str, model: str | None) -> str:
+    return f"{provider}:{model or ''}"
 
 
 def _positive_budget_int(value: object) -> int | None:
