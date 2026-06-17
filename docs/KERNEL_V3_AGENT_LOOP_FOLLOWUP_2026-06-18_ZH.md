@@ -683,3 +683,38 @@ HOLO_V3_LIVE_MODEL=1 env -u DEEPSEEK_API_KEY .venv/bin/python -m kernel_v3.cli .
 `results.jsonl` / `summary.json` 均未创建。当前 Windows interop diagnostic 仍是
 `UtilBindVsockAnyPort: socket failed 1`，所以真正恢复 live 刷分前仍需把 provider
 key 直接放进 UbuntuHolo 环境。
+
+## 19. No-gold debug50 requirements audit checkpoint
+
+用户要求停止逐题补丁，先检查系统合同，按类型簇突破 debug50。为此本轮新增
+`bench finance-requirements-audit`：
+
+```bash
+.venv/bin/python -m kernel_v3.cli bench finance-requirements-audit \
+  --dataset data/bench/finance/financebench_doc_retrieval.jsonl \
+  --split debug50 \
+  --format text
+```
+
+该入口只看题面和公开元数据，不读取或输出 `gold_answer`、`numeric_value`、
+`tolerance`、`evidence_excerpt`、reference evidence 或 dev gold。它输出
+`holo.kernel_v3.finance_requirements_audit.v1`，并固定标记
+`no_gold_fields_used=true`、`capability_claim=false`、
+`benchmark_progress_claim=false`。
+
+实跑 debug50 结构审查结果：
+
+- `items=50`
+- `contract_covered=50/50`
+- `direct_line_item_or_disclosure=42`
+- `defined_formula_calculation=33`
+- `calculation_then_business_judgment=30`
+- `driver_attribution_or_bridge=19`
+- `table_ranking_or_comparison=7`
+- `multi_entity_compare=9`
+
+这一步对应成熟 agent loop 的上层能力：先把任务转成 TaskSpec /
+EvidenceSpec / TransformSpec / tool workbench 的需求图，再让 LLM one-shot
+选择和调用工具。它不替模型做答案规则，不做 table cheating，也不是
+FinanceBench/FQA 分数。后续 live debug 应按这些任务族推进，而不是围绕单题
+重复打补丁。

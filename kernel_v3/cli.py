@@ -29,11 +29,13 @@ from kernel_v3.bench import (
     FinanceBenchmarkResult,
     FINANCE_BENCHMARK_SPLITS,
     build_finance_benchmark_report_from_path,
+    build_finance_requirements_audit,
     convert_public_finance_benchmark,
     fetch_public_finance_benchmark,
     finance_benchmark_run_id,
     load_finance_benchmark_items,
     render_finance_benchmark_report,
+    render_finance_requirements_audit,
     resolve_finance_benchmark_split,
     run_finance_benchmark,
     run_finance_benchmark_parallel,
@@ -779,6 +781,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional benchmark run directory containing results.jsonl, summary.json, http-cache, and worker state.",
     )
+    finance_requirements_audit = bench_sub.add_parser("finance-requirements-audit")
+    finance_requirements_audit.add_argument("--dataset", required=True)
+    finance_requirements_audit.add_argument(
+        "--split",
+        choices=sorted(FINANCE_BENCHMARK_SPLITS),
+        default=None,
+        help=(
+            "Named benchmark split to audit structurally. This reads question text and public metadata only; "
+            "gold/reference material is excluded."
+        ),
+    )
+    finance_requirements_audit.add_argument("--limit", type=int, default=None)
+    finance_requirements_audit.add_argument("--offset", type=int, default=0)
+    finance_requirements_audit.add_argument("--format", choices=["json", "text"], default="json")
+    finance_requirements_audit.add_argument("--output", default=None)
     finance_tool_audit = bench_sub.add_parser("finance-tool-audit")
     finance_tool_audit.add_argument(
         "--execution-profile",
@@ -2450,6 +2467,37 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         if progress_format == "text":
             return {**payload, "_stdout": _render_finance_progress(payload)}
         return payload
+    if command == "finance-requirements-audit":
+        try:
+            audit = build_finance_requirements_audit(
+                args.dataset,
+                split=getattr(args, "split", None),
+                limit=getattr(args, "limit", None),
+                offset=int(getattr(args, "offset", 0) or 0),
+            )
+        except ValueError as exc:
+            return {"status": "failed", "reason": "invalid_finance_requirements_audit_args", "message": str(exc)}
+        journal.append(
+            task_id=None,
+            run_id="finance-requirements-audit",
+            step_id=None,
+            kind="finance_requirements_audit",
+            data=audit,
+            state_delta={"finance_requirements_audit_status": audit.get("status")},
+        )
+        rendered = (
+            render_finance_requirements_audit(audit)
+            if getattr(args, "format", "json") == "text"
+            else json.dumps(audit, ensure_ascii=False, sort_keys=True, indent=2)
+        )
+        if getattr(args, "output", None):
+            path = Path(args.output)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(rendered + "\n", encoding="utf-8")
+            return {**audit, "output": str(path)}
+        if getattr(args, "format", "json") == "text":
+            return {**audit, "_stdout": rendered}
+        return audit
     if command == "finance-tool-audit":
         audit = build_finance_tool_readiness_audit(
             execution_profile_id=args.execution_profile,

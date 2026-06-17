@@ -163,7 +163,56 @@ capability_claim=false; benchmark_progress_claim=false
 
 这一步不是最终通用 loop，只是把 loop contract 提升为模型真实可见的稳定 ABI。下一步应把 ledger bind / task compile / table extraction 从 finalizer 内部继续前移为 loop 中可观察、可恢复的一等步骤。
 
-## 8. 下一步优先级
+## 8. 可执行 no-gold 需求审查入口
+
+2026-06-18 CST 已把上述“按题型簇突破”的复盘变成可执行命令：
+
+```bash
+.venv/bin/python -m kernel_v3.cli bench finance-requirements-audit \
+  --dataset data/bench/finance/financebench_doc_retrieval.jsonl \
+  --split debug50 \
+  --format text
+```
+
+该命令只读取 `item_id`、`question`、`category`、`source`、`workflow_type`
+这类题面/公开元数据；`gold_answer`、`numeric_value`、`tolerance`、
+`evidence_excerpt`、reference evidence、dev gold 等字段会被排除。输出 schema 为
+`holo.kernel_v3.finance_requirements_audit.v1`，并显式标记：
+
+```text
+no_gold_fields_used=true
+capability_claim=false
+benchmark_progress_claim=false
+```
+
+本次 debug50 实跑结果：
+
+```text
+items=50
+contract_covered=50/50
+direct_line_item_or_disclosure=42
+defined_formula_calculation=33
+calculation_then_business_judgment=30
+driver_attribution_or_bridge=19
+table_ranking_or_comparison=7
+multi_entity_compare=9
+```
+
+这说明前 50 个调试题从“系统合同/工具工作台”角度全部有表达路径：
+source acquisition、structured SEC facts、document/table extraction、
+table operations、calculator、provenance ledgers、numeric verifier、
+semantic synthesis、temporary workbench。它不是 live accuracy，不是
+gold-based evaluation，也不能对外报告成 FinanceBench 成绩。
+
+工程作用是让后续 debug50 不再逐题推进，而是按任务族检查：
+
+1. 直接行项目/披露题：SEC/filing source acquisition -> fact/claim ledger。
+2. 公式题：slot bind -> calculator/Formulatrace -> numeric verifier。
+3. 计算后业务判断题：ratio/trend evidence -> LLM 业务语义判断，不用硬阈值。
+4. driver/bridge 题：MD&A/reconciliation/table extraction -> temporary workbench。
+5. 表格排序/比较题：document/table extraction -> data/table query -> cited row。
+
+## 9. 下一步优先级
 
 已推进：
 

@@ -18,6 +18,7 @@ from kernel_v3.bench import (
     write_finance_dev_annotations_from_dataset,
 )
 from kernel_v3.bench.finance import _append_benchmark_provided_context_trace, summarize_finance_benchmark, trace_metrics
+from kernel_v3.bench.finance import build_finance_requirements_audit, render_finance_requirements_audit
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.finance import compile_finance_task_program
 from kernel_v3.journal import JournalStore
@@ -1155,6 +1156,119 @@ def test_finance_benchmark_live_blocks_before_writing_rows_when_api_key_missing(
     assert not output.exists()
     assert not summary.exists()
     assert not JournalStore(journal, index_path=index).records(kind="finance_benchmark_item_started")
+
+
+def test_finance_requirements_audit_excludes_gold_reference_values(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(
+        json.dumps(
+            {
+                "id": "Q1",
+                "question": (
+                    "Long research task: for NYSE: HD and NYSE: LOW, calculate FY2024 days inventory "
+                    "outstanding and compare inventory efficiency. Retrieve public filings, bind inventory "
+                    "and cost of sales inputs, show formulas, and explain which company is more efficient."
+                ),
+                "gold_answer": "SECRET_GOLD_76_34_DAYS",
+                "numeric_value": 987654321.0,
+                "tolerance": 0.01,
+                "evidence_excerpt": "SECRET_EVIDENCE_LINE",
+                "category": "financebench",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    audit = build_finance_requirements_audit(dataset)
+    rendered_json = json.dumps(audit, ensure_ascii=False, sort_keys=True)
+    item = audit["items"][0]
+
+    assert audit["schema"] == "holo.kernel_v3.finance_requirements_audit.v1"
+    assert audit["no_gold_fields_used"] is True
+    assert audit["benchmark_progress_claim"] is False
+    assert audit["capability_claim"] is False
+    assert "gold_answer" in audit["unused_gold_like_fields_present"]
+    assert "evidence_excerpt" in audit["unused_gold_like_fields_present"]
+    assert "SECRET_GOLD_76_34_DAYS" not in rendered_json
+    assert "SECRET_EVIDENCE_LINE" not in rendered_json
+    assert "987654321" not in rendered_json
+    assert "defined_formula_calculation" in item["families"]
+    assert "multi_entity_compare" in item["families"]
+    assert "arithmetic" in item["required_tool_categories"]
+    assert "numeric_verification" in item["required_tool_categories"]
+    assert "transform_compute" in item["loop_stages"]
+
+
+def test_finance_requirements_audit_cli_is_no_gold_structural_check(tmp_path: Path, capsys, monkeypatch) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    dataset.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "Q1", "question": "What was FY2024 revenue?", "gold_answer": "SECRET_ONE"}),
+                json.dumps(
+                    {
+                        "id": "Q2",
+                        "question": "Which segment had the largest FY2024 operating income in the table?",
+                        "gold_answer": "SECRET_TWO",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    code = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "bench",
+            "finance-requirements-audit",
+            "--dataset",
+            str(dataset),
+            "--offset",
+            "1",
+            "--limit",
+            "1",
+            "--format",
+            "text",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "Finance requirements audit" in output
+    assert "not a benchmark accuracy result" in output
+    assert "Q2" in output
+    assert "Q1" not in output
+    assert "SECRET_ONE" not in output
+    assert "SECRET_TWO" not in output
+    records = JournalStore(journal, index_path=index).records(kind="finance_requirements_audit")
+    assert len(records) == 1
+    assert records[0].data["no_gold_fields_used"] is True
+    assert records[0].data["item_count"] == 1
+
+
+def test_finance_requirements_audit_text_renderer_marks_scope(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(
+        json.dumps({"id": "Q1", "question": "Is 3M capital-intensive based on FY2022 sales and PP&E?"}) + "\n",
+        encoding="utf-8",
+    )
+
+    text = render_finance_requirements_audit(build_finance_requirements_audit(dataset))
+
+    assert "capability_claim: false" in text
+    assert "benchmark_progress_claim: false" in text
+    assert "calculation_then_business_judgment" in text
 
 
 def test_finance_dev_annotation_scorer_keeps_gold_post_run(tmp_path: Path) -> None:

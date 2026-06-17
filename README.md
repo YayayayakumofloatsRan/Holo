@@ -157,6 +157,13 @@ allowed by host policy; they are not long regressions and must not be reported
 as benchmark accuracy. Repo-local workers under `.holo_components/` are
 auto-discovered when present, with environment variables still taking
 precedence for custom paths.
+The no-gold debug50 requirements audit is now executable through
+`bench finance-requirements-audit --dataset data/bench/finance/financebench_doc_retrieval.jsonl --split debug50`.
+It reads question text and public metadata only, reports task families, risk
+flags, required tool categories, and loop-stage coverage, and marks
+`no_gold_fields_used=true`, `capability_claim=false`, and
+`benchmark_progress_claim=false`. This is a structural contract check for
+type-cluster debugging, not a FinanceBench/FinQA score.
 The same-day loop logic audit is recorded in
 `docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`; its first checkpoint moved
 finance/web/long profiles onto a LangGraph-backed controller. The later
