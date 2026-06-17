@@ -313,6 +313,165 @@ def test_deep_agent_loop_scaffolds_workbench_source_family_followup() -> None:
         "sec_companyfacts",
         "company_ir_html",
     ]
+    assert args["metadata"]["task_goal"].startswith("What is the FY2018 capital expenditure")
+
+
+def test_deep_agent_loop_scaffold_prefers_direct_target_over_text_query() -> None:
+    journal = JournalStore.in_memory()
+    task_id = "task-workbench-direct-target"
+    run_id = "run-1"
+    sec_url = "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json"
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-4",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "missing_slots": ["capital_expenditure_cash_flow_2018"],
+            "next_queries": ["3M 2018 10-K capital expenditure cash flow statement"],
+            "next_document_targets": [sec_url],
+            "next_source_families": ["sec_companyfacts"],
+            "reason_summary": "Need structured SEC data.",
+        },
+    )
+    feedback = Feedback(
+        feedback_id="fb-workbench-followup",
+        run_id=run_id,
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=["retrieval_workbench_followup"],
+    )
+
+    scaffold = _workbench_followup_scaffold_turn(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        input_text="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        feedback=feedback,
+        proposed_turn=AssistantTurn(turn_id="turn-final-too-soon", message=None, tool_calls=[], final_answer="Not available"),
+    )
+
+    assert scaffold is not None
+    args = scaffold.tool_calls[0].arguments
+    assert args["query"] == sec_url
+    assert args["queries"][0] == sec_url
+    assert args["metadata"]["source_urls"] == [sec_url]
+
+
+def test_deep_agent_loop_scaffold_overrides_broad_model_retrieval_with_direct_target() -> None:
+    journal = JournalStore.in_memory()
+    task_id = "task-workbench-broad-model-query"
+    run_id = "run-1"
+    sec_url = "https://www.sec.gov/Archives/edgar/data/66740/000006674019000008/mmm-20181231.htm"
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-7",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "missing_slots": ["capital_expenditures from 3M FY2018 cash flow statement"],
+            "next_queries": ["3M FY2018 capital expenditure cash flow statement 10-K"],
+            "next_document_targets": [sec_url],
+            "next_source_families": ["sec_edgar_filing"],
+        },
+    )
+    feedback = Feedback(
+        feedback_id="fb-workbench-followup",
+        run_id=run_id,
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=["retrieval_workbench_followup"],
+    )
+    proposed = AssistantTurn(
+        turn_id="turn-model-broad-retrieval",
+        message="Search for the missing line item.",
+        tool_calls=[
+            ToolCallRequest(
+                tool_call_id="tc-model-search",
+                name="retrieval.run",
+                arguments={"query": "3M FY2018 capital expenditure cash flow statement 10-K"},
+                reason="search missing evidence",
+            )
+        ],
+    )
+
+    scaffold = _workbench_followup_scaffold_turn(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        input_text="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        feedback=feedback,
+        proposed_turn=proposed,
+    )
+
+    assert scaffold is not None
+    args = scaffold.tool_calls[0].arguments
+    assert args["query"] == sec_url
+    assert args["queries"][0] == sec_url
+    assert scaffold.reasons[0] == "host_scaffold_model_workbench_followup"
+
+
+def test_deep_agent_loop_scaffold_does_not_mark_candidate_queries_as_attempted() -> None:
+    journal = JournalStore.in_memory()
+    task_id = "task-workbench-candidate-not-attempted"
+    run_id = "run-1"
+    sec_url = "https://www.sec.gov/Archives/edgar/data/66740/000006674019000008/mmm-20181231.htm"
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-6",
+        kind="action",
+        data={
+            "name": "retrieval.run",
+            "payload": {
+                "query": "Benchmark target source follows. Acquire evidence from Source URL first.",
+                "queries": [
+                    "Benchmark target source follows. Acquire evidence from Source URL first.",
+                    sec_url,
+                ],
+            },
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-7",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "missing_slots": ["capital_expenditures"],
+            "next_queries": ["3M FY2018 capital expenditure cash flow statement 10-K"],
+            "next_document_targets": [sec_url],
+            "next_source_families": ["sec_edgar_filing"],
+        },
+    )
+    feedback = Feedback(
+        feedback_id="fb-workbench-followup",
+        run_id=run_id,
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=["retrieval_workbench_followup"],
+    )
+
+    scaffold = _workbench_followup_scaffold_turn(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        input_text="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        feedback=feedback,
+        proposed_turn=AssistantTurn(turn_id="turn-no-tool", message=None, tool_calls=[]),
+    )
+
+    assert scaffold is not None
+    assert scaffold.tool_calls[0].arguments["query"] == sec_url
 
 
 def test_deep_agent_loop_returns_parse_errors_as_observations_for_replanning() -> None:

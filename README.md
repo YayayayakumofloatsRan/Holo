@@ -100,7 +100,13 @@ targets into `deep_agent_loop`; the current live rerun
 also passed `1/1`, matching `1577.0` with `retrieval_runs=7`,
 `calculator=1`, `formula=1`, verifier `passed`, and `851,272` tokens. This is
 a correctness result; efficiency and broader debug50/test100 accuracy are still
-open.
+open. A follow-up route probe
+`.state/kernel_v3/bench/finance/fb_debug50_p0gt95_o000_l001_after_override_20260617.journal.jsonl`
+confirmed that workbench follow-up now promotes direct SEC URLs to the primary
+`retrieval.run` query and reached `final_answer_ready`, `finance_fact_ledger`,
+and `claim_ledger`; it was manually interrupted during a final provider preflight
+and produced no benchmark row, so it is loop-route evidence, not an accuracy
+score.
 The 2026-06-16 framework review is consolidated in
 `docs/KERNEL_V3_FRAMEWORK_LESSONS_FINAL_2026-06-16_ZH.md`; use it as the primary
 report and talk reference for what Holo should absorb from LangChain,

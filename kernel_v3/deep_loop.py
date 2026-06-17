@@ -1480,8 +1480,6 @@ def _workbench_followup_scaffold_turn(
 ) -> AssistantTurn | None:
     if not _feedback_requires_retrieval_workbench_followup(feedback):
         return None
-    if any(call.name == "retrieval.run" for call in proposed_turn.tool_calls):
-        return None
     record = _latest_workbench_decision_record(journal, task_id=task_id, run_id=run_id)
     if record is None:
         return None
@@ -1489,12 +1487,8 @@ def _workbench_followup_scaffold_turn(
     decision = str(data.get("decision") or "")
     if data.get("status") != "ok" or decision not in {"continue", "fail_with_limitations"}:
         return None
-    next_queries = _ordered_unique_strings(
-        [
-            *_json_string_list(data.get("next_queries")),
-            *_json_string_list(data.get("next_document_targets")),
-        ]
-    )
+    next_document_targets = _json_string_list(data.get("next_document_targets"))
+    next_queries = _ordered_unique_strings([*_json_string_list(data.get("next_queries")), *next_document_targets])
     source_families = _json_string_list(data.get("next_source_families"))
     missing_slots = _ordered_unique_strings(
         [
@@ -1506,7 +1500,21 @@ def _workbench_followup_scaffold_turn(
     if not next_queries and not source_families:
         return None
     attempted = _attempted_retrieval_queries(journal, task_id=task_id, run_id=run_id)
-    selected_query = next((query for query in next_queries if query.casefold() not in attempted), "")
+    direct_targets = [target for target in next_document_targets if _looks_like_http_url(target)]
+    proposed_retrieval_calls = [call for call in proposed_turn.tool_calls if call.name == "retrieval.run"]
+    if proposed_retrieval_calls and not direct_targets:
+        return None
+    if proposed_retrieval_calls and direct_targets:
+        proposed_primary = {
+            str(call.arguments.get("query") or "").strip().casefold()
+            for call in proposed_retrieval_calls
+            if isinstance(call.arguments, dict)
+        }
+        if any(target.casefold() in proposed_primary for target in direct_targets):
+            return None
+    selected_query = next((target for target in direct_targets if target.casefold() not in attempted), "")
+    if not selected_query:
+        selected_query = next((query for query in next_queries if query.casefold() not in attempted), "")
     if not selected_query:
         selected_query = _source_family_followup_query(
             input_text,
@@ -1515,17 +1523,20 @@ def _workbench_followup_scaffold_turn(
         )
         if not selected_query or selected_query.casefold() in attempted:
             return None
-    source_urls = [item for item in next_queries if _looks_like_http_url(item)]
-    queries = _ordered_unique_strings([selected_query, *next_queries])[:8]
+    source_urls = _ordered_unique_strings([*direct_targets, *[item for item in next_queries if _looks_like_http_url(item)]])
+    task_goal = _compact_task_goal(input_text)
+    queries = _ordered_unique_strings([selected_query, *direct_targets, *next_queries])[:8]
     metadata: JsonObject = {
         "host_scaffold": "model_workbench_followup",
         "host_scaffold_role": "execute_model_workbench_route_without_selecting_answer_facts",
         "workbench_followup": True,
         "workbench_decision_ref": getattr(record, "record_id", None),
         "workbench_source_decision": decision,
+        "task_goal": task_goal,
+        "workbench_reason_summary": str(data.get("reason_summary") or "")[:500],
         "semantic_missing_slots": missing_slots[:24],
         "preferred_source_families": source_families[:16],
-        "next_document_targets": _json_string_list(data.get("next_document_targets"))[:16],
+        "next_document_targets": next_document_targets[:16],
         "research_profile": "finance_fundamentals",
         "source_authority_requirement": "primary",
     }
@@ -1591,20 +1602,25 @@ def _attempted_retrieval_queries(journal: Any, *, task_id: str, run_id: str) -> 
         if data.get("name") != "retrieval.run":
             continue
         payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
-        for value in [payload.get("query"), *_json_string_list(payload.get("queries"))]:
-            if isinstance(value, str) and value.strip():
-                attempted.add(value.strip().casefold())
+        query = payload.get("query")
+        if isinstance(query, str) and query.strip():
+            attempted.add(query.strip().casefold())
     return attempted
 
 
 def _source_family_followup_query(input_text: str, *, source_families: list[str], missing_slots: list[str]) -> str:
-    text = " ".join(str(input_text or "").split())
-    if len(text) > 260:
-        text = text[:260].rsplit(" ", 1)[0]
+    text = _compact_task_goal(input_text)
     families = " ".join(source_families[:6])
     missing = " ".join(missing_slots[:6])
     query = " ".join(part for part in [text, missing, families] if part).strip()
     return query[:500]
+
+
+def _compact_task_goal(input_text: str) -> str:
+    text = " ".join(str(input_text or "").split())
+    if len(text) > 260:
+        text = text[:260].rsplit(" ", 1)[0]
+    return text
 
 
 def _json_string_list(value: object) -> list[str]:

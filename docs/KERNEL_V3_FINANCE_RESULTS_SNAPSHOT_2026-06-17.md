@@ -78,6 +78,36 @@ This is still a single debug-row live result. It does not establish debug50 or
 test100 accuracy. The next engineering target is to keep the deeper loop
 capability while cutting redundant retrieval and processor context cost.
 
+## 2026-06-17 Workbench Direct-Target Route Probe
+
+The next same-day route probe used:
+
+```text
+.state/kernel_v3/bench/finance/fb_debug50_p0gt95_o000_l001_after_override_20260617.*
+```
+
+It was intentionally stopped before a benchmark row was written, so it is not an
+accuracy score. Its journal is still useful loop evidence:
+
+- step 3 `retrieval.run` found a workbench follow-up target:
+  `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000066740&type=10-K&dateb=20181231&owner=exclude&count=1`;
+- step 4 was host-scaffolded from `retrieval_workbench_followup`, and the primary
+  `retrieval.run.query` was that SEC URL, not the model's broad text search;
+- the step 4 workbench then discovered the concrete 2018 filing HTML:
+  `https://www.sec.gov/Archives/edgar/data/66740/000155837019000470/mmm-20181231x10k.htm`;
+- step 5 ran that filing URL as the primary query, the workbench marked evidence
+  `sufficient`, termination moved to `final_answer`, feedback became
+  `final_answer_ready`, and `finance_fact_ledger` plus `claim_ledger` records
+  were written.
+
+The run was interrupted during the final numeric preflight provider request, not
+during retrieval, and produced no `.summary.json`. Report it as route/loop
+evidence only. The code change behind the probe is generic: if feedback demands
+`retrieval_workbench_followup` and the workbench provides direct document targets,
+the deep loop promotes those targets over broad retrieval queries; candidate
+`queries` are no longer treated as already attempted unless they were the primary
+retrieval query.
+
 ## 2026-06-17 Live Target-Line Evidence Fix
 
 The failed live trace before this pass was not missing documents. Retrieval had
