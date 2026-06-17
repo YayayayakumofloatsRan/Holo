@@ -44,6 +44,18 @@ workbench follow-up 检查前移到 streaming planner 之前，并新增三次�
 迁移必须约束下一步执行”的直接吸收；结构测试已过，但 live accuracy 复测因
 sandbox escalation 审核超时未启动，因此不计入金融 benchmark 成绩。
 
+2026-06-18 finalizer follow-up：另一条 live 探针显示，工具/检索/workbench
+已经拿到足够证据后，final synthesis 仍可能因为大 fact/citation packet 超过
+processor budget 而失败。Holo 将外部成熟 loop 的 fallback/discard/rebuild
+思想迁移到 finalizer：`Synthesizer` 现在会在 provider 调用前检测
+`max_prompt_chars_per_call`，超过预算时重建 compact synthesis packet，并把
+`synthesis_budget_compaction` 作为模型可见的 host 边界写入 prompt。该修复不替
+模型选答案；它只保证已有证据能在预算内回流给 `synthesizer.answer`。同一
+`financebench_id_03029` live 单题已从 v1 的
+`processor_budget_exceeded / failure_report_not_final_answer` 变为 v2 `passed`
+(`numeric_within_tolerance`, matched `1577.0`)。这是有效 live 单题回归，不是
+debug50/test100 总成绩。
+
 ## 外部项目做对的事情
 
 ### 1. Query loop 是真正的流式工具循环

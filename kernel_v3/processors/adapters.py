@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import replace
 
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation
@@ -20,6 +21,7 @@ from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalR
 
 SYNTHESIS_EVIDENCE_PREVIEW_CHARS = 4096
 SYNTHESIS_CITATION_PREVIEW_CHARS = 2048
+SYNTHESIS_BUDGET_HEADROOM_CHARS = 4096
 PROVIDER_TOOL_LIST_LIMIT = 48
 PROVIDER_PERMISSION_LIST_LIMIT = 32
 PROVIDER_TOOL_SELECTION_LIMIT = 24
@@ -146,60 +148,71 @@ class Synthesizer:
         processor_budget: JsonObject | None = None,
     ) -> FinalAnswer:
         budget_parameters = {"processor_budget": dict(processor_budget)} if isinstance(processor_budget, dict) else {}
+        prompt, prompt_parameters, report, evidence, citations = _budgeted_synthesizer_prompt(
+            report,
+            evidence,
+            citations,
+            retry_instruction=retry_instruction,
+            processor_budget=processor_budget,
+        )
         outcome = self.fabric.run_json(
             task_type="synthesizer.answer",
             task_id=task_id,
             run_id=run_id,
             context_id=context_id,
-            prompt=_synthesizer_prompt(report, evidence, citations, retry_instruction=retry_instruction),
+            prompt=prompt,
             schema=SYNTHESIZER_SCHEMA,
             provider=self.provider,
             model=self.model,
             parameters={
                 "adapter": "Synthesizer",
                 "retrieval_report_id": report.report_id,
+                **prompt_parameters,
                 **budget_parameters,
                 **({"retry_reason": "answer_quality"} if retry_instruction else {}),
             },
         )
         if outcome.parsed is None:
             repair_feedback = _synthesizer_repair_feedback(outcome.result.error or "synthesizer_json_invalid")
+            repair_prompt, repair_prompt_parameters, repair_report, repair_evidence, repair_citations = _budgeted_synthesizer_prompt(
+                report,
+                evidence,
+                citations,
+                retry_instruction=(
+                    "Previous synthesizer output was not valid JSON. "
+                    "Return exactly one valid JSON object matching synthesizer.answer. "
+                    "Do not include markdown fences or prose outside JSON. "
+                    "Keep answer concise enough to avoid truncation while preserving required evidence, "
+                    "calculator results, caveats, citation_refs, and used_evidence."
+                ),
+                repair_feedback=repair_feedback,
+                processor_budget=processor_budget,
+            )
             retry = self.fabric.run_json(
                 task_type="synthesizer.answer",
                 task_id=task_id,
                 run_id=run_id,
                 context_id=f"{context_id}-json-repair",
-                prompt=_synthesizer_prompt(
-                    report,
-                    evidence,
-                    citations,
-                    retry_instruction=(
-                        "Previous synthesizer output was not valid JSON. "
-                        "Return exactly one valid JSON object matching synthesizer.answer. "
-                        "Do not include markdown fences or prose outside JSON. "
-                        "Keep answer concise enough to avoid truncation while preserving required evidence, "
-                        "calculator results, caveats, citation_refs, and used_evidence."
-                    ),
-                    repair_feedback=repair_feedback,
-                ),
+                prompt=repair_prompt,
                 schema=SYNTHESIZER_SCHEMA,
                 provider=self.provider,
                 model=self.model,
                 parameters={
                     "adapter": "Synthesizer",
-                    "retrieval_report_id": report.report_id,
+                    "retrieval_report_id": repair_report.report_id,
                     "repair_reason": "invalid_json",
                     "repair_feedback_schema": repair_feedback.get("schema"),
                     "repair_feedback_category": repair_feedback.get("category"),
+                    **repair_prompt_parameters,
                     **budget_parameters,
                 },
             )
             if retry.parsed is not None:
-                return _final_answer_from_json(retry.parsed, citations=citations, evidence=evidence)
+                return _final_answer_from_json(retry.parsed, citations=repair_citations, evidence=repair_evidence)
             salvaged = _salvage_final_answer_from_raw_text(
                 retry.raw_text or outcome.raw_text,
-                citations=citations,
-                evidence=evidence,
+                citations=repair_citations,
+                evidence=repair_evidence,
                 error=retry.result.error or outcome.result.error or "invalid_json",
             )
             if salvaged is not None:
@@ -216,65 +229,71 @@ class Synthesizer:
         answer = _final_answer_from_json(outcome.parsed, citations=citations, evidence=evidence)
         if _is_unknown_reference_error(answer.error) and (citations or evidence):
             repair_feedback = _synthesizer_repair_feedback(answer.error or "unknown_reference")
+            reference_prompt, reference_prompt_parameters, reference_report, reference_evidence, reference_citations = _budgeted_synthesizer_prompt(
+                report,
+                evidence,
+                citations,
+                retry_instruction=(
+                    "Previous synthesizer output used citation_refs or used_evidence ids that are not in the allowed lists. "
+                    "Return a corrected JSON object. Keep the supported answer semantics, but choose citation_refs only from "
+                    "required_citation_refs and used_evidence only from required_evidence_refs. Do not invent ids, source ids, "
+                    "facts, formulas, or unsupported numeric claims."
+                ),
+                repair_feedback=repair_feedback,
+                processor_budget=processor_budget,
+            )
             retry = self.fabric.run_json(
                 task_type="synthesizer.answer",
                 task_id=task_id,
                 run_id=run_id,
                 context_id=f"{context_id}-reference-repair",
-                prompt=_synthesizer_prompt(
-                    report,
-                    evidence,
-                    citations,
-                    retry_instruction=(
-                        "Previous synthesizer output used citation_refs or used_evidence ids that are not in the allowed lists. "
-                        "Return a corrected JSON object. Keep the supported answer semantics, but choose citation_refs only from "
-                        "required_citation_refs and used_evidence only from required_evidence_refs. Do not invent ids, source ids, "
-                        "facts, formulas, or unsupported numeric claims."
-                    ),
-                    repair_feedback=repair_feedback,
-                ),
+                prompt=reference_prompt,
                 schema=SYNTHESIZER_SCHEMA,
                 provider=self.provider,
                 model=self.model,
                 parameters={
                     "adapter": "Synthesizer",
-                    "retrieval_report_id": report.report_id,
+                    "retrieval_report_id": reference_report.report_id,
                     "repair_reason": "unknown_references",
                     "repair_feedback_schema": repair_feedback.get("schema"),
                     "repair_feedback_category": repair_feedback.get("category"),
+                    **reference_prompt_parameters,
                     **budget_parameters,
                 },
             )
             if retry.parsed is not None:
-                return _final_answer_from_json(retry.parsed, citations=citations, evidence=evidence)
+                return _final_answer_from_json(retry.parsed, citations=reference_citations, evidence=reference_evidence)
         if answer.error == "missing_citation_refs" and citations:
+            citation_prompt, citation_prompt_parameters, citation_report, citation_evidence, citation_citations = _budgeted_synthesizer_prompt(
+                report,
+                evidence,
+                citations,
+                retry_instruction=(
+                    "Previous synthesizer output omitted citation_refs. "
+                    "Return a corrected JSON object. citation_refs must include one or more ids "
+                    "from required_citation_refs, and used_evidence must include matching evidence ids."
+                ),
+                processor_budget=processor_budget,
+            )
             retry = self.fabric.run_json(
                 task_type="synthesizer.answer",
                 task_id=task_id,
                 run_id=run_id,
                 context_id=f"{context_id}-citation-repair",
-                prompt=_synthesizer_prompt(
-                    report,
-                    evidence,
-                    citations,
-                    retry_instruction=(
-                        "Previous synthesizer output omitted citation_refs. "
-                        "Return a corrected JSON object. citation_refs must include one or more ids "
-                        "from required_citation_refs, and used_evidence must include matching evidence ids."
-                    ),
-                ),
+                prompt=citation_prompt,
                 schema=SYNTHESIZER_SCHEMA,
                 provider=self.provider,
                 model=self.model,
                 parameters={
                     "adapter": "Synthesizer",
-                    "retrieval_report_id": report.report_id,
+                    "retrieval_report_id": citation_report.report_id,
                     "repair_reason": "missing_citation_refs",
+                    **citation_prompt_parameters,
                     **budget_parameters,
                 },
             )
             if retry.parsed is not None:
-                return _final_answer_from_json(retry.parsed, citations=citations, evidence=evidence)
+                return _final_answer_from_json(retry.parsed, citations=citation_citations, evidence=citation_evidence)
         return answer
 
 
@@ -367,6 +386,333 @@ def _synthesizer_prompt(
     if repair_feedback:
         payload["repair_feedback"] = dict(repair_feedback)
     return _prompt_json(payload)
+
+
+def _budgeted_synthesizer_prompt(
+    report: RetrievalReport,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    *,
+    retry_instruction: str | None = None,
+    repair_feedback: JsonObject | None = None,
+    processor_budget: JsonObject | None = None,
+) -> tuple[str, JsonObject, RetrievalReport, list[EvidenceItem], list[CitationItem]]:
+    prompt = _synthesizer_prompt(
+        report,
+        evidence,
+        citations,
+        retry_instruction=retry_instruction,
+        repair_feedback=repair_feedback,
+    )
+    max_prompt_chars = _processor_budget_max_prompt_chars(processor_budget)
+    if max_prompt_chars is None:
+        return prompt, {}, report, evidence, citations
+    target_chars = max(1, max_prompt_chars - SYNTHESIS_BUDGET_HEADROOM_CHARS)
+    if len(prompt) <= target_chars:
+        return prompt, {}, report, evidence, citations
+
+    selected: tuple[str, JsonObject, RetrievalReport, list[EvidenceItem], list[CitationItem]] | None = None
+    shortest: tuple[str, JsonObject, RetrievalReport, list[EvidenceItem], list[CitationItem]] | None = None
+    original_prompt_chars = len(prompt)
+    for profile in _synthesis_budget_profiles():
+        compact_report, compact_evidence, compact_citations = _compact_synthesis_inputs_for_budget(
+            report,
+            evidence,
+            citations,
+            profile=profile,
+            max_prompt_chars=max_prompt_chars,
+            original_prompt_chars=original_prompt_chars,
+        )
+        compact_prompt = _synthesizer_prompt(
+            compact_report,
+            compact_evidence,
+            compact_citations,
+            retry_instruction=retry_instruction,
+            repair_feedback=repair_feedback,
+        )
+        parameters = {
+            "synthesis_context_compaction": "budgeted",
+            "synthesis_compaction_reason": "prompt_budget",
+            "synthesis_compaction_profile": profile["name"],
+            "synthesis_original_prompt_chars": original_prompt_chars,
+            "synthesis_compact_prompt_chars": len(compact_prompt),
+            "synthesis_max_prompt_chars": max_prompt_chars,
+            "synthesis_original_evidence_count": len(evidence),
+            "synthesis_compact_evidence_count": len(compact_evidence),
+            "synthesis_original_citation_count": len(citations),
+            "synthesis_compact_citation_count": len(compact_citations),
+            "synthesis_semantic_owner": "model",
+            "synthesis_host_role": "budgeted_context_projection_only",
+        }
+        candidate = (compact_prompt, parameters, compact_report, compact_evidence, compact_citations)
+        if shortest is None or len(compact_prompt) < len(shortest[0]):
+            shortest = candidate
+        if len(compact_prompt) <= target_chars:
+            selected = candidate
+            break
+        if selected is None and len(compact_prompt) <= max_prompt_chars:
+            selected = candidate
+
+    if selected is not None:
+        return selected
+    if shortest is not None:
+        return shortest
+    return prompt, {}, report, evidence, citations
+
+
+def _processor_budget_max_prompt_chars(processor_budget: JsonObject | None) -> int | None:
+    if not isinstance(processor_budget, dict):
+        return None
+    value = processor_budget.get("max_prompt_chars_per_call")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _synthesis_budget_profiles() -> list[JsonObject]:
+    return [
+        {
+            "name": "context_window_headroom_1",
+            "evidence_limit": 24,
+            "citation_limit": 32,
+            "evidence_preview_chars": 2048,
+            "citation_preview_chars": 1024,
+            "finance_fact_ledger_limit": 48,
+            "finance_candidate_facts_limit": 20,
+            "finance_formula_traces_limit": 12,
+            "finance_formula_trace_support_limit": 16,
+            "finance_competing_fact_clusters_limit": 10,
+            "finance_metric_intent_hints_limit": 20,
+            "finance_question_numeric_premise_hints_limit": 8,
+            "summary_limit": 6,
+        },
+        {
+            "name": "context_window_headroom_2",
+            "evidence_limit": 18,
+            "citation_limit": 24,
+            "evidence_preview_chars": 1024,
+            "citation_preview_chars": 512,
+            "finance_fact_ledger_limit": 32,
+            "finance_candidate_facts_limit": 16,
+            "finance_formula_traces_limit": 10,
+            "finance_formula_trace_support_limit": 12,
+            "finance_competing_fact_clusters_limit": 8,
+            "finance_metric_intent_hints_limit": 16,
+            "finance_question_numeric_premise_hints_limit": 6,
+            "summary_limit": 4,
+        },
+        {
+            "name": "context_window_headroom_3",
+            "evidence_limit": 12,
+            "citation_limit": 18,
+            "evidence_preview_chars": 640,
+            "citation_preview_chars": 320,
+            "finance_fact_ledger_limit": 24,
+            "finance_candidate_facts_limit": 12,
+            "finance_formula_traces_limit": 8,
+            "finance_formula_trace_support_limit": 8,
+            "finance_competing_fact_clusters_limit": 6,
+            "finance_metric_intent_hints_limit": 12,
+            "finance_question_numeric_premise_hints_limit": 4,
+            "summary_limit": 3,
+        },
+        {
+            "name": "minimal_workbench",
+            "evidence_limit": 8,
+            "citation_limit": 12,
+            "evidence_preview_chars": 360,
+            "citation_preview_chars": 220,
+            "finance_fact_ledger_limit": 12,
+            "finance_candidate_facts_limit": 8,
+            "finance_formula_traces_limit": 6,
+            "finance_formula_trace_support_limit": 6,
+            "finance_competing_fact_clusters_limit": 4,
+            "finance_metric_intent_hints_limit": 8,
+            "finance_question_numeric_premise_hints_limit": 3,
+            "summary_limit": 2,
+        },
+        {
+            "name": "bare_minimum_workbench",
+            "evidence_limit": 4,
+            "citation_limit": 6,
+            "evidence_preview_chars": 220,
+            "citation_preview_chars": 140,
+            "finance_fact_ledger_limit": 6,
+            "finance_candidate_facts_limit": 4,
+            "finance_formula_traces_limit": 4,
+            "finance_formula_trace_support_limit": 4,
+            "finance_competing_fact_clusters_limit": 2,
+            "finance_metric_intent_hints_limit": 4,
+            "finance_question_numeric_premise_hints_limit": 2,
+            "summary_limit": 1,
+        },
+    ]
+
+
+def _compact_synthesis_inputs_for_budget(
+    report: RetrievalReport,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    *,
+    profile: JsonObject,
+    max_prompt_chars: int,
+    original_prompt_chars: int,
+) -> tuple[RetrievalReport, list[EvidenceItem], list[CitationItem]]:
+    evidence_limit = _positive_profile_int(profile, "evidence_limit", default=8)
+    citation_limit = _positive_profile_int(profile, "citation_limit", default=12)
+    selected_citations = _select_citations_for_budget(citations, limit=citation_limit)
+    selected_evidence = _select_evidence_for_budget(evidence, selected_citations, limit=evidence_limit)
+    selected_evidence_ids = {item.evidence_id for item in selected_evidence if item.evidence_id}
+    if selected_evidence_ids:
+        linked_citations = [item for item in selected_citations if item.evidence_id in selected_evidence_ids]
+        if linked_citations:
+            selected_citations = linked_citations
+    selected_citation_ids = [item.citation_id for item in selected_citations if item.citation_id]
+    selected_evidence_ids_list = [item.evidence_id for item in selected_evidence if item.evidence_id]
+    diagnostics = _compact_synthesis_diagnostics_for_budget(
+        report.diagnostics if isinstance(report.diagnostics, dict) else {},
+        profile=profile,
+        max_prompt_chars=max_prompt_chars,
+        original_prompt_chars=original_prompt_chars,
+        original_evidence_count=len(evidence),
+        compact_evidence_count=len(selected_evidence),
+        original_citation_count=len(citations),
+        compact_citation_count=len(selected_citations),
+    )
+    compact_report = replace(
+        report,
+        report_id=f"{report.report_id}-{profile['name']}",
+        evidence_ids=selected_evidence_ids_list,
+        citation_ids=selected_citation_ids,
+        artifact_refs=_ordered_unique_strings([item.artifact_id for item in [*selected_evidence, *selected_citations] if item.artifact_id])[:16],
+        preview=_preview(report.preview, 720),
+        diagnostics=diagnostics,
+    )
+    return compact_report, selected_evidence, selected_citations
+
+
+def _select_citations_for_budget(citations: list[CitationItem], *, limit: int) -> list[CitationItem]:
+    if limit <= 0:
+        return []
+    return _ordered_citation_items(citations)[:limit]
+
+
+def _select_evidence_for_budget(
+    evidence: list[EvidenceItem],
+    selected_citations: list[CitationItem],
+    *,
+    limit: int,
+) -> list[EvidenceItem]:
+    if limit <= 0:
+        return []
+    by_id = {item.evidence_id: item for item in evidence if item.evidence_id}
+    linked = [by_id[item.evidence_id] for item in selected_citations if item.evidence_id in by_id]
+    return _ordered_evidence_items([*linked, *evidence])[:limit]
+
+
+def _compact_synthesis_diagnostics_for_budget(
+    diagnostics: JsonObject,
+    *,
+    profile: JsonObject,
+    max_prompt_chars: int,
+    original_prompt_chars: int,
+    original_evidence_count: int,
+    compact_evidence_count: int,
+    original_citation_count: int,
+    compact_citation_count: int,
+) -> JsonObject:
+    compact = dict(diagnostics)
+    compact["synthesis_evidence_preview_chars"] = _positive_profile_int(
+        profile,
+        "evidence_preview_chars",
+        default=SYNTHESIS_EVIDENCE_PREVIEW_CHARS,
+    )
+    compact["synthesis_citation_preview_chars"] = _positive_profile_int(
+        profile,
+        "citation_preview_chars",
+        default=SYNTHESIS_CITATION_PREVIEW_CHARS,
+    )
+    for key, profile_key in (
+        ("finance_fact_ledger", "finance_fact_ledger_limit"),
+        ("finance_candidate_facts", "finance_candidate_facts_limit"),
+        ("finance_formula_traces", "finance_formula_traces_limit"),
+        ("finance_formula_trace_support", "finance_formula_trace_support_limit"),
+        ("finance_competing_fact_clusters", "finance_competing_fact_clusters_limit"),
+        ("finance_metric_intent_hints", "finance_metric_intent_hints_limit"),
+        ("finance_question_numeric_premise_hints", "finance_question_numeric_premise_hints_limit"),
+    ):
+        compact[key] = _limit_prompt_list(compact.get(key), _positive_profile_int(profile, profile_key, default=8))
+    summary_limit = _positive_profile_int(profile, "summary_limit", default=4)
+    for key in ("search_summaries", "fetch_summaries", "next_tool_actions"):
+        compact[key] = _limit_prompt_list(compact.get(key), summary_limit)
+    for key in ("attempted_queries", "attempted_provider_ids"):
+        compact[key] = _string_list(compact.get(key))[-summary_limit * 4 :]
+    compact["synthesis_budget_compaction"] = {
+        "schema": "holo.kernel_v3.synthesis_budget_compaction.v1",
+        "profile": profile["name"],
+        "reason": "prompt would exceed processor budget",
+        "max_prompt_chars_per_call": max_prompt_chars,
+        "original_prompt_chars": original_prompt_chars,
+        "original_evidence_count": original_evidence_count,
+        "compact_evidence_count": compact_evidence_count,
+        "original_citation_count": original_citation_count,
+        "compact_citation_count": compact_citation_count,
+        "semantic_decision_owner": "model",
+        "host_role": "budgeted projection of existing evidence and workbench state",
+    }
+    return compact
+
+
+def _positive_profile_int(profile: JsonObject, key: str, *, default: int) -> int:
+    try:
+        value = int(profile.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _limit_prompt_list(value: object, limit: int) -> list[object]:
+    if not isinstance(value, list) or limit <= 0:
+        return []
+    return list(value[:limit])
+
+
+def _ordered_evidence_items(items: list[EvidenceItem]) -> list[EvidenceItem]:
+    seen: set[str] = set()
+    result: list[EvidenceItem] = []
+    for item in items:
+        key = item.evidence_id or item.span_id or item.uri
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _ordered_citation_items(items: list[CitationItem]) -> list[CitationItem]:
+    seen: set[str] = set()
+    result: list[CitationItem] = []
+    for item in items:
+        key = item.citation_id or item.evidence_id or item.uri
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _ordered_unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in values:
+        value = str(raw or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _synthesizer_repair_feedback(error: str) -> JsonObject:
@@ -872,6 +1218,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
     finance_numeric_repair_context = diagnostics.get("finance_numeric_repair_context")
     finance_metric_intent_hints = diagnostics.get("finance_metric_intent_hints")
     finance_question_numeric_premise_hints = diagnostics.get("finance_question_numeric_premise_hints")
+    synthesis_budget_compaction = diagnostics.get("synthesis_budget_compaction")
     return {
         "report_id": report.report_id,
         "goal_id": report.goal_id,
@@ -941,6 +1288,7 @@ def _compact_retrieval_report_for_provider(report: RetrievalReport) -> JsonObjec
             "finance_fact_ledger": _compact_list_for_provider(finance_fact_ledger, limit=96),
             "finance_fact_ledger_count": diagnostics.get("finance_fact_ledger_count"),
             "claim_ledger_present": diagnostics.get("claim_ledger_present"),
+            "synthesis_budget_compaction": _compact_prompt_value(synthesis_budget_compaction),
         },
     }
 

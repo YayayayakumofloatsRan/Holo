@@ -274,3 +274,86 @@ balance-sheet net PP&E，并建议继续检索，但 loop 在 streaming 路径�
 说明：这是 agent loop 合同修复，证明 tool result 能驱动下一轮工具调用；不是
 FinanceBench/FinQA/live accuracy 成绩。金融指标仍必须来自在线 live run，且
 gold/reference 不进入模型上下文。
+
+## 10. 2026-06-18 final synthesis budget rebuild
+
+用户再次强调：优先照搬成熟 agent loop 的实现，不要继续围绕单题小修小补。
+本轮继续对照本地 TypeScript 项目的成熟 loop 思路，重点吸收其中一个通用
+机制：当一个 streaming attempt / provider fallback / 工具结果路径不可继续时，
+不要让旧 attempt 的残缺上下文污染下一轮，而要重建一个受控的新上下文包。
+
+Holo live 探针暴露出的同类问题发生在 final synthesis：
+
+- `financebench_id_03029` v1 live run 已经成功检索到目标 SEC 证据；
+- `retrieval.run` 返回成功，目标 source URL/source family/required slots 都命中；
+- journal 中已有 `395` 个 finance facts、claim ledger、slot frame、transform plan；
+- 但 `synthesizer.answer` 首轮 prompt 达到约 `267,737` chars，超过
+  `finance-fact-fast` 的 `max_prompt_chars_per_call=260,000`；
+- fabric 直接返回 `processor_budget_exceeded`，repair retry 仍然用同类大包，
+  最终输出 failure report，评分为 `failure_report_not_final_answer`。
+
+这不是金融知识错误，而是成熟 agent loop 的上下文预算合同错误：工具和
+workbench 已经完成了工作，但 finalizer 没有把工作状态压缩成 provider 可持续
+消费的 packet。
+
+本轮修复：
+
+- `Synthesizer.synthesize(...)` 在调用 provider 前先构造 prompt 并读取
+  `processor_budget.max_prompt_chars_per_call`。
+- 如果 prompt 超出预算，会重建 compact synthesis packet，而不是把同一个大
+  prompt 送入失败/repair 循环。
+- compact packet 会按预算 profile 收缩 evidence、citations、finance fact
+  ledger、candidate facts、FormulaTrace、trace support、competing clusters、
+  metric hints、question numeric premise hints、search/fetch summaries 和预览长度。
+- provider request parameters 会记录
+  `synthesis_context_compaction=budgeted`、原始/压缩 prompt chars、压缩 profile、
+  原始/压缩 evidence/citation 数量。
+- `retrieval_report.diagnostics.synthesis_budget_compaction` 会进入模型 prompt，
+  明确告知模型：语义判断仍由模型完成，host 只做预算化证据投影。
+- JSON repair、unknown reference repair、missing citation repair 也走同一
+  budgeted prompt 构造，避免 repair 分支重新膨胀。
+
+这仍然不是规则答题，也不是按 benchmark id 打表。host 只控制证据包大小、
+引用集合和 provenance 边界；最终答案、事实选择、限制说明仍由
+`synthesizer.answer` LLM 输出。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_processor_streaming.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_fact_context_exposes_question_numeric_premise_hints_to_synthesizer_prompt tests/test_kernel_v3_finance_engine.py::test_finance_formula_trace_support_links_traces_to_fact_citations_in_synthesizer_prompt tests/test_kernel_v3_finance_engine.py::test_finance_fact_context_exposes_competing_clusters_to_synthesizer_prompt -q
+```
+
+结果：
+
+- `108 passed in 6.05s`
+- `3 passed in 0.59s`
+
+新增结构测试 `test_phase5_synthesizer_compacts_prompt_before_processor_budget_limit`
+证明：大 evidence/citation/fact-ledger packet 会在 provider 调用前压缩到
+processor budget 内，并且 compaction metadata 会写入 processor request。
+这是代码合同测试，不是金融能力成绩。
+
+live 验证：
+
+```text
+.state/kernel_v3/bench/finance/run_fb_debug_o000_l001_live_20260618_streaming_v2.jsonl
+.state/kernel_v3/bench/finance/run_fb_debug_o000_l001_live_20260618_streaming_v2.summary.json
+```
+
+同一 `financebench_id_03029` live 单题从 v1 的
+`failure_report_not_final_answer / processor_budget_exceeded` 变为：
+
+- status: `passed`
+- score reason: `numeric_within_tolerance`
+- answer: `3M FY2018 capital expenditure (Purchases of property, plant and equipment) was $1,577 million (USD millions).`
+- tokens: `112,180`
+- processor errors: none
+- `synthesizer.answer`: 1 call, `57,262` prompt tokens, status ok
+- citation present: true
+- numeric verifier / verifier gate / synthesis gate: passed
+- matched numeric: `1577.0`
+
+这是有效 live 单题回归，证明 final synthesis budget rebuild 修复了此前的
+budget-failure loop；它不是 debug50、test100、FinanceBench 总成绩，也不代表
+可以跳过类型簇 live debug。

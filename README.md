@@ -369,6 +369,20 @@ non-empty JSON argument object has arrived. Finance final numeric preflight task
 compilation is bounded and non-retrying so provider stalls cannot hang an
 already-completed live run at ledger-writing time. These are loop-stability
 contracts, not benchmark score claims.
+The next mature-loop checkpoint ports the same fallback/discard/rebuild idea to
+final synthesis. `Synthesizer` now checks `processor_budget.max_prompt_chars_per_call`
+before provider dispatch; if a retrieval/fact/citation packet is too large, it
+rebuilds a compact synthesis packet with bounded evidence, citations,
+finance-fact ledger, FormulaTrace, support indices, hints, and previews. The
+model still owns the final financial judgment; host-side compaction only keeps
+the workbench state within provider budget and exposes
+`synthesis_budget_compaction` as a prompt-visible boundary. Targeted structural
+tests pass (`108` agent-loop/tool/synthesizer tests plus `3` finance prompt
+contract tests). The same live `financebench_id_03029` probe that previously
+failed as `processor_budget_exceeded` now passes `1/1`
+(`numeric_within_tolerance`, matched `1577.0`, no processor errors) in
+`.state/kernel_v3/bench/finance/run_fb_debug_o000_l001_live_20260618_streaming_v2.jsonl`.
+This is a live single-row regression result, not a debug50/test100 score.
 The finance document toolchain now applies the same result-budgeting principle
 inside `document.docling.convert`: PDF URLs first use the lightweight existing
 PDF extraction stack before heavy Docling, nested Docling import probes fall

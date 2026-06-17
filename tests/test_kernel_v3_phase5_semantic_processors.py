@@ -649,6 +649,98 @@ def test_phase5_synthesizer_retries_invalid_json_once():
     assert retry_request.data["parameters"]["repair_feedback_category"] == "malformed_json"
 
 
+def test_phase5_synthesizer_compacts_prompt_before_processor_budget_limit():
+    report, evidence, citation = _retrieval_contracts()
+    evidence_items = [evidence]
+    citations = [citation]
+    for index in range(2, 82):
+        item = replace(
+            evidence,
+            evidence_id=f"ev-{index}",
+            span_id=f"span-{index}",
+            document_id=f"doc-{index}",
+            source_id=f"src-{index}",
+            artifact_id=f"artifact-{index}",
+            title=f"Evidence {index}",
+            text=("large finance evidence text " * 160),
+            payload_hash=f"hash-{index}",
+        )
+        evidence_items.append(item)
+        citations.append(
+            replace(
+                citation,
+                citation_id=f"cite-{index}",
+                evidence_id=item.evidence_id,
+                artifact_id=item.artifact_id,
+                title=item.title,
+                quote=("large citation quote " * 120),
+            )
+        )
+    large_report = replace(
+        report,
+        evidence_ids=[item.evidence_id for item in evidence_items],
+        citation_ids=[item.citation_id for item in citations],
+        artifact_refs=[item.artifact_id for item in evidence_items],
+        diagnostics={
+            "task_goal": "Answer a finance filing question from the provided evidence.",
+            "finance_fact_ledger": [
+                {
+                    "fact_id": f"fact-{index}",
+                    "metric": "capital expenditure",
+                    "value": str(index),
+                    "metadata": {"raw": "x" * 1200, "statement": "cash flow statement"},
+                }
+                for index in range(160)
+            ],
+            "finance_formula_traces": [
+                {"formula_id": f"formula-{index}", "result_value": str(index), "diagnostics": {"raw": "y" * 900}}
+                for index in range(24)
+            ],
+            "search_summaries": [{"query": f"query {index}", "raw": "z" * 1400} for index in range(12)],
+        },
+    )
+    provider = CapturingFakeJsonProvider(
+        {
+            "synthesizer.answer": {
+                "answer": "Kernel v3 cites compact evidence.",
+                "citation_refs": ["cite-1"],
+                "confidence": 0.82,
+                "limitations": [],
+                "used_evidence": ["ev-1"],
+            }
+        }
+    )
+    journal = JournalStore.in_memory()
+    max_prompt_chars = 60_000
+
+    answer = Synthesizer(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    ).synthesize(
+        task_id="task-synth-budget",
+        run_id="run-synth-budget",
+        context_id="ctx-synth-budget",
+        report=large_report,
+        evidence=evidence_items,
+        citations=citations,
+        processor_budget={"max_prompt_chars_per_call": max_prompt_chars},
+    )
+
+    prompt_payload = json.loads(provider.last_prompt)
+    request = journal.records(task_id="task-synth-budget", kind="processor_request")[0]
+    params = request.data["parameters"]
+    assert answer.status == "ok"
+    assert len(provider.last_prompt) <= max_prompt_chars
+    assert params["synthesis_context_compaction"] == "budgeted"
+    assert params["synthesis_original_prompt_chars"] > params["synthesis_compact_prompt_chars"]
+    assert prompt_payload["retrieval_report"]["diagnostics"]["synthesis_budget_compaction"]["host_role"]
+    assert len(prompt_payload["required_evidence_refs"]) < len(evidence_items)
+    assert "cite-1" in prompt_payload["required_citation_refs"]
+
+
 def test_phase5_synthesizer_salvages_answer_text_after_json_repair_failure():
     report, evidence, citation = _retrieval_contracts()
     provider = AlwaysMalformedAnswerProvider(
