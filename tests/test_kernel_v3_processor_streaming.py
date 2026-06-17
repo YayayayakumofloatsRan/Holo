@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 
 from kernel_v3.journal import JournalStore
 from kernel_v3.contracts import ProcessorRequest, ProcessorResult
-from kernel_v3.processors.contracts import ProcessorStreamEvent
+from kernel_v3.processors.contracts import JsonSchema, ProcessorStreamEvent
 from kernel_v3.processors.fabric import ProcessorFabric
 
 
@@ -41,6 +42,25 @@ class NonStreamingProvider:
     model = "nonstream-model"
 
     def run(self, request: ProcessorRequest) -> ProcessorResult:
+        return ProcessorResult(
+            result_id=f"result-{request.request_id}",
+            request_id=request.request_id,
+            status="ok",
+            output={"text": '{"ok": true}'},
+            usage={},
+            error=None,
+        )
+
+
+class CapturePromptProvider:
+    name = "capture"
+    model = "capture-model"
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def run(self, request: ProcessorRequest) -> ProcessorResult:
+        self.prompts.append(request.prompt)
         return ProcessorResult(
             result_id=f"result-{request.request_id}",
             request_id=request.request_id,
@@ -107,6 +127,48 @@ def test_processor_fabric_iter_stream_events_yields_incrementally_and_journals()
     assert [event.event_type for event in iterator] == ["content_delta", "stream_end"]
     stream_records = journal.records(task_id="task-1", kind="processor_stream")
     assert stream_records[0].data["event_count"] == 3
+
+
+def test_processor_fabric_applies_provider_message_replacement_view_to_json_prompt() -> None:
+    provider = CapturePromptProvider()
+    fabric = ProcessorFabric(providers={"capture": provider})
+    raw_prompt = json.dumps(
+        {
+            "context": {
+                "results": [
+                    {
+                        "tool_call_id": "tc-large",
+                        "content_preview": "RAW-" + "x" * 5000,
+                        "content_projection": {"preview": "PROJECTED-" + "y" * 5000},
+                        "content_replacement": {
+                            "schema": "holo.kernel_v3.tool_result_replacement.v1",
+                            "tool_call_id": "tc-large",
+                            "replacement_preview": "bounded replacement",
+                        },
+                    }
+                ]
+            }
+        },
+        ensure_ascii=False,
+    )
+
+    outcome = fabric.run_json(
+        task_type="assistant.turn",
+        run_id="run-1",
+        context_id="ctx-1",
+        prompt=raw_prompt,
+        schema=JsonSchema(name="capture", required={"ok": "bool"}),
+        provider="capture",
+        model="capture-model",
+    )
+
+    assert outcome.parsed == {"ok": True}
+    assert "RAW-" not in provider.prompts[0]
+    assert "PROJECTED-" not in provider.prompts[0]
+    sanitized = json.loads(provider.prompts[0])
+    result = sanitized["context"]["results"][0]
+    assert result["content_preview"] == "bounded replacement"
+    assert result["content_projection"]["preview"] == "bounded replacement"
 
 
 class IncrementalStreamingProvider:

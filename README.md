@@ -199,6 +199,15 @@ tools can call the shared helpers to emit `progress` events and honor host
 abort requests. Provider-native tool exposure now respects runtime loading hints:
 `always_load` tools are prioritized, while `should_defer` tools are summarized
 for discovery instead of flooding the provider `tools` payload.
+The latest P0 continuation adds a provider-message replacement view: deep-loop
+assistant prompts and `ProcessorFabric` JSON prompts now rewrite replaced large
+tool results to stable bounded previews before provider dispatch, so raw
+oversized `content_preview` / `content_projection.preview` payloads do not
+re-enter model context. This moves the generic single-agent loop parity estimate
+to roughly 94%; remaining gaps are native/non-JSON message-surface replacement,
+durable tool-results storage, non-cooperative subprocess/network cancellation,
+and type-family live debug50 evidence. This estimate is architectural only, not
+a FinanceBench or FinQA score.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in

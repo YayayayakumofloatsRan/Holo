@@ -3,7 +3,11 @@ from __future__ import annotations
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import CandidateAction, Observation, PolicyDecision, ToolManifest
 from kernel_v3.policy import PolicyGate
-from kernel_v3.tool_result_budget import ToolResultReplacementState, apply_tool_result_replacement_budget
+from kernel_v3.tool_result_budget import (
+    ToolResultReplacementState,
+    apply_provider_message_replacement_view,
+    apply_tool_result_replacement_budget,
+)
 from kernel_v3.tool_use import (
     ARTIFACT_READ_NAME,
     TOOL_DISCOVERY_NAME,
@@ -197,6 +201,44 @@ def test_tool_result_replacement_state_reapplies_byte_stable_replacements() -> N
     )
     assert second_records == []
     assert second[0]["content_replacement"] == replacement
+
+
+def test_provider_message_replacement_view_sanitizes_replaced_tool_results() -> None:
+    payload = {
+        "context": {
+            "recent_observations": {
+                "records": [
+                    {
+                        "content": {
+                            "results": [
+                                {
+                                    "tool_call_id": "tc-large",
+                                    "content_preview": "RAW-" + "x" * 5000,
+                                    "content_projection": {
+                                        "preview": "PROJECTED-" + "y" * 5000,
+                                        "estimated_chars": 100000,
+                                    },
+                                    "content_replacement": {
+                                        "schema": "holo.kernel_v3.tool_result_replacement.v1",
+                                        "tool_call_id": "tc-large",
+                                        "replacement_preview": "bounded replacement",
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    }
+
+    sanitized = apply_provider_message_replacement_view(payload)
+    result = sanitized["context"]["recent_observations"]["records"][0]["content"]["results"][0]
+
+    assert result["content_preview"] == "bounded replacement"
+    assert result["content_projection"]["preview"] == "bounded replacement"
+    assert result["content_replacement_applied"] is True
+    assert result["provider_message_replacement_applied"] is True
 
 
 def test_artifact_read_returns_bounded_preview_and_text() -> None:

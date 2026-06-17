@@ -121,6 +121,28 @@ def reconstruct_tool_result_replacement_state(records: Iterable[LedgerRecord]) -
     return state
 
 
+def apply_provider_message_replacement_view(value: object) -> object:
+    if isinstance(value, list):
+        return [apply_provider_message_replacement_view(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    updated: JsonObject = {
+        str(key): apply_provider_message_replacement_view(item)
+        for key, item in value.items()
+    }
+    replacement = updated.get("content_replacement")
+    if isinstance(replacement, dict):
+        preview = str(replacement.get("replacement_preview") or "")
+        if preview:
+            updated["content_preview"] = preview
+            projection = updated.get("content_projection")
+            if isinstance(projection, dict):
+                updated["content_projection"] = {**projection, "preview": preview}
+        updated["content_replacement_applied"] = True
+        updated["provider_message_replacement_applied"] = True
+    return updated
+
+
 @dataclass(frozen=True)
 class _ToolResultCandidate:
     tool_call_id: str

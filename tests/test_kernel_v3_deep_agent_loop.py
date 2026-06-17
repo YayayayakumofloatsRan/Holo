@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Iterable
@@ -7,7 +8,14 @@ from collections.abc import Iterable
 from kernel_v3.context import ContextCompiler
 
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation, ProcessorRequest, ToolManifest
-from kernel_v3.deep_loop import AssistantTurn, DeepAgentLoopController, ModelAssistantTurnPlanner, ToolCallParseError, ToolCallRequest
+from kernel_v3.deep_loop import (
+    AssistantTurn,
+    DeepAgentLoopController,
+    ModelAssistantTurnPlanner,
+    ToolCallParseError,
+    ToolCallRequest,
+    _assistant_turn_prompt,
+)
 from kernel_v3.journal import JournalStore
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors.contracts import ProcessorStreamEvent
@@ -472,6 +480,55 @@ def test_streaming_tool_timeout_requests_cooperative_abort() -> None:
         if record.data.get("kind") == "tool_batch_result"
     ][0]
     assert batch.data["content"]["results"][0]["status"] == "failed"
+
+
+def test_assistant_turn_prompt_applies_provider_message_replacement_view() -> None:
+    context = ContextBundle(
+        context_id="ctx-replacement",
+        thread_key="local:default",
+        event_ids=[],
+        memory_refs=[],
+        token_budget=4096,
+        state={
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "sections": [
+                {
+                    "name": "recent_observations",
+                    "records": [
+                        {
+                            "content": {
+                                "results": [
+                                    {
+                                        "tool_call_id": "tc-large",
+                                        "content_preview": "RAW-" + "x" * 5000,
+                                        "content_projection": {
+                                            "preview": "PROJECTED-" + "y" * 5000,
+                                            "estimated_chars": 100000,
+                                        },
+                                        "content_replacement": {
+                                            "schema": "holo.kernel_v3.tool_result_replacement.v1",
+                                            "tool_call_id": "tc-large",
+                                            "replacement_preview": "bounded replacement",
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    prompt = _assistant_turn_prompt(context, None, allowed_tool_names={"alpha.read"})
+    payload = json.loads(prompt)
+    result = payload["context"]["state"]["sections"][0]["records"][0]["content"]["results"][0]
+
+    assert result["content_preview"] == "bounded replacement"
+    assert result["content_projection"]["preview"] == "bounded replacement"
+    assert "RAW-" not in prompt
+    assert "PROJECTED-" not in prompt
 
 
 class _StreamingToolCallProvider:

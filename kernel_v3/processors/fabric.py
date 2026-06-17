@@ -14,6 +14,7 @@ from kernel_v3.processors.generation import adapt_generation_parameters
 from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.routing import ProcessorRouter
 from kernel_v3.processors.usage import coerce_usage
+from kernel_v3.tool_result_budget import apply_provider_message_replacement_view
 
 
 class ProcessorFabric:
@@ -578,6 +579,7 @@ class ProcessorFabric:
         parameters: JsonObject | None,
     ) -> ProcessorRequest:
         self._counter += 1
+        prompt = _provider_message_prompt(prompt)
         merged: JsonObject = {
             **dict(route_parameters),
             **dict(parameters or {}),
@@ -988,6 +990,21 @@ def _safe_request(request: ProcessorRequest) -> JsonObject:
         "parameters": _safe_json(request.parameters),
         "redaction": {"prompt": "preview_hash_only", "secrets": "redacted"},
     }
+
+
+def _provider_message_prompt(prompt: str) -> str:
+    if not isinstance(prompt, str) or "content_replacement" not in prompt:
+        return prompt
+    try:
+        decoded = json.loads(prompt)
+    except json.JSONDecodeError:
+        return prompt
+    if not isinstance(decoded, (dict, list)):
+        return prompt
+    sanitized = apply_provider_message_replacement_view(decoded)
+    if sanitized == decoded:
+        return prompt
+    return json.dumps(sanitized, ensure_ascii=False, sort_keys=True)
 
 
 def _safe_result(

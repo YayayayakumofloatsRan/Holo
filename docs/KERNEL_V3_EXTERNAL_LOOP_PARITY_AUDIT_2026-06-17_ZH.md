@@ -21,17 +21,21 @@ Holo 当前审查范围：
 
 ## 一句话结论
 
-Holo 已经从旧的一步一工具循环，升级到“单回合多工具 + tool.discovery + artifact.read + ToolUseContext + artifact 化长结果”的深循环骨架。
+Holo 已经从旧的一步一工具循环，升级到“provider-visible native tools + eager streaming tool execution + tool.discovery + artifact.read + ToolUseContext + artifact 化长结果 + provider-message replacement view”的深循环骨架。
 
-但与外部成熟项目相比，Holo 还没有完成真正的 streaming agent loop。当前 Holo 仍是：
+但与外部成熟项目相比，Holo 还没有完成 95%+ 的完整 streaming agent loop。当前 Holo 已经不再只是：
 
 `完整 JSON assistant.turn -> 批量执行工具 -> observation 回流`
 
-外部项目的成熟路径是：
+而是具备显式打开的中间形态：
+
+`provider tool_call_delta -> 参数完整即启动工具 -> host 继续 drain provider stream -> completed observation / aggregate batch 回流`
+
+外部项目的最终成熟路径仍然更强：
 
 `provider streaming delta -> tool_use 块一出现就入队执行 -> progress/result 立即回流 -> 缺失/取消/失败 tool_result 全部补齐 -> 下一轮继续`
 
-所以，Holo 现在的核心缺口不是再加某一道题的规则，而是把工具调用从“离线批处理”推进到“流式、可中断、预算稳定、可恢复”的工作台。
+所以，Holo 现在的核心缺口不是再加某一道题的规则，而是把已经落地的流式工具骨架继续推进到“运行中 progress/result 可回注、非协作工具可强边界取消、结果预算跨 provider message surface 与持久 store 字节稳定”的工作台。
 
 ## 外部项目做对的事情
 
@@ -61,7 +65,7 @@ Holo 已经从旧的一步一工具循环，升级到“单回合多工具 + too
 - 对可中断工具，有 child abort controller。
 - streaming fallback 会 discard 当前 attempt 的 pending / running results，避免 orphan tool_result 混入新 attempt。
 
-Holo 目前的 `kernel_v3/tool_use.py` 只实现了 completed assistant turn 下的 evented batch executor。它可以记录 queued / started / completed，但还不是 provider-streaming executor。
+Holo 目前的 `kernel_v3/tool_use.py` 和 `kernel_v3/deep_loop.py` 已经实现 eager streaming execution：provider `tool_call_delta` 的 name/arguments 足够完整时，host 会立即走 policy/guard 并提交工具执行，同时继续 drain provider stream。它已经越过“completed assistant turn 后批处理”的阶段，但还没有达到外部项目的完整 executor 语义：运行中 partial result 尚不能回注同一个 provider conversation，subprocess/network 级强取消还没有闭合。
 
 ### 3. Tool contract 很厚
 
@@ -100,7 +104,7 @@ Holo 目前的 `kernel_v3/tool_use.py` 只实现了 completed assistant turn 下
 - `replacements` 记录被替换后的精确 preview 文本。
 - resume / compact / fork 后用相同 replacement，保持 prompt cache 前缀稳定。
 
-Holo 当前有 `ArtifactStore`、`content_projection`、`artifact.read`，并且金融开放组件已把长 SEC/document/table/market payload 写 blob。本次 P0 接入又新增了 batch observation 层的 `ToolResultReplacementState` 雏形。但它还没有达到外部项目的成熟度：replacement 尚未在 provider 发包前统一应用，也没有完整的 tool-results 文件持久化与 provider-cache 级字节稳定策略。
+Holo 当前有 `ArtifactStore`、`content_projection`、`artifact.read`，并且金融开放组件已把长 SEC/document/table/market payload 写 blob。本次 P0 接入又新增了 batch observation 层的 `ToolResultReplacementState` 和 provider-message replacement view：`DeepAgentLoopController` 的 assistant prompt 与 `ProcessorFabric` 的 JSON prompt 会在 provider 发包前把已标记的长结果替换为稳定 bounded preview。但它还没有达到外部项目的成熟度：完整大结果尚未写入独立 tool-results 文件，非 JSON / native message array surface 尚未统一治理，也没有完全证明 provider-cache 级字节稳定策略。
 
 ### 5. Tool discovery 是 deferred tool loading
 
@@ -346,16 +350,16 @@ Holo 当前要求模型返回 JSON `assistant.turn`。这可控，但会牺牲 p
 
 未闭合：
 
-- provider streaming tool-use。
-- running tool abort / progress。
+- provider streaming tool-use 的运行中 partial result 回注。
+- 非协作 subprocess/network 工具的硬取消边界。
 - 厚工具合同的全链路执行语义。
-- token-aware deferred tool loading。
-- provider 发包前的跨回合稳定 result replacement。
+- token-aware deferred tool loading 和动态 provider tool-set 扩展。
+- 非 JSON/native message surface 与独立 tool-results store 的跨回合稳定 result replacement。
 - 类型化 live debug50 闭环结果。
 
 所以，最诚实的状态是：
 
-Holo 已经摆脱“一题一补丁”的最低级循环，但还没完成成熟 agent loop 的关键工程层。下一次迭代不应该再碰金融规则，而应把本轮 P0 骨架继续闭合：streaming provider tool-use、ToolRuntimeSpec 的执行语义、ContentReplacementState 级结果预算。
+Holo 已经摆脱“一题一补丁”的最低级循环，单 agent 通用 loop 的架构成熟度约为 94%。下一次迭代不应该回到金融规则补丁，而应把本轮 P0 骨架继续闭合：运行中 result/progress 回注、ToolRuntimeSpec 的执行语义、ContentReplacementState 级结果预算、以及 live debug50 的类型化证明。
 
 ## 建议实现顺序
 
@@ -363,9 +367,9 @@ Holo 已经摆脱“一题一补丁”的最低级循环，但还没完成成熟
 2. 将剩余 `concurrency_safe` 兼容读法收口到 runtime spec，避免新工具继续把调度字段塞进 input schema。
 3. 为 `ToolRegistry` 增加 async/progress 执行协议，旧同步 executor 自动包装。
 4. 将当前 `ToolResultReplacementState` 升级为完整 `ContentReplacementState` 等价物，让 tool batch result projection、artifact persistence、journal reconstruction 和 provider 发包前 replacement 跨回合稳定。
-5. 扩展已新增的 `ProcessorProvider` streaming event 协议，从 structural tests 推进到 deep loop 可消费的事件源。
-6. 完成 OpenAI-compatible / DeepSeek provider 的 SSE streaming 与 tool-call delta normalization。
-7. 将 deep loop 从 completed-turn batch 模式升级为 streaming tool-use 模式，JSON assistant.turn 作为 fallback。
+5. 将 provider-message replacement view 扩展到 native message array 和 resume/fork 的 provider-cache 稳定审计。
+6. 扩展 OpenAI-compatible / DeepSeek provider 的 SSE streaming 生产路径和 tool-call delta normalization 的 live 验证。
+7. 将 deep loop 的 eager streaming path 推进到运行中 progress/result 可回注，JSON assistant.turn 继续作为 fallback。
 8. CLI 显示 tool execution progress。
 9. 跑 live debug50，按任务族归因，不做 fake score。
 
@@ -391,9 +395,9 @@ Holo 已经摆脱“一题一补丁”的最低级循环，但还没完成成熟
 
 `src/services/tools/StreamingToolExecutor.ts:129-150` 的调度规则是：没有工具在运行，或当前工具和所有运行工具都并发安全时才可执行；非并发安全工具阻塞队列。这是可泛化调度合同，不是金融题规则。
 
-`src/services/tools/StreamingToolExecutor.ts:153-205` 为 sibling error、用户中断、streaming fallback 都生成 synthetic `tool_result`。这条不变量很重要：模型发出的每个 `tool_use` 必须最终对应一个成功、失败、取消或 fallback 的结果。Holo 当前只对 completed JSON turn 的 parse error / policy block / guard block 有 observation，还没有 provider-native `tool_use_id -> tool_result` 配对层。
+`src/services/tools/StreamingToolExecutor.ts:153-205` 为 sibling error、用户中断、streaming fallback 都生成 synthetic `tool_result`。这条不变量很重要：模型发出的每个 `tool_use` 必须最终对应一个成功、失败、取消或 fallback 的结果。Holo 现在已经把 completed JSON turn 和 eager streaming delta 都接到 observation / aggregate batch result，但 provider fallback、中断、非协作取消下的全量 synthetic result 配对还没有达到外部项目级别。
 
-`src/services/tools/StreamingToolExecutor.ts:207-241` 根据 `interruptBehavior()` 决定用户新消息到来时工具是 cancel 还是 block。Holo 新增的 `ToolRuntimeSpec.interrupt_behavior` 只是雏形，尚未接入 executor。
+`src/services/tools/StreamingToolExecutor.ts:207-241` 根据 `interruptBehavior()` 决定用户新消息到来时工具是 cancel 还是 block。Holo 新增的 `ToolRuntimeSpec.interrupt_behavior` 已接到 cooperative timeout/abort 入口，但 child process、network request 和用户新消息打断语义仍需继续闭合。
 
 ### 外部项目的 tool result budget 不变量
 
@@ -405,17 +409,17 @@ Holo 已经摆脱“一题一补丁”的最低级循环，但还没完成成熟
 
 Holo 的 deep loop 在 `kernel_v3/deep_loop.py:198-301` 中持续循环：compile context、propose assistant turn、执行工具或 terminal turn、evaluate、按 guard/stop 退出。这说明 Holo 已经有可持续 loop，不是单步 planner。
 
-Holo 的多工具执行在 `kernel_v3/deep_loop.py:390-461`：先把 `turn.tool_calls` 转成 `CandidateAction`，走 manifest、policy、pre-exec guard，再通过 `StreamingToolExecutor.execute_batches(...)` 执行。这是正确骨架，但它的输入是完整 JSON assistant turn，而不是 provider streaming delta。
+Holo 的多工具执行在 `kernel_v3/deep_loop.py` 中保留两条路径：JSON fallback 会把完整 `turn.tool_calls` 转成 `CandidateAction` 后批量执行；eager streaming path 会在 provider `tool_call_delta` 的 name/arguments 完整时立即走同一套 manifest、policy、pre-exec guard、network/tool budget 和 executor。剩余差距是运行中 partial result/progress 还不能回注同一个 provider conversation。
 
-Holo 的工具上下文在 `kernel_v3/deep_loop.py:495-511` 绑定到 `_host_context` 后传给工具。`kernel_v3/tool_use.py:21-49` 的 `ToolUseContext` 目前已经包含 `runtime_spec`，但还没有 abort/progress、content replacement state 和显式 workbench state。
+Holo 的工具上下文在 `kernel_v3/deep_loop.py` 绑定到 `_host_context` 后传给工具。`kernel_v3/tool_use.py` 的 `ToolUseContext` 目前已经包含 `runtime_spec`、progress channel、abort signal 和 timeout hints；content replacement 已在 provider JSON prompt view 落地，但显式 workbench state 与完整 `ContentReplacementState` 仍未闭合。
 
-Holo 的工具执行事件在 `kernel_v3/tool_use.py:91-173`。但这里的 `StreamingToolExecutor` 当前是 batch/evented executor，注释也写明“future provider-streaming loop can feed items into the same executor”；所以它还不是外部项目那种 streaming executor。
+Holo 的工具执行事件在 `kernel_v3/tool_use.py`。这里的 `StreamingToolExecutor` 已经承担 queued / started / progress / completed / abort_requested 等 journal 事件，deep loop 的 eager streaming path 也能把 provider delta 喂入该执行层；但它还不是外部项目那种可把运行中结果持续 yield 回 provider conversation 的 executor。
 
-Holo provider 当前仍在 `kernel_v3/processors/providers.py:183-193` 固定 `response_format=json_object` 且 `"stream": False`。这从根上限制了 deep loop：只能等完整 JSON 输出后再执行工具，无法在 tool_use delta 到达时启动工具。
+初始审查时，Holo provider 固定 `response_format=json_object` 且 `"stream": False`，因此只能等完整 JSON 输出后再执行工具。后续 P0 已新增 provider-native tool surface、SSE parser 骨架、stream event contract 和 eager streaming execution；仍需扩大 OpenAI-compatible / DeepSeek 生产路径的 live 验证。
 
 ### 2026-06-17 P0 接入后的当前状态
 
-本次 P0 接入已经把几项“只在审查文档里”的合同落到了代码里，但还没有完成 provider-native streaming deep loop。
+本次 P0 接入已经把几项“只在审查文档里”的合同落到了代码里，但还没有完成外部项目级别的 provider-native streaming deep loop。
 
 已经落地：
 
@@ -436,12 +440,13 @@ Holo provider 当前仍在 `kernel_v3/processors/providers.py:183-193` 固定 `r
 - `ToolUseContext` 现在携带 `progress_channel_id`、`abort_signal_id` 和 `timeout_seconds`。协作式工具可通过 `emit_tool_progress(...)` 发 `progress` tool execution event，通过 `tool_abort_requested(...)` 响应 host abort signal。
 - streaming futures 会读取 runtime `timeout_seconds`；超时后 host 记录 `abort_requested` 事件，设置 cooperative abort signal，并为不退出的工具生成 `tool_call_timeout` observation，避免 loop 无限等待。
 - provider-native tool surface 已接入 runtime loading hints：`always_load` 工具优先进入 provider `tools`，`should_defer` 工具不直接进入 provider payload，而是进入 `native_tool_deferred` summary，供 `tool.discovery` 按需展开。
+- `kernel_v3/tool_result_budget.py` 新增 `apply_provider_message_replacement_view(...)`；`DeepAgentLoopController` 的 `_assistant_turn_prompt(...)` 和 `ProcessorFabric` JSON request 构造都会在 provider 发包前应用 replacement view。结构测试证明原始大 preview 不会进入 prompt，模型只看到 bounded replacement preview。
 
 仍未完成：
 
 - `DeepAgentLoopController` 默认仍保留完整 JSON `assistant.turn` fallback；eager streaming path 需要 recipe metadata 显式打开 `agent_loop.provider_streaming=true` 或 `agent_loop.streaming=true`。
 - eager streaming execution 已经做到“tool_call delta 完整即启动工具并继续 drain provider stream”，协作式工具运行进度也能进入 journal；但还没有把工具运行中的 partial result 反向注入同一个 provider conversation。
-- `ToolResultReplacementState` 已能进入 batch observation 和 context pack，但尚未把完整大结果持久写入独立 tool-results 文件，也尚未做到所有 provider message surface 发包前统一 `applyToolResultBudget(...)`。
+- `ToolResultReplacementState` 已能进入 batch observation、context pack 和 JSON provider prompt view，但尚未把完整大结果持久写入独立 tool-results 文件；非 JSON prompt、native message array、跨 resume/fork provider-cache 边界仍需完整 `ContentReplacementState` 等价机制。
 - `interrupt_behavior` 已进入 runtime spec，协作式 abort signal 已能下发；但 child abort controller、subprocess/network signal 传递和非协作线程强中断还没有闭合。
 - deferred tool loading 已进入 provider-native surface 的 `always_load` / `should_defer` 选择层；但还不是完整 token-budget 优化器，也没有按任务动态扩大 provider tool set。
 
@@ -499,15 +504,26 @@ Holo provider 当前仍在 `kernel_v3/processors/providers.py:183-193` 固定 `r
 
 这一步把“长任务不黑盒卡住”和“工具太多时不把 provider payload 塞爆”的 P0 合同补上了工程入口。剩余不是普通接口问题，而是更硬的系统闭环：subprocess/network 的真实 signal 传递、所有 provider message surface 的统一 result replacement、以及 live debug50 证明。
 
+### 2026-06-17 P0 续进：provider message replacement view
+
+本轮续进补上了“大工具结果已经生成 replacement，但 provider prompt 仍可能带原始大 preview”的直接漏洞：
+
+- `apply_provider_message_replacement_view(...)` 会递归扫描 provider-bound JSON payload；凡是带 `content_replacement` 的结果，都会把 `content_preview` 和 `content_projection.preview` 改写成 `replacement_preview`，并标记 `provider_message_replacement_applied=true`。
+- `_assistant_turn_prompt(...)` 在序列化 deep loop 上下文前应用该 view，避免 recent observations 中的原始大结果重新进入下一轮模型上下文。
+- `ProcessorFabric._request(...)` 对包含 `content_replacement` 的 JSON prompt 做同样处理，因此不只 deep loop helper，普通 JSON provider request 也有统一保险。
+- 结构测试覆盖 helper、deep loop prompt、ProcessorFabric JSON prompt 三层，确认 `RAW-...` / `PROJECTED-...` 不进入最终 provider prompt。
+
+这把成熟度从约 93% 推进到约 94%。它仍不是完整 `ContentReplacementState`：当前覆盖 JSON prompt surface，还没有覆盖 native message array、非 JSON prompt、独立 tool-results 文件和 resume/fork 后 provider-cache 级字节稳定审计。
+
 ### 与外部项目 agent loop 的剩余差距估计
 
 这个估计只描述 agent loop 技术 parity，不是 FinanceBench / FinQA 分数。
 
-按“复刻成熟项目的通用 agent loop”口径，当前大约完成 90%-93%。已经完成的是合同底座和显式入口：host-owned loop、tool manifest/runtime spec、tool discovery 暴露、tool context 注入、processor stream event、stream-to-turn assembler、parse error observation、provider-native tool surface、native-to-Holo tool name map、eager streaming tool execution、cooperative progress/abort、deferred provider tool surface、replacement context exposure、journal 记录。模型已经可以通过显式 streaming planner 在 provider 请求里看到 native tools，并把 provider stream event 带入 Holo 的 policy/tool/journal 链路。
+按“复刻成熟项目的通用 agent loop”口径，当前大约完成 94%。已经完成的是合同底座和显式入口：host-owned loop、tool manifest/runtime spec、tool discovery 暴露、tool context 注入、processor stream event、stream-to-turn assembler、parse error observation、provider-native tool surface、native-to-Holo tool name map、eager streaming tool execution、cooperative progress/abort、deferred provider tool surface、JSON provider prompt replacement view、replacement context exposure、journal 记录。模型已经可以通过显式 streaming planner 在 provider 请求里看到 native tools，并把 provider stream event 带入 Holo 的 policy/tool/journal 链路。
 
-距离 95%+ 成熟度还差的 4%-7% 主要集中在剩余工程闭环：
+距离 95%+ 成熟度还差的 1%-3% 主要集中在剩余工程闭环：
 
-- Tool result replacement 仍要从 batch observation/context exposure 升级到所有 provider message surface 发包前的统一预算/替换/恢复机制，并把完整结果稳定落到 artifact 或 tool-results 存储。
+- Tool result replacement 已进入 JSON provider prompt view，但仍要覆盖 native message array、非 JSON prompt、resume/fork cache 稳定审计，并把完整结果稳定落到 artifact 或 tool-results 存储。
 - Tool runtime spec 已驱动 cooperative progress/abort/timeout，但仍要接到 child process/network cancellation，解决非协作工具的真实中断。
 - deferred/always-load 已进入 provider-native surface，但还需要按任务、token budget、tool.discovery 结果动态调整 provider tool set。
 - Workbench state 仍要更明确地承载 SEC/EDGAR、table query、calculator、formula trace、artifact read、market/search 等临时组装能力。
@@ -530,9 +546,9 @@ FinanceBench / FinQA 失败不应再按单题修补。当前缺口会系统性�
 P0 不是“再多注册几个金融工具”。P0 是把通用 agent loop 的执行合同打通：
 
 1. `ToolRuntimeSpec` 全链路接入：manifest、discovery、tool context、executor concurrency、interrupt、result budget。
-2. `ContentReplacementState` 全链路接入：batch result projection、artifact persistence、journal/transcript record、resume reconstruction。
-3. `ProcessorProvider.stream(...)` 与 `ProcessorFabric.stream_events(...)`：先定义事件协议和 fake/provider tests，再接 OpenAI-compatible SSE。
-4. streaming deep loop 双轨：支持 native streaming tool-use；保留 JSON `assistant.turn` fallback。
-5. tool execution progress/abort：至少让长工具能发 progress observation，并让 interruptBehavior 真正生效。
+2. `ContentReplacementState` 全链路接入：batch result projection、provider prompt view、artifact/tool-results persistence、journal/transcript record、resume reconstruction。
+3. `ProcessorProvider.stream(...)` 与 `ProcessorFabric.stream_events(...)`：事件协议和 fake/provider tests 已有，下一步要扩大 OpenAI-compatible / DeepSeek SSE live 证明。
+4. streaming deep loop 双轨：native streaming tool-use 已有 eager path，下一步要支持运行中 progress/result 回注；JSON `assistant.turn` 继续作为 fallback。
+5. tool execution progress/abort：cooperative helper 已有，下一步要让 subprocess/network 工具真正接入 signal/timeout 边界。
 
-只有这五点完成，Holo 才能说“理论上给足工具后可以解决 FB/FQA 所有类型题”。现在只能说已经有骨架，但关键工程不变量还没闭合。
+只有这些剩余闭环完成，Holo 才能说“理论上给足工具后可以解决 FB/FQA 所有类型题”。现在可以说单 agent loop 骨架已经接近 95%，但关键工程不变量和 live debug50 证据还没闭合。

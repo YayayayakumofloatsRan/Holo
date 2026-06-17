@@ -16,6 +16,7 @@ from kernel_v3.result import AgentResult
 from kernel_v3.session import TaskState
 from kernel_v3.tool_result_budget import (
     ToolResultReplacementState,
+    apply_provider_message_replacement_view,
     apply_tool_result_replacement_budget,
     reconstruct_tool_result_replacement_state,
 )
@@ -1403,7 +1404,8 @@ def _assistant_turn_prompt(
             "host_rule": "The host will validate and return every tool result as observations before the next turn.",
         },
     }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+    sanitized = apply_provider_message_replacement_view(payload)
+    return json.dumps(sanitized, ensure_ascii=False, sort_keys=True, indent=2)
 
 
 def _stream_tool_call_items(value: object) -> list[JsonObject]:
