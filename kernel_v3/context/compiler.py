@@ -25,6 +25,7 @@ AGENT_TRACE_KINDS = {
     "observation",
     "feedback",
     "guard",
+    "agent_loop_turn_result",
     "result",
 }
 
@@ -676,6 +677,8 @@ def _compact_agent_trace_record(record: LedgerRecord) -> JsonObject:
         compacted["feedback"] = _compact_agent_trace_feedback(data)
     elif record.kind == "guard":
         compacted["guard"] = _compact_nested_content(data)
+    elif record.kind == "agent_loop_turn_result":
+        compacted["agent_loop_turn_result"] = _compact_agent_trace_loop_turn_result(data)
     elif record.kind == "result":
         compacted["result"] = _compact_agent_trace_result(data)
     else:
@@ -763,6 +766,25 @@ def _minimal_agent_trace_record(record: JsonObject) -> JsonObject:
         minimal_guard = _pick_present(guard, ("reason", "status", "source"))
         if minimal_guard:
             minimal["guard"] = minimal_guard
+
+    loop_turn_result = record.get("agent_loop_turn_result")
+    if isinstance(loop_turn_result, dict):
+        minimal_loop = _pick_present(
+            loop_turn_result,
+            (
+                "phase",
+                "transition",
+                "turn_id",
+                "guard_stop_reason",
+                "tool_result_count",
+                "failed_tool_count",
+            ),
+        )
+        feedback = loop_turn_result.get("feedback")
+        if isinstance(feedback, dict):
+            minimal_loop["feedback"] = _pick_present(feedback, ("status", "stop_reason"))
+        if minimal_loop:
+            minimal["agent_loop_turn_result"] = minimal_loop
 
     result = record.get("result")
     if isinstance(result, dict):
@@ -903,6 +925,50 @@ def _compact_agent_trace_feedback(data: JsonObject) -> JsonObject:
         "stop_reason": data.get("stop_reason"),
         "answer": _compact_optional_text(data.get("answer"), limit=360),
         "missing_evidence": _string_list(data.get("missing_evidence"))[:24],
+    }
+
+
+def _compact_agent_trace_loop_turn_result(data: JsonObject) -> JsonObject:
+    feedback = data.get("feedback") if isinstance(data.get("feedback"), dict) else {}
+    observation = data.get("observation") if isinstance(data.get("observation"), dict) else {}
+    counters = data.get("counters") if isinstance(data.get("counters"), dict) else {}
+    failed_tools = data.get("failed_tools") if isinstance(data.get("failed_tools"), list) else []
+    tool_results = data.get("tool_results") if isinstance(data.get("tool_results"), list) else []
+    return {
+        "schema": data.get("schema"),
+        "runtime": data.get("runtime"),
+        "phase": data.get("phase"),
+        "transition": data.get("transition"),
+        "turn_id": data.get("turn_id"),
+        "assistant_tool_call_count": data.get("assistant_tool_call_count"),
+        "assistant_parse_error_count": data.get("assistant_parse_error_count"),
+        "assistant_final_answer_present": data.get("assistant_final_answer_present"),
+        "assistant_stop_reason": data.get("assistant_stop_reason"),
+        "tool_result_count": data.get("tool_result_count"),
+        "tool_status_counts": _compact_nested_content(
+            data.get("tool_status_counts") if isinstance(data.get("tool_status_counts"), dict) else {}
+        ),
+        "failed_tool_count": data.get("failed_tool_count"),
+        "failed_tools": [
+            _pick_present(item, ("tool_call_id", "tool", "status", "kind", "policy", "observation_id"))
+            for item in failed_tools[:8]
+            if isinstance(item, dict)
+        ],
+        "tool_results": [
+            _pick_present(item, ("tool_call_id", "tool", "status", "kind", "policy", "observation_id"))
+            for item in tool_results[:8]
+            if isinstance(item, dict)
+        ],
+        "observation": _pick_present(observation, ("observation_id", "kind", "status", "source")),
+        "feedback": {
+            "feedback_id": feedback.get("feedback_id"),
+            "status": feedback.get("status"),
+            "stop_reason": feedback.get("stop_reason"),
+            "answer_present": feedback.get("answer_present"),
+            "missing_evidence": _string_list(feedback.get("missing_evidence"))[:12],
+        },
+        "guard_stop_reason": data.get("guard_stop_reason"),
+        "counters": _pick_present(counters, ("tool_calls", "network_fetches", "total_artifact_bytes")),
     }
 
 
@@ -1479,6 +1545,21 @@ def _agent_trace_budget_view(record: LedgerRecord) -> JsonObject:
         budget_view["tc"] = data.get("tool_call_id")
         budget_view["tn"] = data.get("tool_name")
         budget_view["st"] = data.get("status")
+    elif kind == "agent_loop_turn_result":
+        budget_view["phase"] = data.get("phase")
+        budget_view["transition"] = data.get("transition")
+        budget_view["turn"] = data.get("turn_id")
+        budget_view["st"] = (
+            data.get("feedback", {}).get("status")
+            if isinstance(data.get("feedback"), dict)
+            else None
+        )
+        budget_view["reason"] = data.get("guard_stop_reason") or (
+            data.get("feedback", {}).get("stop_reason")
+            if isinstance(data.get("feedback"), dict)
+            else None
+        )
+        budget_view["failed"] = data.get("failed_tool_count")
     elif kind in {"policy_decision", "result", "guard"}:
         budget_view["st"] = data.get("status")
         budget_view["reason"] = data.get("reason") or data.get("stop_reason")

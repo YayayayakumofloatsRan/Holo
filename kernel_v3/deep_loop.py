@@ -368,6 +368,9 @@ class DeepAgentLoopController(LoopControllerV3):
         while True:
             step_index += 1
             step_id = f"step-{step_index}"
+            step_phase = "assistant_turn"
+            step_observation: Observation | None = None
+            step_execution_items: list[_ToolExecutionItem] | None = None
             context = self.context_compiler.compile(task, self.journal)
             self.journal.append(
                 task_id=task.task_id,
@@ -427,6 +430,7 @@ class DeepAgentLoopController(LoopControllerV3):
             self._append_assistant_turn(task, turn, step_id=step_id)
 
             if not turn.tool_calls and not turn.parse_errors:
+                step_phase = "terminal_turn"
                 current_feedback = self._handle_terminal_turn(
                     task,
                     turn,
@@ -438,9 +442,23 @@ class DeepAgentLoopController(LoopControllerV3):
                     "needs_user_input",
                     "final_answer_ready",
                 }:
+                    self._append_agent_loop_turn_result(
+                        task,
+                        turn=turn,
+                        feedback=current_feedback,
+                        step_id=step_id,
+                        phase=step_phase,
+                        transition="return",
+                        observation=step_observation,
+                        execution_items=step_execution_items,
+                        tool_calls=tool_calls,
+                        network_fetches=network_fetches,
+                        total_artifact_bytes=total_artifact_bytes,
+                    )
                     return self._result(task, current_feedback, step_id=step_id)
 
             else:
+                step_phase = "tool_turn"
                 if preexecuted_items is None:
                     execution_items, tool_calls, network_fetches, total_artifact_bytes = self._execute_tool_turn(
                         task,
@@ -452,12 +470,14 @@ class DeepAgentLoopController(LoopControllerV3):
                     )
                 else:
                     execution_items = preexecuted_items
+                step_execution_items = execution_items
                 aggregate = self._tool_batch_observation(
                     task,
                     turn=turn,
                     step_id=step_id,
                     execution_items=execution_items,
                 )
+                step_observation = aggregate
                 self.journal.append(
                     task_id=task.task_id,
                     run_id=task.run_id,
@@ -499,6 +519,20 @@ class DeepAgentLoopController(LoopControllerV3):
                             action=self._synthetic_batch_action(turn, step_id=step_id),
                             step_id=step_id,
                         )
+                    self._append_agent_loop_turn_result(
+                        task,
+                        turn=turn,
+                        feedback=current_feedback,
+                        step_id=step_id,
+                        phase=step_phase,
+                        transition="return_guard",
+                        observation=step_observation,
+                        execution_items=step_execution_items,
+                        guard_stop_reason=batch_guard_reason,
+                        tool_calls=tool_calls,
+                        network_fetches=network_fetches,
+                        total_artifact_bytes=total_artifact_bytes,
+                    )
                     return self._result(task, current_feedback, step_id=step_id)
 
                 evaluation_context = self.context_compiler.compile(task, self.journal)
@@ -525,9 +559,36 @@ class DeepAgentLoopController(LoopControllerV3):
                         action=self._synthetic_batch_action(turn, step_id=step_id),
                         step_id=step_id,
                     )
+                    self._append_agent_loop_turn_result(
+                        task,
+                        turn=turn,
+                        feedback=current_feedback,
+                        step_id=step_id,
+                        phase=step_phase,
+                        transition="return_guard",
+                        observation=step_observation,
+                        execution_items=step_execution_items,
+                        guard_stop_reason=stop_reason,
+                        tool_calls=tool_calls,
+                        network_fetches=network_fetches,
+                        total_artifact_bytes=total_artifact_bytes,
+                    )
                     return self._result(task, current_feedback, step_id=step_id)
 
                 if self.stop_controller.should_stop(current_feedback):
+                    self._append_agent_loop_turn_result(
+                        task,
+                        turn=turn,
+                        feedback=current_feedback,
+                        step_id=step_id,
+                        phase=step_phase,
+                        transition="return",
+                        observation=step_observation,
+                        execution_items=step_execution_items,
+                        tool_calls=tool_calls,
+                        network_fetches=network_fetches,
+                        total_artifact_bytes=total_artifact_bytes,
+                    )
                     return self._result(task, current_feedback, step_id=step_id)
 
             continuation_guard = self._continuation_guard(step_index=step_index, started_at_ms=started_at_ms)
@@ -536,7 +597,34 @@ class DeepAgentLoopController(LoopControllerV3):
                 current_feedback = self._limit_feedback(task.run_id, stop_reason)
                 self._append_feedback_record(task, current_feedback, step_id=step_id, observation=None)
                 self._append_guard(task, stop_reason, step_id=step_id, data=data)
+                self._append_agent_loop_turn_result(
+                    task,
+                    turn=turn,
+                    feedback=current_feedback,
+                    step_id=step_id,
+                    phase=step_phase,
+                    transition="return_continuation_guard",
+                    observation=step_observation,
+                    execution_items=step_execution_items,
+                    guard_stop_reason=stop_reason,
+                    tool_calls=tool_calls,
+                    network_fetches=network_fetches,
+                    total_artifact_bytes=total_artifact_bytes,
+                )
                 return self._result(task, current_feedback, step_id=step_id)
+            self._append_agent_loop_turn_result(
+                task,
+                turn=turn,
+                feedback=current_feedback,
+                step_id=step_id,
+                phase=step_phase,
+                transition="continue",
+                observation=step_observation,
+                execution_items=step_execution_items,
+                tool_calls=tool_calls,
+                network_fetches=network_fetches,
+                total_artifact_bytes=total_artifact_bytes,
+            )
 
     def _propose_turn(self, context: ContextBundle, feedback: Feedback | None) -> AssistantTurn:
         planner = self.planner
@@ -1696,6 +1784,113 @@ class DeepAgentLoopController(LoopControllerV3):
             observation_ref=observation.observation_id if observation is not None else None,
             feedback_ref=feedback.feedback_id,
             state_delta={"feedback_status": feedback.status},
+        )
+
+    def _append_agent_loop_turn_result(
+        self,
+        task: TaskState,
+        *,
+        turn: AssistantTurn,
+        feedback: Feedback | None,
+        step_id: str,
+        phase: str,
+        transition: str,
+        observation: Observation | None,
+        execution_items: list[_ToolExecutionItem] | None,
+        tool_calls: int,
+        network_fetches: int,
+        total_artifact_bytes: int,
+        guard_stop_reason: str | None = None,
+    ) -> None:
+        execution_items = list(execution_items or [])
+        tool_status_counts: dict[str, int] = {}
+        tool_kind_counts: dict[str, int] = {}
+        failed_tools: list[JsonObject] = []
+        tool_results: list[JsonObject] = []
+        for item in execution_items:
+            status = str(item.observation.status or "")
+            kind = str(item.observation.kind or "")
+            tool_status_counts[status] = tool_status_counts.get(status, 0) + 1
+            tool_kind_counts[kind] = tool_kind_counts.get(kind, 0) + 1
+            summary: JsonObject = {
+                "tool_call_id": item.tool_call_id,
+                "action_id": item.action.action_id,
+                "tool": str(item.action.name or ""),
+                "status": status,
+                "kind": kind,
+                "policy": item.policy_reason,
+                "observation_id": item.observation.observation_id,
+            }
+            if item.tool_result_artifact_ref is not None and hasattr(item.tool_result_artifact_ref, "artifact_id"):
+                summary["tool_result_artifact_id"] = str(item.tool_result_artifact_ref.artifact_id)
+            tool_results.append(summary)
+            if status != "ok":
+                failed_tools.append(summary)
+
+        observation_data: JsonObject = {}
+        if observation is not None:
+            observation_data = {
+                "observation_id": observation.observation_id,
+                "kind": observation.kind,
+                "status": observation.status,
+                "source": observation.source,
+            }
+
+        feedback_data: JsonObject = {}
+        if feedback is not None:
+            feedback_data = {
+                "feedback_id": feedback.feedback_id,
+                "status": feedback.status,
+                "stop_reason": feedback.stop_reason,
+                "answer_present": bool(feedback.answer),
+                "missing_evidence": list(feedback.missing_evidence[:24]),
+            }
+
+        data: JsonObject = {
+            "schema": "holo.kernel_v3.agent_loop_turn_result.v1",
+            "runtime": self.runtime_backend,
+            "phase": phase,
+            "transition": transition,
+            "turn_id": turn.turn_id,
+            "assistant_tool_call_count": len(turn.tool_calls),
+            "assistant_parse_error_count": len(turn.parse_errors or []),
+            "assistant_final_answer_present": bool(turn.final_answer),
+            "assistant_stop_reason": turn.stop_reason,
+            "assistant_reasons": list(turn.reasons or [])[:12],
+            "tool_result_count": len(tool_results),
+            "tool_status_counts": tool_status_counts,
+            "tool_kind_counts": tool_kind_counts,
+            "failed_tool_count": len(failed_tools),
+            "failed_tools": failed_tools[:8],
+            "tool_results": tool_results[:12],
+            "observation": observation_data,
+            "feedback": feedback_data,
+            "guard_stop_reason": guard_stop_reason,
+            "counters": {
+                "tool_calls": tool_calls,
+                "network_fetches": network_fetches,
+                "total_artifact_bytes": total_artifact_bytes,
+            },
+            "host_boundary": (
+                "per-turn lifecycle result copied from mature query-loop practice: "
+                "model owns next semantic step, host records structured transition and recovery state"
+            ),
+        }
+        self.journal.append(
+            task_id=task.task_id,
+            run_id=task.run_id,
+            step_id=step_id,
+            kind="agent_loop_turn_result",
+            data=redact_journal_data(data),
+            event_ref=self._last_ref(task.task_id, "event_ref"),
+            observation_ref=observation.observation_id if observation is not None else None,
+            feedback_ref=feedback.feedback_id if feedback is not None else None,
+            state_delta={
+                "agent_loop_phase": phase,
+                "agent_loop_transition": transition,
+                "agent_loop_feedback_status": feedback.status if feedback is not None else None,
+                "stop_reason": guard_stop_reason or (feedback.stop_reason if feedback is not None else None),
+            },
         )
 
     def _tool_batch_guard_stop_reason(self, observation: Observation) -> str | None:

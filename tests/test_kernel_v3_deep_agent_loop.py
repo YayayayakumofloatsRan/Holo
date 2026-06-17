@@ -209,6 +209,13 @@ def test_deep_agent_loop_records_host_tool_exception_as_tool_result() -> None:
     assert batch.data["status"] == "failed"
     assert batch.data["content"]["results"][0]["kind"] == "tool_host_exception"
     assert batch.data["content"]["results"][0]["policy"] == "tool_host_exception"
+    lifecycle = journal.records(task_id=result.task_id, kind="agent_loop_turn_result")
+    assert lifecycle[-1].data["phase"] == "tool_turn"
+    assert lifecycle[-1].data["transition"] == "return"
+    assert lifecycle[-1].data["tool_status_counts"] == {"failed": 1}
+    assert lifecycle[-1].data["failed_tool_count"] == 1
+    assert lifecycle[-1].data["failed_tools"][0]["kind"] == "tool_host_exception"
+    assert lifecycle[-1].data["failed_tools"][0]["tool_call_id"] == "call-alpha"
 
 
 def test_deep_agent_loop_stops_before_evaluator_when_batch_contains_host_guard() -> None:
@@ -389,6 +396,15 @@ def test_deep_agent_loop_terminal_turn_uses_final_answer_path() -> None:
     assert result.answer == "direct final"
     assert journal.records(task_id=result.task_id, kind="assistant_turn")[0].data["turn_id"] == "turn-final"
     assert journal.records(task_id=result.task_id, kind="observation")[0].data["source"] == "respond"
+    lifecycle = journal.records(task_id=result.task_id, kind="agent_loop_turn_result")
+    assert len(lifecycle) == 1
+    assert lifecycle[0].data["schema"] == "holo.kernel_v3.agent_loop_turn_result.v1"
+    assert lifecycle[0].data["phase"] == "terminal_turn"
+    assert lifecycle[0].data["transition"] == "return"
+    assert lifecycle[0].data["turn_id"] == "turn-final"
+    assert lifecycle[0].data["feedback"]["status"] == "final_answer_ready"
+    assert lifecycle[0].data["assistant_final_answer_present"] is True
+    assert lifecycle[0].data["tool_result_count"] == 0
 
 
 def test_deep_agent_loop_prompt_blocks_final_when_feedback_requires_tool_work() -> None:

@@ -1344,3 +1344,73 @@ Live 诊断：
 - 下一步应继续从 `financebench_id_04672` 的 live journal 复盘 slot/statement
   binding：为什么缺 `balance_sheet net PP&E` 时 finalizer 仍用 cash-flow PP&E
   purchases 或错误数值完成。这是证据槽和合成 gate 的通用问题，不应写成 3M 规则。
+
+## 31. Mature-loop lifecycle trace checkpoint
+
+用户再次强调优先照搬成熟 agent loop 的实现，不要继续自研零散循环。本轮继续对照
+本地 TypeScript 项目的 `QueryEngine.submitMessage(...)` / `queryLoop(...)`：
+成熟 loop 在每次 query 结束时都会产生明确 result/transition 合同，包含
+stop reason、permission denials、tool result、预算错误、执行错误等。Holo
+此前虽然已经 journal 了 assistant turn、action、observation、feedback、guard
+和最终 result，但“每一轮为什么继续/返回/guard”的结构仍需要从多条记录里人工推断。
+
+本轮补齐：
+
+- `DeepAgentLoopController` 每个 step 在继续或返回前写入
+  `agent_loop_turn_result` ledger record。
+- 该 record 统一记录：
+  - `phase`: `terminal_turn` / `tool_turn`
+  - `transition`: `continue` / `return` / `return_guard` /
+    `return_continuation_guard`
+  - `turn_id`、assistant tool-call 数、parse-error 数、final-answer 状态
+  - feedback status / stop reason / answer 是否存在 / missing evidence
+  - guard stop reason
+  - tool-call / network-fetch / artifact-byte counters
+  - tool result status/kind counts、failed tool summaries、observation refs
+- `ContextPackCompiler` 把 compact 后的 `agent_loop_turn_result` 纳入
+  `agent_trace`，并在预算不足时保留最小 lifecycle 摘要。
+- 模型下一轮不再只能从分散的 action/observation/feedback 推断状态，而是能直接
+  看到上一轮的 loop transition、失败工具和 guard 原因。
+
+这不是金融规则，也不是 benchmark 答案表。它只把成熟 agent loop 的
+per-turn lifecycle/result 合同迁移到 Holo 的 host-owned journal 和
+model-visible trace 中。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_phase3_context_compiler.py::test_context_pack_exposes_agent_trace_for_model_tool_loop -q
+.venv/bin/python -m py_compile \
+  kernel_v3/deep_loop.py \
+  kernel_v3/context/compiler.py \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_phase3_context_compiler.py
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_tool_use.py \
+  tests/test_kernel_v3_provider_native_tools.py \
+  tests/test_kernel_v3_phase3_context_compiler.py \
+  tests/test_kernel_v3_phase1_context_trace.py -q
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_engine.py \
+  tests/test_kernel_v3_phase61_workloop.py -q
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_open_components.py \
+  tests/test_kernel_v3_finance_tool_readiness.py \
+  tests/test_kernel_v3_provider_native_tools.py \
+  tests/test_kernel_v3_tool_use.py -q
+```
+
+结果：
+
+- targeted deep-loop/context test: `41 passed in 3.56s`
+- `py_compile` passed
+- context/tool/provider set: `34 passed in 0.72s`
+- finance engine/workloop set: `335 passed in 17.64s`
+- finance-open/tool-readiness/provider/tool set: `52 passed in 4.69s`
+
+说明：这是 mature-loop lifecycle/trace 合同修复，不是 FinanceBench / FinQA
+准确率。下一步仍应回到 live debug50 类型簇，验证模型是否能利用
+`agent_trace.agent_loop_turn_result` 更稳定地从缺槽、失败工具、budget guard 中
+恢复。

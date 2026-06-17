@@ -754,3 +754,20 @@ P0 不是“再多注册几个金融工具”。P0 是把通用 agent loop 的�
 workloop/context-compiler `42 passed`，core loop/tool/provider/finance-open structural set
 `125 passed`，`git diff --check` passed。这些仍是结构成熟度证据，不是 benchmark
 accuracy。
+
+### 2026-06-18 补充：per-turn lifecycle result trace
+
+继续对齐外部项目 `QueryEngine` 的 result/transition 合同，本轮 Holo 在
+`DeepAgentLoopController` 中新增 `agent_loop_turn_result`。每个 step 在
+`continue`、`return`、`return_guard` 或 `return_continuation_guard` 前写入
+统一 lifecycle record，包含 turn id、phase、transition、feedback status、
+guard reason、tool/result counters、失败工具摘要和 observation/feedback refs。
+
+`ContextPackCompiler` 已把该记录纳入 `agent_trace`，并在预算不足时保留最小
+lifecycle 摘要。这样下一轮模型可以直接看到上一轮 loop 为什么继续、返回或被
+guard，而不是从分散的 assistant/action/observation/feedback 记录里推断。
+
+验证结果：targeted deep-loop/context `41 passed`，context/tool/provider `34 passed`，
+finance engine/workloop `335 passed`，finance-open/tool-readiness/provider/tool
+`52 passed`，`py_compile` passed。该补充是 agent-loop parity 证据，不是
+FinanceBench / FinQA 分数。

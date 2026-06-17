@@ -339,8 +339,53 @@ def test_context_pack_exposes_agent_trace_for_model_tool_loop():
         },
         feedback_ref="fb-continue",
     )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="agent_loop_turn_result",
+        data={
+            "schema": "holo.kernel_v3.agent_loop_turn_result.v1",
+            "runtime": "deep_agent_loop",
+            "phase": "tool_turn",
+            "transition": "continue",
+            "turn_id": "turn-1",
+            "assistant_tool_call_count": 1,
+            "assistant_parse_error_count": 0,
+            "assistant_final_answer_present": False,
+            "tool_result_count": 1,
+            "tool_status_counts": {"ok": 1},
+            "failed_tool_count": 0,
+            "failed_tools": [],
+            "tool_results": [
+                {
+                    "tool_call_id": "tc-calc",
+                    "tool": "calculator.compute",
+                    "status": "ok",
+                    "kind": "tool_result",
+                    "policy": "allowed",
+                    "observation_id": "obs-calc",
+                }
+            ],
+            "observation": {
+                "observation_id": "obs-calc",
+                "kind": "tool_result",
+                "status": "ok",
+                "source": "tool:calculator.compute",
+            },
+            "feedback": {
+                "feedback_id": "fb-continue",
+                "status": "continue",
+                "missing_evidence": ["need_final_answer"],
+            },
+            "guard_stop_reason": None,
+            "counters": {"tool_calls": 1, "network_fetches": 0, "total_artifact_bytes": 512},
+        },
+        observation_ref="obs-calc",
+        feedback_ref="fb-continue",
+    )
 
-    pack = ContextPackCompiler(token_budget=4096, section_budget=1024).compile(task, journal, step_id="step-1")
+    pack = ContextPackCompiler(token_budget=4096, section_budget=2048).compile(task, journal, step_id="step-1")
 
     trace = next(section for section in pack.sections if section["name"] == "agent_trace")
     assert [record["kind"] for record in trace["records"]] == [
@@ -348,11 +393,17 @@ def test_context_pack_exposes_agent_trace_for_model_tool_loop():
         "action",
         "observation",
         "feedback",
+        "agent_loop_turn_result",
     ]
     assert trace["records"][0]["assistant_turn"]["tool_calls"][0]["name"] == "calculator.compute"
     assert trace["records"][1]["action"]["payload_keys"] == ["expression", "variables"]
     assert trace["records"][2]["observation"]["status"] == "ok"
     assert trace["records"][3]["feedback"]["missing_evidence"] == ["need_final_answer"]
+    loop_result = trace["records"][4]["agent_loop_turn_result"]
+    assert loop_result["phase"] == "tool_turn"
+    assert loop_result["transition"] == "continue"
+    assert loop_result["feedback"]["status"] == "continue"
+    assert loop_result["failed_tool_count"] == 0
 
 
 def test_context_pack_budget_view_compacts_large_individual_tool_result():

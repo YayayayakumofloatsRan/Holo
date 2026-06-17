@@ -560,6 +560,19 @@ improvement. Final structural validation passed (`129` core
 deep-loop/tool/provider/processor/finance-open/workloop tests, `61` finance
 benchmark harness tests, and `git diff --check`), with targeted
 tool/deep/provider-native checks covered inside that set.
+The next same-day mature-loop lifecycle checkpoint ports another QueryEngine
+practice from the inspected TypeScript agent-loop project: every deep-loop turn
+now writes a compact `agent_loop_turn_result` ledger record before returning or
+continuing. The record captures the phase, transition, turn id, feedback status,
+guard reason, counters, tool-result status counts, failed tool summaries, and
+observation/feedback refs. `ContextPackCompiler` includes the compacted record
+inside `agent_trace`, so the next model turn can reason from a structured
+lifecycle transition instead of inferring it from scattered assistant/action/
+observation/feedback records. This is agent-loop contract evidence, not a
+FinanceBench/FinQA score. Structural validation passed (`41` targeted
+deep-loop/context tests, `34` context/tool/provider tests, `335`
+finance-engine/workloop tests, `52` finance-open/tool-readiness/provider/tool
+tests, plus `py_compile`).
 The debug50 architecture reset is recorded in
 `docs/KERNEL_V3_DEBUG50_REQUIREMENTS_AND_GENERIC_FINANCE_LOOP_2026-06-17_ZH.md`.
 It stops per-question patching, groups the first 50 FinanceBench debug prompts
