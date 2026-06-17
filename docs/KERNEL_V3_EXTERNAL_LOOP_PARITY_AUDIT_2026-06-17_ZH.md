@@ -42,8 +42,10 @@ Holo 已经从旧的一步一工具循环，升级到“provider-visible native 
 `tool.discovery`，并让 provider streaming continuation 在每轮工具结果后重建
 native tool surface。上一轮 `tool.discovery` 发现到的 allowed deferred tool 会在
 下一轮 continuation 中以 provider-native schema 暴露，权限、allowed set、
-schema validation 和 journal 仍由 host 控制。该修复补齐的是工具发现/加载
-链路，不是金融 benchmark accuracy。
+schema validation 和 journal 仍由 host 控制。后续补丁把同一语义接到
+non-streaming JSON-turn：discovery observation 会派生 `tool_context_update`，
+下一轮 prompt 通过 `requested_tool_names` 展开相同工具 schema。该修复补齐的是
+工具发现/加载链路，不是金融 benchmark accuracy。
 
 2026-06-18 follow-up：FinanceBench live 探针暴露 streaming path 绕过
 workbench follow-up scaffold，导致模型重复读取同一 artifact。Holo 已将

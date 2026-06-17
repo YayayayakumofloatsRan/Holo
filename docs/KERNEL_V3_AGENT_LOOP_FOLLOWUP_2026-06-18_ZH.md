@@ -901,6 +901,10 @@ provider-native tools。后续 live slice 不需要模型先绕一轮 `tool.disc
 - provider streaming continuation 每一轮都会重新构建 native tool surface。
   如果上一轮 `tool.discovery` 发现了 allowed deferred tool，下一轮 continuation
   会把该工具 schema 暴露给 provider-native tool call。
+- non-streaming JSON-turn 也走同一链路：`tool.discovery` observation 会派生
+  `tool_context_update`，把 matched tools 写入 `requested_tool_names` /
+  `loaded_tool_names`；下一轮 `_assistant_turn_prompt(...)` 因此能把 deferred
+  tool 从 `deferred_tools` 提升到 `visible_tools`。
 - 这不扩大权限边界：allowed-tool set、policy gate、schema validation、journal
   和 verifier 仍由 host 控制；模型只获得“可调用工作台”的正确入口。
 
@@ -925,7 +929,7 @@ provider-native tools。后续 live slice 不需要模型先绕一轮 `tool.disc
 结果：
 
 - `11 passed in 0.34s`
-- `34 passed in 3.76s`
+- `35 passed in 3.39s`
 - `61 passed in 181.40s`
 - `5 passed in 0.22s`
 

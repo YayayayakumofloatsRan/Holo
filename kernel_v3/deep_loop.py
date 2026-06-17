@@ -2932,6 +2932,17 @@ def _derived_tool_context_update(
             for item in tools[:8]
             if isinstance(item, dict)
         ]
+    if action.name == TOOL_DISCOVERY_NAME or observation.kind == "tool_discovery_result":
+        matched_tool_names = _json_string_list(content.get("matched_tool_names"))
+        if not matched_tool_names and isinstance(tools, list):
+            matched_tool_names = [
+                str(item.get("name"))
+                for item in tools
+                if isinstance(item, dict) and isinstance(item.get("name"), str) and item.get("name")
+            ][:8]
+        if matched_tool_names:
+            hints["requested_tool_names"] = _ordered_unique_strings(matched_tool_names)
+            hints["loaded_tool_names"] = _ordered_unique_strings(matched_tool_names)
     artifact = content.get("artifact")
     if isinstance(artifact, dict):
         hints["artifact"] = {

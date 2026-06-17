@@ -1484,6 +1484,101 @@ def test_streaming_continuation_loads_tool_discovered_native_schema() -> None:
     assert discovery_payload["provider_continuation_effect"].startswith("Discovered allowed tools")
 
 
+def test_json_turn_tool_discovery_expands_next_prompt_tool_surface() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "sec.edgar.financials",
+        _read_tool("sec"),
+        manifest=ToolManifest(
+            name="sec.edgar.financials",
+            version="1",
+            resource_kind="finance",
+            operator_kind="sec_edgar",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="Retrieve SEC filing facts.",
+            input_schema={"identifier": {"type": "str", "required": True}},
+            runtime={"should_defer": True, "read_only": True, "concurrency_safe": True},
+        ),
+    )
+    register_tool_discovery(
+        registry,
+        allowed_tool_names={TOOL_DISCOVERY_NAME, "sec.edgar.financials"},
+    )
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-discover-sec",
+                message="load SEC tool",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="tc-discover-sec",
+                        name=TOOL_DISCOVERY_NAME,
+                        arguments={"query": "select:sec.edgar.financials"},
+                        reason="load the deferred SEC schema",
+                    )
+                ],
+            ),
+            AssistantTurn(
+                turn_id="turn-final-after-discovery",
+                message=None,
+                tool_calls=[],
+                final_answer="discovery reached next turn",
+            ),
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=registry,
+        evaluator=FakeEvaluator(
+            [
+                {
+                    "status": "continue",
+                    "stop_reason": None,
+                    "answer": None,
+                    "missing_evidence": ["tool_discovery_loaded"],
+                },
+                {
+                    "status": "final_answer_ready",
+                    "stop_reason": "completed",
+                    "answer": "discovery reached next turn",
+                    "missing_evidence": [],
+                },
+            ]
+        ),
+        max_steps=3,
+    )
+
+    result = loop.run("discover SEC tool before using it")
+
+    assert result.status == "completed"
+    second_context = planner.calls[1]
+    updates = next(
+        section
+        for section in second_context.state["sections"]
+        if section["name"] == "tool_context_updates"
+    )["updates"]
+    assert updates[0]["hints"]["requested_tool_names"] == ["sec.edgar.financials"]
+    assert updates[0]["hints"]["loaded_tool_names"] == ["sec.edgar.financials"]
+
+    prompt = json.loads(
+        _assistant_turn_prompt(
+            second_context,
+            None,
+            allowed_tool_names={manifest.name for manifest in registry.manifests()},
+            tool_manifests=registry.manifests(),
+        )
+    )
+    visible_by_name = {item["name"]: item for item in prompt["tool_surface"]["visible_tools"]}
+    assert visible_by_name["sec.edgar.financials"]["visibility_reason"] == "context_requested"
+    assert visible_by_name["sec.edgar.financials"]["input_schema"]["identifier"]["required"] is True
+
+
 def test_streamed_malformed_tool_arguments_become_parse_error_observation() -> None:
     journal = JournalStore.in_memory()
     planner = ModelAssistantTurnPlanner(

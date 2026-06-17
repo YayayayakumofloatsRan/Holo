@@ -373,13 +373,17 @@ budgeted manifest summary rather than bloating `recent_observations`.
 Streaming provider continuations rebuild the native tool surface after each
 tool-result round; if a `tool.discovery` result discovered an allowed deferred
 tool, that tool's native schema is exposed on the next continuation while policy
-and allowed-tool boundaries remain host-owned. `bench finance` also computes a
-no-gold requirements slice before live-model preflight when requirements filters
-are present, so provider/key blocks still report selected item ids and required
-tool categories without writing fake benchmark outputs. Targeted structural
-tests pass (`34` deep-loop tests, `11` tool-use tests, `61` finance benchmark
-tests, `5` provider-native tests). This is loop/toolchain readiness evidence,
-not a live FinanceBench or FinQA score.
+and allowed-tool boundaries remain host-owned. The follow-up closes the same
+path for non-streaming JSON turns: discovery results now emit a
+`tool_context_update` with matched tools as `requested_tool_names`, so the next
+`assistant.turn` prompt expands the same deferred schema through the ordinary
+context-requested tool surface. `bench finance` also computes a no-gold
+requirements slice before live-model preflight when requirements filters are
+present, so provider/key blocks still report selected item ids and required tool
+categories without writing fake benchmark outputs. Targeted structural tests
+pass (`35` deep-loop tests, `11` tool-use tests, `61` finance benchmark tests,
+`5` provider-native tests). This is loop/toolchain readiness evidence, not a
+live FinanceBench or FinQA score.
 The next finance tool-runtime P0 checkpoint makes those tool contracts executable
 rather than merely descriptive. `retrieval.run`, SEC/EDGAR, Trafilatura, OpenBB,
 DuckDB, SymPy, `calculator.compute`, `finance.slot_bind`, and
