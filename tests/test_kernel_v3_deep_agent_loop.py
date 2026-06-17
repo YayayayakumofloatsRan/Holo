@@ -342,6 +342,161 @@ def test_assistant_turn_prompt_exposes_visible_and_deferred_tool_surface() -> No
     assert "input_schema" not in surface["deferred_tools"][0]
 
 
+def test_assistant_turn_prompt_expands_context_requested_deferred_tool() -> None:
+    context = ContextBundle(
+        context_id="ctx-tool-surface-context-request",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-tool-surface-context-request",
+            "run_id": "run-1",
+            "sections": [
+                {
+                    "name": "tool_context_updates",
+                    "updates": [
+                        {
+                            "hints": {
+                                "next_action": {
+                                    "tool": "sec.edgar.financials",
+                                    "query": "3M FY2022 net PP&E",
+                                }
+                            }
+                        }
+                    ],
+                }
+            ],
+        },
+        token_budget=4096,
+    )
+    visible = ToolManifest(
+        name="calculator.compute",
+        version="1",
+        resource_kind="finance",
+        operator_kind="calculate",
+        side_effect_class="read",
+        permissions_required=[],
+        enabled=True,
+        description="Evaluate arithmetic formulas with named variables.",
+        input_schema={"expression": {"type": "str", "required": True}},
+        runtime={"concurrency_safe": True, "read_only": True, "always_load": True},
+    )
+    requested_deferred = ToolManifest(
+        name="sec.edgar.financials",
+        version="1",
+        resource_kind="finance",
+        operator_kind="sec_edgar",
+        side_effect_class="network",
+        permissions_required=["network:fetch"],
+        enabled=True,
+        description="Retrieve SEC financial statement facts.",
+        input_schema={"identifier": {"type": "str", "required": True}},
+        runtime={"concurrency_safe": True, "read_only": True, "should_defer": True},
+    )
+
+    prompt = json.loads(
+        _assistant_turn_prompt(
+            context,
+            None,
+            allowed_tool_names={"calculator.compute", "sec.edgar.financials", "tool.discovery"},
+            tool_manifests=[visible, requested_deferred],
+        )
+    )
+
+    surface = prompt["tool_surface"]
+    visible_by_name = {item["name"]: item for item in surface["visible_tools"]}
+    assert "sec.edgar.financials" in visible_by_name
+    assert visible_by_name["sec.edgar.financials"]["visibility_reason"] == "context_requested"
+    assert visible_by_name["sec.edgar.financials"]["input_schema"]["identifier"]["required"] is True
+    assert surface["context_requested_tools"] == ["sec.edgar.financials"]
+    assert all(item["name"] != "sec.edgar.financials" for item in surface["deferred_tools"])
+
+
+def test_streaming_planner_expands_context_requested_deferred_native_tool() -> None:
+    provider = _CaptureNativeToolSurfaceProvider()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"tool.discovery", "calculator.compute", "sec.edgar.financials"},
+        tool_manifests=[
+            ToolManifest(
+                name="tool.discovery",
+                version="1",
+                resource_kind="tooling",
+                operator_kind="discover",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Discover tools.",
+                input_schema={},
+                runtime={"always_load": True},
+            ),
+            ToolManifest(
+                name="calculator.compute",
+                version="1",
+                resource_kind="finance",
+                operator_kind="calculate",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Evaluate arithmetic formulas.",
+                input_schema={"expression": {"type": "str", "required": True}},
+            ),
+            ToolManifest(
+                name="sec.edgar.financials",
+                version="1",
+                resource_kind="finance",
+                operator_kind="sec_edgar",
+                side_effect_class="network",
+                permissions_required=["network:fetch"],
+                enabled=True,
+                description="Retrieve SEC financial statement facts.",
+                input_schema={"identifier": {"type": "str", "required": True}},
+                runtime={"should_defer": True},
+            ),
+        ],
+        use_streaming=True,
+    )
+    context = ContextBundle(
+        context_id="ctx-native-context-request",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-native-context-request",
+            "run_id": "run-1",
+            "sections": [
+                {
+                    "name": "tool_context_updates",
+                    "updates": [
+                        {
+                            "hints": {
+                                "next_action": {
+                                    "tool": "sec.edgar.financials",
+                                    "query": "3M FY2022 net PP&E",
+                                }
+                            }
+                        }
+                    ],
+                }
+            ],
+        },
+        token_budget=4096,
+    )
+
+    stream = planner.stream_turn(context, None, step_id="step-1")
+    assert stream is not None
+    list(stream.events)
+
+    exposed = set(provider.parameters[0]["native_tool_name_map"].values())
+    assert "tool.discovery" in exposed
+    assert "sec.edgar.financials" in exposed
+    assert "sec.edgar.financials" not in {
+        item["name"] for item in provider.parameters[0]["native_tool_deferred"]
+    }
+
+
 def test_streaming_loop_executes_pending_workbench_followup_before_model_turn() -> None:
     journal = JournalStore.in_memory()
     registry = ToolRegistry()
@@ -1613,6 +1768,23 @@ class _NativeNameStreamingToolCallProvider:
             request_id=request.request_id,
             sequence=2,
             delta={"status": "ok"},
+        )
+
+
+class _CaptureNativeToolSurfaceProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def __init__(self) -> None:
+        self.parameters: list[dict] = []
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        self.parameters.append(dict(request.parameters))
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=1,
+            delta={"status": "ok", "text": '{"final_answer":"done"}'},
         )
 
 

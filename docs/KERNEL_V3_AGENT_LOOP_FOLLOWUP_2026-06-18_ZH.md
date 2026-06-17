@@ -468,6 +468,50 @@ observation-derived hint，仍由模型决定下一步工具、语义绑定、�
 - `356 passed in 11.64s`
 - `494 passed in 33.23s`
 
-下一步仍应继续搬成熟 loop 的运行时能力：动态 token-aware tool expansion、运行中
-progress/result 注入同一 provider conversation，以及按 debug50 题型簇做 live 验证。
-这些才会直接推动 FB/FQA 做题指标，而不是在单题上继续打补丁。
+下一步仍应继续搬成熟 loop 的运行时能力：先补动态 token-aware tool expansion，再补
+运行中 progress/result 注入同一 provider conversation，并按 debug50 题型簇做 live
+验证。这些才会直接推动 FB/FQA 做题指标，而不是在单题上继续打补丁。
+
+## 15. Context-aware tool expansion checkpoint
+
+上一节完成了 Holo 版本的 contextModifier，但如果 provider-native 工具面仍然静态，
+模型下一轮即使看到 `tool_context_updates` 里的 `next_action.tool`，也可能拿不到该
+deferred tool 的 schema，只能再绕一次 `tool.discovery`。本轮继续对照成熟 loop 的
+“按当前上下文刷新 tools”思想，把工具展开从固定清单推进到 context-aware。
+
+实现：
+
+- `openai_native_tool_surface(...)` 新增 `expand_tool_names`。当某个工具原本
+  `should_defer=true`，但当前上下文明示需要该工具时，它会被临时放入 provider-native
+  `tools`，而不是留在 `native_tool_deferred`。
+- `ModelAssistantTurnPlanner` 从当前 `ContextBundle` 中提取显式工具请求：
+  `tool_context_updates.hints.next_action.tool`、
+  `finance_working_state.workbench.slot_bind_next_action.tool`、
+  `next_action_options` 中形如 `retrieval.run` 的工具名，以及 `tool.discovery`
+  返回的 `tools[].name` / `requested_tool_names`。
+- `_assistant_turn_prompt(...)` 的 JSON prompt `tool_surface` 与 provider-native
+  surface 使用同一组 context-requested tools。也就是说，JSON 模式和 streaming/native
+  模式看到的可用工具合同保持一致。
+- 增加 token-aware visible-tool 限额：低预算上下文只显示较少 schema；`always_load`
+  和 context-requested tools 优先。超出 visible budget 的工具仍保留为 deferred summary，
+  要求模型通过 `tool.discovery` 获取 schema。
+
+边界：host 只根据结构化上下文中的显式工具名展开 schema，不从自然语言关键词猜工具，
+也不替模型发起调用。模型仍然决定是否调用、如何组参、是否需要先发现工具、是否回答。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_phase3_context_compiler.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_processor_streaming.py tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase1_journal_store.py tests/test_kernel_v3_phase3_context_compiler.py tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_processor_streaming.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_tool_readiness.py tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_phase61_workloop.py -q
+```
+
+结果：
+
+- `34 passed in 3.36s`
+- `359 passed in 11.67s`
+- `497 passed in 33.24s`
+
+剩余 P0 继续缩小：下一块应做运行中 progress/result 注入同一 provider conversation，
+然后按 FB/FQA debug50 题型簇做 live 验证，而不是继续做长回归或单题补丁。

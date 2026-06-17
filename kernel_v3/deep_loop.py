@@ -229,7 +229,16 @@ class ModelAssistantTurnPlanner:
             tool_manifests=self.tool_manifests,
         )
         parameters = {"adapter": "ModelAssistantTurnPlanner", **_processor_budget_parameters_from_context(context)}
-        native_surface = openai_native_tool_surface(self.tool_manifests, allowed_tool_names=self.allowed_tool_names)
+        requested_tool_names = _context_requested_tool_names(
+            context,
+            allowed_tool_names=self.allowed_tool_names,
+        )
+        native_surface = openai_native_tool_surface(
+            self.tool_manifests,
+            allowed_tool_names=self.allowed_tool_names,
+            expand_tool_names=requested_tool_names,
+            max_tools=_context_tool_surface_limit(context),
+        )
         stream_parameters = {**parameters, "streaming_planner": True}
         if native_surface.tools:
             stream_parameters.update(native_surface.to_parameters())
@@ -1980,13 +1989,22 @@ def _assistant_turn_prompt(
     allowed_tool_names: set[str],
     tool_manifests: list[ToolManifest] | None = None,
 ) -> str:
+    requested_tool_names = _context_requested_tool_names(
+        context,
+        allowed_tool_names=allowed_tool_names,
+    )
     payload = {
         "contract": ASSISTANT_TURN_PROMPT_CONTRACT,
         "context": _compact_context_for_turn(context),
         "feedback": feedback.to_dict() if feedback is not None else None,
         "continuation_contract": _feedback_continuation_contract(feedback),
         "allowed_tool_names": sorted(allowed_tool_names),
-        "tool_surface": _assistant_turn_tool_surface(tool_manifests or [], allowed_tool_names=allowed_tool_names),
+        "tool_surface": _assistant_turn_tool_surface(
+            tool_manifests or [],
+            allowed_tool_names=allowed_tool_names,
+            expand_tool_names=requested_tool_names,
+            max_visible_tools=_context_tool_surface_limit(context),
+        ),
         "tool_call_protocol": {
             "tool_call_shape": {
                 "tool_call_id": "stable id for this call, unique within the turn",
@@ -2006,8 +2024,11 @@ def _assistant_turn_tool_surface(
     tool_manifests: list[ToolManifest],
     *,
     allowed_tool_names: set[str],
+    expand_tool_names: set[str] | None = None,
+    max_visible_tools: int | None = None,
 ) -> JsonObject:
     allowed = set(allowed_tool_names)
+    expand = set(expand_tool_names or set())
     visible: list[JsonObject] = []
     deferred: list[JsonObject] = []
     for manifest in tool_manifests:
@@ -2030,7 +2051,8 @@ def _assistant_turn_tool_surface(
                 "always_load": runtime.always_load,
             },
         }
-        if runtime.should_defer and not runtime.always_load:
+        force_visible = manifest.name in expand
+        if runtime.should_defer and not runtime.always_load and not force_visible:
             deferred.append(
                 {
                     **brief,
@@ -2039,13 +2061,38 @@ def _assistant_turn_tool_surface(
                 }
             )
             continue
-        visible.append({**brief, "input_schema": _compact_tool_input_schema(manifest.input_schema)})
+        visible_item = {**brief, "input_schema": _compact_tool_input_schema(manifest.input_schema)}
+        if force_visible and runtime.should_defer and not runtime.always_load:
+            visible_item["visibility_reason"] = "context_requested"
+        visible.append(visible_item)
+    visible = sorted(
+        visible,
+        key=lambda item: (
+            not bool((item.get("runtime") if isinstance(item.get("runtime"), dict) else {}).get("always_load")),
+            item.get("name") not in expand,
+            str(item.get("name") or ""),
+        ),
+    )
+    if max_visible_tools is not None and max_visible_tools >= 0 and len(visible) > max_visible_tools:
+        overflow = visible[max_visible_tools:]
+        visible = visible[:max_visible_tools]
+        for item in overflow:
+            deferred.append(
+                {
+                    **{key: value for key, value in item.items() if key != "input_schema"},
+                    "schema_available_via": TOOL_DISCOVERY_NAME,
+                    "defer_rule": "Tool omitted from visible surface by token budget; call tool.discovery before using it.",
+                    "defer_reason": "tool_surface_budget",
+                }
+            )
     return {
         "schema": "holo.kernel_v3.assistant_turn_tool_surface.v1",
         "visible_tools": visible,
         "deferred_tools": deferred,
         "visible_tool_count": len(visible),
         "deferred_tool_count": len(deferred),
+        "context_requested_tools": sorted(expand),
+        "max_visible_tools": max_visible_tools,
         "host_rule": (
             "Use visible input_schema for direct tool_calls. For deferred tools or uncertain schemas, "
             "call tool.discovery first; the host still validates every tool call."
@@ -2281,6 +2328,85 @@ def _agent_trace_section_from_state(state: JsonObject) -> JsonObject:
         if isinstance(section, dict) and section.get("name") == "agent_trace":
             return dict(section)
     return {}
+
+
+def _context_requested_tool_names(
+    context: ContextBundle,
+    *,
+    allowed_tool_names: set[str],
+) -> set[str]:
+    names: list[str] = []
+    state = context.state if isinstance(context.state, dict) else {}
+    _collect_requested_tool_names(state, names)
+    allowed = set(allowed_tool_names)
+    result = _ordered_unique_strings(names)
+    if allowed:
+        result = [name for name in result if name in allowed]
+    return set(result)
+
+
+def _collect_requested_tool_names(value: object, names: list[str]) -> None:
+    if isinstance(value, dict):
+        for key in ("next_action", "slot_bind_next_action", "model_next_action"):
+            nested = value.get(key)
+            if isinstance(nested, dict):
+                tool = nested.get("tool")
+                if isinstance(tool, str) and tool:
+                    names.append(tool)
+        requested = value.get("requested_tool_names")
+        if isinstance(requested, list):
+            names.extend(str(item) for item in requested if str(item))
+        options = value.get("next_action_options")
+        if isinstance(options, list):
+            names.extend(str(item) for item in options if _looks_like_tool_name(str(item)))
+        tools = value.get("tools")
+        if isinstance(tools, list):
+            for item in tools:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    if isinstance(name, str) and name:
+                        names.append(name)
+        for nested_value in value.values():
+            if isinstance(nested_value, (dict, list)):
+                _collect_requested_tool_names(nested_value, names)
+        return
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, (dict, list)):
+                _collect_requested_tool_names(item, names)
+
+
+def _looks_like_tool_name(value: str) -> bool:
+    text = str(value or "").strip()
+    return bool(text and "." in text and " " not in text)
+
+
+def _context_tool_surface_limit(context: ContextBundle) -> int:
+    budget = _context_token_budget_value(context)
+    if budget <= 0:
+        return 32
+    if budget < 4096:
+        return 8
+    if budget < 8192:
+        return 12
+    if budget < 32768:
+        return 24
+    return 48
+
+
+def _context_token_budget_value(context: ContextBundle) -> int:
+    for value in (
+        getattr(context, "token_budget", None),
+        context.state.get("token_budget") if isinstance(context.state, dict) else None,
+        (context.state.get("budget", {}) if isinstance(context.state, dict) else {}).get("token_budget")
+        if isinstance((context.state.get("budget", {}) if isinstance(context.state, dict) else {}), dict)
+        else None,
+    ):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
 def _processor_budget_parameters_from_context(context: ContextBundle) -> JsonObject:

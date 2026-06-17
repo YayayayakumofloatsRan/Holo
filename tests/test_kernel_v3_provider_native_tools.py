@@ -180,3 +180,52 @@ def test_native_tool_surface_defers_should_defer_tools_but_keeps_always_load() -
     assert "sec.edgar.financials" not in exposed
     assert surface.deferred_tools[0]["name"] == "sec.edgar.financials"
     assert surface.to_parameters()["native_tool_deferred"][0]["load_hint"].startswith("Use tool.discovery")
+
+
+def test_native_tool_surface_expands_context_requested_deferred_tool_before_ordinary_tools() -> None:
+    always = ToolManifest(
+        name="tool.discovery",
+        version="1",
+        resource_kind="tooling",
+        operator_kind="discover",
+        side_effect_class="read",
+        permissions_required=[],
+        enabled=True,
+        description="Discover tools.",
+        input_schema={},
+        runtime={"always_load": True},
+    )
+    ordinary = ToolManifest(
+        name="calculator.compute",
+        version="1",
+        resource_kind="calculator",
+        operator_kind="compute",
+        side_effect_class="read",
+        permissions_required=[],
+        enabled=True,
+        description="Compute arithmetic.",
+        input_schema={"expression": {"type": "str", "required": True}},
+    )
+    requested_deferred = ToolManifest(
+        name="sec.edgar.financials",
+        version="1",
+        resource_kind="sec_edgar",
+        operator_kind="financials",
+        side_effect_class="network",
+        permissions_required=["network:fetch"],
+        enabled=True,
+        description="Fetch SEC financial statements.",
+        input_schema={"identifier": {"type": "str", "required": True}},
+        runtime={"should_defer": True},
+    )
+
+    surface = openai_native_tool_surface(
+        [ordinary, requested_deferred, always],
+        allowed_tool_names={"tool.discovery", "calculator.compute", "sec.edgar.financials"},
+        expand_tool_names={"sec.edgar.financials"},
+        max_tools=2,
+    )
+
+    exposed = list(surface.name_map.values())
+    assert exposed == ["tool.discovery", "sec.edgar.financials"]
+    assert all(item["name"] != "sec.edgar.financials" for item in surface.deferred_tools)

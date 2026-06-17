@@ -34,22 +34,28 @@ def openai_native_tool_surface(
     manifests: Iterable[ToolManifest],
     *,
     allowed_tool_names: set[str] | None = None,
+    expand_tool_names: set[str] | None = None,
     max_tools: int | None = None,
 ) -> ProviderNativeToolSurface:
     allowed = set(allowed_tool_names or set())
+    expand = set(expand_tool_names or set())
     direct_manifests: list[ToolManifest] = []
     deferred_tools: list[JsonObject] = []
     for manifest in sorted(manifests, key=lambda item: item.name):
         if not _manifest_allowed(manifest, allowed):
             continue
         runtime = tool_runtime_spec_for_manifest(manifest)
-        if runtime.should_defer and not runtime.always_load:
+        if runtime.should_defer and not runtime.always_load and manifest.name not in expand:
             deferred_tools.append(_deferred_tool_summary(manifest))
             continue
         direct_manifests.append(manifest)
     direct_manifests = sorted(
         direct_manifests,
-        key=lambda item: (not tool_runtime_spec_for_manifest(item).always_load, item.name),
+        key=lambda item: (
+            not tool_runtime_spec_for_manifest(item).always_load,
+            item.name not in expand,
+            item.name,
+        ),
     )
     tools: list[JsonObject] = []
     name_map: dict[str, str] = {}

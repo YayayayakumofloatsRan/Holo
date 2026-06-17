@@ -261,6 +261,15 @@ slot-binding, workbench, artifact, and discovery tools pass next-step context to
 the following model turn without letting tools directly choose finance facts or
 answers. Targeted structure tests pass (`494` kernel-v3 loop/context/tool/finance
 tests). This is agent-loop substrate evidence, not a benchmark score.
+The next mature-loop continuation makes the tool surface context-aware. Deferred
+tools such as SEC/EDGAR can now be temporarily expanded into the provider-native
+tool list when `tool_context_updates`, finance workbench state, or tool discovery
+results explicitly name them as the next needed tool. The JSON prompt
+`tool_surface` and streaming/native provider surface use the same extracted
+tool set, with token-aware visible-tool limits that prioritize `always_load` and
+context-requested tools while leaving overflow tools discoverable through
+`tool.discovery`. Targeted structure tests pass (`497` kernel-v3 loop/context/
+tool/finance tests). This is substrate evidence, not a benchmark score.
 The provider-message replacement continuation extends replacement beyond prompt
 strings: deep-loop assistant prompts, `ProcessorFabric` JSON prompts, request
 parameters, OpenAI-compatible `provider_messages`, and structured provider
@@ -276,7 +285,7 @@ over-time tools now produce `tool_call_timeout` observations and journal
 `abort_requested` events instead of blocking the loop. Remaining gaps are
 process/network-level signal propagation for already-running non-cooperative
 tools, runtime progress/result injection into the same provider conversation,
-dynamic token-aware tool-set expansion, and type-family live debug50 evidence.
+and type-family live debug50 evidence.
 This estimate is architectural only, not a FinanceBench or FinQA score.
 The 2026-06-18 follow-up is recorded in
 `docs/KERNEL_V3_AGENT_LOOP_FOLLOWUP_2026-06-18_ZH.md`. A live type-cluster probe
