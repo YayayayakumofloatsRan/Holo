@@ -718,3 +718,66 @@ EvidenceSpec / TransformSpec / tool workbench 的需求图，再让 LLM one-shot
 选择和调用工具。它不替模型做答案规则，不做 table cheating，也不是
 FinanceBench/FQA 分数。后续 live debug 应按这些任务族推进，而不是围绕单题
 重复打补丁。
+
+## 20. Finance question requirements ABI checkpoint
+
+上一节的 `finance-requirements-audit` 仍偏向人读报告；按成熟 agent loop 的要求，
+任务需求必须进入模型下一轮上下文和 provider 发包路径。本轮把 no-gold 题面需求
+推断抽成通用模块：
+
+- 新增 `kernel_v3/finance/requirements.py`。
+- `bench finance-requirements-audit` 与 runtime 共享同一个
+  `infer_finance_question_requirements(...)`。
+- finance-capability 的 `_planner_directive(...)` 现在包含
+  `finance_question_requirements`，schema 为
+  `holo.kernel_v3.finance_question_requirements.v1`。
+- `_compact_agent_runtime_directive_for_prompt(...)` 和 provider compact
+  `_compact_runtime_directive_for_provider(...)` 都保留该摘要。
+- `finance_working_state.workbench` 也读取同一 requirements 摘要，把
+  question families、required tool categories 和 required loop stages 暴露给
+  后续 planner turn。
+- 原来 directive 里过于具体的 inventory/DIO 提示已替换成通用
+  formula/comparison slot-bind/transform 指令，避免回到单题补丁。
+- `kernel_v3/processors/contracts.py` 中同类 DIO 专题提示也已改成
+  formula / efficiency / ratio / ranking / comparison 的通用 slot/workbench
+  合同。
+
+该 ABI 仍明确标记 `gold_or_reference_values_used=false`，只从题面和公开元数据
+推断任务族、risk flags、工具类别和 loop 阶段。它不决定答案、不选择 filing line
+item、不设置硬阈值；模型仍负责工具选择、事实绑定、公式选择和金融语义判断。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_engine.py::test_finance_capability_planner_exposes_question_requirements_without_task_patch \
+  tests/test_kernel_v3_finance_engine.py::test_finance_capability_planner_directive_preserves_full_open_tool_surface \
+  tests/test_kernel_v3_finance_engine.py::test_finance_capability_provider_compact_preserves_one_shot_tool_surface \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_requirements_audit_excludes_gold_reference_values \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_requirements_audit_cli_is_no_gold_structural_check \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_requirements_audit_text_renderer_marks_scope -q
+```
+
+结果：`6 passed in 1.85s`。
+
+后续因 processor contract 也同步泛化，补跑：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
+```
+
+结果：`303 passed in 8.42s`。
+
+再次运行 debug50 no-gold audit，结果保持：
+
+- `items=50`
+- `contract_covered=50/50`
+- `direct_line_item_or_disclosure=42`
+- `defined_formula_calculation=33`
+- `calculation_then_business_judgment=30`
+- `driver_attribution_or_bridge=19`
+- `table_ranking_or_comparison=7`
+- `multi_entity_compare=9`
+
+说明：这仍不是 live benchmark accuracy；它只是把“按类型簇突破”的任务需求
+从 CLI 报告推进到模型真实可见的 agent-loop ABI。

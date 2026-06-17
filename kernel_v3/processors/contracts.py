@@ -307,13 +307,14 @@ Use canonical source family names when possible: regulatory_filing,
 structured_regulatory_data, company_ir, earnings_release,
 transaction_disclosure, market_data_provider, reputable_news,
 government_statistic, central_bank_statistic, treasury_data.
-For inventory-efficiency / DIO tasks, treat the problem as solvable from public
-filings when issuers and fiscal year are named. Build evidence_slots for each
-issuer covering beginning inventory, ending inventory, COGS/cost of sales/cost
-of revenue, fiscal_days, and source citations. Prefer SEC companyfacts plus the
-corresponding 10-K when available. After evidence supplies the inputs, include
-calculator.compute so the planner can calculate each issuer's DIO and the
-difference/comparison rather than relying on mental arithmetic.
+For formula, efficiency, ratio, ranking, or comparison tasks, treat the problem
+as solvable from public evidence when entities, periods, metrics, filings, or
+events are named. Build evidence_slots for each required entity, period, line
+item, table row, fiscal/calendar convention, and source citation. Prefer
+authoritative structured data plus the corresponding primary document when
+available. After evidence supplies the inputs, include calculator.compute or
+data.table.query so the planner can perform deterministic transforms rather
+than relying on mental arithmetic.
 When useful, include metadata.domain, metadata.activity, metadata.resource, and
 metadata.execution_surface to preserve broad agent state such as finance,
 database, cloud, workflow, knowledge_base, multimodal, resident, transport,
@@ -413,11 +414,12 @@ Finance-capability prompt:
 - Use canonical source families in retrieval_strategy.source_family_plan:
   regulatory_filing, structured_regulatory_data, company_ir, earnings_release,
   transaction_disclosure, market_data_provider, reputable_news.
-- For inventory-efficiency / DIO comparisons, plan the slots explicitly:
-  entity_a/entity_b, period, inventory_begin, inventory_end, cogs or cost of
-  sales/revenue, fiscal_days, DIO for each entity, and the difference. Use SEC
-  companyfacts/10-K sources first, then call calculator.compute for the two DIO
-  calculations and the comparison once facts are observed.
+- For formula, efficiency, ratio, ranking, or comparison tasks, plan the slots
+  explicitly: entities, periods, requested metric phrases, input line items,
+  table rows, fiscal/calendar conventions, output metric, and comparison basis.
+  Use primary filings or authoritative structured sources first when they are
+  semantically appropriate, then call calculator.compute or data.table.query for
+  deterministic transforms once facts are observed.
 - Preserve the user's exact requested metric phrase as a first-class evidence
   slot. For financial statement line items, distinguish labels such as
   "net revenues", "total revenues", "sales and other operating revenues",

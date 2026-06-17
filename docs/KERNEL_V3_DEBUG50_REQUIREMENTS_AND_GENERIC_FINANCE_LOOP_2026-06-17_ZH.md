@@ -185,6 +185,12 @@ capability_claim=false
 benchmark_progress_claim=false
 ```
 
+2026-06-18 后续已把同一套 no-gold 推断抽成
+`kernel_v3/finance/requirements.py`，runtime 也会把
+`finance_question_requirements` 注入 finance-capability planner directive、
+provider compact payload 和 `finance_working_state.workbench`。这使 debug50
+类型簇需求不只是人读报告，而是模型 one-shot 工具选择时真实可见的 ABI。
+
 本次 debug50 实跑结果：
 
 ```text

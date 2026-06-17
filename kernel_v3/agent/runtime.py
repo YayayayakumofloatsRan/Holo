@@ -62,6 +62,7 @@ from kernel_v3.finance import (
     finance_formula_plan_to_transform_plan,
     finance_agent_loop_contract,
     finance_toolchain_install_summary,
+    infer_finance_question_requirements,
     finance_numeric_repair_guidance,
     finance_slot_frame,
     finance_verification_to_gate_result,
@@ -4292,6 +4293,7 @@ def _finance_working_state_for_prompt(
         recipe=recipe,
         compiled_program_records=compiled_program_records,
     )
+    question_requirements = _finance_question_requirements_for_recipe(recipe)
 
     latest_ledger = ledger_records[-1].data if ledger_records and isinstance(ledger_records[-1].data, dict) else {}
     facts = _finance_facts_from_ledger(latest_ledger)
@@ -4368,6 +4370,7 @@ def _finance_working_state_for_prompt(
         "execution_program": execution_program,
         "workbench": _finance_workbench_state_for_prompt(
             execution_program=execution_program,
+            question_requirements=question_requirements,
             compact_facts=compact_facts,
             compact_claims=compact_claims,
             compact_traces=compact_traces,
@@ -4377,6 +4380,7 @@ def _finance_working_state_for_prompt(
             rejected_evidence=rejected_evidence,
             missing_slots=missing_slots,
         ),
+        "question_requirements": _compact_finance_question_requirements_for_prompt(question_requirements),
         "ledger_count": len(ledger_records),
         "fact_count": int(latest_ledger.get("fact_count") or len(facts) or 0),
         "usable_fact_count": len(usable_facts),
@@ -4444,6 +4448,7 @@ def _finance_execution_program_for_working_state(
 def _finance_workbench_state_for_prompt(
     *,
     execution_program: JsonObject,
+    question_requirements: JsonObject,
     compact_facts: list[JsonObject],
     compact_claims: list[JsonObject],
     compact_traces: list[JsonObject],
@@ -4490,9 +4495,23 @@ def _finance_workbench_state_for_prompt(
         next_action_options.extend(["finance.verify_numeric", "respond if evidence and formulas are sufficient"])
     if phase == "verify_or_replan":
         next_action_options.extend(["repair unsupported answer claims", "retrieve missing support", "calculator.compute"])
+    requirement_tools = _string_list(question_requirements.get("required_tool_categories")) if isinstance(question_requirements, dict) else []
+    if "structured_sec_facts" in requirement_tools:
+        next_action_options.append("sec.edgar.financials")
+    if "document_table_extraction" in requirement_tools:
+        next_action_options.append("document.docling.convert")
+    if "table_operations" in requirement_tools:
+        next_action_options.append("data.table.query")
+    if "arithmetic" in requirement_tools:
+        next_action_options.append("calculator.compute")
+    if "numeric_verification" in requirement_tools:
+        next_action_options.append("finance.verify_numeric")
     return {
         "schema": "holo.kernel_v3.finance_workbench_state.v1",
         "current_phase": phase,
+        "question_families": _string_list(question_requirements.get("families"))[:8] if isinstance(question_requirements, dict) else [],
+        "required_tool_categories": requirement_tools[:12],
+        "required_loop_stages": _string_list(question_requirements.get("loop_stages"))[:8] if isinstance(question_requirements, dict) else [],
         "missing_slots": missing_slots[:16],
         "slot_bind_next_action": latest_slot_bind.get("next_action") if isinstance(latest_slot_bind.get("next_action"), dict) else {},
         "transform_spec_count": len(transform_specs),
@@ -8293,6 +8312,30 @@ def _action_plan_preview(action: CandidateAction) -> JsonObject:
     }
 
 
+def _finance_question_requirements_for_recipe(recipe: TaskRecipe | None) -> JsonObject:
+    if recipe is None:
+        return {}
+    question = _root_goal_from_recipe(recipe)
+    if not question or question == recipe.mode:
+        return {}
+    metadata = dict(recipe.metadata)
+    execution_metadata = _execution_metadata(recipe)
+    for key, value in execution_metadata.items():
+        if key not in metadata:
+            metadata[key] = value
+    return infer_finance_question_requirements(
+        question,
+        category=_string_value(
+            metadata.get("category")
+            or metadata.get("benchmark_category")
+            or metadata.get("task_type")
+            or metadata.get("label")
+        ),
+        source=_string_value(metadata.get("source") or metadata.get("benchmark") or metadata.get("dataset")),
+        workflow_type=_string_value(metadata.get("workflow_type") or metadata.get("workflow") or metadata.get("work_type")),
+    )
+
+
 def _planner_directive(recipe: TaskRecipe) -> JsonObject:
     semantic = _semantic_intake_metadata(recipe)
     preferences = _interaction_preferences_metadata(recipe)
@@ -8572,6 +8615,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         return {
             "mode": recipe.mode,
             **({"finance_agent_loop_contract": finance_agent_loop_contract()} if llm_first_finance else {}),
+            **({"finance_question_requirements": _finance_question_requirements_for_recipe(recipe)} if llm_first_finance else {}),
             **(
                 {
                     "llm_first_finance_template": {
@@ -8603,7 +8647,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                             "For finance capability or benchmark tasks with named entities, events, periods, or documents, assume the task is solvable; use retrieval to resolve tickers, CIKs, filings, exhibits, aliases, and source URLs instead of asking the user.",
                             "Choose source families semantically: official filings, issuer IR/releases/transcripts, exchange disclosures, market data, or reputable news as appropriate.",
                             "For SEC/filing tasks, target ticker/CIK, form type, accession/period, exhibit/proxy/8-K/10-Q/10-K/DEF 14A when relevant.",
-                            "For inventory-efficiency / DIO tasks, track each issuer's beginning inventory, ending inventory, COGS/cost of sales/cost of revenue, fiscal_days, DIO, and comparison difference; prefer SEC companyfacts/10-K evidence, then call calculator.compute for each arithmetic step.",
+                            "For formula or comparison tasks, compile all required input slots, bind period and line-item basis, then call calculator.compute or data.table.query for deterministic transforms.",
                             "Extract the facts needed for the answer; if a calculation is needed, call calculator.compute instead of mental arithmetic.",
                             "Finalize with direct answer, cited evidence ids, supported calculations, and limitations for any soft gaps.",
                         ],
@@ -10698,6 +10742,9 @@ def _compact_agent_runtime_directive_for_prompt(value: object) -> JsonObject:
         "finance_agent_loop_contract": _compact_finance_agent_loop_contract_for_prompt(
             value.get("finance_agent_loop_contract")
         ),
+        "finance_question_requirements": _compact_finance_question_requirements_for_prompt(
+            value.get("finance_question_requirements")
+        ),
         "allowed_non_tool_actions": [
             _compact_simple_dict(item, limit=8)
             for item in list(value.get("allowed_non_tool_actions") or [])[:4]
@@ -10750,6 +10797,27 @@ def _compact_finance_agent_loop_contract_for_prompt(value: object) -> JsonObject
         ],
         "stop_invariants": _string_list(value.get("stop_invariants"))[:6],
     }
+
+
+def _compact_finance_question_requirements_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    features = value.get("question_features") if isinstance(value.get("question_features"), dict) else {}
+    result: JsonObject = {
+        "schema": value.get("schema"),
+        "question_source": value.get("question_source"),
+        "gold_or_reference_values_used": bool(value.get("gold_or_reference_values_used")),
+        "families": _string_list(value.get("families"))[:8],
+        "risk_flags": _string_list(value.get("risk_flags"))[:12],
+        "required_tool_categories": _string_list(value.get("required_tool_categories"))[:12],
+        "loop_stages": _string_list(value.get("loop_stages"))[:8],
+        "workflow_hints": _string_list(value.get("workflow_hints"))[:8],
+        "period_mentions": _string_list(features.get("period_mentions"))[:8],
+        "ticker_mentions": _string_list(features.get("ticker_mentions"))[:8],
+        "decision_owner": value.get("decision_owner"),
+        "host_boundary": _text_preview(value.get("host_boundary"), limit=220),
+    }
+    return {key: val for key, val in result.items() if val not in (None, "", [])}
 
 
 def _compact_state_dimensions_for_prompt(value: object) -> JsonObject:

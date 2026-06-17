@@ -64,6 +64,7 @@ from kernel_v3.finance import (
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_AGENT_LOOP_CONTRACT_SCHEMA,
+    FINANCE_QUESTION_REQUIREMENTS_SCHEMA,
     FINANCE_SLOT_BIND_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
@@ -6752,6 +6753,45 @@ def test_finance_capability_provider_compact_preserves_one_shot_tool_surface() -
     assert compact["llm_first_finance_template"]["standard_tool_interface"]["planner_action"].startswith(
         "Return planner.propose JSON"
     )
+
+
+def test_finance_capability_planner_exposes_question_requirements_without_task_patch() -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    metadata["retrieval"] = {
+        **metadata["retrieval"],
+        "allow_network": True,
+        "max_network_fetches": 3,
+    }
+    metadata["execution_metadata"] = {
+        **dict(metadata.get("execution_metadata") or {}),
+        "semantic_goal": {
+            "root_goal": (
+                "For NYSE: HD and NYSE: LOW, calculate FY2024 days inventory outstanding and "
+                "compare inventory efficiency using public filings."
+            )
+        },
+    }
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=metadata,
+    )
+
+    directive = _planner_directive(recipe)
+    compact = _compact_agent_runtime_directive_for_prompt(directive)
+    provider_compact = _compact_runtime_directive_for_provider(directive)
+
+    requirements = compact["finance_question_requirements"]
+    assert requirements["schema"] == FINANCE_QUESTION_REQUIREMENTS_SCHEMA
+    assert requirements["gold_or_reference_values_used"] is False
+    assert "defined_formula_calculation" in requirements["families"]
+    assert "multi_entity_compare" in requirements["families"]
+    assert "arithmetic" in requirements["required_tool_categories"]
+    assert "numeric_verification" in requirements["required_tool_categories"]
+    assert "transform_compute" in requirements["loop_stages"]
+    assert provider_compact["finance_question_requirements"]["schema"] == FINANCE_QUESTION_REQUIREMENTS_SCHEMA
+    workflow_text = json.dumps(directive["llm_first_finance_template"]["finance_workflow"], ensure_ascii=False)
+    assert "inventory-efficiency / DIO" not in workflow_text
+    assert "compile all required input slots" in workflow_text
 
 
 def test_finance_capability_planner_prompt_exposes_temporary_workbench_tools_to_model() -> None:

@@ -15,6 +15,14 @@ from typing import Callable, Protocol
 from kernel_v3.benchmark_diagnostics import finance_failure_layer, strict_failed_internal_verifier_passed
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.contracts import Contract, JsonObject, JsonValue
+from kernel_v3.finance.requirements import (
+    finance_loop_stage_counter_summary,
+    finance_requirement_counter_summary,
+    finance_requirement_family_has_tool_categories,
+    finance_risk_counter_summary,
+    finance_tool_category_counter_summary,
+    infer_finance_question_requirements,
+)
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.usage import aggregate_processor_usage_by_task_type, summarize_processor_usage
 from kernel_v3.retrieval import retrieval_behavior_benchmark
@@ -299,112 +307,6 @@ FINANCE_REQUIREMENTS_AUDIT_EXCLUDED_FIELDS = (
     "rubric",
     "dev_gold",
 )
-_FINANCE_REQUIREMENT_FAMILY_ORDER = (
-    "direct_line_item_or_disclosure",
-    "defined_formula_calculation",
-    "calculation_then_business_judgment",
-    "driver_attribution_or_bridge",
-    "table_ranking_or_comparison",
-    "multi_entity_compare",
-    "market_or_macro_context",
-)
-_FINANCE_REQUIREMENT_TOOL_ORDER = (
-    "source_acquisition",
-    "structured_sec_facts",
-    "document_table_extraction",
-    "table_operations",
-    "arithmetic",
-    "provenance_ledgers",
-    "numeric_verification",
-    "semantic_synthesis",
-    "temporary_workbench",
-)
-_FINANCE_REQUIREMENT_LOOP_STAGE_ORDER = (
-    "task_compile",
-    "evidence_acquire",
-    "ledger_bind",
-    "transform_compute",
-    "semantic_synthesis",
-    "verify_or_replan",
-)
-_FINANCE_REQUIREMENT_RISK_ORDER = (
-    "needs_primary_filing",
-    "needs_structured_xbrl",
-    "needs_table_rows",
-    "needs_multi_period",
-    "needs_multi_entity",
-    "needs_business_context",
-    "needs_bridge_reconciliation",
-    "needs_market_or_macro_context",
-    "requires_calculator",
-    "requires_verifier",
-    "requires_table_sort",
-    "needs_temporary_workbench",
-)
-_FINANCE_REQUIREMENT_FAMILY_TOOLS: dict[str, tuple[str, ...]] = {
-    "direct_line_item_or_disclosure": (
-        "source_acquisition",
-        "structured_sec_facts",
-        "document_table_extraction",
-        "provenance_ledgers",
-        "semantic_synthesis",
-    ),
-    "defined_formula_calculation": (
-        "source_acquisition",
-        "structured_sec_facts",
-        "document_table_extraction",
-        "arithmetic",
-        "provenance_ledgers",
-        "numeric_verification",
-        "semantic_synthesis",
-    ),
-    "calculation_then_business_judgment": (
-        "source_acquisition",
-        "structured_sec_facts",
-        "document_table_extraction",
-        "arithmetic",
-        "provenance_ledgers",
-        "numeric_verification",
-        "semantic_synthesis",
-    ),
-    "driver_attribution_or_bridge": (
-        "source_acquisition",
-        "document_table_extraction",
-        "table_operations",
-        "arithmetic",
-        "provenance_ledgers",
-        "semantic_synthesis",
-        "temporary_workbench",
-    ),
-    "table_ranking_or_comparison": (
-        "source_acquisition",
-        "document_table_extraction",
-        "table_operations",
-        "arithmetic",
-        "provenance_ledgers",
-        "numeric_verification",
-        "semantic_synthesis",
-        "temporary_workbench",
-    ),
-    "multi_entity_compare": (
-        "source_acquisition",
-        "structured_sec_facts",
-        "document_table_extraction",
-        "table_operations",
-        "arithmetic",
-        "provenance_ledgers",
-        "numeric_verification",
-        "semantic_synthesis",
-        "temporary_workbench",
-    ),
-    "market_or_macro_context": (
-        "source_acquisition",
-        "table_operations",
-        "provenance_ledgers",
-        "semantic_synthesis",
-        "temporary_workbench",
-    ),
-}
 
 
 def resolve_finance_benchmark_split(split: str | None) -> FinanceBenchmarkSplitSpec | None:
@@ -487,10 +389,10 @@ def build_finance_requirements_audit(
         "public_fields_used": list(FINANCE_REQUIREMENTS_AUDIT_PUBLIC_FIELDS),
         "excluded_gold_or_reference_fields": list(FINANCE_REQUIREMENTS_AUDIT_EXCLUDED_FIELDS),
         "unused_gold_like_fields_present": sorted(gold_like_fields_present),
-        "family_summary": _counter_summary(family_counts, order=_FINANCE_REQUIREMENT_FAMILY_ORDER),
-        "tool_category_summary": _counter_summary(tool_counts, order=_FINANCE_REQUIREMENT_TOOL_ORDER),
-        "loop_stage_summary": _counter_summary(loop_stage_counts, order=_FINANCE_REQUIREMENT_LOOP_STAGE_ORDER),
-        "risk_summary": _counter_summary(risk_counts, order=_FINANCE_REQUIREMENT_RISK_ORDER),
+        "family_summary": finance_requirement_counter_summary(family_counts),
+        "tool_category_summary": finance_tool_category_counter_summary(tool_counts),
+        "loop_stage_summary": finance_loop_stage_counter_summary(loop_stage_counts),
+        "risk_summary": finance_risk_counter_summary(risk_counts),
         "coverage_summary": {
             "scope": "contract_tool_surface_only_not_accuracy",
             "contract_covered_item_count": covered_count,
@@ -498,7 +400,7 @@ def build_finance_requirements_audit(
             "contract_coverage_rate": coverage_rate,
             "uncovered_item_ids": uncovered_items,
             "all_identified_families_have_tool_categories": all(
-                family in _FINANCE_REQUIREMENT_FAMILY_TOOLS for family in family_counts
+                finance_requirement_family_has_tool_categories(family) for family in family_counts
             ),
             "all_items_have_loop_stages": all(bool(item["loop_stages"]) for item in item_audits),
         },
@@ -549,300 +451,17 @@ def render_finance_requirements_audit(audit: JsonObject) -> str:
 
 
 def _finance_requirements_item_audit(item: FinanceBenchmarkItem) -> JsonObject:
-    features = _finance_question_features(item.question, category=item.category, workflow_type=item.workflow_type)
-    families = _finance_requirement_families(features)
-    risk_flags = _finance_requirement_risk_flags(features)
-    required_tool_categories = _finance_requirement_tool_categories(families, risk_flags)
-    loop_stages = _finance_requirement_loop_stages(families, risk_flags)
+    requirements = infer_finance_question_requirements(
+        item.question,
+        category=item.category,
+        source=item.source,
+        workflow_type=item.workflow_type,
+    )
     return {
         "item_id": item.item_id,
         "question": item.question,
-        "public_metadata": {
-            "category": item.category,
-            "source": item.source,
-            "workflow_type": item.workflow_type,
-        },
-        "question_features": features,
-        "families": families,
-        "risk_flags": risk_flags,
-        "required_tool_categories": required_tool_categories,
-        "loop_stages": loop_stages,
-        "workflow_hints": _finance_requirement_workflow_hints(families, risk_flags),
-        "gold_or_reference_values_used": False,
+        **requirements,
     }
-
-
-def _finance_question_features(
-    question: str,
-    *,
-    category: str | None = None,
-    workflow_type: str | None = None,
-) -> JsonObject:
-    text = _normalize_text(" ".join(value for value in (question, category or "", workflow_type or "") if value))
-    formula_patterns = (
-        "calculate",
-        "compute",
-        "ratio",
-        "divided by",
-        "percentage",
-        "percent",
-        "average",
-        "margin",
-        "turnover",
-        "return on assets",
-        "roa",
-        "dio",
-        "days inventory outstanding",
-        "dpo",
-        "days payable",
-        "capex /",
-        "cash flow",
-        "working capital",
-        "current ratio",
-        "quick ratio",
-        "growth",
-        "change",
-        "cagr",
-    )
-    table_patterns = (
-        "table",
-        "row",
-        "rank",
-        "ranking",
-        "largest",
-        "smallest",
-        "highest",
-        "lowest",
-        "least",
-        "most",
-        "segment",
-        "activity",
-        "activities",
-        "breakdown",
-        "reconciliation",
-    )
-    driver_patterns = (
-        "driver",
-        "drivers",
-        "why",
-        "explain",
-        "attribut",
-        "due to",
-        "because",
-        "excluding",
-        "adjusted",
-        "bridge",
-        "reconciliation",
-        "foreign exchange",
-        "fx",
-        "m&a",
-        "acquisition",
-        "divestiture",
-        "one-off",
-        "pass-through",
-    )
-    judgment_patterns = (
-        "is ",
-        "whether",
-        "compare",
-        "appears",
-        "more efficient",
-        "less efficient",
-        "healthy",
-        "capital-intensive",
-        "capital intensive",
-        "liquidity",
-        "solvency",
-        "profitability",
-        "business context",
-        "reason from",
-    )
-    market_patterns = (
-        "share price",
-        "stock price",
-        "market cap",
-        "market capitalization",
-        "beta",
-        "treasury",
-        "interest rate",
-        "inflation",
-        "cpi",
-        "gdp",
-        "exchange rate",
-        "macro",
-        "fred",
-    )
-    line_item_patterns = (
-        "revenue",
-        "sales",
-        "net sales",
-        "inventory",
-        "inventories",
-        "cost of sales",
-        "cogs",
-        "assets",
-        "liabilities",
-        "equity",
-        "pp&e",
-        "ppe",
-        "property, plant and equipment",
-        "property plant and equipment",
-        "capex",
-        "capital expenditures",
-        "operating cash flow",
-        "net income",
-        "debt",
-        "cash",
-        "receivable",
-        "payable",
-    )
-    filing_patterns = (
-        "10-k",
-        "10-q",
-        "20-f",
-        "annual report",
-        "quarterly report",
-        "public filing",
-        "public filings",
-        "filing",
-        "sec",
-        "edgar",
-        "fy20",
-        "fiscal",
-    )
-    compare_patterns = (
-        "compare",
-        "versus",
-        " vs ",
-        "both",
-        "higher",
-        "lower",
-        "more",
-        "less",
-        "difference",
-    )
-    multi_period_patterns = (
-        "three-year",
-        "3-year",
-        "multi-year",
-        "year-over-year",
-        "yoy",
-        "from fy",
-        "between fy",
-        "fiscal years",
-    )
-    fy_mentions = re.findall(r"\bfy\s*20\d{2}\b|\b20\d{2}\b", text)
-    ticker_mentions = re.findall(r"\b(?:nyse|nasdaq|amex)\s*:\s*[a-z]{1,5}\b", text)
-    mentions_formula = _contains_any(text, formula_patterns)
-    mentions_table = _contains_any(text, table_patterns)
-    mentions_driver = _contains_any(text, driver_patterns)
-    mentions_judgment = _contains_any(text, judgment_patterns)
-    mentions_market = _contains_any(text, market_patterns)
-    mentions_line_item = _contains_any(text, line_item_patterns)
-    mentions_filing = _contains_any(text, filing_patterns)
-    mentions_compare = _contains_any(text, compare_patterns) or len(ticker_mentions) >= 2
-    mentions_multi_period = len(set(fy_mentions)) >= 2 or _contains_any(text, multi_period_patterns)
-    mentions_multi_entity = len(ticker_mentions) >= 2 or bool(re.search(r"\bfor\s+[^.?!]{2,80}\s+and\s+[^.?!]{2,80}", text))
-    return {
-        "mentions_formula_or_ratio": mentions_formula,
-        "mentions_table_or_ranking": mentions_table,
-        "mentions_driver_or_bridge": mentions_driver,
-        "mentions_business_judgment": mentions_judgment,
-        "mentions_market_or_macro_context": mentions_market,
-        "mentions_line_item_or_disclosure": mentions_line_item,
-        "mentions_primary_filing": mentions_filing,
-        "mentions_comparison": mentions_compare,
-        "mentions_multi_period": mentions_multi_period,
-        "mentions_multi_entity": mentions_multi_entity,
-        "period_mentions": sorted(set(fy_mentions))[:8],
-        "ticker_mentions": sorted(set(ticker_mentions))[:8],
-    }
-
-
-def _finance_requirement_families(features: JsonObject) -> list[str]:
-    families: list[str] = []
-    if bool(features.get("mentions_line_item_or_disclosure")) or bool(features.get("mentions_primary_filing")):
-        families.append("direct_line_item_or_disclosure")
-    if bool(features.get("mentions_formula_or_ratio")):
-        families.append("defined_formula_calculation")
-    if bool(features.get("mentions_business_judgment")) and (
-        bool(features.get("mentions_formula_or_ratio"))
-        or bool(features.get("mentions_line_item_or_disclosure"))
-        or bool(features.get("mentions_primary_filing"))
-    ):
-        families.append("calculation_then_business_judgment")
-    if bool(features.get("mentions_driver_or_bridge")):
-        families.append("driver_attribution_or_bridge")
-    if bool(features.get("mentions_table_or_ranking")):
-        families.append("table_ranking_or_comparison")
-    if bool(features.get("mentions_multi_entity")) or bool(features.get("mentions_comparison")):
-        families.append("multi_entity_compare")
-    if bool(features.get("mentions_market_or_macro_context")):
-        families.append("market_or_macro_context")
-    if not families:
-        families.append("direct_line_item_or_disclosure")
-    return _finance_ordered_unique(families, order=_FINANCE_REQUIREMENT_FAMILY_ORDER)
-
-
-def _finance_requirement_risk_flags(features: JsonObject) -> list[str]:
-    flags: list[str] = ["needs_primary_filing"]
-    if bool(features.get("mentions_primary_filing")) or bool(features.get("mentions_line_item_or_disclosure")):
-        flags.append("needs_structured_xbrl")
-    if bool(features.get("mentions_table_or_ranking")):
-        flags.extend(["needs_table_rows", "requires_table_sort", "needs_temporary_workbench"])
-    if bool(features.get("mentions_multi_period")):
-        flags.append("needs_multi_period")
-    if bool(features.get("mentions_multi_entity")) or bool(features.get("mentions_comparison")):
-        flags.extend(["needs_multi_entity", "needs_temporary_workbench"])
-    if bool(features.get("mentions_business_judgment")):
-        flags.append("needs_business_context")
-    if bool(features.get("mentions_driver_or_bridge")):
-        flags.extend(["needs_bridge_reconciliation", "needs_temporary_workbench"])
-    if bool(features.get("mentions_market_or_macro_context")):
-        flags.extend(["needs_market_or_macro_context", "needs_temporary_workbench"])
-    if bool(features.get("mentions_formula_or_ratio")):
-        flags.extend(["requires_calculator", "requires_verifier"])
-    return _finance_ordered_unique(flags, order=_FINANCE_REQUIREMENT_RISK_ORDER)
-
-
-def _finance_requirement_tool_categories(families: list[str], risk_flags: list[str]) -> list[str]:
-    tools: list[str] = []
-    for family in families:
-        tools.extend(_FINANCE_REQUIREMENT_FAMILY_TOOLS.get(family, ()))
-    if "requires_calculator" in risk_flags:
-        tools.append("arithmetic")
-    if "requires_verifier" in risk_flags:
-        tools.append("numeric_verification")
-    if "needs_temporary_workbench" in risk_flags:
-        tools.append("temporary_workbench")
-    return _finance_ordered_unique(tools, order=_FINANCE_REQUIREMENT_TOOL_ORDER)
-
-
-def _finance_requirement_loop_stages(families: list[str], risk_flags: list[str]) -> list[str]:
-    stages = ["task_compile", "evidence_acquire", "ledger_bind", "semantic_synthesis", "verify_or_replan"]
-    if (
-        "defined_formula_calculation" in families
-        or "calculation_then_business_judgment" in families
-        or "driver_attribution_or_bridge" in families
-        or "table_ranking_or_comparison" in families
-        or "multi_entity_compare" in families
-        or "requires_calculator" in risk_flags
-        or "requires_table_sort" in risk_flags
-    ):
-        stages.append("transform_compute")
-    return _finance_ordered_unique(stages, order=_FINANCE_REQUIREMENT_LOOP_STAGE_ORDER)
-
-
-def _finance_requirement_workflow_hints(families: list[str], risk_flags: list[str]) -> list[str]:
-    hints = ["compile_task_spec", "acquire_primary_sources", "bind_evidence_slots"]
-    if "transform_compute" in _finance_requirement_loop_stages(families, risk_flags):
-        hints.append("run_formula_or_table_transform")
-    if "needs_business_context" in risk_flags:
-        hints.append("synthesize_business_context_without_hard_threshold")
-    else:
-        hints.append("synthesize_with_citations")
-    hints.append("verify_numeric_provenance_and_replan_if_needed")
-    return hints
 
 
 def _finance_gold_like_fields_present(item: FinanceBenchmarkItem) -> set[str]:
@@ -866,24 +485,6 @@ def _finance_gold_like_fields_present(item: FinanceBenchmarkItem) -> set[str]:
     if item.evidence_excerpt is not None:
         present.add("evidence_excerpt")
     return present
-
-
-def _counter_summary(counter: Counter[str], *, order: tuple[str, ...]) -> list[JsonObject]:
-    order_index = {name: index for index, name in enumerate(order)}
-    rows = sorted(counter.items(), key=lambda item: (order_index.get(item[0], len(order_index)), item[0]))
-    return [{"name": name, "count": count} for name, count in rows]
-
-
-def _finance_ordered_unique(values: list[str], *, order: tuple[str, ...]) -> list[str]:
-    seen: set[str] = set()
-    deduped = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        deduped.append(value)
-    order_index = {name: index for index, name in enumerate(order)}
-    return sorted(deduped, key=lambda value: (order_index.get(value, len(order_index)), value))
 
 
 def score_finance_answer(

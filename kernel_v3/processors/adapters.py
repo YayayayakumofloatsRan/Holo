@@ -1005,6 +1005,7 @@ def _compact_runtime_directive_for_provider(directive: JsonObject, *, lightweigh
         ),
         "search_strategy_hint": _compact_prompt_value(directive.get("search_strategy_hint")),
         "final_answer_contract": _compact_prompt_value(directive.get("final_answer_contract")),
+        "finance_question_requirements": _compact_prompt_value(directive.get("finance_question_requirements")),
         "interaction_preferences": _compact_prompt_value(directive.get("interaction_preferences")),
         "active_memory": _compact_prompt_value(directive.get("active_memory")),
     }

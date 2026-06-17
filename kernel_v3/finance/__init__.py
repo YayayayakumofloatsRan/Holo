@@ -22,6 +22,10 @@ from kernel_v3.finance.open_components import (
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
     register_finance_open_component_tools,
 )
+from kernel_v3.finance.requirements import (
+    FINANCE_QUESTION_REQUIREMENTS_SCHEMA,
+    infer_finance_question_requirements,
+)
 from kernel_v3.finance.slot_bind_tool import FINANCE_SLOT_BIND_TOOL_NAME, register_finance_slot_bind_tool
 from kernel_v3.finance.substrate_adapter import (
     finance_evidence_policy_for_question,
@@ -74,6 +78,7 @@ __all__ = [
     "FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES",
     "FINANCE_OPEN_COMPONENT_TOOL_NAMES",
     "FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME",
+    "FINANCE_QUESTION_REQUIREMENTS_SCHEMA",
     "FINANCE_AGENT_LOOP_CONTRACT_SCHEMA",
     "FINANCE_TOOL_SURFACE_SCHEMA",
     "MARKET_OPENBB_FETCH_TOOL_NAME",
@@ -93,6 +98,7 @@ __all__ = [
     "finance_one_shot_tool_protocol",
     "finance_tool_surface_catalog",
     "finance_toolchain_install_summary",
+    "infer_finance_question_requirements",
     "finance_numeric_repair_guidance",
     "attach_target_binding_to_facts",
     "filter_facts_for_target_binding",
