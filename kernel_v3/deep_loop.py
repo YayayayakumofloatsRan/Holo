@@ -2724,6 +2724,8 @@ def _provider_tool_result_continuation_messages(
     tool_calls: list[JsonObject] = []
     tool_messages: list[JsonObject] = []
     for item in execution_items:
+        if _execution_item_is_parse_error(item):
+            continue
         chunk = chunks_by_id.get(item.tool_call_id, {})
         raw_name = str(chunk.get("name") or item.action.name or "")
         raw_arguments = str(chunk.get("arguments") or "").strip()
@@ -2760,6 +2762,10 @@ def _provider_tool_result_continuation_messages(
     )
     messages.extend(tool_messages)
     return messages
+
+
+def _execution_item_is_parse_error(item: _ToolExecutionItem) -> bool:
+    return item.action.name == "__invalid_tool_call__" or item.observation.kind == "tool_call_parse_error"
 
 
 def _provider_terminal_text(text: str, *, index: int) -> str:

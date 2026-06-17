@@ -384,6 +384,14 @@ categories without writing fake benchmark outputs. Targeted structural tests
 pass (`35` deep-loop tests, `11` tool-use tests, `61` finance benchmark tests,
 `5` provider-native tests). This is loop/toolchain readiness evidence, not a
 live FinanceBench or FinQA score.
+The next loop-protocol hardening keeps provider continuation tied to real
+provider tool calls only. `tool_call_parse_error` observations and
+`__invalid_tool_call__` synthetic actions still enter the journal and
+`tool_batch_result` for outer-loop replanning, but they no longer fabricate
+assistant/tool messages inside the provider conversation. Valid executed tool
+results still continue through provider-native tool-result messages. Targeted
+deep-loop structure tests pass (`36` tests). This is protocol integrity work,
+not a finance benchmark score.
 The next finance tool-runtime P0 checkpoint makes those tool contracts executable
 rather than merely descriptive. `retrieval.run`, SEC/EDGAR, Trafilatura, OpenBB,
 DuckDB, SymPy, `calculator.compute`, `finance.slot_bind`, and

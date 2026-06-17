@@ -1580,9 +1580,10 @@ def test_json_turn_tool_discovery_expands_next_prompt_tool_surface() -> None:
 
 
 def test_streamed_malformed_tool_arguments_become_parse_error_observation() -> None:
+    provider = _MalformedStreamingToolCallProvider()
     journal = JournalStore.in_memory()
     planner = ModelAssistantTurnPlanner(
-        fabric=ProcessorFabric(providers={"streaming": _MalformedStreamingToolCallProvider()}, journal=journal),
+        fabric=ProcessorFabric(providers={"streaming": provider}, journal=journal),
         provider="streaming",
         model="stream-model",
         allowed_tool_names={"alpha.read"},
@@ -1618,6 +1619,51 @@ def test_streamed_malformed_tool_arguments_become_parse_error_observation() -> N
     ]
     assert parse_records[0].data["content"]["error"] == "invalid_tool_arguments"
     assert parse_records[0].data["tool_call_id"] == "tc-bad"
+    assert len(provider.requests) == 1
+    assert not journal.records(task_id=result.task_id, kind="provider_conversation_update")
+
+
+def test_stream_error_observation_does_not_fabricate_provider_tool_call() -> None:
+    provider = _StreamErrorOnlyProvider()
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=ToolRegistry.with_builtin_respond(),
+        evaluator=FakeEvaluator(
+            [
+                {
+                    "status": "final_answer_ready",
+                    "stop_reason": "completed",
+                    "answer": "stream error observed",
+                    "missing_evidence": [],
+                }
+            ]
+        ),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("observe provider stream error")
+
+    assert result.status == "completed"
+    assert len(provider.requests) == 1
+    parse_records = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_call_parse_error"
+    ]
+    assert parse_records[0].data["content"]["error"] == "provider_stream_broken"
+    assert not journal.records(task_id=result.task_id, kind="provider_conversation_update")
 
 
 def test_streaming_planner_maps_native_provider_tool_name_back_to_holo_tool() -> None:
@@ -2351,7 +2397,11 @@ class _MalformedStreamingToolCallProvider:
     name = "streaming"
     model = "stream-model"
 
+    def __init__(self) -> None:
+        self.requests: list[ProcessorRequest] = []
+
     def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        self.requests.append(request)
         yield ProcessorStreamEvent(
             event_type="tool_call_delta",
             request_id=request.request_id,
@@ -2373,6 +2423,23 @@ class _MalformedStreamingToolCallProvider:
             request_id=request.request_id,
             sequence=2,
             delta={"status": "ok"},
+        )
+
+
+class _StreamErrorOnlyProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def __init__(self) -> None:
+        self.requests: list[ProcessorRequest] = []
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        self.requests.append(request)
+        yield ProcessorStreamEvent(
+            event_type="stream_error",
+            request_id=request.request_id,
+            sequence=1,
+            delta={"error": "provider_stream_broken"},
         )
 
 

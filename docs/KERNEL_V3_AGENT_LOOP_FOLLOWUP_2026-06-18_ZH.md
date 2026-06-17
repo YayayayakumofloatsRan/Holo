@@ -951,3 +951,36 @@ provider-native tools。后续 live slice 不需要模型先绕一轮 `tool.disc
 返回 `status=blocked` / `reason=live_model_not_enabled`，但保留
 `selected_item_ids=["financebench_id_01865"]`，并确认 results/summary 未写出。
 这说明切片和工具需求链路可观测，但不构成 live finance score。
+
+## 24. Provider continuation parse-error boundary
+
+继续对照成熟 TypeScript loop 的工具协议不变量后，本轮收紧 provider
+continuation：只有真实已执行工具结果才会被构造成 provider-compatible
+assistant/tool messages 回灌给同一个 provider conversation。
+
+此前风险：
+
+- streamed malformed tool arguments、`stream_error` 或 `stream_end(status!=ok)`
+  会产生 `tool_call_parse_error` observation；
+- 这些 parse error item 也可能进入 provider continuation；
+- 对于并非真实 provider tool_call 的错误，host 会构造 synthetic
+  `__invalid_tool_call__` assistant tool_call，这违反“每个 tool_result 对应真实
+  tool_use”的成熟 loop 语义。
+
+现在：
+
+- `tool_call_parse_error` / `__invalid_tool_call__` 仍写入 journal、
+  `tool_batch_result` 和后续 context，供外层 loop 重规划；
+- 它们不再生成 provider conversation 内的 synthetic assistant/tool messages；
+- 真实执行成功/失败/blocked 的工具结果仍正常通过
+  `provider_tool_result_continuation` 回灌。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+```
+
+结果：`36 passed in 3.42s`。
+
+这一步修的是 provider/tool 协议完整性，不是 FinanceBench/FQA accuracy。
