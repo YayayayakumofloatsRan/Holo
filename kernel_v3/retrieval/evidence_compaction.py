@@ -278,18 +278,33 @@ def _candidate_sort_key(
     )
 
 
-def _target_line_item_sort_key(candidate: EvidenceCandidate) -> tuple[int, int, float, str]:
+def _target_line_item_sort_key(candidate: EvidenceCandidate) -> tuple[int, int, int, int, int, float, str]:
     # Target-bound structured spans are generated in EvidenceSpec priority order.
     # Preserve that order instead of letting broad finance facet scoring drop a
     # required slot before formula planning gets a chance to bind it.
     start_offset = candidate.span.start_offset
     if start_offset < 0:
         start_offset = 1_000_000_000
-    return (start_offset, len(candidate.evidence.text), -float(candidate.evidence.score), candidate.evidence.evidence_id)
+    text = candidate.evidence.text.lower()
+    line_item = _candidate_target_line_item(candidate)
+    alias_match = _candidate_line_item_alias_match(text, line_item)
+    table_fact = "html_table_fact_" in text or ("html_table_" in text and "column_" in text)
+    numeric_count = len(re.findall(r"\(?\d[\d,]*(?:\.\d+)?\)?", text))
+    statement_match = _candidate_statement_match(text, candidate)
+    return (
+        0 if alias_match and numeric_count else 1,
+        0 if table_fact else 1,
+        0 if statement_match else 1,
+        -min(numeric_count, 20),
+        start_offset,
+        -float(candidate.evidence.score),
+        candidate.evidence.evidence_id,
+    )
 
 
-def _target_document_sort_key(candidate: EvidenceCandidate, *, goal: SearchGoal) -> tuple[int, float, float, float, int, str]:
+def _target_document_sort_key(candidate: EvidenceCandidate, *, goal: SearchGoal) -> tuple[int, int, float, float, float, int, str]:
     text = f"{candidate.evidence.title} {candidate.evidence.text}".lower()
+    line_item_strength = _candidate_line_item_strength(candidate)
     explanation_hits = sum(
         1
         for marker in (
@@ -310,6 +325,7 @@ def _target_document_sort_key(candidate: EvidenceCandidate, *, goal: SearchGoal)
     if start_offset < 0:
         start_offset = 1_000_000_000
     return (
+        -line_item_strength,
         -explanation_hits,
         -finance_metric_intent_score(candidate.evidence.text, query=goal.query),
         -float(candidate.evidence.score),
@@ -317,6 +333,90 @@ def _target_document_sort_key(candidate: EvidenceCandidate, *, goal: SearchGoal)
         start_offset,
         candidate.evidence.evidence_id,
     )
+
+
+def _candidate_line_item_strength(candidate: EvidenceCandidate) -> int:
+    line_item = _candidate_target_line_item(candidate)
+    if not line_item:
+        return 0
+    text = candidate.evidence.text.lower()
+    score = 0
+    if _candidate_line_item_alias_match(text, line_item):
+        score += 4
+    if _candidate_statement_match(text, candidate):
+        score += 2
+    if "html_table_fact_" in text or ("html_table_" in text and "column_" in text):
+        score += 2
+    if re.search(r"\(?\d[\d,]*(?:\.\d+)?\)?", text):
+        score += 1
+    return score
+
+
+def _candidate_line_item_alias_match(text: str, line_item: str) -> bool:
+    normalized = str(line_item or "").strip().lower()
+    if not normalized:
+        return False
+    aliases = _line_item_aliases(normalized)
+    return any(alias and alias in text for alias in aliases)
+
+
+def _candidate_statement_match(text: str, candidate: EvidenceCandidate) -> bool:
+    metadata = _candidate_span_metadata(candidate)
+    statement = str(metadata.get("target_statement") or "").strip().lower()
+    if statement == "cash_flow_statement":
+        return any(
+            marker in text
+            for marker in (
+                "statement of cash flows",
+                "statements of cash flows",
+                "cash flows from investing activities",
+                "cash flows from operating activities",
+                "cash flows",
+            )
+        )
+    if statement == "income_statement":
+        return any(marker in text for marker in ("statement of income", "statement of operations", "income statement"))
+    if statement == "balance_sheet":
+        return "balance sheet" in text or "total assets" in text
+    return False
+
+
+def _line_item_aliases(line_item: str) -> list[str]:
+    normalized = " ".join(str(line_item or "").lower().replace("_", " ").replace("&", " and ").split())
+    if not normalized:
+        return []
+    if normalized in {"capital expenditures", "capital expenditure", "capex"} or "capital expenditure" in normalized:
+        return [
+            "purchases of property, plant and equipment",
+            "purchases of property plant and equipment",
+            "payments to acquire property, plant and equipment",
+            "payments to acquire property plant and equipment",
+            "purchase of property and equipment",
+            "purchases of pp&e",
+            "purchase of pp&e",
+            "capital expenditures",
+            "capital expenditure",
+            "capex",
+            "pp&e",
+        ]
+    if normalized in {"property plant and equipment net", "net property plant and equipment", "ppe net", "pp&e net"}:
+        return [
+            "property, plant and equipment, net",
+            "property plant and equipment net",
+            "property, plant and equipment net",
+            "property and equipment, net",
+            "net property, plant and equipment",
+            "net property plant and equipment",
+            "net pp&e",
+            "ppe net",
+        ]
+    if normalized in {"revenue", "revenues", "net sales", "net revenues"}:
+        return ["revenue", "revenues", "net sales", "net revenues", "sales and other operating revenues"]
+    if normalized in {"operating cash flow", "cash flow from operations"}:
+        return ["net cash provided by operating activities", "cash flow from operations", "operating activities"]
+    if normalized in {"cost of sales", "cost of revenue", "cogs", "cost of goods sold"}:
+        return ["cost of sales", "cost of revenue", "cost of goods sold", "cost of goods and services sold"]
+    return [normalized]
 
 
 def _target_document_urls(goal: SearchGoal) -> list[str]:
@@ -466,7 +566,7 @@ def _candidate_matches_target(candidate: EvidenceCandidate, target: str) -> bool
 def _target_line_item_markers(candidates: list[EvidenceCandidate]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
-    for candidate in sorted(candidates, key=_target_line_item_sort_key):
+    for candidate in sorted(candidates, key=_target_line_item_marker_sort_key):
         line_item = _candidate_target_line_item(candidate)
         if not line_item or line_item in seen:
             continue
@@ -475,6 +575,13 @@ def _target_line_item_markers(candidates: list[EvidenceCandidate]) -> list[str]:
         seen.add(line_item)
         result.append(line_item)
     return result
+
+
+def _target_line_item_marker_sort_key(candidate: EvidenceCandidate) -> tuple[int, int, str]:
+    start_offset = candidate.span.start_offset
+    if start_offset < 0:
+        start_offset = 1_000_000_000
+    return (start_offset, len(candidate.evidence.text), candidate.evidence.evidence_id)
 
 
 def _candidate_target_line_item(candidate: EvidenceCandidate) -> str:

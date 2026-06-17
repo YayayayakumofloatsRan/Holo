@@ -9,41 +9,66 @@ gold/reference material used only after completion for scoring.
 
 ## Bottom Line
 
-Finance problem-solving remains the core objective. The last reportable live
-accuracy evidence is still the 2026-06-14 FinAgent/FAB-family run record
+Finance problem-solving remains the core objective. The last broad reportable
+live accuracy evidence is still the 2026-06-14 FinAgent/FAB-family run record
 summarized in `docs/KERNEL_V3_FINANCE_RESULTS_SNAPSHOT_2026-06-16.md`.
 
-Fresh FinanceBench live scoring is still blocked by provider account
-availability. Minimal DeepSeek checks on 2026-06-17 found the Windows
-`DEEPSEEK_API_KEY` available to WSL and injectable into the live model process,
-but the actual API call returned:
+After provider access was restored, a 2026-06-17 isolated FinanceBench debug
+rerun on the first doc-retrieval row passed live. This is a real live
+capability result for one debug item, not a held-out `test100` score.
+
+| Field | Value |
+| --- | --- |
+| Dataset | `data/bench/finance/financebench_doc_retrieval.jsonl` |
+| Item | `financebench_id_03029` |
+| Slice | `--offset 0 --limit 1` debug rerun |
+| Live status | `1/1`, `passed`, `numeric_within_tolerance` |
+| Tokens / fetches | `237,555` tokens, `12` fetches, `5.5 MB` downloaded |
+| Finance trace | calculator `1`, formula `1`, trace link `100.0%`, trace cite `100.0%` |
+| Ledgers / gates | `202` facts, `202` claims, verifier `passed`, synthesis gate `passed` |
+| Workbench | retrieval runs `1`, workbench sufficient rate `1.0` |
+| Isolation | run state under `/tmp/holo-kv3-live-debug/fb-o000-l001-focused-escalated-20260617`; main `.state` was not used |
+
+The answer identified 3M FY2018 capital expenditure as USD `1,577` million from
+the filing line item "Purchases of property, plant and equipment (PP&E)" and
+used the absolute value of the cash outflow. Gold/reference material remained
+out of model context and was used only after completion for scoring.
+
+Earlier same-day provider/environment failures, including a zero-token
+non-escalated WSL environment failure and prior `HTTP_402_INSUFFICIENT_BALANCE`
+checks, are not capability scores.
+
+## 2026-06-17 Live Target-Line Evidence Fix
+
+The failed live trace before this pass was not missing documents. Retrieval had
+already fetched the relevant 3M filing, and the accepted evidence span contained
+the exact cash-flow row:
 
 ```text
-HTTP_402_INSUFFICIENT_BALANCE
+Purchases of property, plant and equipment (PP&E) ... (1,577)
 ```
 
-A follow-up live smoke on 2026-06-17 again read the key from Windows
-environment variables, injected it only into the child process environment, and
-reached DeepSeek with provider `deepseek` / model `deepseek-v4-flash`. The
-provider response remained:
+The failure was in the model-visible packet. Workbench summarized long evidence
+from the beginning of the span, while the target PP&E row appeared later in the
+span. The LLM therefore saw generic cash-flow context, did not see the specific
+capex row reliably, and kept reporting `capital_expenditures` as missing.
 
-```text
-deepseek HTTP 402: Insufficient Balance
-```
+The fix is generic, not an answer table:
 
-Therefore no new live FinanceBench/FAB/FinQA capability score exists from this
-run.
+- `kernel_v3/retrieval/workbench.py` now builds focused excerpts around
+  requested line-item aliases and numeric/table markers, so target document
+  candidates expose the relevant row instead of only the start of a long span.
+- `kernel_v3/retrieval/evidence_compaction.py` now prefers same-line-item
+  numeric/table candidates when the EvidenceSpec asks for a target line item,
+  including generic aliases such as capex, PP&E, revenue, operating cash flow,
+  and cost of sales.
+- `kernel_v3/agent/runtime.py` now propagates the model-compiled execution
+  program into a `compiled_task_hint`, so extraction/workbench can see the same
+  EvidenceSpec and TransformSpec intent as the planner.
 
-GitHub push is also still blocked, but the observed failure mode has changed:
-remote reads succeed while `git push --verbose github kernel-v3:kernel-v3`
-hangs in the transfer phase and leaves the remote branch unchanged. The latest
-confirmed remote `kernel-v3` head is:
-
-```text
-cea001a96b01efe01339af56f9ddfc17c21dbd4b
-```
-
-These are external blockers. They are not finance capability scores.
+This keeps the semantic decision with the LLM. The host improves evidence
+presentation, candidate ordering, and trace plumbing; it does not encode the
+FinanceBench answer.
 
 ## 2026-06-17 Generic Formula Scaffold Follow-Up
 
@@ -204,14 +229,26 @@ period-change/VaR/percent-of-sales slice `3 passed, 273 deselected in 1.91s`;
 full finance engine `276 passed in 3.93s`; FinanceBench harness/report
 regression `59 passed in 398.51s`.
 
-The live model smoke was also attempted with the Windows `DEEPSEEK_API_KEY`
-injected into the WSL process and `HOLO_V3_LIVE_MODEL=1`. It reached the
-DeepSeek provider and again failed with `deepseek HTTP 402: Insufficient
-Balance`. No live FinanceBench score was produced.
+The latest focused engineering regression for the target-line evidence fix:
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_metric_intent.py tests/test_kernel_v3_retrieval_workbench.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_fact_ledger_extracts_html_column_cash_flow_rows tests/test_kernel_v3_finance_engine.py::test_html_table_fact_lines_preserve_parenthesized_capex_values tests/test_kernel_v3_finance_engine.py::test_finance_task_compiler_emits_direct_metric_evidence_for_capex_lookup tests/test_kernel_v3_finance_engine.py::test_finance_missing_fact_retrieval_action_preserves_target_document_binding -q
+```
+
+Latest focused result: retrieval/workbench and metric-intent tests
+`30 passed in 0.61s`; targeted finance engine fact/task-binding regression
+`4 passed in 0.47s`. These checks are engineering evidence only.
+
+The latest live FinanceBench debug rerun, with the Windows `DEEPSEEK_API_KEY`
+injected only into the child process and all benchmark gold/reference material
+kept out of model context, passed `financebench_id_03029` at `1/1`
+(`numeric_within_tolerance`). This is the reportable finance capability
+evidence for this single debug row.
 
 ## Next Honest Benchmark Step
 
-When a billable live provider is available, run `debug50` first as the tuning
-slice. Freeze configuration after trace review, then run FinanceBench `test100`
-as the held-out score. Do not report fake/offline tests as finance capability
+Continue with isolated live FinanceBench `debug50` as the tuning slice. Freeze
+configuration after trace review, then run FinanceBench `test100` as the
+held-out score. Do not report fake/offline tests as finance capability
 progress.

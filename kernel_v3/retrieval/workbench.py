@@ -228,7 +228,7 @@ def retrieval_workbench_packet(
         limit=WORKBENCH_REJECTED_EVIDENCE_LIMIT,
     )
     span_readers = _span_reader_diagnostics_by_document(spans)
-    accepted = [_evidence_summary(item, target_contract=target_contract) for item in selected_evidence]
+    accepted = [_evidence_summary(item, target_contract=target_contract, terms=selection_terms) for item in selected_evidence]
     rejected = [_rejected_summary(item, target_contract=target_contract) for item in selected_rejected]
     return {
         "task_goal": _string_value(metadata.get("root_goal") or metadata.get("task_goal") or goal.query),
@@ -255,7 +255,10 @@ def retrieval_workbench_packet(
             )
             for document, body in selected_documents
         ],
-        "extracted_spans": [_span_summary(item, target_contract=target_contract) for item in selected_spans],
+        "extracted_spans": [
+            _span_summary(item, target_contract=target_contract, terms=selection_terms)
+            for item in selected_spans
+        ],
         "accepted_evidence": accepted,
         "rejected_evidence": rejected,
         "target_document_candidates": _target_document_candidates(
@@ -263,6 +266,7 @@ def retrieval_workbench_packet(
             rejected=rejected,
             spans=selected_spans,
             target_contract=target_contract,
+            terms=selection_terms,
         ),
         "current_slot_state": _json_object(metadata.get("slot_state")),
         "current_claim_state": _json_object(metadata.get("claim_state")),
@@ -618,7 +622,15 @@ def _packet_selection_terms(*, goal: SearchGoal, metadata: JsonObject, compiled_
     terms.extend(_string_list(metadata.get("required_transforms")))
     terms.extend(_string_list(metadata.get("known_limitations")))
     for key in ("required_statement", "required_line_item", "company", "issuer", "doc_type", "doc_period"):
-        terms.append(_string_value(metadata.get(key)))
+        value = _string_value(metadata.get(key))
+        terms.append(value)
+        if key == "required_line_item":
+            terms.extend(_workbench_line_item_aliases(value))
+    binding = _json_object(metadata.get("target_document_binding"))
+    binding_line_item = _string_value(binding.get("required_line_item"))
+    if binding_line_item:
+        terms.append(binding_line_item)
+        terms.extend(_workbench_line_item_aliases(binding_line_item))
     terms.append(goal.query)
     task_spec = _json_object(compiled_hint.get("task_spec"))
     terms.extend(_string_list(task_spec.get("target_entities")))
@@ -629,8 +641,13 @@ def _packet_selection_terms(*, goal: SearchGoal, metadata: JsonObject, compiled_
         if not isinstance(spec, dict):
             continue
         for key in ("slot_name", "source_role", "target_period", "statement", "line_item"):
-            terms.append(_string_value(spec.get(key)))
+            value = _string_value(spec.get(key))
+            terms.append(value)
+            if key == "line_item":
+                terms.extend(_workbench_line_item_aliases(value))
         terms.extend(_string_list(spec.get("accepted_attributes")))
+        for attribute in _string_list(spec.get("accepted_attributes")):
+            terms.extend(_workbench_line_item_aliases(attribute))
         terms.extend(_string_list(spec.get("required_source_families")))
     transform_specs = compiled_hint.get("transform_specs") if isinstance(compiled_hint.get("transform_specs"), list) else []
     for spec in transform_specs:
@@ -755,6 +772,120 @@ def _selection_score(text: str, *, terms: list[str]) -> float:
     if re.search(r"\b-?\d[\d,]*(?:\.\d+)?%?\b", normalized):
         score += 1.5
     return score
+
+
+def _focused_excerpt(
+    text: str,
+    *,
+    terms: list[str],
+    target_contract: JsonObject,
+    metadata: JsonObject | None = None,
+    limit: int,
+) -> str:
+    normalized_text = " ".join(str(text or "").split())
+    if len(normalized_text) <= limit:
+        return normalized_text
+    markers = _focused_excerpt_markers(terms=terms, target_contract=target_contract, metadata=metadata or {})
+    if not markers:
+        return _truncate(normalized_text, limit)
+    lowered = normalized_text.casefold()
+    candidates: list[tuple[float, int, str]] = []
+    for marker in markers:
+        marker_norm = marker.casefold().strip()
+        if not marker_norm:
+            continue
+        start = 0
+        while True:
+            index = lowered.find(marker_norm, start)
+            if index < 0:
+                break
+            window = lowered[max(0, index - 260) : min(len(lowered), index + max(limit, 520))]
+            numeric_count = len(re.findall(r"\(?\d[\d,]*(?:\.\d+)?\)?", window))
+            score = float(len(marker_norm)) + min(20.0, numeric_count * 2.5)
+            if _table_or_statement_hint(window):
+                score += 8.0
+            if "html_table_fact_" in window or "html_table_" in window:
+                score += 6.0
+            if "value=" in window or "column_" in window:
+                score += 4.0
+            candidates.append((score, index, marker_norm))
+            start = index + max(1, len(marker_norm))
+    if not candidates:
+        return _truncate(normalized_text, limit)
+    _score, index, _marker = sorted(candidates, key=lambda item: (-item[0], item[1]))[0]
+    start = max(0, index - 260)
+    end = min(len(normalized_text), start + limit)
+    if end - start < limit and start > 0:
+        start = max(0, end - limit)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(normalized_text) else ""
+    return prefix + normalized_text[start:end] + suffix
+
+
+def _focused_excerpt_markers(
+    *,
+    terms: list[str],
+    target_contract: JsonObject,
+    metadata: JsonObject,
+) -> list[str]:
+    markers: list[str] = []
+    for value in terms:
+        markers.append(_string_value(value))
+        markers.extend(_workbench_line_item_aliases(_string_value(value)))
+    binding = _json_object(target_contract.get("binding"))
+    for key in ("target_line_item", "target_slot", "required_line_item"):
+        value = _string_value(metadata.get(key) or binding.get(key))
+        if value:
+            markers.append(value)
+            markers.extend(_workbench_line_item_aliases(value))
+    return _ordered_unique(
+        [
+            marker
+            for marker in markers
+            if marker and len(marker) >= 3 and not _low_value_selection_term(_normalize_selection_term(marker))
+        ]
+    )
+
+
+def _workbench_line_item_aliases(value: str) -> list[str]:
+    normalized = _normalize_selection_term(value)
+    if not normalized:
+        return []
+    compact = normalized.replace(" ", "")
+    if normalized in {"capital expenditures", "capital expenditure", "capex"} or (
+        "capital expenditure" in normalized or compact == "paymentstoacquirepropertyplantandequipment"
+    ):
+        return [
+            "purchases of property, plant and equipment",
+            "purchases of property plant and equipment",
+            "payments to acquire property, plant and equipment",
+            "payments to acquire property plant and equipment",
+            "purchase of property and equipment",
+            "purchases of pp&e",
+            "purchase of pp&e",
+            "capital expenditures",
+            "capital expenditure",
+            "capex",
+            "pp&e",
+        ]
+    if normalized in {"property plant and equipment net", "net property plant and equipment", "ppe net", "pp&e net"}:
+        return [
+            "property, plant and equipment, net",
+            "property plant and equipment net",
+            "property, plant and equipment net",
+            "property and equipment, net",
+            "net property, plant and equipment",
+            "net property plant and equipment",
+            "net pp&e",
+            "ppe net",
+        ]
+    if normalized in {"revenue", "revenues", "net sales", "net revenues"}:
+        return ["net sales", "net revenues", "total revenues", "sales and other operating revenues", "revenues"]
+    if normalized in {"operating cash flow", "cash flow from operations"}:
+        return ["net cash provided by operating activities", "cash flow from operations", "operating activities"]
+    if normalized in {"cost of sales", "cost of revenue", "cogs", "cost of goods sold"}:
+        return ["cost of sales", "cost of revenue", "cost of goods sold", "cost of goods and services sold"]
+    return []
 
 
 def _normalize_selection_term(value: object) -> str:
@@ -1023,14 +1154,25 @@ def _candidate_table_lines(text: str) -> list[str]:
     return [chunk.strip() for chunk in chunks if chunk.strip()][:1_500]
 
 
-def _span_summary(span: ExtractedSpan, *, target_contract: JsonObject | None = None) -> JsonObject:
+def _span_summary(
+    span: ExtractedSpan,
+    *,
+    target_contract: JsonObject | None = None,
+    terms: list[str] | None = None,
+) -> JsonObject:
     return {
         "span_id": span.span_id,
         "candidate_evidence_id": f"evidence-{span.span_id}",
         "source_id": span.source_id,
         "document_id": span.document_id,
         "score": span.score,
-        "text": _truncate(span.text, 280),
+        "text": _focused_excerpt(
+            span.text,
+            terms=terms or [],
+            target_contract=target_contract or {},
+            metadata=span.metadata,
+            limit=520,
+        ),
         "matched_terms": _string_list(span.metadata.get("matched_terms")),
         "text_mode": span.metadata.get("text_mode"),
         "is_target_document": _target_document_uri_match(_string_value(span.metadata.get("source_uri") or span.metadata.get("uri")), target_contract or {}),
@@ -1040,8 +1182,15 @@ def _span_summary(span: ExtractedSpan, *, target_contract: JsonObject | None = N
     }
 
 
-def _evidence_summary(evidence: EvidenceItem, *, target_contract: JsonObject | None = None) -> JsonObject:
+def _evidence_summary(
+    evidence: EvidenceItem,
+    *,
+    target_contract: JsonObject | None = None,
+    terms: list[str] | None = None,
+) -> JsonObject:
     qualification = evidence.diagnostics.get("qualification") if isinstance(evidence.diagnostics, dict) else {}
+    span_metadata = evidence.diagnostics.get("span_metadata") if isinstance(evidence.diagnostics, dict) else {}
+    span_metadata = span_metadata if isinstance(span_metadata, dict) else {}
     return {
         "evidence_id": evidence.evidence_id,
         "source_id": evidence.source_id,
@@ -1051,9 +1200,15 @@ def _evidence_summary(evidence: EvidenceItem, *, target_contract: JsonObject | N
         "title": _truncate(evidence.title, 180),
         "is_target_document": _target_document_uri_match(evidence.uri, target_contract or {}),
         "source_role_hint": _source_role_hint(evidence.uri, evidence.title, target_contract=target_contract or {}),
-        "text": _truncate(evidence.text, 320),
+        "text": _focused_excerpt(
+            evidence.text,
+            terms=terms or [],
+            target_contract=target_contract or {},
+            metadata=span_metadata,
+            limit=900 if _target_document_uri_match(evidence.uri, target_contract or {}) else 320,
+        ),
         "qualification": _bounded_dict(qualification if isinstance(qualification, dict) else {}, text_limit=180),
-        "span_metadata": _bounded_dict(evidence.diagnostics.get("span_metadata"), text_limit=180),
+        "span_metadata": _bounded_dict(span_metadata, text_limit=180),
     }
 
 
@@ -1125,6 +1280,7 @@ def _target_document_candidates(
     rejected: list[JsonObject],
     spans: list[ExtractedSpan],
     target_contract: JsonObject,
+    terms: list[str],
 ) -> list[JsonObject]:
     candidates: list[JsonObject] = []
     seen: set[str] = set()
@@ -1167,7 +1323,13 @@ def _target_document_candidates(
                 "title": span.metadata.get("source_title"),
                 "source_role_hint": "target_document_span",
                 "rescuable": True,
-                "text": _truncate(span.text, 900),
+                "text": _focused_excerpt(
+                    span.text,
+                    terms=terms,
+                    target_contract=target_contract,
+                    metadata=span.metadata,
+                    limit=900,
+                ),
                 "review_hint": "Extracted target-document span; if semantically useful, reference this evidence_id.",
             }
         )

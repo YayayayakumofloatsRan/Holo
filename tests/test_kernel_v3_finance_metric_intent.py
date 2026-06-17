@@ -206,6 +206,43 @@ def test_evidence_compaction_preserves_target_bound_line_item_slots() -> None:
     assert any(item["target_line_item"] == "revenue" for item in rejected)
 
 
+def test_evidence_compaction_prefers_target_numeric_capex_row_over_cash_flow_opening() -> None:
+    goal = SearchGoal(
+        goal_id="goal-3m-capex-row",
+        query="What is 3M FY2018 capital expenditures from the cash flow statement?",
+        metadata={"research_profile": "finance_fundamentals"},
+    )
+
+    selected, _rejected, diagnostics = compact_evidence_candidates(
+        [
+            _candidate(
+                "cash-flow-opening",
+                "HTML table blocks: Consolidated Statement of Cash Flows scale=millions "
+                "html_table_164_row_1: Years ended December 31 2018 2017 2016 "
+                "html_table_164_row_3: Net income including noncontrolling interest column_4=5,363",
+                target_line_item="capital expenditures",
+                target_period="2018",
+                start_offset=0,
+            ),
+            _candidate(
+                "investing-capex-row",
+                "Cash Flows from Investing Activities scale=millions "
+                "html_table_165_row_3: Years_ended_December_31=Purchases of property, plant and equipment (PP&E) "
+                "column_3=$ column_4=(1,577) column_7=(1,373) column_10=(1,420)",
+                target_line_item="capital expenditures",
+                target_period="2018",
+                start_offset=35000,
+            ),
+        ],
+        goal=goal,
+        research_profile=None,
+        limit=1,
+    )
+
+    assert [candidate.evidence.evidence_id for candidate in selected] == ["investing-capex-row"]
+    assert diagnostics["selected_target_line_items"] == ["capital expenditures"]
+
+
 def _candidate(
     evidence_id: str,
     text: str,

@@ -1110,6 +1110,82 @@ def test_target_document_binding_extracts_cash_flow_ppe_purchase_row() -> None:
     assert "1,577" in spans[0].text
 
 
+def test_workbench_packet_focuses_target_line_item_inside_long_evidence() -> None:
+    doc_link = "https://www.sec.gov/Archives/edgar/data/66740/000155837019000470/mmm-20181231x10k.htm"
+    binding = {
+        "company": "3M",
+        "doc_link": doc_link,
+        "doc_period": "2018",
+        "doc_type": "10k",
+        "required_statement": "cash_flow_statement",
+        "required_line_item": "capital expenditures",
+        "primary_source_required": True,
+    }
+    goal = SearchGoal(
+        goal_id="goal-workbench-focused-capex",
+        query="What is 3M FY2018 capital expenditures?",
+        metadata={
+            "target_document_binding": binding,
+            "compiled_task_hint": {
+                "task_spec": {"task_type": "filing_metric_lookup", "target_entities": ["3M"], "target_periods": ["2018"]},
+                "evidence_specs": [
+                    {
+                        "slot_name": "capital_expenditures",
+                        "accepted_attributes": ["capital expenditures", "purchases of property plant and equipment"],
+                        "target_period": "2018",
+                        "statement": "cash_flow_statement",
+                        "line_item": "capital expenditures",
+                    }
+                ],
+            },
+        },
+    )
+    evidence_text = (
+        "HTML table blocks: "
+        + " ".join(f"html_table_164_row_{index}: Operating activity placeholder {index} 1 2 3" for index in range(20))
+        + " Cash Flows from Investing Activities: scale=millions "
+        "html_table_165_row_1: Years ended December 31 | 2018 | 2017 | 2016 "
+        "html_table_165_row_3: Years_ended_December_31=Purchases of property, plant and equipment (PP&E) "
+        "column_3=$ column_4=(1,577) column_7=(1,373) column_10=(1,420)"
+    )
+    evidence = EvidenceItem(
+        evidence_id="evidence-target-capex-row",
+        goal_id=goal.goal_id,
+        span_id="span-target-capex-row",
+        document_id="doc-target-capex-row",
+        source_id="source-target-capex-row",
+        artifact_id="artifact-target-capex-row",
+        uri=doc_link,
+        title="3M 2018 10-K",
+        text=evidence_text,
+        score=1.0,
+        payload_hash="hash",
+        diagnostics={
+            "span_metadata": {
+                "target_line_item": "capital expenditures",
+                "target_statement": "cash_flow_statement",
+                "target_period": "2018",
+            }
+        },
+    )
+
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=[],
+        fetch_summaries=[],
+        documents=[],
+        spans=[],
+        evidence=[evidence],
+        citations=[],
+        rejected_evidence=[],
+    )
+
+    focused = packet["accepted_evidence"][0]["text"]
+    assert "Purchases of property, plant and equipment" in focused
+    assert "1,577" in focused
+    assert packet["target_document_candidates"][0]["text"] == focused
+
+
 def test_compiled_evidence_specs_drive_target_document_table_span_extraction() -> None:
     doc_link = "https://www.sec.gov/Archives/edgar/data/66740/000155837019000470/mmm-20181231x10k.htm"
     binding = {

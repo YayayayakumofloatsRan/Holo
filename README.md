@@ -84,15 +84,16 @@ evidence, demo status, known gaps, and near-term roadmap, see
 `docs/KERNEL_V3_PROJECT_STATUS_2026-06-14_ZH.md`. For a compact Chinese talk
 track and Q&A notes prepared for the recorded Windows browser demo, see
 `docs/KERNEL_V3_DEMO_TALK_NOTES_2026-06-14_ZH.md`.
-For the current 2026-06-17 finance problem-solving scoreboard and the live
-rerun blocker, see
+For the current 2026-06-17 finance problem-solving scoreboard and the latest
+live rerun notes, see
 `docs/KERNEL_V3_FINANCE_RESULTS_SNAPSHOT_2026-06-17.md`. It separates
 evidence-backed results, such as FinAgent full40 `38/40` live and `39/40`
 rescored, from FinanceBench held-out results that still require a fresh
-`test100` run after a billable live provider is available. The 2026-06-17
-minimal DeepSeek provider check saw the Windows `DEEPSEEK_API_KEY`, but the API
-still returned `HTTP_402_INSUFFICIENT_BALANCE`, so no live finance benchmark
-score can be reported from that run.
+`test100` run. After provider access was restored, an isolated 2026-06-17
+FinanceBench debug rerun on `financebench_id_03029` passed `1/1`
+(`numeric_within_tolerance`) with live retrieval, calculator trace, formula
+trace, claim ledger, numeric verifier, and synthesis gate active. This is a
+single debug-row capability result, not a held-out `test100` score.
 The 2026-06-16 framework review is consolidated in
 `docs/KERNEL_V3_FRAMEWORK_LESSONS_FINAL_2026-06-16_ZH.md`; use it as the primary
 report and talk reference for what Holo should absorb from LangChain,
@@ -110,6 +111,17 @@ For the latest decision-oriented report draft, use
 external framework references and Kernel v3 development record, then converts
 the lessons into concrete Kernel v3.1 architecture decisions, forbidden
 anti-patterns, and the next execution checklist.
+The 2026-06-17 architecture pivot is recorded in
+`docs/KERNEL_V3_FRAMEWORK_PIVOT_2026-06-17_ZH.md`. This is the timestamped
+decision point where finance capability work moves from repeated hand-written
+low-level SEC/document/table tool fixes toward mature open-source components:
+LangGraph for the double-layer agent loop, EdgarTools for SEC/EDGAR/XBRL,
+Docling for document/table conversion, OpenBB for broader financial data, and
+AutoGen later for multi-agent collaboration experiments. Holo still keeps the
+host-owned harness boundary: the LLM owns semantic financial judgment, while
+the host validates tools, records journal/fact/claim/formula traces, verifies
+results, preserves gold isolation, and reports only live benchmark evidence as
+finance capability.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in
@@ -173,11 +185,13 @@ nonrecurring events, revenue/inventory/expense drivers, restructuring
 liabilities, and remaining market-risk disclosures. In question-only
 static coverage, recognized FinanceBench formula plans and EvidenceSpec rows
 now reach `150/150`; this is code-regression evidence for the next live run,
-not a benchmark accuracy score. A fresh live attempt on 2026-06-17 again found
-only `DEEPSEEK_API_KEY` in Windows environment variables, successfully injected
-it into the WSL live model process, and reached DeepSeek, but the provider
-returned HTTP `402` insufficient balance, so no new live FinanceBench accuracy
-score is reported.
+not a benchmark accuracy score. The same 2026-06-17 line now includes a live
+debug fix for target line-item evidence binding: focused workbench excerpts,
+alias-aware target row selection, and compiled-program hint propagation moved
+the first FinanceBench doc-retrieval capex row from repeated missing-fact
+loops to a passed live answer with `237,555` tokens, `12` fetches, `202` facts,
+`202` claims, calculator/formula traces present, and verifier/synthesis gates
+passed.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,

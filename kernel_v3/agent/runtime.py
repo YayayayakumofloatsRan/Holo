@@ -730,6 +730,9 @@ class AgentRuntime:
             "source": str(compiled.diagnostics.get("source") or "task_compile_model"),
             "preflight": True,
         }
+        compiled_hint = _compiled_task_hint_from_program_dict(metadata["execution_program"])
+        if compiled_hint:
+            metadata["compiled_task_hint"] = compiled_hint
         metadata["execution_program_mode"] = "model_first"
         return replace(recipe, metadata=metadata)
 
