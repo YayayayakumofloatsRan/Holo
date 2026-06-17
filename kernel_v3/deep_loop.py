@@ -303,7 +303,7 @@ class DeepAgentLoopController(LoopControllerV3):
                 event_ref=self._last_ref(task.task_id, "event_ref"),
                 state_delta={"context_id": context.context_id, "loop_runtime": self.runtime_backend},
             )
-            scaffold_turn = _workbench_followup_scaffold_turn(
+            scaffold_turn = _tool_result_followup_scaffold_turn(
                 self.journal,
                 task_id=task.task_id,
                 run_id=task.run_id,
@@ -339,7 +339,7 @@ class DeepAgentLoopController(LoopControllerV3):
                 else:
                     turn = self._propose_turn(context, current_feedback)
                     preexecuted_items = None
-                    scaffold_turn = _workbench_followup_scaffold_turn(
+                    scaffold_turn = _tool_result_followup_scaffold_turn(
                         self.journal,
                         task_id=task.task_id,
                         run_id=task.run_id,
@@ -1643,6 +1643,242 @@ def _workbench_followup_scaffold_turn(
     )
 
 
+def _tool_result_followup_scaffold_turn(
+    journal: Any,
+    *,
+    task_id: str,
+    run_id: str,
+    input_text: str,
+    feedback: Feedback | None,
+    proposed_turn: AssistantTurn,
+) -> AssistantTurn | None:
+    slot_bind = _finance_slot_bind_followup_scaffold_turn(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        input_text=input_text,
+        feedback=feedback,
+        proposed_turn=proposed_turn,
+    )
+    if slot_bind is not None:
+        return slot_bind
+    return _workbench_followup_scaffold_turn(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        input_text=input_text,
+        feedback=feedback,
+        proposed_turn=proposed_turn,
+    )
+
+
+def _finance_slot_bind_followup_scaffold_turn(
+    journal: Any,
+    *,
+    task_id: str,
+    run_id: str,
+    input_text: str,
+    feedback: Feedback | None,
+    proposed_turn: AssistantTurn,
+) -> AssistantTurn | None:
+    if not _feedback_requires_finance_slot_bind_followup(feedback):
+        return None
+    record, data = _latest_finance_slot_bind_followup_record(journal, task_id=task_id, run_id=run_id)
+    if record is None:
+        return None
+    missing_slots = _json_string_list(data.get("missing_slots"))
+    next_action = data.get("next_action") if isinstance(data.get("next_action"), dict) else {}
+    tool_name = str(next_action.get("tool") or next_action.get("name") or "").strip()
+    if not tool_name:
+        return None
+    arguments = next_action.get("arguments") if isinstance(next_action.get("arguments"), dict) else {}
+    arguments = dict(arguments)
+    reason = str(next_action.get("reason") or data.get("reason_summary") or "finance_slot_bind_followup").strip()
+    if tool_name == "retrieval.run":
+        arguments = _finance_slot_bind_retrieval_arguments(
+            input_text,
+            missing_slots=missing_slots,
+            next_action=next_action,
+            reason=reason,
+            existing=arguments,
+        )
+    if not arguments:
+        return None
+    if tool_name == "retrieval.run":
+        query = str(arguments.get("query") or "").strip().casefold()
+        if query and query in _attempted_retrieval_queries(journal, task_id=task_id, run_id=run_id):
+            return None
+    metadata = arguments.get("metadata") if isinstance(arguments.get("metadata"), dict) else {}
+    metadata = {
+        **dict(metadata),
+        "host_scaffold": "model_finance_slot_bind_followup",
+        "host_scaffold_role": "execute_model_declared_next_action_without_selecting_answer_facts",
+        "finance_slot_bind_followup": True,
+        "finance_slot_bind_ref": getattr(record, "record_id", None),
+        "semantic_missing_slots": missing_slots[:24],
+        "model_next_action": _compact_json_object(next_action, limit=12),
+        "task_goal": _compact_task_goal(input_text),
+        "source_authority_requirement": "primary",
+    }
+    arguments["metadata"] = metadata
+    attempted = _attempted_tool_payloads(journal, task_id=task_id, run_id=run_id, tool_name=tool_name)
+    fingerprint = _payload_fingerprint(arguments)
+    proposed_same_tool = [call for call in proposed_turn.tool_calls if call.name == tool_name]
+    if proposed_same_tool and any(_payload_fingerprint(call.arguments) == fingerprint for call in proposed_same_tool):
+        return None
+    if fingerprint in attempted:
+        return None
+    return AssistantTurn(
+        turn_id=f"turn-finance-slot-bind-followup-{_safe_action_id(str(getattr(record, 'record_id', 'slot-bind')))}",
+        message="Executing finance slot-bind follow-up.",
+        tool_calls=[
+            ToolCallRequest(
+                tool_call_id="tc-finance-slot-bind-followup",
+                name=tool_name,
+                arguments=arguments,
+                reason=reason or "finance_slot_bind_followup",
+                side_effect_class=_next_action_side_effect_class(tool_name),
+            )
+        ],
+        final_answer=None,
+        stop_reason=None,
+        reasons=[
+            "host_scaffold_model_finance_slot_bind_followup",
+            "finance_slot_bind_followup",
+            f"source_turn:{proposed_turn.turn_id}",
+        ],
+    )
+
+
+def _feedback_requires_finance_slot_bind_followup(feedback: Feedback | None) -> bool:
+    if feedback is None or feedback.status != "continue":
+        return False
+    normalized = {str(item).strip().lower().replace("-", "_") for item in feedback.missing_evidence}
+    return "finance_slot_bind_followup" in normalized
+
+
+def _latest_finance_slot_bind_followup_record(journal: Any, *, task_id: str, run_id: str) -> tuple[Any | None, JsonObject]:
+    records = getattr(journal, "records", None)
+    if not callable(records):
+        return None, {}
+    for record in reversed(records(task_id=task_id)):
+        if getattr(record, "run_id", None) != run_id:
+            continue
+        data = record.data if isinstance(record.data, dict) else {}
+        payload: JsonObject = {}
+        if getattr(record, "kind", None) == "finance_slot_bind":
+            payload = dict(data)
+        elif getattr(record, "kind", None) == "observation" and str(data.get("source") or "") == "tool:finance.slot_bind":
+            content = data.get("content") if isinstance(data.get("content"), dict) else {}
+            payload = dict(content)
+        if not payload:
+            continue
+        missing_slots = _json_string_list(payload.get("missing_slots"))
+        next_action = payload.get("next_action") if isinstance(payload.get("next_action"), dict) else {}
+        decision = str(payload.get("decision") or payload.get("status") or "").strip().casefold()
+        if missing_slots and next_action and decision in {
+            "needs_more_evidence",
+            "missing_slots",
+            "failed",
+            "need_more_evidence",
+            "continue",
+        }:
+            return record, payload
+    return None, {}
+
+
+def _finance_slot_bind_retrieval_arguments(
+    input_text: str,
+    *,
+    missing_slots: list[str],
+    next_action: JsonObject,
+    reason: str,
+    existing: JsonObject,
+) -> JsonObject:
+    result = dict(existing)
+    raw_queries = [
+        *_json_string_list(next_action.get("queries")),
+        *_json_string_list(next_action.get("next_queries")),
+        *_json_string_list(next_action.get("source_urls")),
+        *_json_string_list(next_action.get("target_urls")),
+        *_json_string_list(next_action.get("next_document_targets")),
+    ]
+    for key in ("query", "url", "source_url", "target_url", "document_url"):
+        value = next_action.get(key)
+        if isinstance(value, str) and value.strip():
+            raw_queries.insert(0, value.strip())
+    query = str(result.get("query") or "").strip()
+    if not query:
+        query = next((item for item in raw_queries if item), "")
+    if not query:
+        query = _source_family_followup_query(
+            input_text,
+            source_families=_json_string_list(next_action.get("source_families")),
+            missing_slots=[*missing_slots, reason],
+        )
+    if not query:
+        return {}
+    queries = _ordered_unique_strings([query, *raw_queries])[:8]
+    result.setdefault("query", query)
+    result.setdefault("queries", queries)
+    result.setdefault("search_strategy", "structured")
+    result.setdefault("max_queries", max(3, min(8, len(queries))))
+    result.setdefault("max_sources", 24)
+    result.setdefault("max_fetches", 12)
+    result.setdefault("max_spans_per_document", 8)
+    return result
+
+
+def _attempted_tool_payloads(journal: Any, *, task_id: str, run_id: str, tool_name: str) -> set[str]:
+    records = getattr(journal, "records", None)
+    if not callable(records):
+        return set()
+    attempted: set[str] = set()
+    for record in records(task_id=task_id, kind="action"):
+        if getattr(record, "run_id", None) != run_id:
+            continue
+        data = record.data if isinstance(record.data, dict) else {}
+        if data.get("name") != tool_name:
+            continue
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        attempted.add(_payload_fingerprint(payload))
+    return attempted
+
+
+def _payload_fingerprint(value: object) -> str:
+    try:
+        return json.dumps(value if isinstance(value, dict) else {}, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return json.dumps(_compact_json_object(value, limit=24), ensure_ascii=False, sort_keys=True)
+
+
+def _compact_json_object(value: object, *, limit: int) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for index, (key, item) in enumerate(value.items()):
+        if index >= limit:
+            break
+        if isinstance(item, (str, int, float, bool)) or item is None:
+            result[str(key)] = item if not isinstance(item, str) else item[:500]
+        elif isinstance(item, list):
+            result[str(key)] = item[:8]
+        elif isinstance(item, dict):
+            result[str(key)] = _compact_json_object(item, limit=8)
+    return result
+
+
+def _next_action_side_effect_class(tool_name: str) -> str:
+    name = tool_name.casefold()
+    if name in {"retrieval.run", "sec.edgar.financials", "document.docling.convert", "web.search", "web.fetch"}:
+        return "network"
+    if "write" in name:
+        return "write"
+    if "shell" in name or "bash" in name:
+        return "shell"
+    return "read"
+
+
 def _feedback_requires_retrieval_workbench_followup(feedback: Feedback | None) -> bool:
     if feedback is None or feedback.status != "continue":
         return False
@@ -1752,6 +1988,8 @@ def _feedback_continuation_contract(feedback: Feedback | None) -> JsonObject:
         for marker in (
             "retrieval workbench followup",
             "retrieval workbench follow up",
+            "finance slot bind followup",
+            "finance slot bind follow up",
             "finance workbench missing slots",
             "finance formula trace required",
             "formula trace required",

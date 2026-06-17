@@ -18,6 +18,7 @@ from kernel_v3.deep_loop import (
     ToolCallParseError,
     ToolCallRequest,
     _assistant_turn_prompt,
+    _finance_slot_bind_followup_scaffold_turn,
     _workbench_followup_scaffold_turn,
 )
 from kernel_v3.journal import JournalStore
@@ -56,6 +57,8 @@ class FakePlannerWithStreamingProbe(FakeTurnPlanner):
         self.stream_calls += 1
         if feedback is not None and "retrieval_workbench_followup" in feedback.missing_evidence:
             raise AssertionError("workbench follow-up should be scaffolded before streaming")
+        if feedback is not None and "finance_slot_bind_followup" in feedback.missing_evidence:
+            raise AssertionError("finance slot-bind follow-up should be scaffolded before streaming")
         return None
 
 
@@ -256,6 +259,118 @@ def test_streaming_loop_executes_pending_workbench_followup_before_model_turn() 
     assert followup.payload["metadata"]["workbench_followup"] is True
     assistant_turns = journal.records(task_id=result.task_id, kind="assistant_turn")
     assert assistant_turns[1].data["turn_id"].startswith("turn-workbench-followup-")
+
+
+def test_finance_slot_bind_followup_scaffold_executes_model_declared_retrieval() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-slot-followup",
+        run_id="run-1",
+        step_id="step-slot",
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "failed",
+            "decision": "needs_more_evidence",
+            "missing_slots": ["net_ppne"],
+            "next_action": {
+                "tool": "retrieval.run",
+                "query": "3M FY2018 balance sheet net property plant equipment",
+                "reason": "No balance-sheet PP&E net fact was found in the visible ledger.",
+            },
+            "reason_summary": "Need one more primary filing fact before calculator.",
+        },
+    )
+    feedback = Feedback(
+        feedback_id="fb-slot-followup",
+        run_id="run-1",
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=["finance_slot_bind_followup", "missing_slot:net_ppne"],
+    )
+
+    scaffold = _finance_slot_bind_followup_scaffold_turn(
+        journal,
+        task_id="task-slot-followup",
+        run_id="run-1",
+        input_text="Find 3M FY2018 capital intensity using net PP&E.",
+        feedback=feedback,
+        proposed_turn=AssistantTurn(
+            turn_id="turn-premature",
+            message=None,
+            tool_calls=[],
+            final_answer="partial answer",
+        ),
+    )
+
+    assert scaffold is not None
+    call = scaffold.tool_calls[0]
+    assert call.name == "retrieval.run"
+    assert call.arguments["query"] == "3M FY2018 balance sheet net property plant equipment"
+    assert call.arguments["metadata"]["finance_slot_bind_followup"] is True
+    assert call.arguments["metadata"]["semantic_missing_slots"] == ["net_ppne"]
+    assert call.arguments["metadata"]["model_next_action"]["tool"] == "retrieval.run"
+
+
+def test_streaming_loop_executes_pending_finance_slot_bind_followup_before_model_turn() -> None:
+    journal = JournalStore.in_memory()
+    registry = ToolRegistry()
+    registry.register("seed.read", _finance_slot_bind_seed_tool(journal))
+    registry.register("retrieval.run", _read_tool("retrieval"))
+    planner = FakePlannerWithStreamingProbe(
+        [
+            AssistantTurn(
+                turn_id="turn-seed-slot-bind",
+                message="create slot-bind follow-up state",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="tc-seed-slot-bind",
+                        name="seed.read",
+                        arguments={"query": "seed"},
+                        reason="seed slot-bind decision",
+                    )
+                ],
+            )
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator(
+            [
+                {
+                    "status": "continue",
+                    "stop_reason": None,
+                    "answer": None,
+                    "missing_evidence": ["finance_slot_bind_followup", "missing_slot:net_ppne"],
+                },
+                {
+                    "status": "final_answer_ready",
+                    "stop_reason": "completed",
+                    "answer": "done",
+                    "missing_evidence": [],
+                },
+            ]
+        ),
+        max_steps=4,
+        max_tool_calls=4,
+    )
+
+    result = loop.run("Find 3M FY2018 net PP&E from the filing.")
+
+    assert result.status == "completed"
+    assert result.answer == "done"
+    assert planner.stream_calls == 1
+    assert [action.name for action in registry.executed_actions] == ["seed.read", "retrieval.run"]
+    followup = registry.executed_actions[-1]
+    assert followup.payload["query"] == "3M FY2018 net PP&E balance sheet"
+    assert followup.payload["metadata"]["finance_slot_bind_followup"] is True
+    assistant_turns = journal.records(task_id=result.task_id, kind="assistant_turn")
+    assert assistant_turns[1].data["turn_id"].startswith("turn-finance-slot-bind-followup-")
 
 
 def test_finance_workloop_does_not_finalize_on_workbench_fail_with_missing_slots() -> None:
@@ -1474,6 +1589,46 @@ def _workbench_seed_tool(journal: JournalStore):
             status="ok",
             source=f"tool:{action.name}",
             content={"seeded_workbench_followup": True},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
+
+
+def _finance_slot_bind_seed_tool(journal: JournalStore):
+    def execute(action: CandidateAction) -> Observation:
+        host_context = action.payload.get("_host_context") if isinstance(action.payload, dict) else {}
+        host_context = host_context if isinstance(host_context, dict) else {}
+        task_id = str(host_context.get("task_id") or "task-unknown")
+        run_id = str(host_context.get("run_id") or "run-unknown")
+        step_id = str(host_context.get("step_id") or "step-unknown")
+        journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            kind="finance_slot_bind",
+            data={
+                "schema": "holo.kernel_v3.finance_slot_bind.v1",
+                "status": "failed",
+                "decision": "needs_more_evidence",
+                "missing_slots": ["net_ppne"],
+                "next_action": {
+                    "tool": "retrieval.run",
+                    "query": "3M FY2018 net PP&E balance sheet",
+                    "reason": "Need target filing balance-sheet PP&E net evidence.",
+                },
+                "reason_summary": "Need missing balance-sheet PP&E net fact.",
+            },
+        )
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source=f"tool:{action.name}",
+            content={"seeded_finance_slot_bind_followup": True},
             observed_at_ms=0,
             action_id=action.action_id,
             tool_call_id=None,

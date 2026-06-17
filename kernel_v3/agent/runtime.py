@@ -4293,6 +4293,7 @@ def _finance_working_state_for_prompt(
     missing_slots = _ordered_unique(
         [
             *_string_list(latest_slot_frame.get("missing_slots")),
+            *_string_list(latest_slot_bind.get("missing_slots")),
             *_string_list(latest_transform_plan.get("missing_slots")),
             *_string_list(latest_verification.get("missing_slots")),
             *_string_list(execution_program.get("missing_slots")),
@@ -4305,6 +4306,8 @@ def _finance_working_state_for_prompt(
         attention.append("source-grounded claims are available; bind them to the disclosure or context slots before synthesis")
     if missing_slots:
         attention.append("missing finance slots remain; decide whether retrieval, calculation, verification, or a limitation is the best next move")
+    if _string_list(latest_slot_bind.get("missing_slots")) and latest_slot_bind.get("next_action"):
+        attention.append("latest finance slot binding reports missing slots and a model-declared next action; resolve it before final synthesis")
     if compact_facts and not compact_traces:
         attention.append("finance facts are available but no calculator FormulaTrace is present yet")
     if compact_traces and not latest_verification:
@@ -4427,6 +4430,7 @@ def _finance_workbench_state_for_prompt(
         "schema": "holo.kernel_v3.finance_workbench_state.v1",
         "current_phase": phase,
         "missing_slots": missing_slots[:16],
+        "slot_bind_next_action": latest_slot_bind.get("next_action") if isinstance(latest_slot_bind.get("next_action"), dict) else {},
         "transform_spec_count": len(transform_specs),
         "fact_count": len(compact_facts),
         "claim_count": len(compact_claims),
@@ -6200,6 +6204,19 @@ class _RecipeEvaluator:
                 artifact_store=self.artifact_store,
                 observation=observation,
             )
+            slot_bind_followup = _finance_slot_bind_followup_feedback(
+                context,
+                recipe=self.recipe,
+            )
+            if slot_bind_followup:
+                return _feedback(
+                    run_id,
+                    self.calls,
+                    "continue",
+                    None,
+                    None,
+                    slot_bind_followup,
+                )
             workbench_missing = _finance_workbench_missing_slot_feedback(
                 context,
                 recipe=self.recipe,
@@ -6444,6 +6461,43 @@ def _finance_workbench_missing_slot_feedback(
             *[f"missing_slot:{slot}" for slot in missing_slots[:8]],
         ]
         )
+
+
+def _finance_slot_bind_followup_feedback(
+    context: ContextBundle,
+    *,
+    recipe: TaskRecipe,
+) -> list[str]:
+    if recipe.mode != "retrieval_answer":
+        return []
+    state = context.state.get("finance_working_state")
+    state = state if isinstance(state, dict) else {}
+    slot_bind = state.get("slot_bind")
+    slot_bind = slot_bind if isinstance(slot_bind, dict) else {}
+    missing_slots = _string_list(slot_bind.get("missing_slots"))
+    if not missing_slots:
+        return []
+    next_action = slot_bind.get("next_action")
+    next_action = next_action if isinstance(next_action, dict) else {}
+    if not next_action:
+        return []
+    verification = state.get("numeric_verification")
+    verification = verification if isinstance(verification, dict) else {}
+    if verification.get("status") == "passed":
+        return []
+    decision = _string_value(slot_bind.get("decision")) or _string_value(slot_bind.get("status")) or "missing_slots"
+    normalized = decision.strip().casefold()
+    if normalized not in {"needs_more_evidence", "need_more_evidence", "missing_slots", "failed", "continue"}:
+        return []
+    tool = _string_value(next_action.get("tool")) or _string_value(next_action.get("name"))
+    return _ordered_unique(
+        [
+            "finance_slot_bind_followup",
+            f"finance_slot_bind_decision:{decision}",
+            *([f"next_tool:{tool}"] if tool else []),
+            *[f"missing_slot:{slot}" for slot in missing_slots[:8]],
+        ]
+    )
 
 
 def _finance_execution_program_transform_feedback(

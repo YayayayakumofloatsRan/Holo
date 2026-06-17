@@ -223,3 +223,54 @@ loop 合同修复，不记录为 FinanceBench 准确率提升。
 - tool discovery 结果的排序/分组进一步按 finance task family 优化，但不能做题目规则打表。
 - SEC/EDGAR、XBRL、calculator、slot_bind、numeric verifier 作为同一种 ToolCallRequest 接口暴露。
 - FinanceBench debug50 按题型分组跑 live 调试，失败必须归因到 loop/tool/prompt/verification 的通用缺口。
+
+## 9. 2026-06-18 tool-result context modifier 补齐
+
+用户再次强调：优先照搬成熟 agent loop 的实现思想，不要继续自研零散补丁。
+本轮重新对照本地 TypeScript 项目的工具编排层，关键差异不是语言，而是成熟
+loop 把 tool result 当成下一轮上下文修改器：
+
+- 工具调用不是一次性输出；工具执行时携带 `ToolUseContext`。
+- 工具结果可以产生 context modifier / next action。
+- 下一轮 planner 看到的是已经被工具结果更新过的工作状态。
+- loop 必须根据工具结果继续行动，不能只把结果写入日志供事后展示。
+
+Holo 已经有 `StreamingToolExecutor`、`ToolUseContext`、`tool.discovery` 和
+`artifact.read`，但 live trace 暴露出一个 P0 缺口：`finance.slot_bind`
+已经能声明 `missing_slots` 和 `next_action`，主循环却没有稳定把这个信号转成
+下一轮工具调用。典型失败是 `financebench_id_04672`：slot binder 判断缺少
+balance-sheet net PP&E，并建议继续检索，但 loop 在 streaming 路径里继续重复
+读取 artifact。
+
+本轮补齐：
+
+- `finance_working_state` 现在把 latest `finance.slot_bind` 的 `missing_slots`
+  纳入统一缺槽集合，并把 `slot_bind.next_action` 暴露到 workbench state。
+- `_RecipeEvaluator` 在 retrieval/finance 模式下，如果 slot_bind 声明
+  `missing_slots + next_action` 且 numeric verification 尚未通过，会返回
+  `finance_slot_bind_followup` feedback，阻止 premature final。
+- `DeepAgentLoopController` 的 follow-up 入口从单一 workbench scaffold 扩展为
+  `tool_result_followup_scaffold`：先处理 `finance_slot_bind_followup`，再处理
+  `retrieval_workbench_followup`。
+- `finance_slot_bind_followup` 不替模型选择事实或答案，只执行模型已经声明的
+  `next_action`。当 next action 是 `retrieval.run` 且模型只给出 reason/missing
+  slots 时，host 只组装检索 payload，让检索仍走正常 policy/tool/journal 边界。
+- 增加重复 query 保护，避免同一 slot_bind follow-up query 循环执行。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase61_workloop.py -q
+```
+
+结果：
+
+- `23 passed in 3.44s`
+- `298 passed in 8.72s`
+- `31 passed in 9.02s`
+
+说明：这是 agent loop 合同修复，证明 tool result 能驱动下一轮工具调用；不是
+FinanceBench/FinQA/live accuracy 成绩。金融指标仍必须来自在线 live run，且
+gold/reference 不进入模型上下文。

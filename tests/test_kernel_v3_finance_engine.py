@@ -33,6 +33,7 @@ from kernel_v3.agent.runtime import (
     _model_compiled_program_authorizes_numeric_preflight,
     _finance_slot_bind_plans_from_model,
     _finance_slot_bind_prompt,
+    _finance_slot_bind_followup_feedback,
     _report_with_finance_formula_traces,
     _host_semantic_fallbacks_enabled,
     _rank_finance_facts_for_model,
@@ -1918,6 +1919,7 @@ def test_finance_working_state_for_prompt_summarizes_facts_traces_and_verifier_w
     assert "inspect missing numeric values" in state["numeric_verification"]["repair_options"][0]
     assert state["presence"] == {
         "finance_facts": True,
+        "claim_ledger": False,
         "execution_program": False,
         "slot_frame": True,
         "slot_bind": True,
@@ -2152,6 +2154,80 @@ def test_finance_working_state_reads_model_callable_slot_bind_tool_observation()
     assert state["slot_bind"]["decision"] == "ready"
     assert state["slot_bind"]["accepted_formula_plan_count"] == 1
     assert state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+
+
+def test_finance_working_state_exposes_slot_bind_missing_next_action_for_loop() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-finance-slot-bind-missing",
+        run_id="run-1",
+        step_id="step-slot-bind-tool",
+        kind="observation",
+        data={
+            "observation_id": "obs-slot-bind-missing",
+            "run_id": "run-1",
+            "kind": "finance_slot_bind",
+            "status": "ok",
+            "source": f"tool:{FINANCE_SLOT_BIND_TOOL_NAME}",
+            "content": {
+                "schema": "holo.kernel_v3.finance_slot_bind_tool_result.v1",
+                "status": "missing_slots",
+                "decision": "needs_more_evidence",
+                "missing_slots": ["net_ppne"],
+                "next_action": {
+                    "tool": "retrieval.run",
+                    "query": "3M FY2018 balance sheet net PP&E",
+                    "reason": "Need primary filing balance-sheet evidence.",
+                },
+                "reason_summary": "Model could not bind net PP&E from visible facts.",
+            },
+            "observed_at_ms": 1,
+            "action_id": "act-slot-bind-missing",
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-slot-bind-missing", run_id="run-1")
+
+    assert state["presence"]["slot_bind"] is True
+    assert state["presence"]["missing_slots"] is True
+    assert state["missing_slots"] == ["net_ppne"]
+    assert state["slot_bind"]["next_action"]["tool"] == "retrieval.run"
+    assert state["workbench"]["slot_bind_next_action"]["query"] == "3M FY2018 balance sheet net PP&E"
+    assert any("model-declared next action" in item for item in state["model_attention"])
+
+
+def test_recipe_evaluator_turns_slot_bind_missing_next_action_into_continue_feedback() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+    context = ContextBundle(
+        context_id="ctx-slot-bind-followup",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-slot-bind-followup",
+            "run_id": "run-1",
+            "finance_working_state": {
+                "schema": "holo.kernel_v3.finance_working_state.v1",
+                "slot_bind": {
+                    "status": "missing_slots",
+                    "decision": "needs_more_evidence",
+                    "missing_slots": ["net_ppne"],
+                    "next_action": {"tool": "retrieval.run", "query": "3M FY2018 net PP&E"},
+                },
+                "numeric_verification": {},
+            },
+        },
+        token_budget={},
+    )
+
+    feedback = _finance_slot_bind_followup_feedback(context, recipe=recipe)
+
+    assert "finance_slot_bind_followup" in feedback
+    assert "next_tool:retrieval.run" in feedback
+    assert "missing_slot:net_ppne" in feedback
 
 
 def test_finance_working_state_for_prompt_is_absent_without_finance_anchor() -> None:

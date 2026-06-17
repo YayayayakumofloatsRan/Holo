@@ -241,6 +241,18 @@ The workloop also detects repeated `artifact.read` after three identical reads.
 Targeted structural tests pass (`21` deep-loop tests, `31` workloop tests).
 The attempted live rerun was blocked by sandbox escalation review timeouts, so
 this is a loop-contract repair, not a new FinanceBench accuracy claim.
+The next 2026-06-18 checkpoint tightens the TypeScript-loop parity further by
+turning finance tool results into loop-driving context modifiers. `finance.slot_bind`
+already returned model-owned `missing_slots` and `next_action`; Kernel v3 now
+projects those fields into `finance_working_state`, evaluator feedback emits
+`finance_slot_bind_followup` instead of allowing premature finalization, and the
+deep loop scaffolds the model-declared next tool call before invoking the
+streaming planner. For `retrieval.run` follow-ups, the host only packages the
+model-declared query or missing-slot rationale into a normal retrieval payload;
+it does not select answer facts or hard-code benchmark rows. Targeted structural
+tests pass (`23` deep-loop tests, `298` finance-engine tests, `31` workloop
+tests). This is still a loop-contract improvement, not a FinanceBench/FinQA
+score claim.
 The streaming path now also mirrors the inspected TypeScript
 `StreamingToolExecutor` scheduling rule: a streamed tool starts immediately
 when possible, explicitly concurrency-safe tools may run together, and exclusive
