@@ -77,3 +77,53 @@ def test_openai_compatible_payload_uses_native_tools_without_json_response_forma
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
     assert "response_format" not in payload
+
+
+def test_native_tool_surface_defers_should_defer_tools_but_keeps_always_load() -> None:
+    always = ToolManifest(
+        name="tool.discovery",
+        version="1",
+        resource_kind="tooling",
+        operator_kind="discover",
+        side_effect_class="read",
+        permissions_required=[],
+        enabled=True,
+        description="Discover tools.",
+        input_schema={},
+        runtime={"always_load": True},
+    )
+    direct = ToolManifest(
+        name="calculator.compute",
+        version="1",
+        resource_kind="calculator",
+        operator_kind="compute",
+        side_effect_class="read",
+        permissions_required=[],
+        enabled=True,
+        description="Compute arithmetic.",
+        input_schema={"expression": {"type": "str", "required": True}},
+    )
+    deferred = ToolManifest(
+        name="sec.edgar.financials",
+        version="1",
+        resource_kind="sec_edgar",
+        operator_kind="financials",
+        side_effect_class="network",
+        permissions_required=["network:fetch"],
+        enabled=True,
+        description="Fetch SEC financial statements.",
+        input_schema={"identifier": {"type": "str", "required": True}},
+        runtime={"should_defer": True},
+    )
+
+    surface = openai_native_tool_surface(
+        [deferred, direct, always],
+        allowed_tool_names={"tool.discovery", "calculator.compute", "sec.edgar.financials"},
+    )
+
+    exposed = set(surface.name_map.values())
+    assert "tool.discovery" in exposed
+    assert "calculator.compute" in exposed
+    assert "sec.edgar.financials" not in exposed
+    assert surface.deferred_tools[0]["name"] == "sec.edgar.financials"
+    assert surface.to_parameters()["native_tool_deferred"][0]["load_hint"].startswith("Use tool.discovery")

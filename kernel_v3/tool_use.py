@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
@@ -19,6 +21,24 @@ TOOL_USE_CONTEXT_SCHEMA = "holo.kernel_v3.tool_use_context.v1"
 TOOL_EXECUTION_EVENT_SCHEMA = "holo.kernel_v3.tool_execution_event.v1"
 
 
+class ToolAbortSignal:
+    def __init__(self, *, signal_id: str) -> None:
+        self.signal_id = signal_id
+        self._event = threading.Event()
+        self._reason = ""
+
+    def request(self, reason: str) -> None:
+        self._reason = str(reason or "abort_requested")
+        self._event.set()
+
+    def requested(self) -> bool:
+        return self._event.is_set()
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+
 @dataclass(frozen=True)
 class ToolUseContext:
     task_id: str
@@ -33,6 +53,9 @@ class ToolUseContext:
     policy_reason: str
     allowed_tool_names: list[str]
     runtime_spec: JsonObject = field(default_factory=dict)
+    progress_channel_id: str | None = None
+    abort_signal_id: str | None = None
+    timeout_seconds: int | None = None
 
     def to_execution_context(self) -> JsonObject:
         return {
@@ -49,6 +72,9 @@ class ToolUseContext:
             "policy_reason": self.policy_reason,
             "allowed_tool_names": list(self.allowed_tool_names),
             "runtime_spec": dict(self.runtime_spec),
+            "progress_channel_id": self.progress_channel_id,
+            "abort_signal_id": self.abort_signal_id,
+            "timeout_seconds": self.timeout_seconds,
         }
 
 
@@ -174,6 +200,80 @@ class StreamingToolExecutor:
                 detail=detail,
             )
         )
+
+
+_TOOL_CONTROL_LOCK = threading.RLock()
+_PROGRESS_CHANNELS: dict[str, Callable[[ToolExecutionEvent], None]] = {}
+_ABORT_SIGNALS: dict[str, ToolAbortSignal] = {}
+
+
+@contextmanager
+def tool_execution_control(
+    *,
+    progress_channel_id: str,
+    abort_signal: ToolAbortSignal,
+    emit_event: Callable[[ToolExecutionEvent], None],
+):
+    with _TOOL_CONTROL_LOCK:
+        _PROGRESS_CHANNELS[progress_channel_id] = emit_event
+        _ABORT_SIGNALS[abort_signal.signal_id] = abort_signal
+    try:
+        yield
+    finally:
+        with _TOOL_CONTROL_LOCK:
+            _PROGRESS_CHANNELS.pop(progress_channel_id, None)
+            _ABORT_SIGNALS.pop(abort_signal.signal_id, None)
+
+
+def emit_tool_progress(payload_or_context: object, *, status: str = "running", detail: JsonObject | None = None) -> bool:
+    context = _host_context(payload_or_context)
+    channel_id = str(context.get("progress_channel_id") or "")
+    if not channel_id:
+        return False
+    with _TOOL_CONTROL_LOCK:
+        emit = _PROGRESS_CHANNELS.get(channel_id)
+    if emit is None:
+        return False
+    emit(
+        ToolExecutionEvent(
+            event_type="progress",
+            tool_call_id=str(context.get("tool_call_id") or ""),
+            action_id=str(context.get("action_id") or ""),
+            tool_name=str(context.get("tool_name") or ""),
+            status=status,
+            detail=dict(detail or {}),
+        )
+    )
+    return True
+
+
+def tool_abort_requested(payload_or_context: object) -> bool:
+    context = _host_context(payload_or_context)
+    signal_id = str(context.get("abort_signal_id") or "")
+    if not signal_id:
+        return False
+    with _TOOL_CONTROL_LOCK:
+        signal = _ABORT_SIGNALS.get(signal_id)
+    return bool(signal is not None and signal.requested())
+
+
+def tool_abort_reason(payload_or_context: object) -> str:
+    context = _host_context(payload_or_context)
+    signal_id = str(context.get("abort_signal_id") or "")
+    if not signal_id:
+        return ""
+    with _TOOL_CONTROL_LOCK:
+        signal = _ABORT_SIGNALS.get(signal_id)
+    return signal.reason if signal is not None else ""
+
+
+def _host_context(payload_or_context: object) -> JsonObject:
+    if not isinstance(payload_or_context, dict):
+        return {}
+    if payload_or_context.get("schema") == TOOL_USE_CONTEXT_SCHEMA:
+        return dict(payload_or_context)
+    context = payload_or_context.get("_host_context")
+    return dict(context) if isinstance(context, dict) else {}
 
 
 def register_tool_discovery(
@@ -380,6 +480,9 @@ def tool_use_context_for_action(
     manifest: ToolManifest | None,
     policy_decision: PolicyDecision | None,
     allowed_tool_names: Iterable[str],
+    progress_channel_id: str | None = None,
+    abort_signal_id: str | None = None,
+    timeout_seconds: int | None = None,
 ) -> ToolUseContext:
     side_effect = str(getattr(manifest, "side_effect_class", action.side_effect_class) or action.side_effect_class)
     runtime_spec = tool_runtime_spec_for_action(action, manifest).to_dict()
@@ -396,6 +499,9 @@ def tool_use_context_for_action(
         policy_reason=str(getattr(policy_decision, "reason", "") or ""),
         allowed_tool_names=sorted(str(name) for name in allowed_tool_names if str(name)),
         runtime_spec=runtime_spec,
+        progress_channel_id=progress_channel_id,
+        abort_signal_id=abort_signal_id,
+        timeout_seconds=timeout_seconds,
     )
 
 

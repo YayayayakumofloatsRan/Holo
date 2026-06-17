@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Iterable
 
 from kernel_v3.context import ContextCompiler
@@ -12,6 +13,7 @@ from kernel_v3.policy import PolicyGate
 from kernel_v3.processors.contracts import ProcessorStreamEvent
 from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.testing.fakes import FakeEvaluator
+from kernel_v3.tool_use import emit_tool_progress, tool_abort_requested
 from kernel_v3.tools import ToolRegistry
 
 
@@ -369,6 +371,109 @@ def test_streaming_planner_starts_tool_before_provider_stream_is_drained() -> No
     assert execution_events[-1].data["event_type"] == "completed"
 
 
+def test_streaming_tool_progress_is_journaled_from_host_context() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "alpha.read",
+        _progress_read_tool("alpha"),
+        manifest=ToolManifest(
+            name="alpha.read",
+            version="1",
+            resource_kind="alpha",
+            operator_kind="read",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Read alpha data with progress.",
+            input_schema={"query": {"type": "str", "required": True, "min_length": 1}},
+            runtime={"progress_supported": True, "concurrency_safe": True, "read_only": True},
+        ),
+    )
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": _StreamingToolCallProvider()}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        tool_manifests=registry.manifests(),
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("read alpha with progress")
+
+    assert result.status == "completed"
+    progress_records = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="tool_execution_event")
+        if record.data["event_type"] == "progress"
+    ]
+    assert progress_records[0].data["tool_call_id"] == "tc-alpha"
+    assert progress_records[0].data["detail"]["stage"] == "fetch"
+
+
+def test_streaming_tool_timeout_requests_cooperative_abort() -> None:
+    abort_seen = threading.Event()
+    registry = ToolRegistry()
+    registry.register(
+        "alpha.read",
+        _abortable_read_tool("alpha", abort_seen),
+        manifest=ToolManifest(
+            name="alpha.read",
+            version="1",
+            resource_kind="alpha",
+            operator_kind="read",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Abortable alpha read.",
+            input_schema={"query": {"type": "str", "required": True, "min_length": 1}},
+            runtime={"progress_supported": True, "interrupt_behavior": "cancel", "timeout_seconds": 1},
+        ),
+    )
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": _StreamingToolCallProvider()}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        tool_manifests=registry.manifests(),
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("read alpha with abort")
+
+    assert result.status == "completed"
+    assert abort_seen.is_set()
+    events = journal.records(task_id=result.task_id, kind="tool_execution_event")
+    assert any(record.data["event_type"] == "abort_requested" for record in events)
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    assert batch.data["content"]["results"][0]["status"] == "failed"
+
+
 class _StreamingToolCallProvider:
     name = "streaming"
     model = "stream-model"
@@ -540,6 +645,45 @@ def _signaling_read_tool(name: str, started: threading.Event):
             status="ok",
             source=f"tool:{action.name}",
             content={"name": name, "payload": action.payload},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
+
+
+def _progress_read_tool(name: str):
+    def execute(action: CandidateAction) -> Observation:
+        emit_tool_progress(action.payload, status="running", detail={"stage": "fetch"})
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source=f"tool:{action.name}",
+            content={"name": name, "payload": action.payload},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
+
+
+def _abortable_read_tool(name: str, abort_seen: threading.Event):
+    def execute(action: CandidateAction) -> Observation:
+        while not tool_abort_requested(action.payload):
+            emit_tool_progress(action.payload, status="running", detail={"stage": "waiting"})
+            time.sleep(0.05)
+        abort_seen.set()
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="failed",
+            source=f"tool:{action.name}",
+            content={"name": name, "aborted": True},
             observed_at_ms=0,
             action_id=action.action_id,
             tool_call_id=None,

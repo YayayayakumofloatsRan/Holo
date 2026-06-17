@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from kernel_v3.contracts import JsonObject, ToolManifest
+from kernel_v3.tool_runtime import tool_runtime_spec_for_manifest
 
 
 OPENAI_NATIVE_TOOL_SURFACE_SCHEMA = "holo.kernel_v3.openai_native_tool_surface.v1"
@@ -17,6 +18,7 @@ _MAX_NATIVE_TOOL_NAME_CHARS = 64
 class ProviderNativeToolSurface:
     tools: list[JsonObject]
     name_map: dict[str, str]
+    deferred_tools: list[JsonObject]
     schema: str = OPENAI_NATIVE_TOOL_SURFACE_SCHEMA
 
     def to_parameters(self) -> JsonObject:
@@ -24,6 +26,7 @@ class ProviderNativeToolSurface:
             "native_tool_surface_schema": self.schema,
             "native_tools": [dict(tool) for tool in self.tools],
             "native_tool_name_map": dict(self.name_map),
+            "native_tool_deferred": [dict(item) for item in self.deferred_tools],
         }
 
 
@@ -34,13 +37,23 @@ def openai_native_tool_surface(
     max_tools: int | None = None,
 ) -> ProviderNativeToolSurface:
     allowed = set(allowed_tool_names or set())
+    direct_manifests: list[ToolManifest] = []
+    deferred_tools: list[JsonObject] = []
+    for manifest in sorted(manifests, key=lambda item: item.name):
+        if not _manifest_allowed(manifest, allowed):
+            continue
+        runtime = tool_runtime_spec_for_manifest(manifest)
+        if runtime.should_defer and not runtime.always_load:
+            deferred_tools.append(_deferred_tool_summary(manifest))
+            continue
+        direct_manifests.append(manifest)
+    direct_manifests = sorted(
+        direct_manifests,
+        key=lambda item: (not tool_runtime_spec_for_manifest(item).always_load, item.name),
+    )
     tools: list[JsonObject] = []
     name_map: dict[str, str] = {}
-    for manifest in sorted(manifests, key=lambda item: item.name):
-        if allowed and manifest.name not in allowed:
-            continue
-        if not manifest.enabled or manifest.name.startswith("__"):
-            continue
+    for manifest in direct_manifests:
         native_name = _native_tool_name(manifest.name)
         if native_name in name_map and name_map[native_name] != manifest.name:
             native_name = _native_tool_name(manifest.name, force_hash=True)
@@ -48,7 +61,7 @@ def openai_native_tool_surface(
         name_map[native_name] = manifest.name
         if max_tools is not None and len(tools) >= max(0, int(max_tools)):
             break
-    return ProviderNativeToolSurface(tools=tools, name_map=name_map)
+    return ProviderNativeToolSurface(tools=tools, name_map=name_map, deferred_tools=deferred_tools)
 
 
 def resolve_native_tool_name(name: str, name_map: dict[str, str] | JsonObject | None) -> str:
@@ -66,6 +79,27 @@ def _openai_tool_for_manifest(manifest: ToolManifest, *, native_name: str) -> Js
             "description": _tool_description(manifest),
             "parameters": _json_schema_for_input_schema(manifest.input_schema),
         },
+    }
+
+
+def _manifest_allowed(manifest: ToolManifest, allowed: set[str]) -> bool:
+    if allowed and manifest.name not in allowed:
+        return False
+    if not manifest.enabled or manifest.name.startswith("__"):
+        return False
+    return True
+
+
+def _deferred_tool_summary(manifest: ToolManifest) -> JsonObject:
+    runtime = tool_runtime_spec_for_manifest(manifest)
+    return {
+        "name": manifest.name,
+        "resource_kind": manifest.resource_kind,
+        "operator_kind": manifest.operator_kind,
+        "side_effect_class": manifest.side_effect_class,
+        "description": manifest.description,
+        "runtime": runtime.to_dict(),
+        "load_hint": "Use tool.discovery to inspect this deferred tool before calling it.",
     }
 
 

@@ -193,7 +193,12 @@ replacement previews and artifact-read hints in the next model packet.
 `tool_call_delta` contains a complete JSON argument object, the host prepares the
 tool through the normal policy/guard path, submits execution before the provider
 stream is drained, continues consuming stream events, and then records completed
-tool observations and the aggregate batch result.
+tool observations and the aggregate batch result. Tool execution context now
+includes progress channel ids, abort signal ids, and timeout hints; cooperative
+tools can call the shared helpers to emit `progress` events and honor host
+abort requests. Provider-native tool exposure now respects runtime loading hints:
+`always_load` tools are prioritized, while `should_defer` tools are summarized
+for discovery instead of flooding the provider `tools` payload.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in
@@ -209,9 +214,9 @@ local TypeScript agent-loop project against Holo Kernel v3 and identifies the
 remaining hard gaps after the first P0 substrate checkpoint: provider-native
 instant tool execution inside the deep loop, full execution semantics for the
 thicker tool runtime spec, provider-packet-level tool-result replacement for all
-message surfaces, progress/abort-capable tool execution, deferred tool loading,
-and type-family live debug50 evaluation. This is a design audit, not a finance
-benchmark score.
+message surfaces, forceful subprocess/network cancellation for non-cooperative
+tools, and type-family live debug50 evaluation. This is a design audit, not a
+finance benchmark score.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in

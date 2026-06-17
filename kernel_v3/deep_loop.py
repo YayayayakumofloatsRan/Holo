@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -22,8 +22,10 @@ from kernel_v3.tool_result_budget import (
 from kernel_v3.tool_runtime import tool_runtime_spec_for_action
 from kernel_v3.tool_use import (
     StreamingToolExecutor,
+    ToolAbortSignal,
     ToolExecutionEvent,
     project_tool_result_content,
+    tool_execution_control,
     tool_use_context_for_action,
 )
 
@@ -256,6 +258,14 @@ class _PreparedToolCall:
     manifest: Any
     decision: Any
     pre_exec_guard: str | None
+    control: Any
+
+
+@dataclass(frozen=True)
+class _ToolExecutionControl:
+    progress_channel_id: str
+    abort_signal: ToolAbortSignal
+    timeout_seconds: int | None
 
 
 @dataclass(frozen=True)
@@ -453,7 +463,8 @@ class DeepAgentLoopController(LoopControllerV3):
         execution_items: list[_ToolExecutionItem] = []
         pending: list[tuple[_PreparedToolCall, Future[_ToolExecutionItem]]] = []
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        pool = ThreadPoolExecutor(max_workers=4)
+        try:
             for event in stream.events:
                 delta = event.delta
                 if event.event_type == "content_delta":
@@ -563,21 +574,18 @@ class DeepAgentLoopController(LoopControllerV3):
                 self._append_tool_execution_observation(task, step_id=step_id, item=item)
 
             for prepared, future in pending:
-                item = future.result()
-                self._append_tool_execution_event(
-                    task,
-                    step_id=step_id,
-                    event=_prepared_tool_execution_event("completed", prepared, outcome=item),
-                )
+                item = self._finish_streaming_future(task, step_id=step_id, prepared=prepared, future=future)
                 execution_items.append(item)
                 if item.policy_allowed and item.policy_reason == "allowed" and self._is_network_action(item.action, manifest=item.manifest):
                     network_fetches += self._network_action_actual_cost(
                         item.action,
                         manifest=item.manifest,
                         observation=item.observation,
-                    ) - self._network_action_cost(item.action, manifest=item.manifest)
+                ) - self._network_action_cost(item.action, manifest=item.manifest)
                 total_artifact_bytes += self._estimate_artifact_bytes(item.observation, item.artifact_refs)
                 self._append_tool_execution_observation(task, step_id=step_id, item=item)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         text = "".join(text_parts) or final_text
         parsed = _try_parse_json_object(text)
@@ -605,6 +613,40 @@ class DeepAgentLoopController(LoopControllerV3):
             network_fetches=network_fetches,
             total_artifact_bytes=total_artifact_bytes,
         )
+
+    def _finish_streaming_future(
+        self,
+        task: TaskState,
+        *,
+        step_id: str,
+        prepared: _PreparedToolCall,
+        future: Future[_ToolExecutionItem],
+    ) -> _ToolExecutionItem:
+        timeout = prepared.control.timeout_seconds
+        try:
+            item = future.result(timeout=timeout)
+        except FutureTimeoutError:
+            prepared.control.abort_signal.request("tool_timeout")
+            self._append_tool_execution_event(
+                task,
+                step_id=step_id,
+                event=_prepared_tool_execution_event(
+                    "abort_requested",
+                    prepared,
+                    detail={"reason": "tool_timeout", "timeout_seconds": timeout},
+                ),
+            )
+            try:
+                item = future.result(timeout=0.25)
+            except FutureTimeoutError:
+                future.cancel()
+                item = self._timeout_execution_item(task, step_id=step_id, prepared=prepared, reason="tool_timeout")
+        self._append_tool_execution_event(
+            task,
+            step_id=step_id,
+            event=_prepared_tool_execution_event("completed", prepared, outcome=item),
+        )
+        return item
 
     def _handle_terminal_turn(
         self,
@@ -768,6 +810,9 @@ class DeepAgentLoopController(LoopControllerV3):
             tool_calls += 1
             if self._is_network_action(action, manifest=manifest):
                 network_fetches += self._network_action_cost(action, manifest=manifest)
+        runtime_spec = tool_runtime_spec_for_action(action, manifest)
+        progress_channel_id = f"tool-progress-{task.run_id}-{_safe_action_id(action.action_id)}"
+        abort_signal = ToolAbortSignal(signal_id=f"tool-abort-{task.run_id}-{_safe_action_id(action.action_id)}")
         return (
             _PreparedToolCall(
                 call=call,
@@ -775,6 +820,11 @@ class DeepAgentLoopController(LoopControllerV3):
                 manifest=manifest,
                 decision=decision,
                 pre_exec_guard=pre_exec_guard,
+                control=_ToolExecutionControl(
+                    progress_channel_id=progress_channel_id,
+                    abort_signal=abort_signal,
+                    timeout_seconds=runtime_spec.timeout_seconds,
+                ),
             ),
             tool_calls,
             network_fetches,
@@ -823,12 +873,20 @@ class DeepAgentLoopController(LoopControllerV3):
             manifest=manifest,
             policy_decision=decision,
             allowed_tool_names=[manifest.name for manifest in self.tool_registry.manifests()],
+            progress_channel_id=prepared.control.progress_channel_id,
+            abort_signal_id=prepared.control.abort_signal.signal_id,
+            timeout_seconds=prepared.control.timeout_seconds,
         )
-        tool_result = self.tool_registry.execute_with_artifacts(
-            action,
-            policy_decision=decision,
-            execution_context=tool_context.to_execution_context(),
-        )
+        with tool_execution_control(
+            progress_channel_id=prepared.control.progress_channel_id,
+            abort_signal=prepared.control.abort_signal,
+            emit_event=lambda event: self._append_tool_execution_event(task, step_id=step_id, event=event),
+        ):
+            tool_result = self.tool_registry.execute_with_artifacts(
+                action,
+                policy_decision=decision,
+                execution_context=tool_context.to_execution_context(),
+            )
         observation = _with_tool_call_id(
             self._bind_observation(task.run_id, action, tool_result.observation),
             prepared.call.tool_call_id,
@@ -903,6 +961,45 @@ class DeepAgentLoopController(LoopControllerV3):
             content={
                 "reason": reason,
                 "host_boundary": "pending sibling tool call was cancelled before execution; running tools are not interrupted",
+            },
+            observed_at_ms=self.clock_ms(),
+            action_id=action.action_id,
+            tool_call_id=prepared.call.tool_call_id,
+        )
+        return _ToolExecutionItem(
+            tool_call_id=prepared.call.tool_call_id,
+            action=action,
+            manifest=prepared.manifest,
+            observation=observation,
+            artifact_refs=[],
+            policy_allowed=False,
+            policy_reason=reason,
+        )
+
+    def _timeout_execution_item(
+        self,
+        task: TaskState,
+        *,
+        step_id: str,
+        prepared: _PreparedToolCall,
+        reason: str,
+    ) -> _ToolExecutionItem:
+        action = prepared.action
+        observation = Observation(
+            observation_id=f"obs-{action.action_id}-{reason}",
+            run_id=task.run_id,
+            kind="tool_call_timeout",
+            status="failed",
+            source="deep_agent_loop",
+            content={
+                "reason": reason,
+                "timeout_seconds": prepared.control.timeout_seconds,
+                "abort_signal_id": prepared.control.abort_signal.signal_id,
+                "interrupt_behavior": tool_runtime_spec_for_action(action, prepared.manifest).interrupt_behavior,
+                "host_boundary": (
+                    "host requested cooperative abort after timeout; Python threads cannot be force-killed, "
+                    "so non-cooperative tools must implement their own bounded subprocess/network timeout"
+                ),
             },
             observed_at_ms=self.clock_ms(),
             action_id=action.action_id,
@@ -1379,12 +1476,13 @@ def _prepared_tool_execution_event(
     prepared: _PreparedToolCall,
     *,
     outcome: _ToolExecutionItem | None = None,
+    detail: JsonObject | None = None,
 ) -> ToolExecutionEvent:
-    detail: JsonObject = {}
+    event_detail: JsonObject = dict(detail or {})
     status: str | None = None
     if outcome is not None:
-        detail["observation_id"] = outcome.observation.observation_id
-        detail["observation_kind"] = outcome.observation.kind
+        event_detail["observation_id"] = outcome.observation.observation_id
+        event_detail["observation_kind"] = outcome.observation.kind
         status = outcome.observation.status
     return ToolExecutionEvent(
         event_type=event_type,
@@ -1392,7 +1490,7 @@ def _prepared_tool_execution_event(
         action_id=prepared.action.action_id,
         tool_name=str(prepared.action.name or ""),
         status=status,
-        detail=detail,
+        detail=event_detail,
     )
 
 
