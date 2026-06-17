@@ -552,7 +552,7 @@ def _compact_tool_batch_content(content: JsonObject) -> JsonObject:
 def _compact_tool_batch_result(item: JsonObject) -> JsonObject:
     projection = item.get("content_projection") if isinstance(item.get("content_projection"), dict) else {}
     compact_projection = _compact_content_projection(projection)
-    return {
+    compacted = {
         "tool_call_id": item.get("tool_call_id"),
         "action_id": item.get("action_id"),
         "tool": item.get("tool"),
@@ -563,6 +563,23 @@ def _compact_tool_batch_result(item: JsonObject) -> JsonObject:
         "policy": item.get("policy"),
         "artifact_refs": [str(ref) for ref in item.get("artifact_refs", [])[:8]] if isinstance(item.get("artifact_refs"), list) else [],
         "content_projection": compact_projection,
+    }
+    replacement = item.get("content_replacement")
+    if isinstance(replacement, dict):
+        compacted["content_replacement_applied"] = bool(item.get("content_replacement_applied"))
+        compacted["content_replacement"] = _compact_tool_result_replacement(replacement)
+    return compacted
+
+
+def _compact_tool_result_replacement(replacement: JsonObject) -> JsonObject:
+    return {
+        "schema": replacement.get("schema"),
+        "tool_call_id": replacement.get("tool_call_id"),
+        "reason": replacement.get("reason"),
+        "original_estimated_chars": replacement.get("original_estimated_chars"),
+        "artifact_refs": [str(ref) for ref in replacement.get("artifact_refs", [])[:8]] if isinstance(replacement.get("artifact_refs"), list) else [],
+        "replacement_preview": _compact_text(str(replacement.get("replacement_preview") or ""), limit=480),
+        "read_hint": _compact_text(str(replacement.get("read_hint") or ""), limit=360),
     }
 
 
@@ -1015,6 +1032,9 @@ def _tool_batch_budget_view(content: JsonObject) -> JsonObject:
                 "projection": _compact_content_projection(
                     item.get("content_projection") if isinstance(item.get("content_projection"), dict) else {}
                 ),
+                "replacement": _compact_tool_result_replacement(item.get("content_replacement"))
+                if isinstance(item.get("content_replacement"), dict)
+                else {},
             }
             for item in results[:16]
             if isinstance(item, dict)

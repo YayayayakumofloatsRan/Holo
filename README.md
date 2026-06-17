@@ -170,8 +170,7 @@ inspect bounded artifact previews or bodies only when needed. Finance open
 component tools now write long SEC/EDGAR, document, market, and DuckDB table
 payloads into `ArtifactStore` blobs when the runtime provides a store; the model
 gets a short observation, `artifact_id`, and `artifact.read` hint instead of the
-full payload. The executor is ready for provider-streaming integration, but
-current validation still feeds it completed assistant turns. The next P0
+full payload. The next P0
 substrate checkpoint adds manifest-level `ToolRuntimeSpec` projection into
 tool discovery and execution context, batch-observation tool-result replacement
 state, and a processor streaming event contract with OpenAI-compatible SSE
@@ -180,10 +179,23 @@ parsing scaffolding. The following P0 continuation wires
 `ProcessorFabric.stream_events(...)`, normalize OpenAI-style `tool_call_delta`
 events into `ToolCallRequest`, and route malformed streamed arguments into
 synthetic parse-error observations. This proves stream events can enter the
-host policy/tool/journal chain, while true immediate "tool delta arrives -> tool
-starts running" execution remains open. `finance-fact-fast` remains on the
-LangGraph fast lane for now. This is a structural loop milestone, not a finance
-benchmark score.
+host policy/tool/journal chain. The next P0 continuation adds a
+provider-native OpenAI-compatible tool surface: Holo manifests are projected to
+valid provider function names and JSON schemas, `ModelAssistantTurnPlanner`
+passes them into streaming requests, and streamed provider function names are
+mapped back to canonical Holo tool names before policy/execution. `ProcessorFabric`
+now also exposes `iter_stream_events(...)` for true incremental provider stream
+consumption while preserving the old list-returning `stream_events(...)`
+compatibility path. Context packing now exposes `content_replacement` views from
+tool batch results so long tool outputs are represented by stable bounded
+replacement previews and artifact-read hints in the next model packet.
+`DeepAgentLoopController` now has an eager streaming path: when provider
+`tool_call_delta` contains a complete JSON argument object, the host prepares the
+tool through the normal policy/guard path, submits execution before the provider
+stream is drained, continues consuming stream events, and then records completed
+tool observations and the aggregate batch result.
+`finance-fact-fast` remains on the LangGraph fast lane for now. This is a
+structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in
 `docs/KERNEL_V3_DEBUG50_REQUIREMENTS_AND_GENERIC_FINANCE_LOOP_2026-06-17_ZH.md`.
 It stops per-question patching, groups the first 50 FinanceBench debug prompts
@@ -195,11 +207,11 @@ The external-loop parity audit is recorded in
 `docs/KERNEL_V3_EXTERNAL_LOOP_PARITY_AUDIT_2026-06-17_ZH.md`. It compares the
 local TypeScript agent-loop project against Holo Kernel v3 and identifies the
 remaining hard gaps after the first P0 substrate checkpoint: provider-native
-instant tool execution inside the deep loop, provider payload support for native
-tool schemas, full execution semantics for the thicker tool runtime spec,
-provider-packet-level stable tool-result replacement, progress/abort-capable
-tool execution, deferred tool loading, and type-family live debug50 evaluation.
-This is a design audit, not a finance benchmark score.
+instant tool execution inside the deep loop, full execution semantics for the
+thicker tool runtime spec, provider-packet-level tool-result replacement for all
+message surfaces, progress/abort-capable tool execution, deferred tool loading,
+and type-family live debug50 evaluation. This is a design audit, not a finance
+benchmark score.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in

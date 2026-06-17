@@ -268,15 +268,23 @@ class OpenAICompatibleProvider:
 
     def build_payload(self, request: ProcessorRequest, *, stream: bool = False) -> JsonObject:
         thinking = _thinking_payload(request.parameters.get("thinking"))
+        native_tools = _native_tools_payload(request.parameters.get("native_tools"))
         payload: JsonObject = {
             "model": str(request.parameters.get("model") or self.model),
             "messages": [
                 {"role": "system", "content": PROCESSOR_SYSTEM_PROMPT},
                 {"role": "user", "content": request.prompt},
             ],
-            "response_format": {"type": "json_object"},
             "stream": bool(stream),
         }
+        if native_tools:
+            payload["tools"] = native_tools
+            payload["tool_choice"] = _tool_choice_payload(request.parameters.get("tool_choice")) or "auto"
+            parallel_tool_calls = request.parameters.get("parallel_tool_calls")
+            if isinstance(parallel_tool_calls, bool):
+                payload["parallel_tool_calls"] = parallel_tool_calls
+        else:
+            payload["response_format"] = {"type": "json_object"}
         if thinking is not None:
             payload["thinking"] = thinking
         explicit_temperature = request.parameters.get("temperature")
@@ -509,6 +517,49 @@ def _thinking_payload(value: object) -> JsonObject | None:
 
 def _thinking_enabled(value: JsonObject | None) -> bool:
     return isinstance(value, dict) and value.get("type") == "enabled"
+
+
+def _native_tools_payload(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    tools: list[JsonObject] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "function":
+            continue
+        function = item.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        parameters = function.get("parameters")
+        if not isinstance(name, str) or not name:
+            continue
+        if not isinstance(parameters, dict):
+            continue
+        tool: JsonObject = {
+            "type": "function",
+            "function": {
+                "name": name,
+                "parameters": dict(parameters),
+            },
+        }
+        description = function.get("description")
+        if isinstance(description, str) and description:
+            tool["function"]["description"] = description[:1024]  # type: ignore[index]
+        strict = function.get("strict")
+        if isinstance(strict, bool):
+            tool["function"]["strict"] = strict  # type: ignore[index]
+        tools.append(tool)
+    return tools
+
+
+def _tool_choice_payload(value: object) -> JsonObject | str | None:
+    if value in {"auto", "none", "required"}:
+        return str(value)
+    if isinstance(value, dict):
+        return dict(value)
+    return None
 
 
 def _retryable_provider_error(message: str) -> bool:

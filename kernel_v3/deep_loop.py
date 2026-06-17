@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation
+from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation, ToolManifest
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.loop import LoopControllerV3, _journal_action_data
 from kernel_v3.processors.contracts import JsonSchema, ProcessorStreamEvent
 from kernel_v3.processors.fabric import ProcessorFabric
+from kernel_v3.provider_tools import openai_native_tool_surface, resolve_native_tool_name
 from kernel_v3.result import AgentResult
 from kernel_v3.session import TaskState
 from kernel_v3.tool_result_budget import (
@@ -129,6 +132,14 @@ class AssistantTurn:
         }
 
 
+@dataclass(frozen=True)
+class AssistantTurnStream:
+    turn_id: str
+    index: int
+    events: Iterable[ProcessorStreamEvent]
+    tool_name_map: dict[str, str]
+
+
 class AssistantTurnPlanner(Protocol):
     def propose_turn(self, context: ContextBundle, feedback: Feedback | None = None) -> AssistantTurn:
         ...
@@ -142,33 +153,31 @@ class ModelAssistantTurnPlanner:
         provider: str | None = None,
         model: str | None = None,
         allowed_tool_names: set[str] | None = None,
+        tool_manifests: list[ToolManifest] | None = None,
         use_streaming: bool = False,
     ) -> None:
         self.fabric = fabric
         self.provider = provider
         self.model = model
         self.allowed_tool_names = set(allowed_tool_names or set())
+        self.tool_manifests = list(tool_manifests or [])
         self.use_streaming = bool(use_streaming)
         self.calls: list[ContextBundle] = []
 
     def propose_turn(self, context: ContextBundle, feedback: Feedback | None = None) -> AssistantTurn:
+        parameters = {"adapter": "ModelAssistantTurnPlanner", **_processor_budget_parameters_from_context(context)}
+        if self.use_streaming:
+            stream = self.stream_turn(context, feedback)
+            if stream is not None:
+                return _assistant_turn_from_stream_events(
+                    list(stream.events),
+                    index=stream.index,
+                    tool_name_map=stream.tool_name_map,
+                )
         self.calls.append(context)
         task_id = _task_id(context)
         run_id = _run_id(context)
         prompt = _assistant_turn_prompt(context, feedback, allowed_tool_names=self.allowed_tool_names)
-        parameters = {"adapter": "ModelAssistantTurnPlanner", **_processor_budget_parameters_from_context(context)}
-        if self.use_streaming:
-            events = self.fabric.stream_events(
-                task_type="assistant.turn",
-                task_id=task_id,
-                run_id=run_id,
-                context_id=context.context_id,
-                prompt=prompt,
-                provider=self.provider,
-                model=self.model,
-                parameters={**parameters, "streaming_planner": True},
-            )
-            return _assistant_turn_from_stream_events(events, index=len(self.calls))
         outcome = self.fabric.run_json(
             task_type="assistant.turn",
             task_id=task_id,
@@ -191,6 +200,43 @@ class ModelAssistantTurnPlanner:
             )
         return _assistant_turn_from_json(outcome.parsed, index=len(self.calls))
 
+    def stream_turn(
+        self,
+        context: ContextBundle,
+        feedback: Feedback | None = None,
+        *,
+        step_id: str | None = None,
+    ) -> AssistantTurnStream | None:
+        if not self.use_streaming:
+            return None
+        self.calls.append(context)
+        index = len(self.calls)
+        task_id = _task_id(context)
+        run_id = _run_id(context)
+        prompt = _assistant_turn_prompt(context, feedback, allowed_tool_names=self.allowed_tool_names)
+        parameters = {"adapter": "ModelAssistantTurnPlanner", **_processor_budget_parameters_from_context(context)}
+        native_surface = openai_native_tool_surface(self.tool_manifests, allowed_tool_names=self.allowed_tool_names)
+        stream_parameters = {**parameters, "streaming_planner": True}
+        if native_surface.tools:
+            stream_parameters.update(native_surface.to_parameters())
+            stream_parameters.setdefault("tool_choice", "auto")
+        return AssistantTurnStream(
+            turn_id=f"turn-stream-{index}",
+            index=index,
+            events=self.fabric.iter_stream_events(
+                task_type="assistant.turn",
+                task_id=task_id,
+                run_id=run_id,
+                context_id=context.context_id,
+                prompt=prompt,
+                step_id=step_id,
+                provider=self.provider,
+                model=self.model,
+                parameters=stream_parameters,
+            ),
+            tool_name_map=native_surface.name_map,
+        )
+
 
 @dataclass(frozen=True)
 class _ToolExecutionItem:
@@ -210,6 +256,15 @@ class _PreparedToolCall:
     manifest: Any
     decision: Any
     pre_exec_guard: str | None
+
+
+@dataclass(frozen=True)
+class _StreamingTurnExecution:
+    turn: AssistantTurn
+    execution_items: list[_ToolExecutionItem] | None
+    tool_calls: int
+    network_fetches: int
+    total_artifact_bytes: int
 
 
 class DeepAgentLoopController(LoopControllerV3):
@@ -237,7 +292,24 @@ class DeepAgentLoopController(LoopControllerV3):
                 event_ref=self._last_ref(task.task_id, "event_ref"),
                 state_delta={"context_id": context.context_id, "loop_runtime": self.runtime_backend},
             )
-            turn = self._propose_turn(context, current_feedback)
+            streamed = self._try_execute_streaming_turn(
+                task,
+                context,
+                current_feedback,
+                step_id=step_id,
+                tool_calls=tool_calls,
+                network_fetches=network_fetches,
+                total_artifact_bytes=total_artifact_bytes,
+            )
+            if streamed is not None:
+                turn = streamed.turn
+                preexecuted_items = streamed.execution_items
+                tool_calls = streamed.tool_calls
+                network_fetches = streamed.network_fetches
+                total_artifact_bytes = streamed.total_artifact_bytes
+            else:
+                turn = self._propose_turn(context, current_feedback)
+                preexecuted_items = None
             self._append_assistant_turn(task, turn, step_id=step_id)
 
             if not turn.tool_calls and not turn.parse_errors:
@@ -255,14 +327,17 @@ class DeepAgentLoopController(LoopControllerV3):
                     return self._result(task, current_feedback, step_id=step_id)
 
             else:
-                execution_items, tool_calls, network_fetches, total_artifact_bytes = self._execute_tool_turn(
-                    task,
-                    turn,
-                    step_id=step_id,
-                    tool_calls=tool_calls,
-                    network_fetches=network_fetches,
-                    total_artifact_bytes=total_artifact_bytes,
-                )
+                if preexecuted_items is None:
+                    execution_items, tool_calls, network_fetches, total_artifact_bytes = self._execute_tool_turn(
+                        task,
+                        turn,
+                        step_id=step_id,
+                        tool_calls=tool_calls,
+                        network_fetches=network_fetches,
+                        total_artifact_bytes=total_artifact_bytes,
+                    )
+                else:
+                    execution_items = preexecuted_items
                 aggregate = self._tool_batch_observation(
                     task,
                     turn=turn,
@@ -331,6 +406,205 @@ class DeepAgentLoopController(LoopControllerV3):
                 return turn
         action = planner.propose(context, feedback)
         return _assistant_turn_from_action(action)
+
+    def _try_execute_streaming_turn(
+        self,
+        task: TaskState,
+        context: ContextBundle,
+        feedback: Feedback | None,
+        *,
+        step_id: str,
+        tool_calls: int,
+        network_fetches: int,
+        total_artifact_bytes: int,
+    ) -> _StreamingTurnExecution | None:
+        streamer = getattr(self.planner, "stream_turn", None)
+        if not callable(streamer):
+            return None
+        stream = streamer(context, feedback, step_id=step_id)
+        if not isinstance(stream, AssistantTurnStream):
+            return None
+        return self._execute_streaming_turn(
+            task,
+            stream,
+            step_id=step_id,
+            tool_calls=tool_calls,
+            network_fetches=network_fetches,
+            total_artifact_bytes=total_artifact_bytes,
+        )
+
+    def _execute_streaming_turn(
+        self,
+        task: TaskState,
+        stream: AssistantTurnStream,
+        *,
+        step_id: str,
+        tool_calls: int,
+        network_fetches: int,
+        total_artifact_bytes: int,
+    ) -> _StreamingTurnExecution:
+        text_parts: list[str] = []
+        final_text = ""
+        finish_reason: str | None = None
+        parse_errors: list[ToolCallParseError] = []
+        tool_chunks: dict[str, dict[str, object]] = {}
+        executed_chunk_keys: set[str] = set()
+        tool_call_requests: list[ToolCallRequest] = []
+        execution_items: list[_ToolExecutionItem] = []
+        pending: list[tuple[_PreparedToolCall, Future[_ToolExecutionItem]]] = []
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for event in stream.events:
+                delta = event.delta
+                if event.event_type == "content_delta":
+                    text = delta.get("text")
+                    if isinstance(text, str):
+                        text_parts.append(text)
+                    continue
+                if event.event_type == "finish_delta":
+                    reason = delta.get("finish_reason")
+                    if isinstance(reason, str):
+                        finish_reason = reason
+                    continue
+                if event.event_type == "stream_end":
+                    text = delta.get("text")
+                    if isinstance(text, str):
+                        final_text = text
+                    status = delta.get("status")
+                    if isinstance(status, str) and status != "ok":
+                        parse_errors.append(
+                            ToolCallParseError(
+                                tool_call_id=f"stream-error-{event.sequence}",
+                                error=f"processor_stream_{status}",
+                                raw_preview=_preview_json_value(delta, limit=400),
+                            )
+                        )
+                    continue
+                if event.event_type == "stream_error":
+                    parse_errors.append(
+                        ToolCallParseError(
+                            tool_call_id=f"stream-error-{event.sequence}",
+                            error=str(delta.get("error") or "processor_stream_error"),
+                            raw_preview=_preview_json_value(delta, limit=400),
+                        )
+                    )
+                    continue
+                if event.event_type != "tool_call_delta":
+                    continue
+
+                for raw_call in _stream_tool_call_items(delta.get("tool_calls")):
+                    key = _stream_tool_call_key(raw_call, fallback=f"stream-tool-{len(tool_chunks) + 1}")
+                    current = tool_chunks.setdefault(key, {"id": key, "name": "", "arguments": "", "raw": []})
+                    raw_items = current.get("raw")
+                    if isinstance(raw_items, list):
+                        raw_items.append(raw_call)
+                    function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+                    name = raw_call.get("name")
+                    if not isinstance(name, str):
+                        name = function.get("name") if isinstance(function, dict) else None
+                    if isinstance(name, str) and name:
+                        current["name"] = str(current.get("name") or "") + name
+                    arguments = raw_call.get("arguments")
+                    if not isinstance(arguments, str):
+                        arguments = function.get("arguments") if isinstance(function, dict) else None
+                    if isinstance(arguments, str) and arguments:
+                        current["arguments"] = str(current.get("arguments") or "") + arguments
+
+                for offset, (chunk_key, chunk) in enumerate(tool_chunks.items(), start=1):
+                    if chunk_key in executed_chunk_keys:
+                        continue
+                    call = _stream_chunk_ready_tool_call(
+                        chunk,
+                        turn_id=stream.turn_id,
+                        offset=offset,
+                        tool_name_map=stream.tool_name_map,
+                    )
+                    if call is None:
+                        continue
+                    executed_chunk_keys.add(chunk_key)
+                    tool_call_requests.append(call)
+                    prepared, tool_calls, network_fetches = self._prepare_tool_call(
+                        task,
+                        turn_id=stream.turn_id,
+                        step_id=step_id,
+                        call=call,
+                        index=len(tool_call_requests),
+                        tool_calls=tool_calls,
+                        network_fetches=network_fetches,
+                    )
+                    self._append_tool_execution_event(
+                        task,
+                        step_id=step_id,
+                        event=_prepared_tool_execution_event("queued", prepared),
+                    )
+                    self._append_tool_execution_event(
+                        task,
+                        step_id=step_id,
+                        event=_prepared_tool_execution_event("started", prepared),
+                    )
+                    pending.append((prepared, pool.submit(self._execute_prepared_tool, task, step_id, prepared)))
+
+            for offset, (chunk_key, chunk) in enumerate(tool_chunks.items(), start=1):
+                if chunk_key in executed_chunk_keys:
+                    continue
+                parse_error = _stream_chunk_final_parse_error(
+                    chunk,
+                    turn_id=stream.turn_id,
+                    offset=offset,
+                    tool_name_map=stream.tool_name_map,
+                )
+                if parse_error is not None:
+                    parse_errors.append(parse_error)
+
+            for parse_error in parse_errors:
+                tool_calls += 1
+                item = self._parse_error_execution_item(task, AssistantTurn(stream.turn_id, None, []), step_id=step_id, parse_error=parse_error)
+                execution_items.append(item)
+                self._append_tool_execution_observation(task, step_id=step_id, item=item)
+
+            for prepared, future in pending:
+                item = future.result()
+                self._append_tool_execution_event(
+                    task,
+                    step_id=step_id,
+                    event=_prepared_tool_execution_event("completed", prepared, outcome=item),
+                )
+                execution_items.append(item)
+                if item.policy_allowed and item.policy_reason == "allowed" and self._is_network_action(item.action, manifest=item.manifest):
+                    network_fetches += self._network_action_actual_cost(
+                        item.action,
+                        manifest=item.manifest,
+                        observation=item.observation,
+                    ) - self._network_action_cost(item.action, manifest=item.manifest)
+                total_artifact_bytes += self._estimate_artifact_bytes(item.observation, item.artifact_refs)
+                self._append_tool_execution_observation(task, step_id=step_id, item=item)
+
+        text = "".join(text_parts) or final_text
+        parsed = _try_parse_json_object(text)
+        if parsed is not None and not tool_chunks and not parse_errors:
+            return _StreamingTurnExecution(
+                turn=_assistant_turn_from_json(parsed, index=stream.index),
+                execution_items=None,
+                tool_calls=tool_calls,
+                network_fetches=network_fetches,
+                total_artifact_bytes=total_artifact_bytes,
+            )
+        turn = AssistantTurn(
+            turn_id=stream.turn_id,
+            message=text or None,
+            tool_calls=tool_call_requests,
+            final_answer=None if tool_call_requests or parse_errors else (text or None),
+            stop_reason="processor_stream_error" if parse_errors and not tool_call_requests else finish_reason,
+            reasons=["processor_stream", "incremental_tool_execution"] + ([finish_reason] if finish_reason else []),
+            parse_errors=parse_errors,
+        )
+        return _StreamingTurnExecution(
+            turn=turn,
+            execution_items=execution_items,
+            tool_calls=tool_calls,
+            network_fetches=network_fetches,
+            total_artifact_bytes=total_artifact_bytes,
+        )
 
     def _handle_terminal_turn(
         self,
@@ -423,41 +697,16 @@ class DeepAgentLoopController(LoopControllerV3):
 
         prepared: list[_PreparedToolCall] = []
         for index, call in enumerate(turn.tool_calls, start=1):
-            action = call.to_action(turn_id=turn.turn_id, index=index)
-            manifest = self.tool_registry.manifest_for_action(action)
-            self._record_action(task, action, step_id=step_id, manifest=manifest)
-            decision = self.policy_gate.validate(run_id=task.run_id, action=action, manifest=manifest)
-            self.journal.append(
-                task_id=task.task_id,
-                run_id=task.run_id,
+            prepared_call, tool_calls, network_fetches = self._prepare_tool_call(
+                task,
+                turn_id=turn.turn_id,
                 step_id=step_id,
-                kind="policy_decision",
-                data=redact_journal_data(decision.to_dict()),
-                event_ref=self._last_ref(task.task_id, "event_ref"),
-                action_ref=action.action_id,
-                state_delta={"policy_allowed": decision.allowed},
+                call=call,
+                index=index,
+                tool_calls=tool_calls,
+                network_fetches=network_fetches,
             )
-            pre_exec_guard = None
-            if decision.allowed:
-                pre_exec_guard = self._pre_execution_guard(
-                    action,
-                    manifest=manifest,
-                    tool_calls=tool_calls,
-                    network_fetches=network_fetches,
-                )
-            if decision.allowed and pre_exec_guard is None:
-                tool_calls += 1
-                if self._is_network_action(action, manifest=manifest):
-                    network_fetches += self._network_action_cost(action, manifest=manifest)
-            prepared.append(
-                _PreparedToolCall(
-                    call=call,
-                    action=action,
-                    manifest=manifest,
-                    decision=decision,
-                    pre_exec_guard=pre_exec_guard,
-                )
-            )
+            prepared.append(prepared_call)
 
         executor = StreamingToolExecutor(
             emit_event=lambda event: self._append_tool_execution_event(task, step_id=step_id, event=event)
@@ -481,6 +730,55 @@ class DeepAgentLoopController(LoopControllerV3):
             total_artifact_bytes += self._estimate_artifact_bytes(item.observation, item.artifact_refs)
             self._append_tool_execution_observation(task, step_id=step_id, item=item)
         return execution_items, tool_calls, network_fetches, total_artifact_bytes
+
+    def _prepare_tool_call(
+        self,
+        task: TaskState,
+        *,
+        turn_id: str,
+        step_id: str,
+        call: ToolCallRequest,
+        index: int,
+        tool_calls: int,
+        network_fetches: int,
+    ) -> tuple[_PreparedToolCall, int, int]:
+        action = call.to_action(turn_id=turn_id, index=index)
+        manifest = self.tool_registry.manifest_for_action(action)
+        self._record_action(task, action, step_id=step_id, manifest=manifest)
+        decision = self.policy_gate.validate(run_id=task.run_id, action=action, manifest=manifest)
+        self.journal.append(
+            task_id=task.task_id,
+            run_id=task.run_id,
+            step_id=step_id,
+            kind="policy_decision",
+            data=redact_journal_data(decision.to_dict()),
+            event_ref=self._last_ref(task.task_id, "event_ref"),
+            action_ref=action.action_id,
+            state_delta={"policy_allowed": decision.allowed},
+        )
+        pre_exec_guard = None
+        if decision.allowed:
+            pre_exec_guard = self._pre_execution_guard(
+                action,
+                manifest=manifest,
+                tool_calls=tool_calls,
+                network_fetches=network_fetches,
+            )
+        if decision.allowed and pre_exec_guard is None:
+            tool_calls += 1
+            if self._is_network_action(action, manifest=manifest):
+                network_fetches += self._network_action_cost(action, manifest=manifest)
+        return (
+            _PreparedToolCall(
+                call=call,
+                action=action,
+                manifest=manifest,
+                decision=decision,
+                pre_exec_guard=pre_exec_guard,
+            ),
+            tool_calls,
+            network_fetches,
+        )
 
     def _execute_prepared_tool(
         self,
@@ -872,7 +1170,12 @@ def _assistant_turn_from_json(data: JsonObject, *, index: int = 1) -> AssistantT
     )
 
 
-def _assistant_turn_from_stream_events(events: list[ProcessorStreamEvent], *, index: int = 1) -> AssistantTurn:
+def _assistant_turn_from_stream_events(
+    events: list[ProcessorStreamEvent],
+    *,
+    index: int = 1,
+    tool_name_map: dict[str, str] | JsonObject | None = None,
+) -> AssistantTurn:
     turn_id = f"turn-stream-{index}"
     text_parts: list[str] = []
     final_text = ""
@@ -939,7 +1242,7 @@ def _assistant_turn_from_stream_events(events: list[ProcessorStreamEvent], *, in
     parse_errors = list(stream_errors)
     for offset, chunk in enumerate(tool_chunks.values(), start=1):
         tool_call_id = str(chunk.get("id") or f"{turn_id}-{offset}")
-        name = str(chunk.get("name") or "").strip()
+        name = resolve_native_tool_name(str(chunk.get("name") or "").strip(), tool_name_map)
         raw_arguments = str(chunk.get("arguments") or "").strip()
         if not name:
             parse_errors.append(
@@ -1021,6 +1324,76 @@ def _stream_tool_call_key(raw_call: JsonObject, *, fallback: str) -> str:
     if isinstance(index, int):
         return f"index-{index}"
     return fallback
+
+
+def _stream_chunk_ready_tool_call(
+    chunk: dict[str, object],
+    *,
+    turn_id: str,
+    offset: int,
+    tool_name_map: dict[str, str] | JsonObject | None,
+) -> ToolCallRequest | None:
+    tool_call_id = str(chunk.get("id") or f"{turn_id}-{offset}")
+    name = resolve_native_tool_name(str(chunk.get("name") or "").strip(), tool_name_map)
+    if not name:
+        return None
+    arguments = _try_parse_json_object(str(chunk.get("arguments") or "").strip() or "{}")
+    if arguments is None:
+        return None
+    return ToolCallRequest(
+        tool_call_id=tool_call_id,
+        name=name,
+        arguments=arguments,
+        reason="processor_stream_tool_call",
+        side_effect_class="read",
+    )
+
+
+def _stream_chunk_final_parse_error(
+    chunk: dict[str, object],
+    *,
+    turn_id: str,
+    offset: int,
+    tool_name_map: dict[str, str] | JsonObject | None,
+) -> ToolCallParseError | None:
+    tool_call_id = str(chunk.get("id") or f"{turn_id}-{offset}")
+    name = resolve_native_tool_name(str(chunk.get("name") or "").strip(), tool_name_map)
+    if not name:
+        return ToolCallParseError(
+            tool_call_id=tool_call_id,
+            error="missing_tool_name",
+            raw_preview=_preview_json_value(chunk, limit=400),
+        )
+    arguments = _try_parse_json_object(str(chunk.get("arguments") or "").strip() or "{}")
+    if arguments is None:
+        return ToolCallParseError(
+            tool_call_id=tool_call_id,
+            error="invalid_tool_arguments",
+            raw_preview=_preview_json_value(chunk, limit=400),
+        )
+    return None
+
+
+def _prepared_tool_execution_event(
+    event_type: str,
+    prepared: _PreparedToolCall,
+    *,
+    outcome: _ToolExecutionItem | None = None,
+) -> ToolExecutionEvent:
+    detail: JsonObject = {}
+    status: str | None = None
+    if outcome is not None:
+        detail["observation_id"] = outcome.observation.observation_id
+        detail["observation_kind"] = outcome.observation.kind
+        status = outcome.observation.status
+    return ToolExecutionEvent(
+        event_type=event_type,
+        tool_call_id=prepared.call.tool_call_id,
+        action_id=prepared.action.action_id,
+        tool_name=str(prepared.action.name or ""),
+        status=status,
+        detail=detail,
+    )
 
 
 def _try_parse_json_object(text: str) -> JsonObject | None:

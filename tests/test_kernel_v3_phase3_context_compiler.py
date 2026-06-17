@@ -268,6 +268,94 @@ def test_context_pack_compacts_tool_batch_results_with_projection_not_raw_previe
     assert "x" * 200 not in encoded
 
 
+def test_context_pack_exposes_tool_result_replacement_view():
+    journal = JournalStore.in_memory()
+    task = SessionEngine.from_journal(journal).start("inspect replaced tool batch", thread_id="thread-a", journal=journal)
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-0",
+        kind="event",
+        data={"event_id": "evt-1", "payload": {"text": "inspect replaced tool batch"}},
+        event_ref="evt-1",
+    )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="observation",
+        data={
+            "observation_id": "obs-tool-batch",
+            "kind": "tool_batch_result",
+            "status": "ok",
+            "source": "deep_agent_loop",
+            "content": {
+                "schema": "holo.kernel_v3.deep_tool_batch_result.v1",
+                "turn_id": "turn-1",
+                "tool_call_count": 1,
+                "results": [
+                    {
+                        "tool_call_id": "call-large",
+                        "action_id": "act-large",
+                        "tool": "sec.edgar.financials",
+                        "status": "ok",
+                        "source": "tool:sec.edgar.financials",
+                        "kind": "sec_edgar_result",
+                        "observation_id": "obs-large",
+                        "policy": "allowed",
+                        "artifact_refs": ["artifact-large"],
+                        "content_preview": "replacement preview",
+                        "content_projection": {
+                            "preview": "original projected preview",
+                            "preview_chars": 26,
+                            "truncated": True,
+                            "estimated_chars": 100000,
+                            "shape": {"type": "object", "keys": ["records"], "key_count": 1},
+                        },
+                        "content_replacement_applied": True,
+                        "content_replacement": {
+                            "schema": "holo.kernel_v3.tool_result_replacement.v1",
+                            "tool_call_id": "call-large",
+                            "reason": "aggregate_tool_result_budget",
+                            "original_estimated_chars": 100000,
+                            "artifact_refs": ["artifact-large"],
+                            "replacement_preview": "bounded replacement preview",
+                            "read_hint": "Full output is available through artifact.read.",
+                        },
+                    }
+                ],
+            },
+        },
+        observation_ref="obs-tool-batch",
+        artifact_refs=["artifact-large"],
+    )
+
+    artifacts = ArtifactStore.in_memory(
+        [
+            ArtifactRef(
+                artifact_id="artifact-large",
+                kind="observation_payload",
+                uri="journal://observations/obs-large",
+                payload_hash="hash-large",
+                metadata={"observation_id": "obs-large", "preview": "artifact preview", "size_bytes": 100000},
+            )
+        ]
+    )
+    pack = ContextPackCompiler(
+        artifact_store=artifacts,
+        memory_read=MemoryRead(journal=journal, artifact_store=artifacts),
+        token_budget=1000000,
+        section_budget=200000,
+    ).compile(task, journal, step_id="step-1")
+
+    recent = next(section for section in pack.sections if section["name"] == "recent_observations")
+    result = recent["records"][-1]["content"]["results"][0]
+    assert result["content_replacement_applied"] is True
+    assert result["content_replacement"]["replacement_preview"] == "bounded replacement preview"
+    assert result["content_replacement"]["read_hint"] == "Full output is available through artifact.read."
+    assert result["content_replacement"]["artifact_refs"] == ["artifact-large"]
+
+
 def test_context_pack_recent_observations_memory_refs_and_citations_use_same_window():
     journal = JournalStore.in_memory()
     task = SessionEngine.from_journal(journal).start("inspect sequence", thread_id="thread-a", journal=journal)

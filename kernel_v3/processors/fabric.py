@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
@@ -49,6 +49,35 @@ class ProcessorFabric:
         timeout_seconds: int | None = None,
         parameters: JsonObject | None = None,
     ) -> list[ProcessorStreamEvent]:
+        return list(
+            self.iter_stream_events(
+                task_type=task_type,
+                run_id=run_id,
+                context_id=context_id,
+                prompt=prompt,
+                task_id=task_id,
+                step_id=step_id,
+                provider=provider,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                parameters=parameters,
+            )
+        )
+
+    def iter_stream_events(
+        self,
+        *,
+        task_type: str,
+        run_id: str,
+        context_id: str,
+        prompt: str,
+        task_id: str | None = None,
+        step_id: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        timeout_seconds: int | None = None,
+        parameters: JsonObject | None = None,
+    ) -> Iterator[ProcessorStreamEvent]:
         route = self.router.route(task_type, provider=provider, model=model, timeout_seconds=timeout_seconds)
         request = self._request(
             task_type=task_type,
@@ -64,7 +93,7 @@ class ProcessorFabric:
         self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
         selected = self.providers.get(route.provider)
         if selected is None:
-            return self._stream_error(
+            yield from self._stream_error(
                 request,
                 task_id=task_id,
                 run_id=run_id,
@@ -75,10 +104,11 @@ class ProcessorFabric:
                 error="provider_not_registered",
                 delta={"provider": route.provider},
             )
+            return
         provider_model = str(request.parameters.get("model") or route.model)
         budget_error = self._processor_budget_error(request, task_id=task_id)
         if budget_error is not None:
-            return self._stream_error(
+            yield from self._stream_error(
                 request,
                 task_id=task_id,
                 run_id=run_id,
@@ -89,9 +119,10 @@ class ProcessorFabric:
                 error="processor_budget_exceeded",
                 delta={"budget": budget_error.get("budget", {}), "budget_state": budget_error.get("state", {})},
             )
+            return
         circuit = self._provider_circuit.get(route.provider)
         if circuit is not None:
-            return self._stream_error(
+            yield from self._stream_error(
                 request,
                 task_id=task_id,
                 run_id=run_id,
@@ -102,9 +133,10 @@ class ProcessorFabric:
                 error="provider_circuit_open",
                 delta={"circuit": circuit},
             )
+            return
         boundary_error = _external_private_context_boundary_error(request, provider_name=route.provider, provider=selected)
         if boundary_error is not None:
-            return self._stream_error(
+            yield from self._stream_error(
                 request,
                 task_id=task_id,
                 run_id=run_id,
@@ -115,18 +147,21 @@ class ProcessorFabric:
                 error=boundary_error,
                 delta={"boundary": "private_context_external_model"},
             )
+            return
 
         stream_method = getattr(selected, "stream", None)
         started = self.clock_ms()
         events: list[ProcessorStreamEvent] = []
         try:
             if callable(stream_method):
-                events = list(stream_method(request))
+                source = stream_method(request)
             else:
                 result = selected.run(request)
-                events = _events_from_non_streaming_result(request, result)
+                source = _events_from_non_streaming_result(request, result)
+            for event in source:
+                events.append(event)
+                yield event
         except Exception as exc:
-            duration_ms = max(0, self.clock_ms() - started)
             error_preview = _preview(str(exc) or type(exc).__name__, 240)
             self._open_provider_circuit(
                 route.provider,
@@ -134,14 +169,16 @@ class ProcessorFabric:
                 error=type(exc).__name__,
                 error_preview=error_preview,
             )
-            events = [
-                ProcessorStreamEvent(
-                    event_type="stream_error",
-                    request_id=request.request_id,
-                    sequence=1,
-                    delta={"error": type(exc).__name__, "error_preview": error_preview},
-                )
-            ]
+            error_event = ProcessorStreamEvent(
+                event_type="stream_error",
+                request_id=request.request_id,
+                sequence=(events[-1].sequence + 1) if events else 1,
+                delta={"error": type(exc).__name__, "error_preview": error_preview},
+            )
+            events.append(error_event)
+            yield error_event
+        finally:
+            duration_ms = max(0, self.clock_ms() - started)
             self._journal_stream_events(
                 task_id=task_id,
                 run_id=run_id,
@@ -152,19 +189,6 @@ class ProcessorFabric:
                 duration_ms=duration_ms,
                 events=events,
             )
-            return events
-        duration_ms = max(0, self.clock_ms() - started)
-        self._journal_stream_events(
-            task_id=task_id,
-            run_id=run_id,
-            step_id=step_id,
-            provider=route.provider,
-            model=provider_model,
-            task_type=task_type,
-            duration_ms=duration_ms,
-            events=events,
-        )
-        return events
 
     def run_json(
         self,

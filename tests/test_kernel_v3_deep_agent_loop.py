@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable
 
 from kernel_v3.context import ContextCompiler
 
-from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation, ProcessorRequest
+from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation, ProcessorRequest, ToolManifest
 from kernel_v3.deep_loop import AssistantTurn, DeepAgentLoopController, ModelAssistantTurnPlanner, ToolCallParseError, ToolCallRequest
 from kernel_v3.journal import JournalStore
 from kernel_v3.policy import PolicyGate
@@ -290,6 +291,84 @@ def test_streamed_malformed_tool_arguments_become_parse_error_observation() -> N
     assert parse_records[0].data["tool_call_id"] == "tc-bad"
 
 
+def test_streaming_planner_maps_native_provider_tool_name_back_to_holo_tool() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "alpha.read",
+        _read_tool("alpha"),
+        manifest=ToolManifest(
+            name="alpha.read",
+            version="1",
+            resource_kind="alpha",
+            operator_kind="read",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Read alpha data.",
+            input_schema={"query": {"type": "str", "required": True, "min_length": 1}},
+        ),
+    )
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": _NativeNameStreamingToolCallProvider()}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        tool_manifests=registry.manifests(),
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("read alpha through native streamed tool call")
+
+    assert result.status == "completed"
+    assert [action.name for action in registry.executed_actions] == ["alpha.read"]
+    assert registry.executed_actions[0].payload["query"] == "A"
+
+
+def test_streaming_planner_starts_tool_before_provider_stream_is_drained() -> None:
+    tool_started = threading.Event()
+    provider = _BlockingAfterToolDeltaProvider(tool_started)
+    registry = ToolRegistry()
+    registry.register("alpha.read", _signaling_read_tool("alpha", tool_started))
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("read alpha before stream drain")
+
+    assert result.status == "completed"
+    assert provider.tool_started_before_stream_end is True
+    assert [action.name for action in registry.executed_actions] == ["alpha.read"]
+    execution_events = journal.records(task_id=result.task_id, kind="tool_execution_event")
+    assert [record.data["event_type"] for record in execution_events[:2]] == ["queued", "started"]
+    assert execution_events[-1].data["event_type"] == "completed"
+
+
 class _StreamingToolCallProvider:
     name = "streaming"
     model = "stream-model"
@@ -354,8 +433,106 @@ class _MalformedStreamingToolCallProvider:
         )
 
 
+class _NativeNameStreamingToolCallProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        native_tools = request.parameters.get("native_tools")
+        assert isinstance(native_tools, list)
+        native_name = native_tools[0]["function"]["name"]
+        assert isinstance(native_name, str)
+        assert native_name.startswith("alpha_read_")
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=1,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-native-alpha",
+                        "function": {
+                            "name": native_name,
+                            "arguments": '{"query":"A"}',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=2,
+            delta={"status": "ok"},
+        )
+
+
+class _BlockingAfterToolDeltaProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def __init__(self, tool_started: threading.Event) -> None:
+        self.tool_started = tool_started
+        self.tool_started_before_stream_end = False
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        yield ProcessorStreamEvent(
+            event_type="stream_start",
+            request_id=request.request_id,
+            sequence=1,
+            delta={"provider": self.name},
+        )
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=2,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-blocking-alpha",
+                        "function": {
+                            "name": "alpha.read",
+                            "arguments": '{"query":"A"}',
+                        },
+                    }
+                ]
+            },
+        )
+        self.tool_started_before_stream_end = self.tool_started.wait(timeout=1.0)
+        yield ProcessorStreamEvent(
+            event_type="content_delta",
+            request_id=request.request_id,
+            sequence=3,
+            delta={"text": "continuing after tool start"},
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=4,
+            delta={"status": "ok"},
+        )
+
+
 def _read_tool(name: str):
     def execute(action: CandidateAction) -> Observation:
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source=f"tool:{action.name}",
+            content={"name": name, "payload": action.payload},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
+
+
+def _signaling_read_tool(name: str, started: threading.Event):
+    def execute(action: CandidateAction) -> Observation:
+        started.set()
         return Observation(
             observation_id=f"obs-{action.action_id}",
             run_id="",

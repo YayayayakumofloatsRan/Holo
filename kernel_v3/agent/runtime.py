@@ -794,6 +794,7 @@ class AgentRuntime:
                 return ModelAssistantTurnPlanner(
                     fabric=self.processor_fabric,
                     allowed_tool_names=_planner_allowed_tool_names(recipe),
+                    tool_manifests=registry.manifests(),
                     use_streaming=_recipe_requests_deep_agent_streaming(recipe),
                 )
             planner = ModelPlanner(
