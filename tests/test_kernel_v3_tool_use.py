@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import CandidateAction, Observation, PolicyDecision, ToolManifest
 from kernel_v3.policy import PolicyGate
@@ -11,6 +14,7 @@ from kernel_v3.tool_result_budget import (
 from kernel_v3.tool_use import (
     ARTIFACT_READ_NAME,
     TOOL_DISCOVERY_NAME,
+    StreamingToolExecutor,
     ToolAbortSignal,
     ToolExecutionEvent,
     emit_tool_progress,
@@ -156,6 +160,55 @@ def test_tool_progress_helpers_emit_progress_and_read_abort_signal() -> None:
     assert events[0].event_type == "progress"
     assert events[0].tool_call_id == "tc-progress"
     assert events[0].detail == {"stage": "fetch"}
+
+
+def test_streaming_tool_executor_bounds_concurrent_safe_batch() -> None:
+    executor = StreamingToolExecutor(max_concurrency=2)
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def execute_one(item: int) -> dict[str, object]:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return {"status": "ok", "item": item}
+
+    outcomes = executor.execute_batches(
+        list(range(6)),
+        execute_one=execute_one,
+        is_concurrency_safe=lambda _item: True,
+        is_failed=lambda outcome: outcome["status"] != "ok",
+    )
+
+    assert len(outcomes) == 6
+    assert peak <= 2
+
+
+def test_streaming_tool_executor_failure_cancel_callback_can_keep_independent_reads() -> None:
+    executor = StreamingToolExecutor(max_concurrency=1)
+    calls: list[str] = []
+
+    def execute_one(item: str) -> dict[str, object]:
+        calls.append(item)
+        return {"status": "failed" if item == "read-fail" else "ok", "item": item}
+
+    outcomes = executor.execute_batches(
+        ["read-fail", "after-read"],
+        execute_one=execute_one,
+        is_concurrency_safe=lambda _item: True,
+        cancel_pending_on_failure=True,
+        is_failed=lambda outcome: outcome["status"] != "ok",
+        failure_cancels_siblings=lambda _item, _outcome: False,
+        cancel_one=lambda item, reason: {"status": "cancelled", "item": item, "reason": reason},
+    )
+
+    assert calls == ["read-fail", "after-read"]
+    assert [outcome["status"] for outcome in outcomes] == ["failed", "ok"]
 
 
 def test_tool_result_projection_preserves_shape_and_budget_state() -> None:

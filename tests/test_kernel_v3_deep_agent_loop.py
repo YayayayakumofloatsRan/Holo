@@ -201,6 +201,60 @@ def test_deep_agent_loop_prompt_blocks_final_when_feedback_requires_tool_work() 
     assert "retrieval_workbench_followup" in contract["missing_evidence"]
 
 
+def test_assistant_turn_prompt_exposes_visible_and_deferred_tool_surface() -> None:
+    context = ContextBundle(
+        context_id="ctx-tool-surface",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-tool-surface", "run_id": "run-1"},
+        token_budget={},
+    )
+    visible = ToolManifest(
+        name="calculator.compute",
+        version="1",
+        resource_kind="finance",
+        operator_kind="calculate",
+        side_effect_class="read",
+        permissions_required=[],
+        enabled=True,
+        description="Evaluate arithmetic formulas with named variables.",
+        input_schema={
+            "expression": {"type": "str", "required": True, "description": "Formula expression."},
+            "variables": {"type": "object", "required": False},
+        },
+        runtime={"concurrency_safe": True, "read_only": True, "always_load": True},
+    )
+    deferred = ToolManifest(
+        name="sec.edgar.financials",
+        version="1",
+        resource_kind="finance",
+        operator_kind="sec_edgar",
+        side_effect_class="network",
+        permissions_required=["network:fetch"],
+        enabled=True,
+        description="Retrieve SEC financial statement facts.",
+        input_schema={"identifier": {"type": "str", "required": True}},
+        runtime={"concurrency_safe": True, "read_only": True, "should_defer": True},
+    )
+
+    prompt = json.loads(
+        _assistant_turn_prompt(
+            context,
+            None,
+            allowed_tool_names={"calculator.compute", "sec.edgar.financials", "tool.discovery"},
+            tool_manifests=[visible, deferred],
+        )
+    )
+
+    surface = prompt["tool_surface"]
+    assert surface["visible_tools"][0]["name"] == "calculator.compute"
+    assert surface["visible_tools"][0]["input_schema"]["expression"]["required"] is True
+    assert surface["deferred_tools"][0]["name"] == "sec.edgar.financials"
+    assert surface["deferred_tools"][0]["schema_available_via"] == "tool.discovery"
+    assert "input_schema" not in surface["deferred_tools"][0]
+
+
 def test_streaming_loop_executes_pending_workbench_followup_before_model_turn() -> None:
     journal = JournalStore.in_memory()
     registry = ToolRegistry()

@@ -266,6 +266,17 @@ short-circuit a different model on the same provider later in the run. Targeted
 structural tests pass (`24` deep-loop tests, `22` context/tool-surface tests,
 `18` processor/fabric tests). This is architecture evidence, not a new finance
 benchmark score.
+The next 2026-06-18 mature-loop parity checkpoint mirrors two more inspected
+TypeScript-loop mechanics. `StreamingToolExecutor` now has bounded worker
+concurrency and a semantic sibling-cancel callback: shell/write/destructive or
+non-read-only exclusive failures can cancel pending siblings, while ordinary
+read/network failures preserve independent tool results for replanning. The
+`assistant.turn` prompt now includes a host-built `tool_surface` from
+`ToolManifest`/`ToolRuntimeSpec`: visible or `always_load` tools expose compact
+input schemas and runtime metadata, while deferred tools expose only briefs and
+route schema lookup through `tool.discovery`. Targeted structural tests pass
+(`25` deep-loop tests, `9` tool-use tests, `15` provider/context tests). This is
+agent-loop/tool-interface evidence, not a FinanceBench/FAB/FinQA score claim.
 The streaming path now also mirrors the inspected TypeScript
 `StreamingToolExecutor` scheduling rule: a streamed tool starts immediately
 when possible, explicitly concurrency-safe tools may run together, and exclusive

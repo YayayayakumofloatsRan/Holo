@@ -126,8 +126,14 @@ class StreamingToolExecutor:
     started / completed event stream.
     """
 
-    def __init__(self, *, emit_event: Callable[[ToolExecutionEvent], None] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        emit_event: Callable[[ToolExecutionEvent], None] | None = None,
+        max_concurrency: int = 10,
+    ) -> None:
         self.emit_event = emit_event
+        self.max_concurrency = max(1, int(max_concurrency or 1))
 
     def execute_batches(
         self,
@@ -137,6 +143,7 @@ class StreamingToolExecutor:
         is_concurrency_safe: Callable[[Any], bool],
         cancel_pending_on_failure: bool = False,
         is_failed: Callable[[Any], bool] | None = None,
+        failure_cancels_siblings: Callable[[Any, Any], bool] | None = None,
         cancel_one: Callable[[Any, str], Any] | None = None,
     ) -> list[Any]:
         outcomes: list[Any] = []
@@ -144,11 +151,10 @@ class StreamingToolExecutor:
             for item in batch:
                 self._emit("queued", item)
             if len(batch) > 1 and all(is_concurrency_safe(item) for item in batch):
-                with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                with ThreadPoolExecutor(max_workers=min(len(batch), self.max_concurrency)) as pool:
                     futures = []
                     for item in batch:
-                        self._emit("started", item)
-                        futures.append((item, pool.submit(execute_one, item)))
+                        futures.append((item, pool.submit(self._execute_with_started_event, item, execute_one)))
                     batch_outcomes = []
                     failure_seen = False
                     for item, future in futures:
@@ -159,7 +165,13 @@ class StreamingToolExecutor:
                             continue
                         outcome = future.result()
                         self._emit("completed", item, outcome=outcome)
-                        if cancel_pending_on_failure and _outcome_failed(outcome, is_failed):
+                        if _outcome_cancels_siblings(
+                            item,
+                            outcome,
+                            cancel_pending_on_failure=cancel_pending_on_failure,
+                            is_failed=is_failed,
+                            failure_cancels_siblings=failure_cancels_siblings,
+                        ):
                             failure_seen = True
                         batch_outcomes.append(outcome)
             else:
@@ -174,11 +186,21 @@ class StreamingToolExecutor:
                     self._emit("started", item)
                     outcome = execute_one(item)
                     self._emit("completed", item, outcome=outcome)
-                    if cancel_pending_on_failure and _outcome_failed(outcome, is_failed):
+                    if _outcome_cancels_siblings(
+                        item,
+                        outcome,
+                        cancel_pending_on_failure=cancel_pending_on_failure,
+                        is_failed=is_failed,
+                        failure_cancels_siblings=failure_cancels_siblings,
+                    ):
                         failure_seen = True
                     batch_outcomes.append(outcome)
             outcomes.extend(batch_outcomes)
         return outcomes
+
+    def _execute_with_started_event(self, item: Any, execute_one: Callable[[Any], Any]) -> Any:
+        self._emit("started", item)
+        return execute_one(item)
 
     def _emit(self, event_type: str, item: Any, *, outcome: Any | None = None) -> None:
         if self.emit_event is None:
@@ -541,6 +563,24 @@ def _outcome_failed(outcome: Any, is_failed: Callable[[Any], bool] | None) -> bo
     observation = getattr(outcome, "observation", None)
     status = str(getattr(observation, "status", "") or "")
     return status not in {"", "ok"}
+
+
+def _outcome_cancels_siblings(
+    item: Any,
+    outcome: Any,
+    *,
+    cancel_pending_on_failure: bool,
+    is_failed: Callable[[Any], bool] | None,
+    failure_cancels_siblings: Callable[[Any, Any], bool] | None,
+) -> bool:
+    if not cancel_pending_on_failure or not _outcome_failed(outcome, is_failed):
+        return False
+    if failure_cancels_siblings is None:
+        return True
+    try:
+        return bool(failure_cancels_siblings(item, outcome))
+    except Exception:
+        return True
 
 
 def _cancelled_outcome(item: Any, cancel_one: Callable[[Any, str], Any] | None, reason: str) -> Any:

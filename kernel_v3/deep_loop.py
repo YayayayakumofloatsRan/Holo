@@ -20,9 +20,10 @@ from kernel_v3.tool_result_budget import (
     apply_tool_result_replacement_budget,
     reconstruct_tool_result_replacement_state,
 )
-from kernel_v3.tool_runtime import tool_runtime_spec_for_action
+from kernel_v3.tool_runtime import tool_runtime_spec_for_action, tool_runtime_spec_for_manifest
 from kernel_v3.tool_use import (
     StreamingToolExecutor,
+    TOOL_DISCOVERY_NAME,
     ToolAbortSignal,
     ToolExecutionEvent,
     project_tool_result_content,
@@ -180,7 +181,12 @@ class ModelAssistantTurnPlanner:
         self.calls.append(context)
         task_id = _task_id(context)
         run_id = _run_id(context)
-        prompt = _assistant_turn_prompt(context, feedback, allowed_tool_names=self.allowed_tool_names)
+        prompt = _assistant_turn_prompt(
+            context,
+            feedback,
+            allowed_tool_names=self.allowed_tool_names,
+            tool_manifests=self.tool_manifests,
+        )
         outcome = self.fabric.run_json(
             task_type="assistant.turn",
             task_id=task_id,
@@ -216,7 +222,12 @@ class ModelAssistantTurnPlanner:
         index = len(self.calls)
         task_id = _task_id(context)
         run_id = _run_id(context)
-        prompt = _assistant_turn_prompt(context, feedback, allowed_tool_names=self.allowed_tool_names)
+        prompt = _assistant_turn_prompt(
+            context,
+            feedback,
+            allowed_tool_names=self.allowed_tool_names,
+            tool_manifests=self.tool_manifests,
+        )
         parameters = {"adapter": "ModelAssistantTurnPlanner", **_processor_budget_parameters_from_context(context)}
         native_surface = openai_native_tool_surface(self.tool_manifests, allowed_tool_names=self.allowed_tool_names)
         stream_parameters = {**parameters, "streaming_planner": True}
@@ -826,6 +837,7 @@ class DeepAgentLoopController(LoopControllerV3):
             is_concurrency_safe=lambda item: _is_concurrency_safe(item.action, item.manifest),
             cancel_pending_on_failure=True,
             is_failed=_execution_item_failed,
+            failure_cancels_siblings=_tool_failure_cancels_siblings,
             cancel_one=lambda item, reason: self._cancelled_execution_item(task, step_id=step_id, prepared=item, reason=reason),
         )
         for item in batch_items:
@@ -1956,6 +1968,7 @@ def _assistant_turn_prompt(
     feedback: Feedback | None,
     *,
     allowed_tool_names: set[str],
+    tool_manifests: list[ToolManifest] | None = None,
 ) -> str:
     payload = {
         "contract": ASSISTANT_TURN_PROMPT_CONTRACT,
@@ -1963,6 +1976,7 @@ def _assistant_turn_prompt(
         "feedback": feedback.to_dict() if feedback is not None else None,
         "continuation_contract": _feedback_continuation_contract(feedback),
         "allowed_tool_names": sorted(allowed_tool_names),
+        "tool_surface": _assistant_turn_tool_surface(tool_manifests or [], allowed_tool_names=allowed_tool_names),
         "tool_call_protocol": {
             "tool_call_shape": {
                 "tool_call_id": "stable id for this call, unique within the turn",
@@ -1976,6 +1990,97 @@ def _assistant_turn_prompt(
     }
     sanitized = apply_provider_message_replacement_view(payload)
     return json.dumps(sanitized, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _assistant_turn_tool_surface(
+    tool_manifests: list[ToolManifest],
+    *,
+    allowed_tool_names: set[str],
+) -> JsonObject:
+    allowed = set(allowed_tool_names)
+    visible: list[JsonObject] = []
+    deferred: list[JsonObject] = []
+    for manifest in tool_manifests:
+        if manifest.name not in allowed:
+            continue
+        runtime = tool_runtime_spec_for_manifest(manifest)
+        brief: JsonObject = {
+            "name": manifest.name,
+            "description": _preview_text(str(manifest.description or ""), 220),
+            "side_effect_class": manifest.side_effect_class,
+            "permissions_required": list(manifest.permissions_required)[:8],
+            "runtime": {
+                "concurrency_safe": runtime.concurrency_safe,
+                "read_only": runtime.read_only,
+                "destructive": runtime.destructive,
+                "open_world": runtime.open_world,
+                "timeout_seconds": runtime.timeout_seconds,
+                "max_result_size_chars": runtime.max_result_size_chars,
+                "should_defer": runtime.should_defer,
+                "always_load": runtime.always_load,
+            },
+        }
+        if runtime.should_defer and not runtime.always_load:
+            deferred.append(
+                {
+                    **brief,
+                    "schema_available_via": TOOL_DISCOVERY_NAME,
+                    "defer_rule": "Call tool.discovery when this tool may be needed and exact arguments/schema are not already known.",
+                }
+            )
+            continue
+        visible.append({**brief, "input_schema": _compact_tool_input_schema(manifest.input_schema)})
+    return {
+        "schema": "holo.kernel_v3.assistant_turn_tool_surface.v1",
+        "visible_tools": visible,
+        "deferred_tools": deferred,
+        "visible_tool_count": len(visible),
+        "deferred_tool_count": len(deferred),
+        "host_rule": (
+            "Use visible input_schema for direct tool_calls. For deferred tools or uncertain schemas, "
+            "call tool.discovery first; the host still validates every tool call."
+        ),
+    }
+
+
+def _compact_tool_input_schema(value: object, *, limit: int = 32) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    compact: JsonObject = {}
+    for key, raw in list(value.items())[:limit]:
+        key_text = str(key)
+        if key_text.startswith("_"):
+            continue
+        compact[key_text] = _compact_tool_schema_value(raw, depth=0)
+    if len(value) > limit:
+        compact["_truncated"] = True
+        compact["_total_keys"] = len(value)
+    return compact
+
+
+def _compact_tool_schema_value(value: object, *, depth: int) -> object:
+    if depth >= 3:
+        return _preview_json_value(value, limit=180)
+    if isinstance(value, dict):
+        result: JsonObject = {}
+        for key, raw in list(value.items())[:16]:
+            key_text = str(key)
+            if key_text in {"description", "notes", "use_when", "examples"} and isinstance(raw, str):
+                result[key_text] = _preview_text(raw, 220)
+            elif key_text.startswith("_"):
+                continue
+            else:
+                result[key_text] = _compact_tool_schema_value(raw, depth=depth + 1)
+        if len(value) > 16:
+            result["_truncated"] = True
+        return result
+    if isinstance(value, list):
+        return [_compact_tool_schema_value(item, depth=depth + 1) for item in value[:8]]
+    if isinstance(value, str):
+        return _preview_text(value, 220)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return str(value)[:220]
 
 
 def _feedback_continuation_contract(feedback: Feedback | None) -> JsonObject:
@@ -2118,6 +2223,13 @@ def _try_parse_json_object(text: str) -> JsonObject | None:
     return _json_object(decoded) if isinstance(decoded, dict) else None
 
 
+def _preview_text(text: str, limit: int) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 3)] + "..."
+
+
 def _compact_context_for_turn(context: ContextBundle) -> JsonObject:
     state = context.state
     selected_keys = [
@@ -2196,6 +2308,20 @@ def _is_concurrency_safe(action: CandidateAction, manifest: Any) -> bool:
 
 def _execution_item_failed(item: _ToolExecutionItem) -> bool:
     return item.observation.status not in {"ok"}
+
+
+def _tool_failure_cancels_siblings(item: _PreparedToolCall, outcome: _ToolExecutionItem) -> bool:
+    if not _execution_item_failed(outcome):
+        return False
+    spec = tool_runtime_spec_for_action(item.action, item.manifest)
+    side_effect = str(
+        getattr(item.manifest, "side_effect_class", item.action.side_effect_class) or item.action.side_effect_class
+    ).strip().lower()
+    if spec.destructive or side_effect in {"shell", "write", "destructive"}:
+        return True
+    if not spec.read_only and not spec.concurrency_safe:
+        return True
+    return False
 
 
 def _with_tool_call_id(observation: Observation, tool_call_id: str) -> Observation:

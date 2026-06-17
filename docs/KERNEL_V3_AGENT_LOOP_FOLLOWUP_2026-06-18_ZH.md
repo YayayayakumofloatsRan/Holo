@@ -141,3 +141,43 @@ tool result、feedback、恢复/继续状态组成下一轮模型可见的稳定
 本轮没有新增可报告的 held-out finance benchmark 分数。下一步应继续用 live
 debug50 类型簇验证：模型是否能利用 `agent_trace` 和工具 surface 自主恢复失败、
 补齐证据、计算并通过 verifier。
+
+## 8. Mature-loop executor/tool-surface parity checkpoint
+
+用户再次强调优先照搬成熟 agent loop，而不是继续自研低层循环。本轮继续对照
+本地 TypeScript 项目的 `queryLoop`、`Tool`、`StreamingToolExecutor`、
+`toolOrchestration` 和 `toolSearch`，把两项通用运行语义补进 Holo：
+
+- `StreamingToolExecutor` 新增有界并发，默认同批 concurrency-safe 工具最多
+  10 个 worker，而不是按批大小无限启动；`started` 事件现在由 worker 真正
+  开始执行时发出。
+- 工具失败是否取消 sibling 不再是全局布尔值。`DeepAgentLoopController` 现在
+  只让 shell/write/destructive 或非只读独占工具失败触发 pending sibling
+  cancel；普通 read/network 工具失败保留其他独立工具结果，避免复杂研究题里
+  一个网页/SEC 查询失败就误伤同批计算、文档读取和检索。
+- `assistant.turn` prompt 新增 `tool_surface` 合同：visible/always-load 工具
+  暴露 compact `input_schema`、runtime、权限和 side-effect；deferred 工具只
+  暴露 brief，并明确要求模型通过 `tool.discovery` 获取完整 schema。
+- 该工具面来自 host registry 的 `ToolManifest` 和 `ToolRuntimeSpec`，仍保持
+  “模型选择，host 校验/执行/记录”的边界；没有新增金融题面规则，也没有任何
+  benchmark 答案表。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_tool_use.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_phase3_context_compiler.py tests/test_kernel_v3_phase1_context_trace.py -q
+```
+
+结果：
+
+- `25 passed in 3.27s`
+- `9 passed in 0.22s`
+- `15 passed in 0.34s`
+
+说明：这是 agent loop/tool interface 成熟度修复，不是新的 FinanceBench、
+FAB/FinAgent 或 FinQA 准确率。下一步应在 live debug50 类型簇上验证：模型
+是否能利用显式 `tool_surface` 一次性构造更正确的 `sec.edgar.financials`、
+`retrieval.run`、`document.*`、`calculator.compute` 和 `finance.slot_bind`
+调用链。
