@@ -259,6 +259,7 @@ class _ToolExecutionItem:
     manifest: Any
     observation: Observation
     artifact_refs: list[Any]
+    context_updates: list[JsonObject]
     policy_allowed: bool
     policy_reason: str
 
@@ -900,6 +901,7 @@ class DeepAgentLoopController(LoopControllerV3):
                 manifest=manifest,
                 observation=observation,
                 artifact_refs=[],
+                context_updates=[],
                 policy_allowed=False,
                 policy_reason=decision.reason,
             )
@@ -911,6 +913,7 @@ class DeepAgentLoopController(LoopControllerV3):
                 manifest=manifest,
                 observation=observation,
                 artifact_refs=[],
+                context_updates=[],
                 policy_allowed=False,
                 policy_reason=pre_exec_guard,
             )
@@ -949,6 +952,12 @@ class DeepAgentLoopController(LoopControllerV3):
             manifest=manifest,
             observation=observation,
             artifact_refs=list(tool_result.artifact_refs),
+            context_updates=_tool_context_updates_for_result(
+                tool_result,
+                observation=observation,
+                action=action,
+                manifest=manifest,
+            ),
             policy_allowed=True,
             policy_reason=decision.reason,
         )
@@ -991,6 +1000,7 @@ class DeepAgentLoopController(LoopControllerV3):
             manifest=None,
             observation=observation,
             artifact_refs=[],
+            context_updates=[],
             policy_allowed=False,
             policy_reason="invalid_tool_call",
         )
@@ -1024,6 +1034,7 @@ class DeepAgentLoopController(LoopControllerV3):
             manifest=prepared.manifest,
             observation=observation,
             artifact_refs=[],
+            context_updates=[],
             policy_allowed=False,
             policy_reason=reason,
         )
@@ -1063,6 +1074,7 @@ class DeepAgentLoopController(LoopControllerV3):
             manifest=prepared.manifest,
             observation=observation,
             artifact_refs=[],
+            context_updates=[],
             policy_allowed=False,
             policy_reason=reason,
         )
@@ -1101,6 +1113,25 @@ class DeepAgentLoopController(LoopControllerV3):
             },
             artifact_refs=[artifact.artifact_id for artifact in item.artifact_refs if hasattr(artifact, "artifact_id")],
         )
+        for update in item.context_updates:
+            update_id = str(update.get("update_id") or f"tool-context-{item.observation.observation_id}")
+            self.journal.append(
+                task_id=task.task_id,
+                run_id=task.run_id,
+                step_id=step_id,
+                kind="tool_context_update",
+                data=redact_journal_data({**update, "update_id": update_id}),
+                event_ref=self._last_ref(task.task_id, "event_ref"),
+                action_ref=item.action.action_id,
+                observation_ref=item.observation.observation_id,
+                state_delta={
+                    "tool_context_update": str(update.get("update_type") or "observation_context"),
+                    "tool": str(update.get("tool") or item.action.name or ""),
+                },
+                artifact_refs=[str(ref) for ref in update.get("artifact_refs", [])[:8]]
+                if isinstance(update.get("artifact_refs"), list)
+                else [],
+            )
 
     def _tool_batch_observation(
         self,
@@ -1132,6 +1163,11 @@ class DeepAgentLoopController(LoopControllerV3):
                 "artifact_refs": artifact_refs,
                 "content_preview": _preview_json_value(item.observation.content),
                 "content_projection": project_tool_result_content(item.observation.content).to_dict(),
+                "context_update_refs": [
+                    str(update.get("update_id"))
+                    for update in item.context_updates
+                    if update.get("update_id")
+                ],
             }
             if tool_result_artifact is not None:
                 artifact_id = str(tool_result_artifact.artifact_id)
@@ -2310,6 +2346,162 @@ def _with_tool_call_id(observation: Observation, tool_call_id: str) -> Observati
         action_id=observation.action_id,
         tool_call_id=observation.tool_call_id or tool_call_id,
     )
+
+
+def _tool_context_updates_for_result(
+    tool_result: Any,
+    *,
+    observation: Observation,
+    action: CandidateAction,
+    manifest: ToolManifest | None,
+) -> list[JsonObject]:
+    updates: list[JsonObject] = []
+    updates.extend(
+        _normalize_explicit_context_updates(
+            getattr(tool_result, "context_updates", []),
+            observation=observation,
+            action=action,
+            manifest=manifest,
+        )
+    )
+    derived = _derived_tool_context_update(observation, action=action, manifest=manifest)
+    if derived:
+        updates.append(derived)
+    return updates[:8]
+
+
+def _normalize_explicit_context_updates(
+    values: object,
+    *,
+    observation: Observation,
+    action: CandidateAction,
+    manifest: ToolManifest | None,
+) -> list[JsonObject]:
+    raw_updates = values if isinstance(values, list) else []
+    updates: list[JsonObject] = []
+    for index, raw in enumerate(raw_updates, start=1):
+        if not isinstance(raw, dict):
+            continue
+        update = _json_object(raw)
+        update.setdefault("schema", "holo.kernel_v3.tool_context_update.v1")
+        update.setdefault("update_id", f"tool-context-{observation.observation_id}-explicit-{index}")
+        update.setdefault("update_type", "tool_declared_context")
+        update.setdefault("tool", action.name or getattr(manifest, "name", ""))
+        update.setdefault("source_observation_id", observation.observation_id)
+        update.setdefault("source_observation_kind", observation.kind)
+        update.setdefault("status", observation.status)
+        update.setdefault("host_boundary", _TOOL_CONTEXT_UPDATE_BOUNDARY)
+        updates.append(update)
+    return updates
+
+
+def _derived_tool_context_update(
+    observation: Observation,
+    *,
+    action: CandidateAction,
+    manifest: ToolManifest | None,
+) -> JsonObject:
+    if not isinstance(observation.content, dict):
+        return {}
+    content = _json_object(observation.content)
+    hints: JsonObject = {}
+    for key in (
+        "missing_slots",
+        "next_action",
+        "artifact_read_hint",
+        "content_replacement",
+        "content_replacement_applied",
+        "tool_surface_schema",
+        "matched_count",
+        "requested_tool_names",
+        "query",
+        "mode",
+        "truncated",
+        "reason",
+    ):
+        if key in content:
+            hints[key] = _compact_context_update_value(content[key])
+    tools = content.get("tools")
+    if isinstance(tools, list):
+        hints["tools"] = [
+            _compact_context_update_tool(item)
+            for item in tools[:8]
+            if isinstance(item, dict)
+        ]
+    artifact = content.get("artifact")
+    if isinstance(artifact, dict):
+        hints["artifact"] = {
+            key: artifact.get(key)
+            for key in ("artifact_id", "kind", "uri")
+            if artifact.get(key) is not None
+        }
+    if not hints:
+        return {}
+    artifact_refs: list[str] = []
+    direct_artifact_refs = content.get("artifact_refs")
+    if isinstance(direct_artifact_refs, list):
+        artifact_refs.extend(str(ref) for ref in direct_artifact_refs[:8] if str(ref))
+    hint = content.get("artifact_read_hint")
+    if isinstance(hint, dict):
+        artifact_id = hint.get("artifact_id")
+        if isinstance(artifact_id, str) and artifact_id:
+            artifact_refs.append(artifact_id)
+    return {
+        "schema": "holo.kernel_v3.tool_context_update.v1",
+        "update_id": f"tool-context-{observation.observation_id}",
+        "update_type": "observation_context",
+        "tool": action.name or getattr(manifest, "name", ""),
+        "source_observation_id": observation.observation_id,
+        "source_observation_kind": observation.kind,
+        "source": observation.source,
+        "status": observation.status,
+        "hints": hints,
+        "artifact_refs": _ordered_unique_strings(artifact_refs),
+        "host_boundary": _TOOL_CONTEXT_UPDATE_BOUNDARY,
+    }
+
+
+def _compact_context_update_tool(item: JsonObject) -> JsonObject:
+    runtime = item.get("runtime") if isinstance(item.get("runtime"), dict) else {}
+    return {
+        key: value
+        for key, value in {
+            "name": item.get("name"),
+            "description": _preview_text(str(item.get("description") or ""), 160),
+            "side_effect_class": item.get("side_effect_class"),
+            "resource_kind": item.get("resource_kind"),
+            "operator_kind": item.get("operator_kind"),
+            "runtime": {
+                key: runtime.get(key)
+                for key in ("concurrency_safe", "read_only", "always_load", "should_defer")
+                if runtime.get(key) is not None
+            },
+        }.items()
+        if value not in (None, "", {}, [])
+    }
+
+
+def _compact_context_update_value(value: object) -> object:
+    if isinstance(value, str):
+        return _preview_text(value, 420)
+    if isinstance(value, list):
+        return [
+            _compact_context_update_value(item)
+            for item in value[:16]
+        ]
+    if isinstance(value, dict):
+        return {
+            str(key): _compact_context_update_value(raw)
+            for key, raw in list(value.items())[:24]
+            if not str(key).startswith("_host_")
+        }
+    return value
+
+
+_TOOL_CONTEXT_UPDATE_BOUNDARY = (
+    "tool context update is an observation-derived hint; the model still owns tool choice, "
+    "semantic binding, and final judgment"
+)
 
 
 def _payload_text(payload: JsonObject) -> str | None:

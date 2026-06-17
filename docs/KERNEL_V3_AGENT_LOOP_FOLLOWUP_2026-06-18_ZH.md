@@ -425,3 +425,49 @@ line item。但新暴露出更底层的成熟 loop 缺口：deep tool batch 内�
 tool discovery、工具上下文替换和类型簇 live debug50 连接起来。下一次 live 不应再长
 回归，而应按题型簇验证：工具路径是否能从 `evidence_replan` 进入正确 filing/source，
 并最终稳定到 slot bind、calculator/formula trace、numeric verifier 和 synthesis gate。
+
+## 14. Tool context update checkpoint
+
+继续对照本地 TypeScript 项目的 `queryLoop` / `runTools`：成熟 loop 在工具执行后不只
+把 tool_result 作为一条消息追加进去，还允许工具返回 `contextModifier`，由 loop 在
+下一轮 API 调用前更新 `ToolUseContext`。这对 Holo 很关键：金融任务里的
+`finance.slot_bind`、`retrieval.workbench`、`artifact.read`、`tool.discovery` 等结果，
+应该能变成稳定的小型工作台提示，而不是只靠下一轮 context compiler 从大量
+observation 中重新猜。
+
+本轮实现了 Holo 版本的 host-owned contextModifier：
+
+- `ToolResult` 新增兼容字段 `context_updates`，默认空列表；现有工具无需修改。
+- `DeepAgentLoopController` 在工具执行后生成 `tool_context_update` ledger：
+  - 工具显式返回的 `context_updates` 会被标准化为
+    `schema=holo.kernel_v3.tool_context_update.v1`。
+  - 普通 observation 若包含 `missing_slots`、`next_action`、`artifact_read_hint`、
+    `content_replacement`、`tool_surface_schema`、`tools` 等通用上下文字段，也会生成
+    一个派生 update。
+  - 每个 deep `tool_batch_result.results[]` 记录 `context_update_refs`，保持 batch
+    observation 与 context update 的可追溯关系。
+- `ContextPackCompiler` 新增可选 `tool_context_updates` section，只暴露最近 4 条；
+  小预算下只保留最近 2 条和紧凑 hints。它与 `agent_trace`、`recent_observations`
+  分开，避免把大工具结果绕回 prompt。
+
+边界：这不是让工具直接改 Holo 状态对象，也不是让 host 选择金融答案。update 只是
+observation-derived hint，仍由模型决定下一步工具、语义绑定、公式和最终判断；host 只
+负责标准化、记录、预算压缩和暴露。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_phase3_context_compiler.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_phase3_context_compiler.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_processor_streaming.py tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase1_journal_store.py tests/test_kernel_v3_phase3_context_compiler.py tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_processor_streaming.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_tool_readiness.py tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_phase61_workloop.py -q
+```
+
+结果：
+
+- `37 passed in 3.50s`
+- `356 passed in 11.64s`
+- `494 passed in 33.23s`
+
+下一步仍应继续搬成熟 loop 的运行时能力：动态 token-aware tool expansion、运行中
+progress/result 注入同一 provider conversation，以及按 debug50 题型簇做 live 验证。
+这些才会直接推动 FB/FQA 做题指标，而不是在单题上继续打补丁。

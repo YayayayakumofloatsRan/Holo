@@ -27,7 +27,7 @@ from kernel_v3.processors.contracts import ProcessorStreamEvent
 from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.testing.fakes import FakeEvaluator
 from kernel_v3.tool_use import emit_tool_progress, tool_abort_requested
-from kernel_v3.tools import ToolRegistry
+from kernel_v3.tools import ToolRegistry, ToolResult
 
 
 class FakeTurnPlanner:
@@ -149,6 +149,86 @@ def test_deep_agent_loop_executes_multi_tool_turn_and_journals_batch() -> None:
     ]
     assert {context["schema"] for context in contexts} == {"holo.kernel_v3.tool_use_context.v1"}
     assert {context["tool_call_id"] for context in contexts} == {"call-alpha", "call-beta"}
+
+
+def test_deep_agent_loop_projects_tool_context_updates_into_next_turn() -> None:
+    registry = ToolRegistry()
+    registry.register("stateful.read", _context_update_tool())
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-stateful-read",
+                message="read stateful result",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-stateful",
+                        name="stateful.read",
+                        arguments={"query": "missing ppe"},
+                        reason="need a tool-declared context update",
+                    )
+                ],
+            ),
+            AssistantTurn(
+                turn_id="turn-final-after-update",
+                message=None,
+                tool_calls=[],
+                final_answer="context update was visible",
+                reasons=["tool_context_update_visible"],
+            ),
+        ]
+    )
+
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator(
+            [
+                {
+                    "status": "continue",
+                    "stop_reason": None,
+                    "answer": None,
+                    "missing_evidence": ["tool_context_update_refresh"],
+                },
+                {
+                    "status": "final_answer_ready",
+                    "stop_reason": "completed",
+                    "answer": "context update was visible",
+                    "missing_evidence": [],
+                },
+            ]
+        ),
+        max_steps=3,
+    )
+
+    result = loop.run("prove tool context updates reach the next turn")
+
+    assert result.status == "completed"
+    update_records = journal.records(task_id=result.task_id, kind="tool_context_update")
+    assert len(update_records) == 2
+    assert {record.data["update_type"] for record in update_records} == {
+        "tool_declared_context",
+        "observation_context",
+    }
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    assert batch.data["content"]["results"][0]["context_update_refs"]
+
+    second_context = planner.calls[1].state
+    updates = next(
+        section
+        for section in second_context["sections"]
+        if section["name"] == "tool_context_updates"
+    )["updates"]
+    assert updates[0]["hints"]["missing_slots"] == ["net_ppne"]
+    assert updates[0]["hints"]["next_action"]["tool"] == "retrieval.run"
+    assert updates[1]["hints"]["missing_slots"] == ["net_ppne"]
 
 
 def test_deep_agent_loop_terminal_turn_uses_final_answer_path() -> None:
@@ -1710,6 +1790,45 @@ def _read_tool(name: str):
             observed_at_ms=0,
             action_id=action.action_id,
             tool_call_id=None,
+        )
+
+    return execute
+
+
+def _context_update_tool():
+    def execute(action: CandidateAction) -> ToolResult:
+        observation = Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source=f"tool:{action.name}",
+            content={
+                "missing_slots": ["net_ppne"],
+                "next_action": {
+                    "tool": "retrieval.run",
+                    "query": "3M FY2022 10-K net PP&E",
+                },
+            },
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+        return ToolResult(
+            observation=observation,
+            artifact_refs=[],
+            context_updates=[
+                {
+                    "update_type": "tool_declared_context",
+                    "hints": {
+                        "missing_slots": ["net_ppne"],
+                        "next_action": {
+                            "tool": "retrieval.run",
+                            "query": "3M FY2022 10-K net PP&E",
+                        },
+                    },
+                }
+            ],
         )
 
     return execute

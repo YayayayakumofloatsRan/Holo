@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 import re
 import subprocess
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -60,6 +60,7 @@ WORKSPACE_LIST_MAX_ENTRIES = 200
 class ToolResult:
     observation: Observation
     artifact_refs: list[ArtifactRef]
+    context_updates: list[JsonObject] = field(default_factory=list)
 
 
 ToolExecutor = Callable[[CandidateAction], Observation | ToolResult]
@@ -318,6 +319,7 @@ class ToolRegistry:
         return ToolResult(
             observation=result.observation,
             artifact_refs=[_artifact_for_observation(result.observation)],
+            context_updates=list(result.context_updates),
         )
 
 

@@ -108,6 +108,7 @@ class ContextPackCompiler:
         records = journal.records(task_id=task.task_id)
         event_records = [record for record in records if record.kind in {"event", "resume"}]
         observation_records = [record for record in records if record.kind == "observation"][-3:]
+        tool_context_records = [record for record in records if record.kind == "tool_context_update"][-4:]
         agent_trace_limit = _agent_trace_record_limit(
             token_budget=self.token_budget,
             section_budget=self.section_budget,
@@ -162,6 +163,17 @@ class ContextPackCompiler:
             {"name": "tool_briefs", "tools": [_compact_tool_brief(item) for item in list(tool_briefs or [])]},
             {"name": "permission_state", "permission": _compact_permission_state(self.permission_state)},
         ]
+        if tool_context_records:
+            sections.insert(
+                4 if agent_trace_limit > 0 else 3,
+                {
+                    "name": "tool_context_updates",
+                    "updates": [_compact_tool_context_update(record.data) for record in tool_context_records],
+                    "record_limit": 4,
+                    "purpose": "recent tool-result context updates for next-step planning",
+                    "host_boundary": "observational hints only; the model chooses the next tool and semantic action",
+                },
+            )
         if agent_trace_limit > 0:
             sections.insert(
                 3,
@@ -207,6 +219,11 @@ class ContextPackCompiler:
             "tool_briefs": {"tools": [_compact_tool_brief(item) for item in list(tool_briefs or [])]},
             "permission_state": {"permission": _compact_permission_state(self.permission_state)},
         }
+        if tool_context_records:
+            budget_views["tool_context_updates"] = {
+                "updates": [_tool_context_update_budget_view(record.data) for record in tool_context_records],
+                "record_limit": 4,
+            }
         if agent_trace_limit > 0:
             budget_views["agent_trace"] = {
                 "records": [_agent_trace_budget_view(record) for record in agent_trace_records],
@@ -225,6 +242,7 @@ class ContextPackCompiler:
                 raise BudgetExceeded("bundle", total_units, self.token_budget)
             total_units = self._truncate_bundle(redacted_sections, section_units, total_units, compacted_section_names)
         source_refs = [record.record_id for record in event_records[-1:] + observation_records]
+        source_refs.extend(record.record_id for record in tool_context_records)
         source_refs.extend(artifact_ids)
         source_refs.extend(
             _ordered_unique(
@@ -311,6 +329,7 @@ class ContextPackCompiler:
             "durable_memory",
             "memory_refs",
             "agent_trace",
+            "tool_context_updates",
             "recent_observations",
             "project_profile",
         ]
@@ -409,6 +428,10 @@ class ContextPackCompiler:
             records = section.get("records")
             if isinstance(records, list):
                 del records[4:]
+        elif name == "tool_context_updates":
+            updates = section.get("updates")
+            if isinstance(updates, list):
+                del updates[2:]
         _truncate_text_values(section, limit=8)
         if name == "recent_observations":
             records = section.get("records")
@@ -458,6 +481,14 @@ class ContextPackCompiler:
                         payload = record.get(key)
                         if isinstance(payload, dict):
                             record[key] = _compact_nested_content(payload)
+        elif name == "tool_context_updates":
+            updates = section.get("updates")
+            if isinstance(updates, list):
+                for update in updates:
+                    if isinstance(update, dict):
+                        update["hints"] = _compact_nested_content(
+                            update.get("hints") if isinstance(update.get("hints"), dict) else {}
+                        )
 
     def _minimize_agent_trace_section(self, section: JsonObject) -> None:
         records = section.get("records")
@@ -911,6 +942,28 @@ def _compact_observation(data: JsonObject) -> JsonObject:
     else:
         compacted["content"] = content
     return compacted
+
+
+def _compact_tool_context_update(data: JsonObject) -> JsonObject:
+    hints = data.get("hints") if isinstance(data.get("hints"), dict) else {}
+    return {
+        key: value
+        for key, value in {
+            "schema": data.get("schema"),
+            "update_id": data.get("update_id"),
+            "update_type": data.get("update_type"),
+            "tool": data.get("tool"),
+            "source_observation_id": data.get("source_observation_id"),
+            "source_observation_kind": data.get("source_observation_kind"),
+            "status": data.get("status"),
+            "hints": _compact_nested_content(hints),
+            "artifact_refs": [str(ref) for ref in data.get("artifact_refs", [])[:8]]
+            if isinstance(data.get("artifact_refs"), list)
+            else [],
+            "host_boundary": data.get("host_boundary"),
+        }.items()
+        if value not in (None, "", {}, [])
+    }
 
 
 def _compact_tool_batch_content(content: JsonObject) -> JsonObject:
@@ -1430,6 +1483,18 @@ def _agent_trace_budget_view(record: LedgerRecord) -> JsonObject:
         budget_view["st"] = data.get("status")
         budget_view["reason"] = data.get("reason") or data.get("stop_reason")
     return budget_view
+
+
+def _tool_context_update_budget_view(data: JsonObject) -> JsonObject:
+    hints = data.get("hints") if isinstance(data.get("hints"), dict) else {}
+    return {
+        "u": data.get("update_id"),
+        "t": data.get("tool"),
+        "k": data.get("update_type"),
+        "st": data.get("status"),
+        "o": data.get("source_observation_id"),
+        "h": _compact_nested_content(hints),
+    }
 
 
 def _observation_budget_view(data: JsonObject) -> JsonObject:

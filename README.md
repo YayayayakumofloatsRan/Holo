@@ -251,7 +251,17 @@ answer can be delivered. The context compiler also has a minimal `agent_trace`
 projection and an explicit omit fallback for very small section budgets. Targeted
 structure tests pass (`483` kernel-v3 loop/tool/finance tests). This is
 agent-loop stability evidence, not a benchmark score.
-The latest P0 continuation extends provider-message replacement beyond prompt
+The next mature-loop continuation ports the inspected TypeScript loop's
+`contextModifier` idea into Holo's host-owned journal boundary. `ToolResult`
+can now carry `context_updates`; deep-loop execution standardizes explicit and
+observation-derived updates into `tool_context_update` ledger records, links
+them from `tool_batch_result.context_update_refs`, and exposes recent compact
+updates through a `tool_context_updates` context-pack section. This lets
+slot-binding, workbench, artifact, and discovery tools pass next-step context to
+the following model turn without letting tools directly choose finance facts or
+answers. Targeted structure tests pass (`494` kernel-v3 loop/context/tool/finance
+tests). This is agent-loop substrate evidence, not a benchmark score.
+The provider-message replacement continuation extends replacement beyond prompt
 strings: deep-loop assistant prompts, `ProcessorFabric` JSON prompts, request
 parameters, OpenAI-compatible `provider_messages`, and structured provider
 message content now rewrite replaced large tool results to stable bounded

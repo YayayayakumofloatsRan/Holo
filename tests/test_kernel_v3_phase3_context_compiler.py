@@ -535,6 +535,46 @@ def test_context_pack_recent_observations_memory_refs_and_citations_use_same_win
     assert pack.source_refs == ["ledger-2", "ledger-5", "ledger-6", "ledger-7", "artifact-3", "artifact-4", "artifact-5"]
 
 
+def test_context_pack_exposes_recent_tool_context_updates():
+    journal, artifacts, task = _seed_context_inputs()
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-2",
+        kind="tool_context_update",
+        data={
+            "schema": "holo.kernel_v3.tool_context_update.v1",
+            "update_id": "tool-context-1",
+            "update_type": "observation_context",
+            "tool": "finance.slot_bind",
+            "source_observation_id": "obs-1",
+            "source_observation_kind": "finance_slot_bind",
+            "status": "ok",
+            "hints": {
+                "missing_slots": ["net_ppne"],
+                "next_action": {"tool": "retrieval.run", "query": "3M FY2022 10-K net PP&E"},
+            },
+            "artifact_refs": ["artifact-obs-1"],
+            "host_boundary": "observational hint only",
+        },
+        observation_ref="obs-1",
+        artifact_refs=["artifact-obs-1"],
+    )
+
+    pack = ContextPackCompiler(
+        artifact_store=artifacts,
+        memory_read=MemoryRead(journal=journal, artifact_store=artifacts),
+        token_budget=1024,
+        section_budget=256,
+    ).compile(task, journal, step_id="step-2")
+
+    updates = next(section for section in pack.sections if section["name"] == "tool_context_updates")
+    assert updates["updates"][0]["tool"] == "finance.slot_bind"
+    assert updates["updates"][0]["hints"]["missing_slots"] == ["net_ppne"]
+    assert updates["updates"][0]["hints"]["next_action"]["tool"] == "retrieval.run"
+    assert "ledger-4" in pack.source_refs
+
+
 def _seed_context_inputs():
     journal = JournalStore.in_memory()
     task = SessionEngine.from_journal(journal).start("read README", thread_id="thread-a", journal=journal)
