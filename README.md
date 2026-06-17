@@ -175,10 +175,15 @@ current validation still feeds it completed assistant turns. The next P0
 substrate checkpoint adds manifest-level `ToolRuntimeSpec` projection into
 tool discovery and execution context, batch-observation tool-result replacement
 state, and a processor streaming event contract with OpenAI-compatible SSE
-parsing scaffolding; native streaming tool-use is still not wired into
-`DeepAgentLoopController`. `finance-fact-fast` remains on the LangGraph fast
-lane for now. This is a structural loop milestone, not a finance benchmark
-score.
+parsing scaffolding. The following P0 continuation wires
+`ModelAssistantTurnPlanner(use_streaming=True)` to consume
+`ProcessorFabric.stream_events(...)`, normalize OpenAI-style `tool_call_delta`
+events into `ToolCallRequest`, and route malformed streamed arguments into
+synthetic parse-error observations. This proves stream events can enter the
+host policy/tool/journal chain, while true immediate "tool delta arrives -> tool
+starts running" execution remains open. `finance-fact-fast` remains on the
+LangGraph fast lane for now. This is a structural loop milestone, not a finance
+benchmark score.
 The debug50 architecture reset is recorded in
 `docs/KERNEL_V3_DEBUG50_REQUIREMENTS_AND_GENERIC_FINANCE_LOOP_2026-06-17_ZH.md`.
 It stops per-question patching, groups the first 50 FinanceBench debug prompts
@@ -190,10 +195,11 @@ The external-loop parity audit is recorded in
 `docs/KERNEL_V3_EXTERNAL_LOOP_PARITY_AUDIT_2026-06-17_ZH.md`. It compares the
 local TypeScript agent-loop project against Holo Kernel v3 and identifies the
 remaining hard gaps after the first P0 substrate checkpoint: provider-native
-streaming tool-use inside the deep loop, full execution semantics for the thicker
-tool runtime spec, provider-packet-level stable tool-result replacement,
-progress/abort-capable tool execution, deferred tool loading, and type-family
-live debug50 evaluation. This is a design audit, not a finance benchmark score.
+instant tool execution inside the deep loop, provider payload support for native
+tool schemas, full execution semantics for the thicker tool runtime spec,
+provider-packet-level stable tool-result replacement, progress/abort-capable
+tool execution, deferred tool loading, and type-family live debug50 evaluation.
+This is a design audit, not a finance benchmark score.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in

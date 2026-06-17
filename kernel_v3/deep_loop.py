@@ -7,7 +7,7 @@ from typing import Any, Protocol
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.loop import LoopControllerV3, _journal_action_data
-from kernel_v3.processors.contracts import JsonSchema
+from kernel_v3.processors.contracts import JsonSchema, ProcessorStreamEvent
 from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.result import AgentResult
 from kernel_v3.session import TaskState
@@ -142,27 +142,43 @@ class ModelAssistantTurnPlanner:
         provider: str | None = None,
         model: str | None = None,
         allowed_tool_names: set[str] | None = None,
+        use_streaming: bool = False,
     ) -> None:
         self.fabric = fabric
         self.provider = provider
         self.model = model
         self.allowed_tool_names = set(allowed_tool_names or set())
+        self.use_streaming = bool(use_streaming)
         self.calls: list[ContextBundle] = []
 
     def propose_turn(self, context: ContextBundle, feedback: Feedback | None = None) -> AssistantTurn:
         self.calls.append(context)
         task_id = _task_id(context)
         run_id = _run_id(context)
+        prompt = _assistant_turn_prompt(context, feedback, allowed_tool_names=self.allowed_tool_names)
+        parameters = {"adapter": "ModelAssistantTurnPlanner", **_processor_budget_parameters_from_context(context)}
+        if self.use_streaming:
+            events = self.fabric.stream_events(
+                task_type="assistant.turn",
+                task_id=task_id,
+                run_id=run_id,
+                context_id=context.context_id,
+                prompt=prompt,
+                provider=self.provider,
+                model=self.model,
+                parameters={**parameters, "streaming_planner": True},
+            )
+            return _assistant_turn_from_stream_events(events, index=len(self.calls))
         outcome = self.fabric.run_json(
             task_type="assistant.turn",
             task_id=task_id,
             run_id=run_id,
             context_id=context.context_id,
-            prompt=_assistant_turn_prompt(context, feedback, allowed_tool_names=self.allowed_tool_names),
+            prompt=prompt,
             schema=ASSISTANT_TURN_SCHEMA,
             provider=self.provider,
             model=self.model,
-            parameters={"adapter": "ModelAssistantTurnPlanner", **_processor_budget_parameters_from_context(context)},
+            parameters=parameters,
         )
         if outcome.parsed is None:
             return AssistantTurn(
@@ -856,6 +872,115 @@ def _assistant_turn_from_json(data: JsonObject, *, index: int = 1) -> AssistantT
     )
 
 
+def _assistant_turn_from_stream_events(events: list[ProcessorStreamEvent], *, index: int = 1) -> AssistantTurn:
+    turn_id = f"turn-stream-{index}"
+    text_parts: list[str] = []
+    final_text = ""
+    finish_reason: str | None = None
+    stream_errors: list[ToolCallParseError] = []
+    tool_chunks: dict[str, dict[str, object]] = {}
+
+    for event in sorted(events, key=lambda item: item.sequence):
+        delta = event.delta
+        if event.event_type == "content_delta":
+            text = delta.get("text")
+            if isinstance(text, str):
+                text_parts.append(text)
+        elif event.event_type == "tool_call_delta":
+            for raw_call in _stream_tool_call_items(delta.get("tool_calls")):
+                key = _stream_tool_call_key(raw_call, fallback=f"stream-tool-{len(tool_chunks) + 1}")
+                current = tool_chunks.setdefault(key, {"id": key, "name": "", "arguments": "", "raw": []})
+                raw_items = current.get("raw")
+                if isinstance(raw_items, list):
+                    raw_items.append(raw_call)
+                function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+                name = raw_call.get("name")
+                if not isinstance(name, str):
+                    name = function.get("name") if isinstance(function, dict) else None
+                if isinstance(name, str) and name:
+                    current["name"] = str(current.get("name") or "") + name
+                arguments = raw_call.get("arguments")
+                if not isinstance(arguments, str):
+                    arguments = function.get("arguments") if isinstance(function, dict) else None
+                if isinstance(arguments, str) and arguments:
+                    current["arguments"] = str(current.get("arguments") or "") + arguments
+        elif event.event_type == "finish_delta":
+            reason = delta.get("finish_reason")
+            if isinstance(reason, str):
+                finish_reason = reason
+        elif event.event_type == "stream_end":
+            text = delta.get("text")
+            if isinstance(text, str):
+                final_text = text
+            status = delta.get("status")
+            if isinstance(status, str) and status != "ok":
+                stream_errors.append(
+                    ToolCallParseError(
+                        tool_call_id=f"stream-error-{event.sequence}",
+                        error=f"processor_stream_{status}",
+                        raw_preview=_preview_json_value(delta, limit=400),
+                    )
+                )
+        elif event.event_type == "stream_error":
+            stream_errors.append(
+                ToolCallParseError(
+                    tool_call_id=f"stream-error-{event.sequence}",
+                    error=str(delta.get("error") or "processor_stream_error"),
+                    raw_preview=_preview_json_value(delta, limit=400),
+                )
+            )
+
+    text = "".join(text_parts) or final_text
+    parsed = _try_parse_json_object(text)
+    if parsed is not None and not tool_chunks and not stream_errors:
+        return _assistant_turn_from_json(parsed, index=index)
+
+    tool_calls: list[ToolCallRequest] = []
+    parse_errors = list(stream_errors)
+    for offset, chunk in enumerate(tool_chunks.values(), start=1):
+        tool_call_id = str(chunk.get("id") or f"{turn_id}-{offset}")
+        name = str(chunk.get("name") or "").strip()
+        raw_arguments = str(chunk.get("arguments") or "").strip()
+        if not name:
+            parse_errors.append(
+                ToolCallParseError(
+                    tool_call_id=tool_call_id,
+                    error="missing_tool_name",
+                    raw_preview=_preview_json_value(chunk, limit=400),
+                )
+            )
+            continue
+        arguments = _try_parse_json_object(raw_arguments or "{}")
+        if arguments is None:
+            parse_errors.append(
+                ToolCallParseError(
+                    tool_call_id=tool_call_id,
+                    error="invalid_tool_arguments",
+                    raw_preview=_preview_json_value(chunk, limit=400),
+                )
+            )
+            continue
+        tool_calls.append(
+            ToolCallRequest(
+                tool_call_id=tool_call_id,
+                name=name,
+                arguments=arguments,
+                reason="processor_stream_tool_call",
+                side_effect_class="read",
+            )
+        )
+
+    return AssistantTurn(
+        turn_id=turn_id,
+        message=text or None,
+        tool_calls=tool_calls,
+        final_answer=None if tool_calls or parse_errors else (text or None),
+        stop_reason="processor_stream_error" if stream_errors and not tool_calls else finish_reason,
+        reasons=["processor_stream"] + ([finish_reason] if finish_reason else []),
+        parse_errors=parse_errors,
+    )
+
+
 def _assistant_turn_prompt(
     context: ContextBundle,
     feedback: Feedback | None,
@@ -879,6 +1004,33 @@ def _assistant_turn_prompt(
         },
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _stream_tool_call_items(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _stream_tool_call_key(raw_call: JsonObject, *, fallback: str) -> str:
+    for key in ("id", "tool_call_id"):
+        value = raw_call.get(key)
+        if isinstance(value, str) and value:
+            return value
+    index = raw_call.get("index")
+    if isinstance(index, int):
+        return f"index-{index}"
+    return fallback
+
+
+def _try_parse_json_object(text: str) -> JsonObject | None:
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return _json_object(decoded) if isinstance(decoded, dict) else None
 
 
 def _compact_context_for_turn(context: ContextBundle) -> JsonObject:

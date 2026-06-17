@@ -429,12 +429,42 @@ Holo provider 当前仍在 `kernel_v3/processors/providers.py:183-193` 固定 `r
 
 仍未完成：
 
-- `ProcessorFabric.stream_events(...)` 目前是事件收集接口，不是 deep loop 的主执行路径。
-- `OpenAICompatibleProvider.stream(...)` 只能解析 OpenAI-style SSE chunks；尚未把 provider-native tool call delta 接到 Holo `ToolCall` / `CandidateAction` / policy / executor 链路。
-- `DeepAgentLoopController` 仍以完整 JSON `assistant.turn` 为主，工具执行发生在模型完整返回之后；还没有“tool delta 一出现就启动工具”的 streaming loop。
+- `ProcessorFabric.stream_events(...)` 已能通过 `ModelAssistantTurnPlanner(use_streaming=True)` 显式进入 deep loop，但还不是默认主路径。
+- `OpenAICompatibleProvider.stream(...)` 能解析 OpenAI-style SSE chunks；tool-call delta 已能经 stream-to-turn assembler 进入 Holo `ToolCall` / `CandidateAction` / policy / executor 链路，但 provider payload 侧的 native tool schema exposure 还没完成。
+- `DeepAgentLoopController` 默认仍以完整 JSON `assistant.turn` 为主；即使打开 streaming planner，工具执行仍发生在 stream 组装出 `AssistantTurn` 之后，还没有“tool delta 一出现就启动工具”的即时 streaming executor。
 - `ToolResultReplacementState` 当前替换的是 batch observation preview，尚未把完整大结果持久写入独立 tool-results 文件，也尚未做到外部项目那种 API message 发包前统一 `applyToolResultBudget(...)`。
 - `interrupt_behavior` 已进入 runtime spec，但 running tool abort、child abort controller、subprocess/network signal 传递还没有闭合。
 - deferred tool loading 仍是 manifest 搜索，不是 token-aware `should_defer` / `always_load` provider tool exposure。
+
+### 2026-06-17 P0 续进：stream event 可进入 deep loop
+
+本轮续进把 `ProcessorFabric.stream_events(...)` 从“只可单独测试的旁路”接到了 `ModelAssistantTurnPlanner`：
+
+- `ModelAssistantTurnPlanner(use_streaming=True)` 会调用 `ProcessorFabric.stream_events(...)`，而不是 `run_json(...)`。
+- 新增 stream-to-turn assembler，把 `content_delta`、`tool_call_delta`、`finish_delta`、`stream_end`、`stream_error` 组装成 Holo `AssistantTurn`。
+- OpenAI-style `tool_call_delta` 支持按 `id` / `index` 合并分片，并把 `function.name` 和 `function.arguments` 规范化为 `ToolCallRequest`。
+- malformed streamed tool arguments 不会静默丢失，会变成 `ToolCallParseError`，再由现有 deep loop 作为 `tool_call_parse_error` observation 回流。
+- `AgentRuntime` 可通过 recipe metadata `agent_loop.provider_streaming=true` 或 `agent_loop.streaming=true` 显式打开 streaming planner；默认路径仍保留旧 JSON turn，避免破坏现有 live 路径。
+- 结构测试已覆盖：streamed tool call delta 进入 `DeepAgentLoopController` 后执行 host policy/tool executor/journal；malformed streamed arguments 进入 parse error observation。
+
+这一步是 P0 的必要中间层，但不是最终闭环。它证明 Holo 已经能消费 provider stream events 并进入深循环工具链；还没有做到外部项目那种“provider 流式输出 tool_use 的同时立即启动工具并并行 drain progress/result”。下一步必须把 execution 从 planner 返回后批量执行，推进到 provider stream 过程中即时入队执行。
+
+### 与外部项目 agent loop 的剩余差距估计
+
+这个估计只描述 agent loop 技术 parity，不是 FinanceBench / FinQA 分数。
+
+按“复刻成熟项目的通用 agent loop”口径，当前大约完成 55%-60%。已经完成的是合同底座和显式入口：host-owned loop、tool manifest/runtime spec、tool discovery 暴露、tool context 注入、processor stream event、stream-to-turn assembler、parse error observation、journal 记录。模型已经可以通过显式 streaming planner 把 provider stream event 带入 Holo 的 policy/tool/journal 链路。
+
+还差的 40%-45% 主要集中在真正决定通用能力的执行形态：
+
+- Provider 发包层仍要支持 native tool schemas，让 LLM 在一次请求里真实看到可调用工具，而不是只按 JSON `assistant.turn` schema 输出。
+- Deep loop 仍要从“stream 组装完 turn 后批量执行工具”升级到“tool_call delta 足够完整时立即入队执行工具，并并行 drain progress/result”。
+- Tool result replacement 仍要从 batch observation preview 升级到 API message 发包前的统一预算/替换/恢复机制，并把完整结果稳定落到 artifact 或 tool-results 存储。
+- Tool runtime spec 仍要驱动 progress、abort、timeout、concurrency、deferred loading，而不是只作为 discovery/context 元数据。
+- Tool discovery 仍要支持 token-aware deferred/always-load 暴露，避免金融长题里工具太多时模型 one-shot 看不到关键工具，或上下文被工具说明挤爆。
+- Workbench state 仍要更明确地承载 SEC/EDGAR、table query、calculator、formula trace、artifact read、market/search 等临时组装能力。
+
+按“能支撑 FB/FQA live debug 并显著刷分”的口径，当前只有 35%-45%。原因是金融题不只需要 loop 会跑，还需要 provider-native tool exposure、稳定证据读取、表格/公式/计算链、长结果预算、失败重规划和 live evaluation 闭环同时成立。结构进展不能替代 live 做题结果；下一阶段必须用类型簇 debug50 证明这些接口真的提升解题成功率。
 
 ### 对金融能力的直接影响
 

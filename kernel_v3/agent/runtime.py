@@ -794,6 +794,7 @@ class AgentRuntime:
                 return ModelAssistantTurnPlanner(
                     fabric=self.processor_fabric,
                     allowed_tool_names=_planner_allowed_tool_names(recipe),
+                    use_streaming=_recipe_requests_deep_agent_streaming(recipe),
                 )
             planner = ModelPlanner(
                 fabric=self.processor_fabric,
@@ -7170,6 +7171,20 @@ def _recipe_requests_deep_agent_loop(recipe: TaskRecipe) -> bool:
                 return True
         backend = str(container.get("loop_runtime") or container.get("runtime_backend") or "").strip().lower()
         if backend in {"deep", "deep_agent_loop", "deep-agent-loop", "assistant_turn", "assistant-turn"}:
+            return True
+    return False
+
+
+def _recipe_requests_deep_agent_streaming(recipe: TaskRecipe) -> bool:
+    for container in (recipe.metadata, _execution_metadata_from_metadata(recipe.metadata)):
+        if not isinstance(container, dict):
+            continue
+        loop_config = container.get("agent_loop")
+        if isinstance(loop_config, dict):
+            value = loop_config.get("provider_streaming", loop_config.get("streaming"))
+            if _truthy(value):
+                return True
+        if _truthy(container.get("provider_streaming")) or _truthy(container.get("streaming_agent_loop")):
             return True
     return False
 

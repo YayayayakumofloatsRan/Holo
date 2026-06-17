@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from kernel_v3.context import ContextCompiler
-from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation
-from kernel_v3.deep_loop import AssistantTurn, DeepAgentLoopController, ToolCallParseError, ToolCallRequest
+
+from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation, ProcessorRequest
+from kernel_v3.deep_loop import AssistantTurn, DeepAgentLoopController, ModelAssistantTurnPlanner, ToolCallParseError, ToolCallRequest
 from kernel_v3.journal import JournalStore
 from kernel_v3.policy import PolicyGate
+from kernel_v3.processors.contracts import ProcessorStreamEvent
+from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.testing.fakes import FakeEvaluator
 from kernel_v3.tools import ToolRegistry
 
@@ -203,6 +208,150 @@ def test_deep_agent_loop_returns_parse_errors_as_observations_for_replanning() -
     ][0]
     assert batch.data["content"]["results"][0]["tool_call_id"] == "call-bad"
     assert batch.data["content"]["results"][0]["status"] == "failed"
+
+
+def test_deep_agent_loop_consumes_streamed_tool_call_delta() -> None:
+    registry = ToolRegistry()
+    registry.register("alpha.read", _read_tool("alpha"))
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": _StreamingToolCallProvider()}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("read alpha through streamed tool call")
+
+    assert result.status == "completed"
+    assert [action.name for action in registry.executed_actions] == ["alpha.read"]
+    stream_records = journal.records(task_id=result.task_id, kind="processor_stream")
+    assert stream_records[0].data["event_count"] == 3
+    turn_record = journal.records(task_id=result.task_id, kind="assistant_turn")[0]
+    assert turn_record.data["tool_call_count"] == 1
+    assert turn_record.data["tool_calls"][0]["tool_call_id"] == "tc-alpha"
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    assert batch.data["content"]["results"][0]["tool"] == "alpha.read"
+
+
+def test_streamed_malformed_tool_arguments_become_parse_error_observation() -> None:
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": _MalformedStreamingToolCallProvider()}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=ToolRegistry.with_builtin_respond(),
+        evaluator=FakeEvaluator(
+            [
+                {
+                    "status": "final_answer_ready",
+                    "stop_reason": "completed",
+                    "answer": "parse error observed",
+                    "missing_evidence": [],
+                }
+            ]
+        ),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("emit malformed streamed tool call")
+
+    assert result.status == "completed"
+    parse_records = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_call_parse_error"
+    ]
+    assert parse_records[0].data["content"]["error"] == "invalid_tool_arguments"
+    assert parse_records[0].data["tool_call_id"] == "tc-bad"
+
+
+class _StreamingToolCallProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        yield ProcessorStreamEvent(
+            event_type="stream_start",
+            request_id=request.request_id,
+            sequence=1,
+            delta={"provider": self.name},
+        )
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=2,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-alpha",
+                        "function": {
+                            "name": "alpha.read",
+                            "arguments": '{"query":"A"}',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=3,
+            delta={"status": "ok"},
+        )
+
+
+class _MalformedStreamingToolCallProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=1,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-bad",
+                        "function": {
+                            "name": "alpha.read",
+                            "arguments": '{"query":',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=2,
+            delta={"status": "ok"},
+        )
 
 
 def _read_tool(name: str):
