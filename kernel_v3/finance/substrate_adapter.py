@@ -95,6 +95,24 @@ def finance_slot_frame(
         resolved_formula = _infer_formula_name(question)
     task_type = _task_type_for_formula(resolved_formula, question)
     required = _slot_specs_for_formula(resolved_formula)
+    if resolved_formula in {"metric_lookup", "disclosure_lookup"}:
+        dynamic_slots: list[str] = []
+        if missing_slots is not None:
+            dynamic_slots.extend(str(item) for item in missing_slots if str(item))
+        elif plan is not None and plan.missing_facts:
+            dynamic_slots.extend(str(item) for item in plan.missing_facts if str(item))
+        elif plan is not None and isinstance(plan.payload, dict):
+            variables = plan.payload.get("variables") if isinstance(plan.payload.get("variables"), dict) else {}
+            dynamic_slots.extend(str(item) for item in variables.keys() if str(item))
+        required = [
+            SlotSpec(
+                name=name,
+                requirement="required",
+                accepted_attributes=_accepted_attributes_for_slot(name),
+                source_requirements=["finance_fact_ledger"],
+            )
+            for name in _ordered_unique(dynamic_slots)
+        ]
     claims = finance_facts_to_claims(facts)
     fills = _slot_fills(required, claims)
     if missing_slots is not None:
@@ -166,6 +184,15 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
     slots_by_formula: dict[str, list[str]] = {
         "cagr": ["beginning_value", "ending_value", "years"],
         "dio": ["inventory_begin", "inventory_end", "cogs", "fiscal_days"],
+        "dpo": ["accounts_payable_begin", "accounts_payable_end", "cogs", "fiscal_days"],
+        "dpo_inventory_adjusted": [
+            "accounts_payable_begin",
+            "accounts_payable_end",
+            "cogs",
+            "inventory_begin",
+            "inventory_end",
+            "fiscal_days",
+        ],
         "ev_revenue": ["equity_value_or_market_cap", "debt", "cash", "revenue"],
         "ev_ebitda": ["enterprise_value_or_market_cap", "debt", "cash", "ebitda_or_ebitda_components"],
         "bridge_subtotal": [
@@ -192,6 +219,123 @@ def _slot_specs_for_formula(formula_name: str) -> list[SlotSpec]:
             "revenue",
             "property_plant_and_equipment_net_current",
             "property_plant_and_equipment_net_prior",
+        ],
+        "operating_cash_flow_ratio": [
+            "operating_cash_flow",
+            "total_current_liabilities",
+        ],
+        "quick_ratio": [
+            "cash_and_equivalents",
+            "marketable_securities",
+            "accounts_receivable",
+            "total_current_liabilities",
+        ],
+        "working_capital_ratio": [
+            "total_current_assets",
+            "total_current_liabilities",
+        ],
+        "net_working_capital": [
+            "total_current_assets",
+            "total_current_liabilities",
+        ],
+        "return_on_assets": [
+            "net_income",
+            "assets_current",
+            "assets_prior",
+        ],
+        "free_cash_flow": [
+            "operating_cash_flow",
+            "capital_expenditures",
+        ],
+        "inventory_turnover": [
+            "inventory_begin",
+            "inventory_end",
+            "cogs",
+        ],
+        "dividend_payout_ratio": [
+            "dividends_paid",
+            "net_income",
+        ],
+        "retention_ratio": [
+            "dividends_paid",
+            "net_income",
+        ],
+        "effective_tax_rate_change": [
+            "prior_effective_tax_rate",
+            "current_effective_tax_rate",
+        ],
+        "interest_coverage_ratio": [
+            "adjusted_ebit_or_ebit",
+            "interest_expense",
+        ],
+        "unadjusted_ebitda": [
+            "operating_income",
+            "depreciation_and_amortization",
+        ],
+        "unadjusted_ebitda_less_capex": [
+            "operating_income",
+            "depreciation_and_amortization",
+            "capital_expenditures",
+        ],
+        "asset_turnover": [
+            "revenue",
+            "assets_current",
+            "assets_prior",
+        ],
+        "average_cogs_to_revenue": [],
+        "liquidation_value_per_share": [
+            "assets",
+            "liabilities",
+            "shares_outstanding",
+        ],
+        "debt_change": [
+            "prior_debt",
+            "current_debt",
+        ],
+        "component_percent_of_total": [
+            "component_amount",
+            "total_amount",
+        ],
+        "cash_and_equivalents_change": [
+            "cash_and_equivalents_prior",
+            "cash_and_equivalents_current",
+        ],
+        "market_risk_var_change": [
+            "market_risk_var_prior",
+            "market_risk_var_current",
+        ],
+        "percent_of_sales_change": [
+            "prior_percent_of_sales",
+            "current_percent_of_sales",
+        ],
+        "property_plant_and_equipment_change": [
+            "property_plant_and_equipment_net_prior",
+            "property_plant_and_equipment_net_current",
+        ],
+        "store_count_change": [
+            "store_count_prior",
+            "store_count_current",
+        ],
+        "cash_flow_activity_comparison": [
+            "operating_cash_flow",
+            "investing_cash_flow",
+            "financing_cash_flow",
+        ],
+        "margin_profile_change": [],
+        "margin_consistency_range": [],
+        "category_metric_rank": [
+            "ranked_category_metric_table",
+        ],
+        "average_capex_to_revenue": [],
+        "fixed_charge_coverage": [
+            "earnings_available_for_fixed_charges_or_pretax_income",
+            "fixed_charges",
+        ],
+        "mlr_rebate": [
+            "actual_mlr_or_complete_mlr_numerator",
+            "adjusted_premium_revenue_or_mlr_denominator",
+            "mlr_standard_or_market_segment",
+            "rebate_basis_or_adjusted_premium_revenue",
         ],
     }
     names = slots_by_formula.get(str(formula_name or ""), [])
@@ -317,11 +461,15 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "years": [],
         "inventory_begin": ["inventory", "inventories"],
         "inventory_end": ["inventory", "inventories"],
+        "accounts_payable_begin": ["accounts payable", "trade accounts payable", "payables"],
+        "accounts_payable_end": ["accounts payable", "trade accounts payable", "payables"],
         "cogs": ["cogs", "cost of sales", "cost of revenue"],
         "fiscal_days": [],
         "equity_value_or_market_cap": ["equity value", "market cap", "market capitalization", "enterprise value", "transaction value"],
         "enterprise_value_or_market_cap": ["enterprise value", "market cap", "market capitalization", "transaction value"],
         "debt": ["debt", "long term debt", "short term debt"],
+        "prior_debt": ["debt", "long term debt", "short term debt", "borrowings"],
+        "current_debt": ["debt", "long term debt", "short term debt", "borrowings"],
         "cash": ["cash and equivalents", "cash and cash equivalents"],
         "revenue": ["revenue", "net sales", "net revenues", "total revenues"],
         "ebitda_or_ebitda_components": ["adjusted ebitda", "ebitda", "net income", "interest expense", "tax", "depreciation and amortization"],
@@ -335,8 +483,14 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "revenue_denominator": ["revenue", "net sales", "net revenues", "total revenues"],
         "prior_rate_or_margin": ["margin", "rate", "yield"],
         "current_rate_or_margin": ["margin", "rate", "yield"],
+        "prior_effective_tax_rate": ["effective tax rate", "income tax rate", "tax rate"],
+        "current_effective_tax_rate": ["effective tax rate", "income tax rate", "tax rate"],
         "prior_period_value": ["revenue", "net sales", "net income", "operating income", "ebitda"],
         "current_period_value": ["revenue", "net sales", "net income", "operating income", "ebitda"],
+        "adjusted_ebit_or_ebit": ["adjusted ebit", "ebit", "operating income"],
+        "interest_expense": ["interest expense", "interest"],
+        "operating_income": ["operating income", "income from operations"],
+        "depreciation_and_amortization": ["depreciation and amortization", "depreciation amortization", "d&a"],
         "entity": ["entity", "ticker"],
         "base_cash_flow": [
             "free cash flow",
@@ -358,10 +512,40 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
         "exit_assumption": ["exit multiple", "terminal multiple", "exit value"],
         "capital_expenditures": ["capital expenditures", "capex"],
         "net_income": ["net income", "net earnings", "profit"],
+        "cash_and_equivalents": ["cash and cash equivalents", "cash equivalents", "cash"],
+        "cash_and_equivalents_prior": ["cash and cash equivalents", "cash equivalents", "cash"],
+        "cash_and_equivalents_current": ["cash and cash equivalents", "cash equivalents", "cash"],
+        "marketable_securities": ["marketable securities", "short-term investments", "short term investments"],
+        "accounts_receivable": ["accounts receivable", "net accounts receivable", "receivables"],
+        "total_current_assets": ["total current assets", "current assets", "assets current"],
+        "assets_current": ["assets", "total assets"],
+        "assets_prior": ["assets", "total assets"],
+        "liabilities": ["liabilities", "total liabilities"],
+        "shares_outstanding": ["shares outstanding", "common shares outstanding", "weighted average shares"],
+        "component_amount": ["component amount", "quarterly amount", "share repurchases", "stock repurchases"],
+        "total_amount": ["total amount", "annual amount", "share repurchases", "stock repurchases"],
+        "dividends_paid": ["dividends paid", "cash dividends paid", "dividends to shareholders"],
         "operating_cash_flow": [
             "operating cash flow",
             "cash flow from operations",
             "net cash provided by operating activities",
+        ],
+        "investing_cash_flow": [
+            "investing cash flow",
+            "cash flow from investing activities",
+            "net cash provided by investing activities",
+            "net cash used in investing activities",
+        ],
+        "financing_cash_flow": [
+            "financing cash flow",
+            "cash flow from financing activities",
+            "net cash provided by financing activities",
+            "net cash used in financing activities",
+        ],
+        "total_current_liabilities": [
+            "total current liabilities",
+            "current liabilities",
+            "liabilities current",
         ],
         "property_plant_and_equipment_net": [
             "property plant and equipment net",
@@ -381,7 +565,83 @@ def _accepted_attributes_for_slot(name: str) -> list[str]:
             "net ppne",
             "ppne",
         ],
+        "store_count_prior": ["stores", "store count", "number of stores"],
+        "store_count_current": ["stores", "store count", "number of stores"],
+        "earnings_available_for_fixed_charges_or_pretax_income": [
+            "earnings available for fixed charges",
+            "pretax income",
+        ],
+        "fixed_charges": ["fixed charges"],
+        "actual_mlr_or_complete_mlr_numerator": [
+            "medical loss ratio",
+            "mlr numerator",
+            "medical claims",
+            "quality improvement expenses",
+        ],
+        "adjusted_premium_revenue_or_mlr_denominator": [
+            "adjusted premium revenue",
+            "mlr denominator",
+            "premium revenue",
+            "earned premiums",
+        ],
+        "mlr_standard_or_market_segment": ["mlr standard", "medical loss ratio standard"],
+        "rebate_basis_or_adjusted_premium_revenue": [
+            "adjusted premium revenue",
+            "mlr denominator",
+            "premium revenue",
+        ],
         "assets": ["assets", "total assets"],
+        "gain_on_separation": ["gain on separation", "gain", "separation"],
+        "cash_proceeds": ["cash proceeds", "proceeds"],
+        "separation_payment": ["expected payment", "expect to pay", "spin-off payment", "separation payment", "upjohn"],
+        "market_risk_var": ["value at risk", "var", "market risk"],
+        "market_risk_var_prior": ["value at risk", "var", "market risk", "prior year"],
+        "market_risk_var_current": ["value at risk", "var", "market risk", "current period"],
+        "prior_percent_of_sales": ["as a percent of sales", "as a percent of net sales", "percent of sales", "prior period"],
+        "current_percent_of_sales": ["as a percent of sales", "as a percent of net sales", "percent of sales", "current period"],
+        "organic_sales_change": ["organic sales change", "real change in sales", "sales change excluding fx", "foreign exchange"],
+        "credit_facility": ["revolving credit agreement", "credit facility", "borrowings"],
+        "pension_postretirement_payments": ["expected benefit payments", "retirees", "pension", "postretirement"],
+        "registered_debt_securities": ["registered securities", "debt securities", "national securities exchange"],
+        "dividend_distribution_history": ["dividend distribution", "dividend history", "dividends declared", "dividends paid"],
+        "filing_event_summary": ["8-k", "8k", "filing event", "key agenda"],
+        "acquisitions": ["acquisitions", "business combinations", "companies acquired"],
+        "industry": ["industry", "business"],
+        "products_and_services": ["products", "services", "product categories", "service categories"],
+        "product_revenue_concentration": ["product categories", "service categories", "revenue concentration", "more than 20% of revenue"],
+        "customers": ["customers", "customer concentration", "primary customers"],
+        "operating_geographies": ["geographies", "geographic areas", "regions"],
+        "customer_retention": ["customer retention", "card member retention", "card members"],
+        "business_cyclicality": ["cyclicality", "cyclical", "business cycle"],
+        "production_rates": ["production rate", "production rates", "forecast production"],
+        "material_legal_proceedings": ["legal proceedings", "litigation", "material legal proceedings"],
+        "dividends_disclosure": ["dividends", "common shareholders", "dividends to common shareholders"],
+        "governance_disclosure": ["directors", "executive officers", "board nominees", "ceo"],
+        "shareholder_vote_results": ["shareholder vote", "shareholder proposal", "voting results"],
+        "guidance": ["guidance", "outlook", "forecast"],
+        "guidance_change": ["guidance change", "full year guidance", "core constant currency eps growth", "percentage points"],
+        "separation_or_discontinued_operation": ["separation", "spin-off", "discontinued operation", "subsequent events"],
+        "nonrecurring_events": ["nonrecurring events", "special items", "standard business operations", "net income drivers"],
+        "revenue_driver_discussion": ["revenue drivers", "sales drivers", "revenue change", "net sales change"],
+        "inventory_driver_discussion": ["inventory drivers", "merchandise inventories", "inventory balance", "inventory increase"],
+        "expense_driver_discussion": ["expense drivers", "sg&a", "selling general and administrative", "wages expense"],
+        "geographic_sales_growth": ["us sales growth", "international sales growth", "geographic sales"],
+        "expense_ratio_change": ["as a percent of sales", "as a percent of net sales", "expense ratio"],
+        "growth_profile_evidence": ["growth profile", "revenue growth", "net income growth", "high growth company"],
+        "restructuring_liability": ["restructuring liability", "restructuring reserve", "restructuring accrual", "nature and purpose"],
+        "ranked_category_metric_table": [
+            "category",
+            "segment revenue",
+            "segment net revenue",
+            "segment net income",
+            "regional ebitdar",
+            "product category revenue",
+            "short-term investments",
+            "debt securities",
+            "derivative instruments",
+            "notional value",
+            "liabilities",
+        ],
     }
     return mapping.get(name, [name])
 
@@ -391,8 +651,14 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         return "reconcile"
     if formula_name in {"dcf", "lbo"}:
         return "model"
+    if formula_name == "metric_lookup":
+        return "filing_metric_lookup"
+    if formula_name == "disclosure_lookup":
+        return "disclosure_analysis"
     if formula_name in {
         "dio",
+        "dpo",
+        "dpo_inventory_adjusted",
         "ev_revenue",
         "ev_ebitda",
         "cagr",
@@ -401,6 +667,36 @@ def _task_type_for_formula(formula_name: str, question: str) -> str:
         "yoy_growth",
         "capital_intensity",
         "fixed_asset_turnover",
+        "fixed_charge_coverage",
+        "mlr_rebate",
+        "operating_cash_flow_ratio",
+        "quick_ratio",
+        "working_capital_ratio",
+        "net_working_capital",
+        "return_on_assets",
+        "free_cash_flow",
+        "inventory_turnover",
+        "dividend_payout_ratio",
+        "retention_ratio",
+        "average_capex_to_revenue",
+        "asset_turnover",
+        "average_cogs_to_revenue",
+        "liquidation_value_per_share",
+        "debt_change",
+        "component_percent_of_total",
+        "cash_and_equivalents_change",
+        "market_risk_var_change",
+        "percent_of_sales_change",
+        "property_plant_and_equipment_change",
+        "store_count_change",
+        "cash_flow_activity_comparison",
+        "margin_profile_change",
+        "margin_consistency_range",
+        "category_metric_rank",
+        "effective_tax_rate_change",
+        "interest_coverage_ratio",
+        "unadjusted_ebitda",
+        "unadjusted_ebitda_less_capex",
     }:
         return "compare_compute" if _looks_like_compare(question) else "compute"
     return "lookup"
@@ -421,19 +717,167 @@ def _infer_formula_name(question: str) -> str:
         return "capital_intensity"
     if "fixed asset turnover" in text or "fixed-asset turnover" in text:
         return "fixed_asset_turnover"
+    if "asset turnover" in text:
+        return "asset_turnover"
+    if any(marker in text for marker in ("cash and cash equivalents", "cash & cash equivalents", "cash equivalents")) and any(
+        marker in text for marker in ("drop", "dropped", "increase", "increased", "decrease", "decreased", "change", "changed", "between")
+    ):
+        return "cash_and_equivalents_change"
+    if ("value at risk" in text or re.search(r"\bvar\b", text)) and any(
+        marker in text for marker in ("decrease", "decreased", "increase", "increased", "compared", "prior year", "year over year", "year-over-year")
+    ):
+        return "market_risk_var_change"
+    if (
+        "what drove" not in text
+        and "driver" not in text
+        and any(marker in text for marker in ("as a percent of sales", "as a percent of net sales", "percent of sales", "percent of net sales"))
+        and any(marker in text for marker in ("increase", "increased", "decrease", "decreased", "change", "changed", "compared"))
+    ):
+        return "percent_of_sales_change"
+    if "turnover" not in text and any(
+        marker in text for marker in ("ppne", "pp&e", "ppe", "property plant and equipment", "property, plant and equipment")
+    ) and any(
+        marker in text for marker in ("grow", "grew", "increase", "increased", "decrease", "decreased", "change", "changed")
+    ):
+        return "property_plant_and_equipment_change"
+    if any(marker in text for marker in ("number of stores", "store count", "stores between")) and any(
+        marker in text for marker in ("change", "changed", "increase", "decrease", "between")
+    ):
+        return "store_count_change"
+    if (
+        ("operations, investing, and financing" in text or "operating, investing, and financing" in text)
+        and "cash flow" in text
+    ):
+        return "cash_flow_activity_comparison"
+    if (
+        ("operating margin" in text or "gross margin" in text or "gross margins" in text or "operating margins" in text)
+        and ("historically consistent" in text or "consistent" in text or "fluctuat" in text)
+    ):
+        return "margin_consistency_range"
+    if (
+        ("operating margin" in text or "gross margin" in text or "gross margins" in text or "operating margins" in text)
+        and any(marker in text for marker in ("profile", "what drove", "drove", "driver", "change as of", "improving"))
+    ):
+        return "margin_profile_change"
+    if (
+        "operating cash flow ratio" in text
+        or "cash flow ratio" in text
+        or (
+            any(marker in text for marker in ("cash from operations", "cash flow from operations", "operating cash flow"))
+            and "current liabilities" in text
+            and "ratio" in text
+        )
+    ):
+        return "operating_cash_flow_ratio"
+    if "quick ratio" in text:
+        return "quick_ratio"
+    if "working capital ratio" in text:
+        return "working_capital_ratio"
+    if "net working capital" in text:
+        return "net_working_capital"
+    if "return on assets" in text or re.search(r"\broa\b", text):
+        return "return_on_assets"
+    if "free cash flow" in text or "free cashflow" in text or re.search(r"\bfcf\b", text):
+        return "free_cash_flow"
+    if "inventory turnover" in text:
+        return "inventory_turnover"
+    if "dividend payout ratio" in text or "payout ratio" in text:
+        return "dividend_payout_ratio"
+    if "retention ratio" in text:
+        return "retention_ratio"
+    if "fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text:
+        return "fixed_charge_coverage"
+    if "medical loss ratio" in text or " mlr" in f" {text}":
+        return "mlr_rebate"
     if "dio" in text or "days inventory" in text:
         return "dio"
+    if "dpo" in text or "days payable" in text:
+        if "change in inventory" in text or "change in inventories" in text:
+            return "dpo_inventory_adjusted"
+        return "dpo"
+    if (
+        ("capex" in text or "capital expenditure" in text or "capital expenditures" in text)
+        and ("revenue" in text or "sales" in text)
+        and ("average" in text or "avg" in text or "as a % of revenue" in text or "capex/revenue" in compact)
+    ):
+        return "average_capex_to_revenue"
+    if (
+        ("cost of goods sold" in text or "cost of sales" in text or "cost of revenue" in text or "cogs" in text)
+        and ("revenue" in text or "sales" in text)
+        and ("average" in text or "avg" in text or "as a % of revenue" in text or "as a percent of revenue" in text)
+    ):
+        return "average_cogs_to_revenue"
+    if "liquidated all" in text or "liquidation" in text or "pay its shareholders" in text:
+        return "liquidation_value_per_share"
+    if "debt" in text and any(marker in text for marker in ("increase", "increased", "decrease", "changed", "between")) and "balance sheet" in text:
+        return "debt_change"
+    if ("what percent" in text or "what percentage" in text) and "total" in text:
+        return "component_percent_of_total"
+    if "effective tax rate" in text and any(marker in text for marker in ("change", "changed", "compare", "between", "increase", "decrease")):
+        return "effective_tax_rate_change"
+    if "positive working capital" in text:
+        return "net_working_capital"
+    if "interest coverage ratio" in text or "interest coverage" in text:
+        return "interest_coverage_ratio"
+    if "unadjusted ebitda" in text or (
+        "operating income" in text and ("depreciation and amortization" in text or "depreciation & amortization" in text or "d&a" in text)
+    ):
+        if "less capex" in text or "less capital expenditure" in text or "less capital expenditures" in text:
+            return "unadjusted_ebitda_less_capex"
+        return "unadjusted_ebitda"
     if "cagr" in text:
         return "cagr"
     if "add-back" in text or "addback" in text or "bridge" in text or "reconciliation" in text:
         return "bridge_subtotal"
     if "basis point" in text or "bps" in text:
         return "bps_difference"
+    if _looks_like_category_metric_rank(text):
+        return "category_metric_rank"
     if "margin" in text:
         return "margin"
     if "growth rate" in text or "yoy" in text:
         return "yoy_growth"
     return ""
+
+
+def _looks_like_category_metric_rank(text: str) -> bool:
+    rank_markers = (
+        "highest",
+        "lowest",
+        "largest",
+        "smallest",
+        "best",
+        "worst",
+        "most",
+        "least",
+        "dragged down",
+        "proportionally increase",
+        "proportionally increased",
+        "performed the best",
+    )
+    if not any(marker in text for marker in rank_markers):
+        return False
+    if "registered to trade" in text or "registered on a national securities exchange" in text:
+        return False
+    category_markers = (
+        "segment",
+        "region",
+        "geographic",
+        "product category",
+        "service category",
+        "category",
+        "among",
+        "derivative instrument",
+        "notional value",
+        "short term investments",
+        "short-term investments",
+        "type of debt",
+        "liability",
+        "liabilities",
+        "topline",
+        "ebitdar",
+    )
+    return any(marker in text for marker in category_markers)
 
 
 def _looks_like_reconciliation_task(text: str, *, formula_name: str | None) -> bool:

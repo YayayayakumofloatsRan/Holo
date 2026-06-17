@@ -14,10 +14,10 @@ We are always working in the new kernel v3, the old phase-naming-mode is already
 
 Demands for codex:
 
-You need to update the documents precisely and timely, as well as README.md on github. Push to branch: kernel-v3 insteaof default branch.
+You need to update the documents precisely and timely, as well as README.md on github. Push to branch: kernel-v3 instead of default branch.
 Think before you act. Make sure of high code quality.
 
-It's preferred to do live tests, which are important. Fake offline tests often disturbs the whole process of iteration of the whole plan. You shouldn't do table cheating in real tests. The LLM should decide what it needs to do, then the harness system shouldn't be doing precomputation cheating. Do not expect the system to be responding in a fixed way and we shouldn't anyway.你不可以打表来骗过仿真测试！
+Live tests are mandatory for finance capability claims. Fake/offline tests are permanently forbidden as evidence of problem-solving ability; they may only be used as narrow code regression, schema, compile, or safety checks and must be labeled as such. Any reported finance benchmark progress must come from an online/live model run with gold/reference material kept out of model context. Fake offline tests often disturbs the whole process of iteration of the whole plan. You shouldn't do table cheating in real tests. The LLM should decide what it needs to do, then the harness system shouldn't be doing precomputation cheating. Do not expect the system to be responding in a fixed way and we shouldn't anyway.你不可以打表来骗过仿真测试！
 你不应该一直使用阈值方法，重要的逻辑判断应该交给llm进行处理，这样系统的泛化能力才能得到保障。
 始终要记得用llm做核心判断！！！不能用规则方法！
 
@@ -28,6 +28,7 @@ Make full use of Internet, learn from other excellent open-source projects.
 
 You will have to ensure the limit of how each role of conversation consumes.
 
+Upgrade for higher cache hit rate to reduce calling cost.
 
 Kernel v3 demands:
 
@@ -56,4 +57,3 @@ The system should work as a intelligent digital workforce as well as a good comp
 The system should be capable of meeting demands of the project proposal as a reliable financial developer/researcher.
 
 Friendly interaction with the user besides cli.
-

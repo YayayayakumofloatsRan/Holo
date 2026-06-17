@@ -12,6 +12,7 @@ STRUCTURED_TASK_TYPES = {
     "semantic.intake",
     "planner.propose",
     "task.compile",
+    "finance.slot_bind",
     "retrieval.workbench",
     "evaluator.assess",
     "mission.assess",
@@ -134,6 +135,7 @@ def _thinking_for(*, task_type: str, assessment: GenerationAssessment) -> str:
         if assessment.task_difficulty in {"replan", "deep_research"} and task_type in {
             "planner.propose",
             "task.compile",
+            "finance.slot_bind",
             "retrieval.workbench",
             "evaluator.assess",
             "mission.assess",
@@ -156,6 +158,7 @@ def _model_for(*, task_type: str, assessment: GenerationAssessment, provider: st
         if task_type in {
             "planner.propose",
             "task.compile",
+            "finance.slot_bind",
             "retrieval.workbench",
             "mission.assess",
             "workmethod.frame",

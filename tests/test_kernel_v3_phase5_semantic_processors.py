@@ -98,6 +98,36 @@ def test_phase5_processor_prompt_contracts_include_json_examples_for_model_imita
         assert "{" in contract and "}" in contract
 
 
+def test_phase5_planner_and_evaluator_contracts_explain_toolchain_state_packet():
+    combined = "\n".join([PLANNER_PROMPT_CONTRACT, EVALUATOR_PROMPT_CONTRACT]).lower()
+
+    assert "context.state.toolchain_state" in combined
+    assert "toolchain_presence" in combined
+    assert "failed_tools" in combined
+    assert "observation_diagnostics" in combined
+    assert "issue_codes" in combined
+    assert "repair_options" in combined
+    assert "missing_value_examples" in combined
+    assert "repeated_action_fingerprints" in combined
+    assert "repeated_action_groups" in combined
+    assert "payload_summary" in combined
+    assert "post_final_record_count" in combined
+    assert "not as host-selected semantic answers" in combined
+    assert "observational only" in combined
+
+
+def test_phase5_planner_and_evaluator_contracts_explain_finance_working_state_packet():
+    combined = "\n".join([PLANNER_PROMPT_CONTRACT, EVALUATOR_PROMPT_CONTRACT]).lower()
+
+    assert "context.state.finance_working_state" in combined
+    assert "slot_frame" in combined
+    assert "missing_slots" in combined
+    assert "formula_trace_support" in combined
+    assert "numeric_verification" in combined
+    assert "repair_options" in combined
+    assert "model still owns finance semantic binding" in combined
+
+
 def test_phase5_roleplay_style_contract_avoids_parenthesized_stage_directions_by_default():
     combined = "\n".join([PROCESSOR_SYSTEM_PROMPT, PLANNER_PROMPT_CONTRACT, SYNTHESIZER_PROMPT_CONTRACT]).lower()
 
@@ -157,6 +187,15 @@ def test_phase5_finance_prompt_preserves_exact_metric_phrase_for_line_item_disam
     assert "multiple candidate values" in lowered
     assert "competing evidence" in lowered
     assert "10-k statement table" in lowered
+
+
+def test_phase5_finance_prompt_exposes_numeric_verifier_tool_example():
+    lowered = PLANNER_PROMPT_CONTRACT.lower()
+
+    assert "finance.verify_numeric" in lowered
+    assert "draft finance answer numeric support" in lowered
+    assert "formula_traces" in lowered
+    assert "a draft answer exists" in lowered
 
 
 def test_phase5_user_visible_text_guard_trims_only_stock_agreement_prefix():
@@ -505,6 +544,58 @@ def test_phase5_synthesizer_repairs_missing_citation_refs_with_known_refs():
     assert len(journal.records(task_id="task-synth-repair", kind="processor_request")) == 2
 
 
+def test_phase5_synthesizer_repairs_unknown_evidence_refs_with_known_refs():
+    report, evidence, citation = _retrieval_contracts()
+    provider = CapturingFakeJsonProvider(
+        {
+            "synthesizer.answer": [
+                {
+                    "answer": "Kernel v3 cites evidence.",
+                    "citation_refs": ["cite-1"],
+                    "confidence": 0.2,
+                    "limitations": [],
+                    "used_evidence": ["ev-missing"],
+                },
+                {
+                    "answer": "Kernel v3 cites evidence.",
+                    "citation_refs": ["cite-1"],
+                    "confidence": 0.82,
+                    "limitations": [],
+                    "used_evidence": ["ev-1"],
+                },
+            ]
+        }
+    )
+    journal = JournalStore.in_memory()
+
+    answer = Synthesizer(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    ).synthesize(
+        task_id="task-synth-ref-repair",
+        run_id="run-synth-ref-repair",
+        context_id="ctx-synth-ref-repair",
+        report=report,
+        evidence=[evidence],
+        citations=[citation],
+    )
+
+    retry_prompt = json.loads(provider.prompts[-1])
+    assert answer.status == "ok"
+    assert answer.citation_refs == ["cite-1"]
+    assert answer.used_evidence == ["ev-1"]
+    assert len(provider.prompts) == 2
+    assert retry_prompt["required_citation_refs"] == ["cite-1"]
+    assert retry_prompt["required_evidence_refs"] == ["ev-1"]
+    assert retry_prompt["repair_feedback"]["category"] == "unknown_evidence_refs"
+    assert retry_prompt["repair_feedback"]["unknown_evidence_refs"] == ["ev-missing"]
+    assert "used citation_refs or used_evidence ids" in retry_prompt["retry_instruction"]
+    assert len(journal.records(task_id="task-synth-ref-repair", kind="processor_request")) == 2
+
+
 def test_phase5_synthesizer_retries_invalid_json_once():
     report, evidence, citation = _retrieval_contracts()
     provider = MalformedThenJsonProvider(
@@ -539,8 +630,21 @@ def test_phase5_synthesizer_retries_invalid_json_once():
     assert answer.citation_refs == ["cite-1"]
     assert len(provider.prompts) == 2
     assert "Previous synthesizer output was not valid JSON" in retry_prompt["retry_instruction"]
+    assert retry_prompt["repair_feedback"]["schema"] == "holo.kernel_v3.synthesizer_repair_feedback.v1"
+    assert retry_prompt["repair_feedback"]["category"] == "malformed_json"
+    assert retry_prompt["repair_feedback"]["required_fields"] == [
+        "answer",
+        "citation_refs",
+        "confidence",
+        "limitations",
+        "used_evidence",
+    ]
+    assert "Return exactly one JSON object" in retry_prompt["repair_feedback"]["repair_checklist"][0]
     results = journal.records(task_id="task-synth-json-repair", kind="processor_result")
     assert [item.data["status"] for item in results] == ["failed", "ok"]
+    retry_request = journal.records(task_id="task-synth-json-repair", kind="processor_request")[-1]
+    assert retry_request.data["parameters"]["repair_feedback_schema"] == "holo.kernel_v3.synthesizer_repair_feedback.v1"
+    assert retry_request.data["parameters"]["repair_feedback_category"] == "malformed_json"
 
 
 def test_phase5_synthesizer_salvages_answer_text_after_json_repair_failure():
@@ -736,6 +840,331 @@ def test_phase5_model_planner_redacts_secret_like_context_before_provider_and_jo
     assert "access_token" not in encoded
 
 
+def test_phase5_model_planner_prompt_preserves_compact_toolchain_state():
+    journal = JournalStore.in_memory()
+    provider = CapturingFakeJsonProvider(
+        {
+            "planner.propose": {
+                "action_id": "act-toolchain-aware",
+                "kind": "respond",
+                "name": None,
+                "description": "respond safely",
+                "payload": {"text": "ok"},
+                "score": 1.0,
+                "reasons": [],
+                "side_effect_class": "none",
+            }
+        }
+    )
+    planner = ModelPlanner(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    )
+    context = _context(
+        state={
+            "task_id": "task-toolchain-prompt",
+            "run_id": "run-toolchain-prompt",
+            "input_text": "Continue the finance task.",
+            "toolchain_state": {
+                "schema": "holo.kernel_v3.toolchain_state.v1",
+                "toolchain_presence": {"retrieval": True, "calculator": True, "finance_verify_numeric": False},
+                "failed_tools": [{"source": "tool:retrieval.run", "status": "failed", "error": "network_failed"}],
+                "recent_tool_observations": [
+                    {
+                        "source": "tool:finance.verify_numeric",
+                        "status": "ok",
+                        "observation_diagnostics": {
+                            "verifier_status": "failed",
+                            "issue_codes": ["unsupported_answer_number"],
+                            "repair_options": ["ask synthesis to remove unsupported numbers"],
+                            "missing_value_examples": [
+                                {"raw": "$12 million", "value": "12000000", "unit": "million", "slot": "revenue"}
+                            ],
+                        },
+                    }
+                ],
+                "recent_tool_actions": [
+                    {
+                        "tool": "calculator.compute",
+                        "action_id": "act-calc",
+                        "payload_fingerprint": "fp-123",
+                        "payload_summary": {
+                            "formula_name": "gross_margin",
+                            "variable_names": ["gross_profit", "revenue"],
+                            "expression_fingerprint": "expr-123",
+                        },
+                    }
+                ],
+                "repeated_action_fingerprints": ["fp-123"],
+                "repeated_action_groups": [
+                    {
+                        "tool": "calculator.compute",
+                        "payload_fingerprint": "fp-123",
+                        "attempt_count": 2,
+                        "payload_summary": {
+                            "formula_name": "gross_margin",
+                            "variable_names": ["gross_profit", "revenue"],
+                        },
+                        "latest_observation_status": "ok",
+                    }
+                ],
+                "post_final_record_count": 0,
+                "host_boundary": "observational compact state only; model still chooses the next action",
+            },
+            "sections": [],
+        }
+    )
+
+    action = planner.propose(context)
+    prompt_payload = json.loads(provider.last_prompt)
+
+    assert action.action_id == "act-toolchain-aware"
+    toolchain = prompt_payload["context"]["state"]["toolchain_state"]
+    assert toolchain["toolchain_presence"]["retrieval"] is True
+    assert toolchain["toolchain_presence"]["calculator"] is True
+    assert toolchain["failed_tools"][0]["source"] == "tool:retrieval.run"
+    assert toolchain["recent_tool_observations"][0]["observation_diagnostics"]["issue_codes"] == [
+        "unsupported_answer_number"
+    ]
+    assert toolchain["recent_tool_observations"][0]["observation_diagnostics"]["repair_options"] == [
+        "ask synthesis to remove unsupported numbers"
+    ]
+    assert toolchain["repeated_action_fingerprints"] == ["fp-123"]
+    assert toolchain["recent_tool_actions"][0]["payload_summary"]["formula_name"] == "gross_margin"
+    assert toolchain["repeated_action_groups"][0]["attempt_count"] == 2
+    assert "network_failed" in provider.last_prompt
+    assert "observation_diagnostics" in provider.last_prompt
+    assert "unsupported_answer_number" in provider.last_prompt
+    assert "$12 million" in provider.last_prompt
+    assert "payload_fingerprint" in provider.last_prompt
+    assert "payload_summary" in provider.last_prompt
+
+
+def test_phase5_model_planner_prompt_omits_empty_toolchain_state():
+    journal = JournalStore.in_memory()
+    provider = CapturingFakeJsonProvider(
+        {
+            "planner.propose": {
+                "action_id": "act-no-toolchain",
+                "kind": "respond",
+                "name": None,
+                "description": "respond safely",
+                "payload": {"text": "ok"},
+                "score": 1.0,
+                "reasons": [],
+                "side_effect_class": "none",
+            }
+        }
+    )
+    planner = ModelPlanner(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    )
+    context = _context(
+        state={
+            "task_id": "task-no-toolchain-prompt",
+            "run_id": "run-no-toolchain-prompt",
+            "input_text": "hi",
+            "toolchain_state": {},
+            "sections": [],
+        }
+    )
+
+    action = planner.propose(context)
+    prompt_payload = json.loads(provider.last_prompt)
+
+    assert action.action_id == "act-no-toolchain"
+    assert "toolchain_state" not in prompt_payload["context"]["state"]
+    assert "holo.kernel_v3.toolchain_state.v1" not in provider.last_prompt
+
+
+def test_phase5_model_planner_prompt_preserves_compact_finance_working_state():
+    journal = JournalStore.in_memory()
+    provider = CapturingFakeJsonProvider(
+        {
+            "planner.propose": {
+                "action_id": "act-finance-state-aware",
+                "kind": "respond",
+                "name": None,
+                "description": "respond safely",
+                "payload": {"text": "ok"},
+                "score": 1.0,
+                "reasons": [],
+                "side_effect_class": "none",
+            }
+        }
+    )
+    planner = ModelPlanner(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    )
+    context = _context(
+        state={
+            "task_id": "task-finance-state-prompt",
+            "run_id": "run-finance-state-prompt",
+            "input_text": "Continue the finance task.",
+            "finance_working_state": {
+                "schema": "holo.kernel_v3.finance_working_state.v1",
+                "fact_count": 2,
+                "facts": [{"fact_id": "finfact-revenue", "metric": "revenue", "value": "1000"}],
+                "slot_frame": {"task_type": "compute", "missing_slots": ["margin"]},
+                "slot_bind": {
+                    "decision": "ready",
+                    "period_basis": [{"slot_name": "revenue", "selected_period": "FY2024"}],
+                    "line_item_basis": [{"slot_name": "revenue", "selected_line_item": "Revenue"}],
+                },
+                "formula_traces": [{"formula_id": "formula-margin", "result_value": "0.4"}],
+                "formula_trace_support": [{"formula_id": "formula-margin", "citation_refs": ["cite-revenue"]}],
+                "numeric_verification": {
+                    "status": "failed",
+                    "issue_codes": ["unsupported_answer_number"],
+                    "repair_options": ["ask synthesis to remove unsupported numbers"],
+                },
+                "host_boundary": "observational finance working state only; the model owns metric binding",
+            },
+            "sections": [],
+        }
+    )
+
+    action = planner.propose(context)
+    prompt_payload = json.loads(provider.last_prompt)
+
+    assert action.action_id == "act-finance-state-aware"
+    finance_state = prompt_payload["context"]["state"]["finance_working_state"]
+    assert finance_state["fact_count"] == 2
+    assert finance_state["facts"][0]["metric"] == "revenue"
+    assert finance_state["slot_frame"]["missing_slots"] == ["margin"]
+    assert finance_state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert finance_state["slot_bind"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
+    assert finance_state["formula_trace_support"][0]["citation_refs"] == ["cite-revenue"]
+    assert finance_state["numeric_verification"]["issue_codes"] == ["unsupported_answer_number"]
+    assert finance_state["numeric_verification"]["repair_options"] == ["ask synthesis to remove unsupported numbers"]
+    assert "RAW_PROVIDER_BODY_SHOULD_NOT_LEAK" not in provider.last_prompt
+
+
+def test_phase5_model_evaluator_prompt_preserves_compact_finance_working_state():
+    journal = JournalStore.in_memory()
+    provider = CapturingFakeJsonProvider(
+        {
+            "evaluator.assess": {
+                "status": "continue",
+                "answer": None,
+                "stop_reason": None,
+                "missing_evidence": ["verify_margin"],
+                "reason": "finance state shows verifier issue",
+            }
+        }
+    )
+    evaluator = ModelEvaluator(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    )
+    context = _context(
+        state={
+            "task_id": "task-finance-eval-prompt",
+            "run_id": "run-finance-eval-prompt",
+            "input_text": "Evaluate the latest finance observation.",
+            "finance_working_state": {
+                "schema": "holo.kernel_v3.finance_working_state.v1",
+                "fact_count": 2,
+                "facts": [{"fact_id": "finfact-revenue", "metric": "revenue", "value": "1000"}],
+                "slot_frame": {"task_type": "compute", "missing_slots": ["margin"]},
+                "slot_bind": {
+                    "decision": "ready",
+                    "period_basis": [{"slot_name": "revenue", "selected_period": "FY2024"}],
+                    "line_item_basis": [{"slot_name": "revenue", "selected_line_item": "Revenue"}],
+                },
+                "formula_traces": [{"formula_id": "formula-margin", "result_value": "0.4"}],
+                "formula_trace_support": [{"formula_id": "formula-margin", "citation_refs": ["cite-revenue"]}],
+                "numeric_verification": {
+                    "status": "failed",
+                    "issue_codes": ["unsupported_answer_number"],
+                    "repair_options": ["ask synthesis to remove unsupported numbers"],
+                },
+                "host_boundary": "observational finance working state only; the model owns metric binding",
+            },
+            "sections": [],
+        }
+    )
+    observation = Observation(
+        observation_id="obs-finance-eval",
+        run_id="run-finance-eval-prompt",
+        kind="tool_result",
+        status="ok",
+        source="tool:calculator.compute",
+        content={"formula_trace": {"formula_id": "formula-margin", "result_value": "0.4"}},
+        observed_at_ms=0,
+        action_id="act-calc",
+        tool_call_id=None,
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+    prompt_payload = json.loads(provider.last_prompt)
+
+    assert feedback.status == "continue"
+    finance_state = prompt_payload["context"]["state"]["finance_working_state"]
+    assert finance_state["fact_count"] == 2
+    assert finance_state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert finance_state["slot_bind"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
+    assert finance_state["formula_trace_support"][0]["citation_refs"] == ["cite-revenue"]
+    assert finance_state["numeric_verification"]["issue_codes"] == ["unsupported_answer_number"]
+    assert finance_state["numeric_verification"]["repair_options"] == ["ask synthesis to remove unsupported numbers"]
+    assert prompt_payload["observation"]["source"] == "tool:calculator.compute"
+
+
+def test_phase5_model_planner_prompt_omits_empty_finance_working_state():
+    journal = JournalStore.in_memory()
+    provider = CapturingFakeJsonProvider(
+        {
+            "planner.propose": {
+                "action_id": "act-generic-state-aware",
+                "kind": "respond",
+                "name": None,
+                "description": "respond safely",
+                "payload": {"text": "ok"},
+                "score": 1.0,
+                "reasons": [],
+                "side_effect_class": "none",
+            }
+        }
+    )
+    planner = ModelPlanner(
+        fabric=ProcessorFabric(
+            providers={"fake_json": provider},
+            router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+            journal=journal,
+        )
+    )
+    context = _context(
+        state={
+            "task_id": "task-generic-state-prompt",
+            "run_id": "run-generic-state-prompt",
+            "input_text": "Summarize the current document.",
+            "finance_working_state": {},
+            "sections": [],
+        }
+    )
+
+    action = planner.propose(context)
+    prompt_payload = json.loads(provider.last_prompt)
+
+    assert action.action_id == "act-generic-state-aware"
+    assert "finance_working_state" not in prompt_payload["context"]["state"]
+    assert "holo.kernel_v3.finance_working_state.v1" not in provider.last_prompt
+
+
 def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_bodies():
     raw = "RAW_PROVIDER_EGRESS_EVIDENCE_" + ("y" * 6000)
     tail = "SYNTHESIS_PREVIEW_TAIL_MARKER"
@@ -775,6 +1204,8 @@ def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_b
     )
 
     assert answer.status == "ok"
+    prompt_payload = json.loads(provider.last_prompt)
+    assert list(prompt_payload)[:3] == ["contract", "answer_requirements", "task_goal"]
     assert raw not in provider.last_prompt
     assert "task_goal" in provider.last_prompt
     assert '"response_language":"zh"' in provider.last_prompt
@@ -782,6 +1213,11 @@ def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_b
     assert "Answer every explicit question" in provider.last_prompt
     assert "$193.414 billion" in provider.last_prompt
     assert "Chinese 百万" in provider.last_prompt
+    assert "generic industry thresholds" in provider.last_prompt
+    assert "comparison cutoffs" in provider.last_prompt
+    assert "rule-of-thumb numbers" in provider.last_prompt
+    assert "capital intensity" in provider.last_prompt
+    assert "source-backed threshold" in provider.last_prompt
     assert "begin with one short English core answer sentence" in provider.last_prompt
     assert "adjacent revenue metrics" in provider.last_prompt
     assert "RevenueFromContractWithCustomerExcludingAssessedTax" in provider.last_prompt

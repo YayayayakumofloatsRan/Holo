@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from kernel_v3.benchmark_diagnostics import finance_failure_layer, strict_failed_internal_verifier_passed
 from kernel_v3.context.redaction import Redactor
 from kernel_v3.contracts import Contract, JsonObject, LedgerRecord
 from kernel_v3.journal import JournalStore
@@ -232,6 +233,9 @@ def build_benchmark_result_graph(
     category_nodes: dict[str, str] = {}
     reason_nodes: dict[str, str] = {}
     failure_nodes: dict[str, str] = {}
+    failure_layer_nodes: dict[str, str] = {}
+    processor_task_nodes: dict[str, str] = {}
+    processor_error_nodes: dict[str, str] = {}
     metric_nodes = _benchmark_metric_nodes(summary)
     for node in metric_nodes:
         if builder.add_node(node):
@@ -243,6 +247,12 @@ def build_benchmark_result_graph(
         scorecard = _dict(result.get("scorecard"))
         trace_metrics = _dict(result.get("trace_metrics"))
         metadata = _dict(result.get("metadata"))
+        failure_layer = finance_failure_layer(
+            status=status,
+            scorecard=scorecard,
+            trace_metrics=trace_metrics,
+            failure_report=result.get("failure_report"),
+        )
         item_node_id = f"bench_item:{_safe_node_id(item_id)}"
         item_node = BehaviorGraphNode(
             node_id=item_node_id,
@@ -258,6 +268,7 @@ def build_benchmark_result_graph(
                     "category": _text(metadata.get("category")),
                     "source": _text(metadata.get("source")),
                     "score_reason": _text(scorecard.get("reason")),
+                    "failure_layer": failure_layer,
                     "answer_present": scorecard.get("answer_present"),
                     "citation_present": scorecard.get("citation_present"),
                     "numeric_passed": _nested(scorecard, "numeric", "passed"),
@@ -267,8 +278,20 @@ def build_benchmark_result_graph(
                     "downloaded_bytes": _number(trace_metrics.get("downloaded_bytes")),
                     "query_repetition_rate": _number(trace_metrics.get("query_repetition_rate")),
                     "processor_errors": _number(trace_metrics.get("processor_error_count")),
+                    "processor_prompt_cache_hit_tokens": _number(trace_metrics.get("processor_prompt_cache_hit_tokens")),
+                    "processor_prompt_cache_miss_tokens": _number(trace_metrics.get("processor_prompt_cache_miss_tokens")),
+                    "processor_prompt_cache_hit_ratio": _number(trace_metrics.get("processor_prompt_cache_hit_ratio")),
+                    "processor_task_types": _compact_count_map(_processor_task_counts_from_metrics(trace_metrics), limit=12),
+                    "processor_error_counts": _compact_count_map(_dict(trace_metrics.get("processor_error_counts")), limit=12),
                     "calculator_calls": _number(trace_metrics.get("calculator_call_count")),
                     "formula_traces": _number(trace_metrics.get("formula_trace_count")),
+                    "formula_trace_support_count": _number(trace_metrics.get("formula_trace_support_count")),
+                    "formula_trace_fact_link_rate": _number(trace_metrics.get("formula_trace_fact_link_rate")),
+                    "formula_trace_citation_link_rate": _number(trace_metrics.get("formula_trace_citation_link_rate")),
+                    "formula_trace_evidence_link_rate": _number(trace_metrics.get("formula_trace_evidence_link_rate")),
+                    "formula_trace_input_fact_missing_count": _number(
+                        trace_metrics.get("formula_trace_input_fact_missing_count")
+                    ),
                     "finance_facts": _number(trace_metrics.get("finance_fact_count")),
                     "numeric_verifier_status": _text(trace_metrics.get("numeric_verifier_status")),
                     "answer_numeric_support_rate": _number(trace_metrics.get("answer_numeric_support_rate")),
@@ -348,6 +371,58 @@ def build_benchmark_result_graph(
                 ):
                     builder.add_edge(benchmark_node_id, failure_node_id, "has_failure_mode")
             builder.add_edge(item_node_id, failure_node_id, "failed_at")
+
+        if status == "failed" and failure_layer:
+            layer_node_id = failure_layer_nodes.get(failure_layer)
+            if layer_node_id is None:
+                layer_node_id = f"bench_failure_layer:{_safe_node_id(failure_layer)}"
+                failure_layer_nodes[failure_layer] = layer_node_id
+                if builder.add_node(
+                    BehaviorGraphNode(
+                        node_id=layer_node_id,
+                        node_type="benchmark_failure_layer",
+                        label=_preview(f"Layer: {failure_layer}", 120),
+                        metadata={"failure_layer": failure_layer, "count": summary["failure_layer_counts"].get(failure_layer, 0)},
+                    )
+                ):
+                    builder.add_edge(benchmark_node_id, layer_node_id, "has_failure_layer")
+            builder.add_edge(item_node_id, layer_node_id, "diagnosed_as")
+
+        for task_type, count in _processor_task_counts_from_metrics(trace_metrics).items():
+            if count <= 0:
+                continue
+            task_node_id = processor_task_nodes.get(task_type)
+            if task_node_id is None:
+                task_node_id = f"bench_processor_task:{_safe_node_id(task_type)}"
+                processor_task_nodes[task_type] = task_node_id
+                if builder.add_node(
+                    BehaviorGraphNode(
+                        node_id=task_node_id,
+                        node_type="benchmark_processor_task_type",
+                        label=_preview(f"Processor: {task_type}", 120),
+                        metadata={"task_type": task_type, "call_count": summary["processor_task_type_counts"].get(task_type, 0)},
+                    )
+                ):
+                    builder.add_edge(benchmark_node_id, task_node_id, "has_processor_task_type")
+            builder.add_edge(item_node_id, task_node_id, "uses_processor", str(count))
+
+        for error, count in _processor_error_counts_from_metrics(trace_metrics).items():
+            if count <= 0:
+                continue
+            error_node_id = processor_error_nodes.get(error)
+            if error_node_id is None:
+                error_node_id = f"bench_processor_error:{_safe_node_id(error)}"
+                processor_error_nodes[error] = error_node_id
+                if builder.add_node(
+                    BehaviorGraphNode(
+                        node_id=error_node_id,
+                        node_type="benchmark_processor_error",
+                        label=_preview(f"Processor error: {error}", 120),
+                        metadata={"error": error, "count": summary["processor_error_counts"].get(error, 0)},
+                    )
+                ):
+                    builder.add_edge(benchmark_node_id, error_node_id, "has_processor_error")
+            builder.add_edge(item_node_id, error_node_id, "processor_failed_with", str(count))
 
     graph = builder.to_graph()
     diagnostics = dict(graph.diagnostics)
@@ -630,6 +705,7 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
     status_counts: dict[str, int] = {}
     reason_counts: dict[str, int] = {}
     failure_mode_counts: dict[str, int] = {}
+    failure_layer_counts: dict[str, int] = {}
     finance_numeric_failure_reason_counts: dict[str, int] = {}
     workflow_type_counts: dict[str, int] = {}
     values: dict[str, list[float]] = {
@@ -666,6 +742,18 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
     synthesis_gate_repairable = 0
     synthesis_gate_repaired = 0
     unsupported_numeric_count = 0
+    strict_failed_internal_verifier_passed_count = 0
+    formula_trace_support_count = 0
+    formula_trace_fact_linked_count = 0
+    formula_trace_citation_linked_count = 0
+    formula_trace_evidence_linked_count = 0
+    formula_trace_input_fact_missing_count = 0
+    processor_cache_hit_tokens = 0
+    processor_cache_miss_tokens = 0
+    processor_task_type_counts: dict[str, int] = {}
+    processor_provider_model_counts: dict[str, int] = {}
+    processor_status_counts: dict[str, int] = {}
+    processor_error_counts: dict[str, int] = {}
     missing_slot_recovery_scored = 0
     missing_slot_recovered = 0
     scored = 0
@@ -695,6 +783,16 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
             if numeric.get("passed") is True:
                 numeric_passed += 1
         trace_metrics = _dict(result.get("trace_metrics"))
+        failure_layer = finance_failure_layer(
+            status=status,
+            scorecard=scorecard,
+            trace_metrics=trace_metrics,
+            failure_report=result.get("failure_report"),
+        )
+        if status == "failed" and failure_layer:
+            failure_layer_counts[failure_layer] = failure_layer_counts.get(failure_layer, 0) + 1
+        if strict_failed_internal_verifier_passed(status=status, scorecard=scorecard, trace_metrics=trace_metrics):
+            strict_failed_internal_verifier_passed_count += 1
         metadata = _dict(result.get("metadata"))
         workflow_type = _text(metadata.get("workflow_type") or metadata.get("category") or "unclassified")
         workflow_type_counts[workflow_type] = workflow_type_counts.get(workflow_type, 0) + 1
@@ -754,16 +852,29 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
             ) + 1
             if finance_failure_reason == "unsupported_answer_number":
                 unsupported_numeric_count += 1
+        formula_trace_support_count += _int_value(trace_metrics.get("formula_trace_support_count"))
+        formula_trace_fact_linked_count += _int_value(trace_metrics.get("formula_trace_fact_linked_count"))
+        formula_trace_citation_linked_count += _int_value(trace_metrics.get("formula_trace_citation_linked_count"))
+        formula_trace_evidence_linked_count += _int_value(trace_metrics.get("formula_trace_evidence_linked_count"))
+        formula_trace_input_fact_missing_count += _int_value(trace_metrics.get("formula_trace_input_fact_missing_count"))
+        processor_cache_hit_tokens += _int_value(trace_metrics.get("processor_prompt_cache_hit_tokens"))
+        processor_cache_miss_tokens += _int_value(trace_metrics.get("processor_prompt_cache_miss_tokens"))
+        _merge_counts(processor_task_type_counts, _processor_task_counts_from_metrics(trace_metrics))
+        _merge_counts(processor_provider_model_counts, _processor_provider_model_counts_from_metrics(trace_metrics))
+        _merge_counts(processor_status_counts, _processor_status_counts_from_metrics(trace_metrics))
+        _merge_counts(processor_error_counts, _processor_error_counts_from_metrics(trace_metrics))
         for key in values:
             value = trace_metrics.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 values[key].append(float(value))
     item_count = len(results)
     repeated_item_count, repeatability_score = _benchmark_repeatability_summary(results)
+    processor_cache_total = processor_cache_hit_tokens + processor_cache_miss_tokens
     return {
         "status_counts": status_counts,
         "reason_counts": reason_counts,
         "failure_mode_counts": failure_mode_counts,
+        "failure_layer_counts": failure_layer_counts,
         "finance_numeric_failure_reason_counts": finance_numeric_failure_reason_counts,
         "workflow_type_counts": workflow_type_counts,
         "item_count": item_count,
@@ -795,6 +906,30 @@ def _benchmark_result_summary(results: list[JsonObject]) -> JsonObject:
         "repeatability_score": repeatability_score,
         "average_calculator_calls": _average(values["calculator_call_count"]),
         "average_formula_traces": _average(values["formula_trace_count"]),
+        "average_formula_trace_support_count": round(formula_trace_support_count / item_count, 4) if item_count else 0.0,
+        "formula_trace_fact_link_rate": _rate(formula_trace_fact_linked_count, formula_trace_support_count)
+        if formula_trace_support_count
+        else None,
+        "formula_trace_citation_link_rate": _rate(formula_trace_citation_linked_count, formula_trace_support_count)
+        if formula_trace_support_count
+        else None,
+        "formula_trace_evidence_link_rate": _rate(formula_trace_evidence_linked_count, formula_trace_support_count)
+        if formula_trace_support_count
+        else None,
+        "formula_trace_input_fact_missing_count": formula_trace_input_fact_missing_count,
+        "processor_prompt_cache_hit_tokens": processor_cache_hit_tokens,
+        "processor_prompt_cache_miss_tokens": processor_cache_miss_tokens,
+        "processor_prompt_cache_hit_ratio": round(processor_cache_hit_tokens / processor_cache_total, 6)
+        if processor_cache_total
+        else None,
+        "strict_failed_internal_verifier_passed_count": strict_failed_internal_verifier_passed_count,
+        "strict_failed_internal_verifier_passed_rate": _rate(strict_failed_internal_verifier_passed_count, status_counts.get("failed", 0))
+        if status_counts.get("failed", 0)
+        else None,
+        "processor_task_type_counts": dict(sorted(processor_task_type_counts.items())),
+        "processor_provider_model_counts": dict(sorted(processor_provider_model_counts.items())),
+        "processor_status_counts": dict(sorted(processor_status_counts.items())),
+        "processor_error_counts": dict(sorted(processor_error_counts.items())),
         "average_finance_facts": _average(values["finance_fact_count"]),
         "average_claims": _average(values["claim_count"]),
         "average_transform_plans": _average(values["transform_plan_count"]),
@@ -819,6 +954,15 @@ def _benchmark_metric_nodes(summary: JsonObject) -> list[BehaviorGraphNode]:
         ("verifier_gate_pass_rate", "Verifier gate"),
         ("synthesis_gate_pass_rate", "Synthesis gate"),
         ("average_formula_traces", "Avg formula traces"),
+        ("average_formula_trace_support_count", "Avg trace support"),
+        ("formula_trace_fact_link_rate", "Trace fact link"),
+        ("formula_trace_citation_link_rate", "Trace citation link"),
+        ("formula_trace_evidence_link_rate", "Trace evidence link"),
+        ("formula_trace_input_fact_missing_count", "Missing trace facts"),
+        ("processor_prompt_cache_hit_ratio", "Processor cache"),
+        ("processor_prompt_cache_hit_tokens", "Processor cache hit tokens"),
+        ("processor_prompt_cache_miss_tokens", "Processor cache miss tokens"),
+        ("strict_failed_internal_verifier_passed_count", "Strict-failed verifier-supported"),
         ("claim_ledger_present_rate", "Claim ledger"),
         ("slot_frame_present_rate", "Slot frame"),
         ("transform_plan_present_rate", "Transform plan"),
@@ -878,6 +1022,63 @@ def _benchmark_repeatability_summary(results: list[JsonObject]) -> tuple[int, fl
         ]
         scores.append(_rate(sum(1 for item in components if item), len(components)))
     return len(repeated), _average(scores)
+
+
+def _processor_task_counts_from_metrics(trace_metrics: JsonObject) -> dict[str, int]:
+    return _nested_processor_call_counts(trace_metrics.get("processor_usage_by_task_type"))
+
+
+def _processor_provider_model_counts_from_metrics(trace_metrics: JsonObject) -> dict[str, int]:
+    return _nested_processor_call_counts(trace_metrics.get("processor_usage_by_provider_model"))
+
+
+def _processor_status_counts_from_metrics(trace_metrics: JsonObject) -> dict[str, int]:
+    return _flat_count_map(trace_metrics.get("processor_status_counts"))
+
+
+def _processor_error_counts_from_metrics(trace_metrics: JsonObject) -> dict[str, int]:
+    return _flat_count_map(trace_metrics.get("processor_error_counts"))
+
+
+def _nested_processor_call_counts(value: object) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, payload in value.items():
+        name = str(key)
+        if not name:
+            continue
+        if isinstance(payload, dict):
+            count = _int_value(payload.get("call_count"))
+        else:
+            count = _int_value(payload)
+        if count > 0:
+            counts[name] = counts.get(name, 0) + count
+    return dict(sorted(counts.items()))
+
+
+def _flat_count_map(value: object) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, payload in value.items():
+        name = str(key)
+        if not name:
+            continue
+        count = _int_value(payload)
+        if count > 0:
+            counts[name] = counts.get(name, 0) + count
+    return dict(sorted(counts.items()))
+
+
+def _merge_counts(target: dict[str, int], source: dict[str, int]) -> None:
+    for key, value in source.items():
+        if value > 0:
+            target[key] = target.get(key, 0) + value
+
+
+def _compact_count_map(counts: dict[str, int], *, limit: int) -> JsonObject:
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0]))[: max(0, limit)])
 
 
 def _processor_task_type(data: JsonObject) -> str:
@@ -1019,6 +1220,11 @@ def _int(value: object) -> int | None:
     if isinstance(value, (int, float)):
         return int(value)
     return None
+
+
+def _int_value(value: object) -> int:
+    item = _int(value)
+    return item if item is not None else 0
 
 
 def _status_label(data: JsonObject) -> str | None:

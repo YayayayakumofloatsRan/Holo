@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from kernel_v3.contracts import JsonObject
 from kernel_v3.finance.contracts import FinanceFact
+from kernel_v3.retrieval.url_utils import unwrap_url_candidates, url_equivalent_or_unwrapped
 
 
 def target_document_binding_from_metadata(metadata: JsonObject | None, *, question: str = "") -> JsonObject:
@@ -55,6 +56,10 @@ def target_document_binding_from_metadata(metadata: JsonObject | None, *, questi
         ),
     }
     if doc_link:
+        unwrapped_links = unwrap_url_candidates(doc_link)
+        if unwrapped_links:
+            binding["unwrapped_doc_link"] = unwrapped_links[0]
+            binding["source_urls"] = _ordered_unique([doc_link, *unwrapped_links])
         parsed = urlparse(doc_link)
         binding["doc_host"] = parsed.netloc.lower()
         binding["doc_path_tail"] = parsed.path.rsplit("/", 1)[-1].lower()
@@ -63,6 +68,7 @@ def target_document_binding_from_metadata(metadata: JsonObject | None, *, questi
 
 def _refine_existing_binding_with_question(existing: JsonObject, *, text: str) -> JsonObject:
     binding = dict(existing)
+    _attach_unwrapped_doc_links(binding)
     inferred_line_item = _required_line_item(text)
     existing_line_item = _string(binding.get("required_line_item")).lower()
     if _should_refine_required_line_item(existing_line_item, inferred_line_item):
@@ -72,6 +78,17 @@ def _refine_existing_binding_with_question(existing: JsonObject, *, text: str) -
         if required_statement and not binding.get("required_statement"):
             binding["required_statement"] = required_statement
     return binding
+
+
+def _attach_unwrapped_doc_links(binding: JsonObject) -> None:
+    doc_link = _string(binding.get("doc_link"))
+    if not doc_link:
+        return
+    unwrapped_links = unwrap_url_candidates(doc_link)
+    if not unwrapped_links:
+        return
+    binding.setdefault("unwrapped_doc_link", unwrapped_links[0])
+    binding["source_urls"] = _ordered_unique([doc_link, *_string_list(binding.get("source_urls")), *unwrapped_links])
 
 
 def _should_refine_required_line_item(existing_line_item: str, inferred_line_item: str | None) -> bool:
@@ -223,15 +240,26 @@ def _minimum_binding_score(binding: JsonObject) -> int:
 
 def _same_target_document(source_uri: str, binding: JsonObject) -> bool:
     doc_link = _string(binding.get("doc_link"))
-    if not source_uri or not doc_link:
+    if not source_uri:
         return False
-    source = source_uri.rstrip("/")
-    target = doc_link.rstrip("/")
-    if source == target or source.startswith(target) or target.startswith(source):
-        return True
-    parsed_source = urlparse(source)
-    parsed_target = urlparse(target)
-    return bool(parsed_source.netloc and parsed_source.netloc == parsed_target.netloc and parsed_source.path == parsed_target.path)
+    targets = _ordered_unique([
+        doc_link,
+        _string(binding.get("unwrapped_doc_link")),
+        _string(binding.get("original_doc_link")),
+        *_string_list(binding.get("source_urls")),
+    ])
+    for target_url in targets:
+        if not target_url:
+            continue
+        if url_equivalent_or_unwrapped(source_uri, target_url):
+            return True
+        source = source_uri.rstrip("/")
+        target = target_url.rstrip("/")
+        parsed_source = urlparse(source)
+        parsed_target = urlparse(target)
+        if parsed_source.netloc and parsed_source.netloc == parsed_target.netloc and parsed_source.path == parsed_target.path:
+            return True
+    return False
 
 
 def _is_primary_filing_source(uri: str, title: str) -> bool:
@@ -389,6 +417,24 @@ def _normalize(value: object) -> str:
 
 def _string(value: object) -> str:
     return str(value or "").strip()
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [_string(item) for item in value if _string(item)]
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _string(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _period_year(value: object) -> int | None:

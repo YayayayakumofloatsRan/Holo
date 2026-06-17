@@ -6,9 +6,9 @@ from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.testing import fake_fabric
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.retrieval.extract import extract_spans
-from kernel_v3.retrieval.contracts import EvidenceItem, ExtractedSpan, FetchedDocument
+from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, ExtractedSpan, FetchedDocument
 from kernel_v3.retrieval.http_provider import HttpFetchProvider, HttpTransportResponse
-from kernel_v3.retrieval.workbench import retrieval_workbench_packet, validate_workbench_output
+from kernel_v3.retrieval.workbench import _workbench_prompt, retrieval_workbench_packet, validate_workbench_output
 
 
 def test_retrieval_operator_journals_model_workbench_decision() -> None:
@@ -752,6 +752,78 @@ def test_retrieval_workbench_packet_stays_compact_on_large_candidate_sets() -> N
     assert packet["document_summaries"][0]["is_target_document"] is True
     assert packet["target_document_candidates"][0]["evidence_id"] == "evidence-rejected-0"
     assert len(json.dumps(packet, ensure_ascii=False, sort_keys=True)) < 25_000
+
+
+def test_retrieval_workbench_prompt_keeps_stable_contract_before_dynamic_packet() -> None:
+    goal = SearchGoal(
+        goal_id="goal-workbench-cache",
+        query="Compare FY2024 DIO for HD and LOW from public filings",
+        metadata={
+            "workflow_type": "finance_compute",
+            "required_slots": ["inventory_begin", "inventory_end", "cogs", "fiscal_days"],
+            "compiled_task_hint": {
+                "domain": "finance",
+                "task_spec": {"task_type": "compare_compute", "target_entities": ["HD", "LOW"], "target_periods": ["FY2024"]},
+                "evidence_specs": [
+                    {"slot_name": "inventory_begin", "source_role": "primary_filing", "target_period": "FY2024"},
+                    {"slot_name": "inventory_end", "source_role": "primary_filing", "target_period": "FY2024"},
+                    {"slot_name": "cogs", "source_role": "primary_filing", "target_period": "FY2024"},
+                ],
+                "transform_specs": [{"name": "days_inventory_outstanding", "required_slots": ["inventory_begin", "inventory_end", "cogs", "fiscal_days"]}],
+            },
+        },
+    )
+    evidence = [
+        EvidenceItem(
+            evidence_id=f"evidence-{index}",
+            goal_id=goal.goal_id,
+            span_id=f"span-{index}",
+            document_id=f"doc-{index}",
+            source_id=f"source-{index}",
+            artifact_id=f"artifact-{index}",
+            uri=f"https://www.sec.gov/example-{index}",
+            title="Annual report",
+            text="Inventory and cost of sales evidence " * 20,
+            score=0.8,
+            payload_hash=f"hash-{index}",
+            diagnostics={},
+        )
+        for index in range(10)
+    ]
+    citations = [
+        CitationItem(
+            citation_id=f"citation-{index}",
+            goal_id=goal.goal_id,
+            evidence_id=f"evidence-{index % 10}",
+            artifact_id=f"artifact-{index % 10}",
+            uri=f"https://www.sec.gov/example-{index % 10}",
+            title="Annual report",
+            quote="A long citation quote about inventory, cost of sales, fiscal year, and numeric table rows. " * 12,
+            span_start=0,
+            span_end=100,
+        )
+        for index in range(40)
+    ]
+
+    packet = retrieval_workbench_packet(
+        goal=goal,
+        sources=[],
+        fetch_summaries=[],
+        documents=[],
+        spans=[],
+        evidence=evidence,
+        citations=citations,
+        rejected_evidence=[],
+    )
+    prompt = _workbench_prompt(packet)
+    payload = json.loads(prompt)
+
+    assert prompt.index('"contract"') < prompt.index('"packet"')
+    assert "Finance workbench behavior" in payload["contract"]
+    assert len(payload["packet"]["current_citations"]) == 8
+    assert all(len(item["quote"]) <= 163 for item in payload["packet"]["current_citations"])
+    assert "calculator.compute" in payload["contract"]
+    assert len(prompt) < 11_000
 
 
 def test_retrieval_workbench_packet_exposes_target_document_candidates_for_llm_judgment() -> None:

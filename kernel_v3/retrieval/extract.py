@@ -27,6 +27,7 @@ SEC_FILING_TEXT_LIMIT = 4_000_000
 SEC_COMPLETE_SUBMISSION_TEXT_LIMIT = SEC_FILING_TEXT_LIMIT
 SPAN_BEFORE_CHARS = 120
 SPAN_AFTER_CHARS = 780
+FINANCE_TABLE_SPAN_AFTER_CHARS = 2_400
 HTML_MIME_MARKERS = ("html", "xhtml")
 PDF_MIME_MARKERS = ("pdf", "application/pdf")
 JSON_MIME_MARKERS = ("json", "application/json")
@@ -507,7 +508,8 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
     for term in terms:
         for index in _term_positions(lower, term):
             window_start = max(0, index - SPAN_BEFORE_CHARS)
-            window_end = min(len(text), index + len(term) + SPAN_AFTER_CHARS)
+            window_after_chars = _span_after_chars_for_anchor(text, index=index, term=term)
+            window_end = min(len(text), index + len(term) + window_after_chars)
             key = _coarse_window_key(window_start, window_end)
             if key not in seen_windows:
                 seen_windows.add(key)
@@ -535,6 +537,28 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
             int(item["start_offset"]),
         ),
     )
+
+
+def _span_after_chars_for_anchor(text: str, *, index: int, term: str) -> int:
+    context = str(text or "")[max(0, index - 220) : min(len(text), index + 220)].lower()
+    normalized_term = str(term or "").lower()
+    if "html_table_" in context or any(
+        marker in context or marker in normalized_term
+        for marker in (
+            "cash flows",
+            "cash flow",
+            "balance sheet",
+            "statement of income",
+            "statement of operations",
+            "property, plant and equipment",
+            "property plant and equipment",
+            "total assets",
+            "net sales",
+            "capital expenditures",
+        )
+    ):
+        return FINANCE_TABLE_SPAN_AFTER_CHARS
+    return SPAN_AFTER_CHARS
 
 
 def _term_positions(text: str, term: str) -> list[int]:
@@ -3485,6 +3509,7 @@ def _normalize_html_numeric_cell(value: str) -> str:
     text = text.replace("$", "").replace("%", "").strip()
     if not text or text in {"-", "--", "—"}:
         return ""
+    text = re.sub(r"^\(\s*(-?\d[\d,]*(?:\.\d+)?)\s*\)$", r"(\1)", text)
     if re.fullmatch(r"\(?-?\d[\d,]*(?:\.\d+)?\)?", text):
         return text
     return ""

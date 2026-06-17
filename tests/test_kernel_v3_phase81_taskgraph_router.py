@@ -172,6 +172,52 @@ def test_phase81_calculator_compute_is_standard_tool_capability():
     assert step["metadata"]["capability_args"]["calculator.compute"]["formula_name"] == "ev_revenue"
 
 
+def test_phase81_finance_verify_numeric_is_standard_tool_capability():
+    intake = SemanticIntake(
+        intake_id="semantic-intake-finance-verify",
+        goal="Verify whether a finance answer is numerically supported.",
+        primary_intent="financial_modeling",
+        suggested_mode="retrieval_answer",
+        compound=False,
+        requires_clarification=False,
+        intents=[
+            {
+                "kind": "financial_modeling",
+                "text": "Check that numeric finance claims are supported by facts and formula traces.",
+                "sequence_index": 1,
+                "required_capabilities": ["finance.verify_numeric"],
+                "risk": "read",
+                "status": "ready",
+                "metadata": {
+                    "suggested_mode": "retrieval_answer",
+                    "capability_args": {
+                        "finance.verify_numeric": {
+                            "answer": "FY2024 revenue was $10 million.",
+                            "facts": [],
+                            "formula_traces": [],
+                        }
+                    },
+                },
+            }
+        ],
+        blocked_capabilities=[],
+        warnings=[],
+        response_hint=None,
+        clarification_question=None,
+    )
+
+    proposal = task_graph_from_semantic(intake)
+    validation = validate_task_graph(proposal)
+    plan = build_task_execution_plan(proposal, validation)
+
+    step = plan.steps[0]
+    assert validation.status == "ready"
+    assert step["action_kind"] == "tool"
+    assert step["tool_name"] == "finance.verify_numeric"
+    assert step["metadata"]["capability_plan"]["tools"] == ["finance.verify_numeric"]
+    assert step["metadata"]["capability_args"]["finance.verify_numeric"]["answer"] == "FY2024 revenue was $10 million."
+
+
 def test_phase81_open_semantic_label_routes_by_capability_not_intent_table():
     journal = JournalStore.in_memory()
     fabric = fake_fabric(

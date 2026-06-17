@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -8,36 +9,52 @@ from kernel_v3.agent import AgentRuntime
 from kernel_v3.agent.contracts import FinalAnswer, SemanticIntake
 from kernel_v3.agent.execution_profile import execution_profile, execution_profile_runtime_metadata
 from kernel_v3.agent.runtime import (
+    _AgentContextCompiler,
     _RecipeBoundPlanner,
     _RecipeEvaluator,
     _agent_replan_hints,
     _apply_recipe_profile_defaults,
     _benchmark_doc_retrieval_primary_citation_satisfies_required_source,
     _compiled_task_hint_for_retrieval,
+    _enforce_benchmark_doc_retrieval_binding,
     _augment_finance_modeling_retrieval_payload,
     _finance_fallback_fact_lines,
     _finance_missing_fact_retrieval_action,
     _finance_missing_fact_retrieval_payload,
     _finance_formula_preflight_plans,
     _can_synthesize_partial_retrieval,
+    _compact_finance_synthesis_rescue_packet,
     _finance_fact_judge_summary,
+    _finance_formula_trace_synthesis_policy,
+    _finance_formula_traces_for_synthesis,
+    _finance_working_state_for_prompt,
+    _model_compiled_program_authorizes_numeric_preflight,
+    _finance_slot_bind_plans_from_model,
+    _finance_slot_bind_prompt,
+    _report_with_finance_formula_traces,
+    _host_semantic_fallbacks_enabled,
     _rank_finance_facts_for_model,
     _finance_capability_execute_clarification_as_retrieval,
     _finance_numeric_judge_accepts_answer,
+    _finance_numeric_judge_prompt,
     _planner_directive,
+    _planner_allowed_tool_names,
     _candidate_fact_evidence_text,
+    _report_with_finance_fact_context,
     _retrieval_and_toolchain_grounding,
     _retrieval_payload,
     _retrieval_capability_args,
     _toolchain_candidate_facts,
+    _toolchain_state_for_prompt,
     _workspace_grounding,
     task_recipe,
 )
-from kernel_v3.contracts import CandidateAction, ContextBundle, Observation
+from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation, ProcessorRequest, ProcessorResult
 from kernel_v3.bench import convert_public_finance_benchmark, load_finance_benchmark_items
 from kernel_v3.context import ArtifactStore
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
+    FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     FinanceFact,
     FormulaTrace,
     attach_target_binding_to_facts,
@@ -55,14 +72,18 @@ from kernel_v3.finance import (
     verify_finance_answer,
 )
 from kernel_v3.finance.calculator import register_finance_tools
+from kernel_v3.finance.task_compiler import TASK_COMPILE_FACT_LIMIT, _model_task_compile_prompt
 from kernel_v3.journal import JournalStore
-from kernel_v3.processors import FakeJsonProvider, ProcessorFabric, ProcessorRouter
+from kernel_v3.loop import LoopControllerV3
+from kernel_v3.processors import FakeJsonProvider, ModelPlanner, ProcessorFabric, ProcessorRouter
 from kernel_v3.policy import PolicyGate
+from kernel_v3.processors.adapters import _synthesizer_prompt
 from kernel_v3.research.profiles import finance_fundamentals_profile
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, FetchedDocument, RetrievalReport, SearchGoal
 from kernel_v3.retrieval.evaluate import qualify_evidence_candidate
 from kernel_v3.retrieval.extract import extract_spans, readable_document_text
 from kernel_v3.retrieval.targeting import target_entity_phrases
+from kernel_v3.session import TaskState
 from kernel_v3.tools import ToolRegistry
 
 
@@ -91,11 +112,536 @@ def test_calculator_compute_handles_common_finance_formulas() -> None:
         unit="x",
         formula_name="ev_revenue",
     )
+    capex_intensity = compute_formula(
+        expression="abs(capex_raw) / revenue",
+        variables={"capex_raw": "-1749000000", "revenue": "34229000000"},
+        unit="percent",
+        formula_name="capex_intensity",
+    )
 
     assert abs((Decimal(cagr.result_value) * Decimal(100)) - Decimal("22.62")) < Decimal("0.01")
     assert Decimal(dio.result_value).quantize(Decimal("0.01")) == Decimal("34.15")
     assert Decimal(bps.result_value) == Decimal("42")
     assert Decimal(ev_revenue.result_value) == Decimal("4")
+    assert Decimal(capex_intensity.result_value).quantize(Decimal("0.0001")) == Decimal("0.0511")
+
+
+def test_finance_formula_traces_for_synthesis_prefers_slot_bound_traces() -> None:
+    exploratory = FormulaTrace(
+        formula_id="formula-early-ppe-assets",
+        formula_name="capital_intensity",
+        expression="ppe_net / total_assets",
+        input_fact_ids=["fact-ppe-net-2022", "fact-total-assets-2022"],
+        result_value="0.221",
+        unit="ratio",
+        diagnostics={"semantic_decision_owner": "model"},
+    )
+    slot_bound = FormulaTrace(
+        formula_id="formula-slot-ppe-assets",
+        formula_name="ppe_to_assets",
+        expression="ppe_net / assets",
+        input_fact_ids=["finfact-ppe", "finfact-assets"],
+        result_value="0.1976",
+        unit="percent",
+        diagnostics={"source": "finance_slot_bind_model"},
+    )
+
+    ordered = _finance_formula_traces_for_synthesis([exploratory, slot_bound])
+
+    assert [trace.formula_id for trace in ordered] == ["formula-slot-ppe-assets", "formula-early-ppe-assets"]
+
+
+def test_finance_formula_trace_policy_preserves_capital_intensity_roa() -> None:
+    traces = [
+        FormulaTrace(
+            formula_id="formula-slot-capex-revenue",
+            formula_name="capital_intensity_capex_revenue",
+            expression="abs(capex_raw) / revenue",
+            input_fact_ids=["finfact-capex", "finfact-revenue"],
+            result_value="0.0511",
+            unit="percent",
+            diagnostics={"source": "finance_slot_bind_model", "formatted_value": "5.11%", "method": "capex_to_revenue"},
+        ),
+        FormulaTrace(
+            formula_id="formula-slot-roa",
+            formula_name="capital_intensity_return_on_assets",
+            expression="net_income / assets",
+            input_fact_ids=["finfact-net-income", "finfact-assets"],
+            result_value="0.1244",
+            unit="percent",
+            diagnostics={"source": "finance_slot_bind_model", "formatted_value": "12.44%", "method": "roa"},
+        ),
+    ]
+
+    policy = _finance_formula_trace_synthesis_policy(traces)
+
+    assert policy["task_family"] == "capital_intensity_assessment"
+    assert "capex_to_revenue" in policy["available_lenses"]
+    assert "return_on_assets" in policy["available_lenses"]
+    assert "roa_preservation_instruction" in policy
+    assert policy["supported_trace_outputs"][0]["formatted_value"] == "5.11%"
+    assert "generic industry thresholds" in policy["unsupported_comparison_number_policy"]
+
+
+def test_finance_formula_trace_policy_labels_model_outputs_and_assumptions() -> None:
+    trace = FormulaTrace(
+        formula_id="formula-dcf-crm",
+        formula_name="dcf",
+        expression="discounted projected free cash flow plus terminal value",
+        input_fact_ids=["finfact-ocf", "finfact-capex"],
+        result_value="123000000000",
+        unit="USD",
+        diagnostics={
+            "source": "finance_slot_bind_model",
+            "modeling_workflow": "discounted_cash_flow",
+            "assumption_source": "question_or_host_modeling_policy",
+            "assumptions": {
+                "growth_rate": "0.04",
+                "discount_rate": "0.09",
+                "terminal_growth_rate": "0.02",
+                "forecast_years": 5,
+            },
+            "defaulted_assumptions": ["terminal_growth_rate"],
+            "model_outputs": {
+                "enterprise_value": "123000000000",
+                "equity_value": "114000000000",
+                "projection": [
+                    {"year": 1, "free_cash_flow": "9900000000"},
+                    {"year": 2, "free_cash_flow": "10296000000"},
+                    {"year": 3, "free_cash_flow": "10707840000"},
+                    {"year": 4, "free_cash_flow": "11136153600"},
+                ],
+            },
+        },
+    )
+
+    policy = _finance_formula_trace_synthesis_policy([trace])
+    model_context = policy["model_trace_context"][0]
+
+    assert policy["task_family"] == "finance_modeling_or_derived_metric"
+    assert "assumptions are not filing facts" in policy["assumption_labeling_instruction"].lower()
+    assert model_context["assumptions"]["discount_rate"] == "0.09"
+    assert model_context["defaulted_assumptions"] == ["terminal_growth_rate"]
+    assert model_context["model_outputs"]["enterprise_value"] == "123000000000"
+    assert model_context["model_outputs"]["projection_summary"]["row_count"] == 4
+    assert model_context["model_outputs"]["projection_summary"]["last_row"]["year"] == 4
+
+
+def test_finance_formula_trace_support_links_traces_to_fact_citations_in_synthesizer_prompt() -> None:
+    journal = JournalStore.in_memory()
+    trace = FormulaTrace(
+        formula_id="formula-slot-capex-revenue",
+        formula_name="capital_intensity_capex_revenue",
+        expression="abs(capex_raw) / revenue",
+        input_fact_ids=["fact-capex", "fact-revenue"],
+        result_value="0.0511",
+        unit="percent",
+        diagnostics={
+            "source": "finance_slot_bind_model",
+            "formatted_value": "5.11%",
+            "method": "capex_to_revenue",
+            "output_attribute": "capex_to_revenue",
+        },
+    )
+    journal.append(
+        task_id="task-trace-support",
+        run_id="run-1",
+        step_id=None,
+        kind="observation",
+        data={
+            "source": f"tool:{CALCULATOR_TOOL_NAME}",
+            "status": "ok",
+            "content": {"formula_trace": trace.to_dict()},
+        },
+    )
+    journal.append(
+        task_id="task-trace-support",
+        run_id="run-1",
+        step_id=None,
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "ready",
+            "decision": "ready",
+            "accepted_formula_plan_count": 1,
+            "period_basis": [
+                {"slot_name": "capex", "fact_id": "fact-capex", "selected_period": "FY2022", "reason": "10-K FY fact"}
+            ],
+            "line_item_basis": [
+                {
+                    "slot_name": "capex",
+                    "fact_id": "fact-capex",
+                    "selected_line_item": "capital expenditures",
+                    "reason": "cash-flow PP&E purchases row",
+                }
+            ],
+            "reason_summary": "Model bound capex and net sales from FY2022 filing facts.",
+        },
+    )
+    report = replace(
+        _retrieval_report(evidence=[], citations=[]),
+        diagnostics={
+            "finance_fact_ledger": [
+                {
+                    "fact_id": "fact-capex",
+                    "metric": "capital expenditures",
+                    "value": "-1749000000",
+                    "unit": "USD",
+                    "fiscal_year": 2022,
+                    "evidence_ref": "evidence-capex",
+                    "citation_ref": "cite-capex",
+                    "metadata": {
+                        "concept": "PaymentsToAcquirePropertyPlantAndEquipment",
+                        "label": "Capital expenditures",
+                        "form": "10-K",
+                        "fp": "FY",
+                        "source_uri": "https://www.sec.gov/example/mmm-2022.htm",
+                    },
+                },
+                {
+                    "fact_id": "fact-revenue",
+                    "metric": "net sales",
+                    "value": "34229000000",
+                    "unit": "USD",
+                    "fiscal_year": 2022,
+                    "evidence_ref": "evidence-revenue",
+                    "citation_ref": "cite-revenue",
+                    "metadata": {
+                        "concept": "Revenues",
+                        "label": "Net sales",
+                        "form": "10-K",
+                        "fp": "FY",
+                        "source_uri": "https://www.sec.gov/example/mmm-2022.htm",
+                    },
+                },
+            ]
+        },
+    )
+
+    enriched = _report_with_finance_formula_traces(journal, report, task_id="task-trace-support", run_id="run-1")
+    prompt_payload = json.loads(_synthesizer_prompt(enriched, [], []))
+    diagnostics = prompt_payload["retrieval_report"]["diagnostics"]
+    support = diagnostics["finance_formula_trace_support"][0]
+
+    assert support["formula_id"] == "formula-slot-capex-revenue"
+    assert support["support_status"] == "linked_to_fact_ledger"
+    assert support["citation_refs"] == ["cite-capex", "cite-revenue"]
+    assert support["evidence_refs"] == ["evidence-capex", "evidence-revenue"]
+    assert [item["fact_id"] for item in support["input_facts"]] == ["fact-capex", "fact-revenue"]
+    assert support["input_facts"][0]["raw_fields"]["concept"] == "PaymentsToAcquirePropertyPlantAndEquipment"
+    assert diagnostics["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY2022"
+    assert diagnostics["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "capital expenditures"
+    assert diagnostics["finance_slot_bind_basis_policy"]["semantic_decision_owner"] == "model"
+    assert diagnostics["finance_formula_trace_synthesis_policy"]["task_family"] == "capital_intensity_assessment"
+    assert "capex_to_revenue" in diagnostics["finance_formula_trace_synthesis_policy"]["available_lenses"]
+
+
+def test_compact_finance_synthesis_rescue_packet_exposes_formula_trace_support() -> None:
+    journal = JournalStore.in_memory()
+    trace = FormulaTrace(
+        formula_id="formula-slot-bridge",
+        formula_name="bridge_subtotal",
+        expression="base + addback",
+        input_fact_ids=["fact-base", "fact-addback"],
+        result_value="5669000000",
+        unit="USD",
+        diagnostics={"source": "finance_slot_bind_model", "formatted_value": "$5.669B"},
+    )
+    journal.append(
+        task_id="task-compact-trace-support",
+        run_id="run-1",
+        step_id=None,
+        kind="observation",
+        data={
+            "source": f"tool:{CALCULATOR_TOOL_NAME}",
+            "status": "ok",
+            "content": {"formula_trace": trace.to_dict()},
+        },
+    )
+    journal.append(
+        task_id="task-compact-trace-support",
+        run_id="run-1",
+        step_id=None,
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "ready",
+            "decision": "ready",
+            "accepted_formula_plan_count": 1,
+            "period_basis": [
+                {"slot_name": "base", "fact_id": "fact-base", "selected_period": "FY bridge", "reason": "same bridge table"}
+            ],
+            "line_item_basis": [
+                {"slot_name": "addback", "fact_id": "fact-addback", "selected_line_item": "add-back", "reason": "bridge row label"}
+            ],
+            "reason_summary": "Model bound the bridge subtotal inputs.",
+        },
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-base",
+            title="KHC adjusted EBITDA bridge",
+            text="Adjusted EBITDA base value was 2,846 and add-back was 2,823.",
+        ),
+        _finance_evidence(
+            evidence_id="evidence-addback",
+            title="KHC adjusted EBITDA bridge",
+            text="The add-back line item was 2,823.",
+        ),
+    ]
+    citations = [
+        _finance_citation(evidence[0], citation_id="cite-base"),
+        _finance_citation(evidence[1], citation_id="cite-addback"),
+    ]
+    report = _retrieval_report(evidence=evidence, citations=citations)
+    recipe = task_recipe("retrieval_answer", metadata={"goal": "Compute KHC adjusted EBITDA bridge subtotal."})
+
+    rescue_report, _rescue_evidence, _rescue_citations = _compact_finance_synthesis_rescue_packet(
+        journal,
+        task_id="task-compact-trace-support",
+        run_id="run-1",
+        recipe=recipe,
+        report=report,
+        evidence=evidence,
+        citations=citations,
+        synthesis_error="test_compaction",
+    )
+
+    support = rescue_report.diagnostics["finance_formula_trace_support"][0]
+    assert support["formula_id"] == "formula-slot-bridge"
+    assert support["support_status"] in {"linked_to_fact_ledger", "trace_only"}
+    assert "citation_refs" in support
+    assert "input_facts" in support
+    assert rescue_report.diagnostics["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY bridge"
+    assert rescue_report.diagnostics["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "add-back"
+
+
+def test_compact_finance_synthesis_rescue_packet_exposes_competing_fact_clusters() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-total-revenues",
+            text=(
+                "SEC companyfacts official financial statement entityName=Chevron Corp "
+                "concept=Revenues label=Revenues metric=revenue unit=USD period=annual fy=2024 "
+                "form=10-K value=202792000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="evidence-sales-revenues",
+            text=(
+                "SEC filing statement entityName=Chevron Corp concept=SalesAndOtherOperatingRevenue "
+                "label=Sales and Other Operating Revenues metric=sales and other operating revenues "
+                "unit=USD period=annual fy=2024 form=10-K value=193414000000"
+            ),
+        ),
+    ]
+    evidence[0].diagnostics.update(
+        {
+            "span_metadata": {
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 2.5,
+                    "matched_preferred": ["metric=revenue"],
+                    "matched_demoted": [],
+                }
+            }
+        }
+    )
+    evidence[1].diagnostics.update(
+        {
+            "span_metadata": {
+                "target_line_item": "total revenues",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 13.5,
+                    "matched_preferred": ["metric=sales and other operating revenues"],
+                    "matched_demoted": [],
+                },
+            }
+        }
+    )
+    citations = [_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence]
+    report = _retrieval_report(evidence=evidence, citations=citations)
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"goal": "What was Chevron's total revenues for fiscal year 2024?"},
+    )
+
+    rescue_report, _rescue_evidence, _rescue_citations = _compact_finance_synthesis_rescue_packet(
+        JournalStore.in_memory(),
+        task_id="task-compact-clusters",
+        run_id="run-1",
+        recipe=recipe,
+        report=report,
+        evidence=evidence,
+        citations=citations,
+        synthesis_error="test_compaction",
+    )
+
+    clusters = rescue_report.diagnostics["finance_competing_fact_clusters"]
+    assert clusters
+    assert clusters[0]["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert clusters[0]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
+
+
+def test_compact_finance_synthesis_rescue_packet_exposes_numeric_repair_context_to_synthesizer() -> None:
+    journal = JournalStore.in_memory()
+    task_id = "task-compact-repair-context"
+    run_id = "run-1"
+    question = "What was Example Co FY2024 revenue from the 2024 10-K?"
+    target_url = "https://www.sec.gov/Archives/example/example-2024-10k.htm"
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "Example Co",
+            "doc_link": target_url,
+            "doc_period": "2024",
+            "doc_type": "10-K",
+            "required_statement": "income_statement",
+            "required_line_item": "revenue",
+            "primary_source_required": True,
+        }
+    )
+    facts = [
+        FinanceFact(
+            fact_id="target-revenue",
+            entity="Example Co",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="10",
+            unit="USD",
+            scale=None,
+            source_ref="target",
+            evidence_ref="ev-target",
+            citation_ref="cite-target",
+            metadata={
+                "source_uri": target_url,
+                "source_title": "Example Co 2024 10-K",
+                "statement": "income_statement",
+                "form": "10-K",
+                "context": "Revenue 10",
+            },
+        ),
+        FinanceFact(
+            fact_id="secondary-revenue",
+            entity="Example Co",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="11",
+            unit="USD",
+            scale=None,
+            source_ref="secondary",
+            evidence_ref="ev-secondary",
+            citation_ref="cite-secondary",
+            metadata={
+                "source_uri": "https://stockanalysis.com/stocks/exm/financials/",
+                "source_title": "Example Co Financials - StockAnalysis",
+                "context": "Revenue 11",
+            },
+        ),
+    ]
+    verification = verify_finance_answer(
+        answer="Example Co FY2024 revenue was 10%.",
+        facts=facts,
+        question=question,
+        target_binding=binding,
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=None,
+        kind="finance_numeric_verification",
+        data={**verification.to_dict(), "schema": "holo.kernel_v3.finance_numeric_verification.v1"},
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="ev-target",
+            uri=target_url,
+            title="Example Co 2024 10-K",
+            text="entityName=Example Co metric=revenue unit=USD fy=2024 form=10-K value=10",
+        ),
+        _finance_evidence(
+            evidence_id="ev-secondary",
+            uri="https://stockanalysis.com/stocks/exm/financials/",
+            title="Example Co Financials - StockAnalysis",
+            text="entityName=Example Co metric=revenue unit=USD fy=2024 value=11",
+        ),
+    ]
+    citations = [
+        _finance_citation(evidence[0], citation_id="cite-target"),
+        _finance_citation(evidence[1], citation_id="cite-secondary"),
+    ]
+    report = _retrieval_report(evidence=evidence, citations=citations)
+    recipe = task_recipe("retrieval_answer", metadata={"goal": question, "target_document_binding": binding})
+
+    rescue_report, rescue_evidence, rescue_citations = _compact_finance_synthesis_rescue_packet(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+        report=report,
+        evidence=evidence,
+        citations=citations,
+        synthesis_error="finance_numeric_judge_repair:test",
+    )
+    prompt_payload = json.loads(_synthesizer_prompt(rescue_report, rescue_evidence, rescue_citations))
+    repair_context = prompt_payload["retrieval_report"]["diagnostics"]["finance_numeric_repair_context"]
+
+    assert repair_context["status"] == "failed"
+    assert repair_context["semantic_decision_owner"] == "model"
+    assert repair_context["host_role"] == "diagnostic_carrier_only"
+    assert repair_context["unit_mismatch_examples"][0]["raw"] == "10%"
+    assert repair_context["unit_mismatch_examples"][0]["support_units"] == ["usd"]
+    assert "unit or scale wording" in " ".join(repair_context["repair_options"])
+    assert repair_context["target_document_binding"]["doc_period"] == "2024"
+    assert repair_context["target_document_binding"]["required_line_item"] == "revenue"
+    binding_context = repair_context["primary_source_numeric_binding"]
+    assert binding_context["status"] == "selected"
+    assert binding_context["selected_fact_ids"] == ["target-revenue"]
+    assert binding_context["rejected_count"] == 1
+    assert binding_context["rejected_candidates"][0]["fact_id"] == "secondary-revenue"
+
+
+def test_finance_fact_context_exposes_question_numeric_premise_hints_to_synthesizer_prompt() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-actual-revenue",
+            text=(
+                "SEC filing statement entityName=ExampleCo concept=Revenues label=Revenues "
+                "metric=revenue unit=USD period=annual fy=2024 form=10-K value=193414000000"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-actual-revenue")]
+    report = _retrieval_report(evidence=evidence, citations=citations)
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={"goal": "ExampleCo FY2024 revenue was $999 billion; what was the actual filing revenue?"},
+    )
+
+    enriched = _report_with_finance_fact_context(
+        report,
+        recipe=recipe,
+        evidence=evidence,
+        citations=citations,
+    )
+    prompt_payload = json.loads(_synthesizer_prompt(enriched, evidence, citations))
+    diagnostics = prompt_payload["retrieval_report"]["diagnostics"]
+    hints = diagnostics["finance_question_numeric_premise_hints"]
+
+    assert hints[0]["question_number"] == "$999 billion"
+    assert hints[0]["relation_to_supported_values"] == "different_from_supported_values"
+    assert hints[0]["closest_supported_value"]["value"] == "193.414"
+    assert hints[0]["closest_supported_value"]["unit"] == "billion"
+    assert hints[0]["closest_supported_value"]["metric"] == "revenue"
+    assert diagnostics["finance_question_numeric_premise_hint_policy"]["semantic_decision_owner"] == "model"
+    assert "question-embedded numbers" in " ".join(prompt_payload["answer_requirements"])
 
 
 def test_calculator_rejects_unsafe_expressions() -> None:
@@ -113,14 +659,213 @@ def test_calculator_rejects_unsafe_expressions() -> None:
         raise AssertionError("unsafe expression was accepted")
 
 
-def test_formula_planner_does_not_force_generic_growth_into_yoy_formula() -> None:
+def test_finance_numeric_verifier_is_registered_as_read_only_tool() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    manifests = {item.name: item for item in registry.manifests()}
+    fact = FinanceFact(
+        fact_id="fact-revenue",
+        entity="Example Co",
+        ticker="EXM",
+        period="FY2024",
+        fiscal_year=2024,
+        metric="revenue",
+        value="10000000",
+        unit="USD",
+        scale=None,
+        source_ref="src-1",
+        evidence_ref="ev-1",
+        citation_ref="cite-1",
+        metadata={},
+    )
+    action = CandidateAction(
+        action_id="act-verify-1",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify model answer numeric support",
+        score=0.9,
+        payload={
+            "answer": "Example Co FY2024 revenue was $10 million.",
+            "facts": [fact.to_dict()],
+            "question": "What was Example Co FY2024 revenue?",
+        },
+        reasons=["the answer has a material numeric finance claim"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_only").validate(
+        run_id="run-finance-verify",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert manifests[FINANCE_VERIFY_NUMERIC_TOOL_NAME].side_effect_class == "read"
+    assert manifests[FINANCE_VERIFY_NUMERIC_TOOL_NAME].permissions_required == []
+    assert manifests[FINANCE_VERIFY_NUMERIC_TOOL_NAME].input_schema["answer"]["required"] is True
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "finance_numeric_verification"
+    assert observation.source == f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}"
+    assert observation.content["verifier_status"] == "passed"
+    assert observation.content["verification"]["status"] == "passed"
+    assert observation.content["matched_value_count"] >= 1
+    assert observation.content["repair_guidance"]["schema"] == "holo.kernel_v3.finance_numeric_repair_guidance.v1"
+    assert observation.content["repair_options"] == []
+    assert observation.content["missing_value_examples"] == []
+
+
+def test_finance_numeric_verifier_tool_observation_exposes_repair_guidance() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    fact = FinanceFact(
+        fact_id="fact-revenue",
+        entity="Example Co",
+        ticker="EXM",
+        period="FY2024",
+        fiscal_year=2024,
+        metric="revenue",
+        value="10000000",
+        unit="USD",
+        scale=None,
+        source_ref="src-1",
+        evidence_ref="ev-1",
+        citation_ref="cite-1",
+        metadata={},
+    )
+    action = CandidateAction(
+        action_id="act-verify-repair",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify model answer numeric support",
+        score=0.9,
+        payload={
+            "answer": "Example Co FY2024 revenue was $12 million.",
+            "facts": [fact.to_dict()],
+            "question": "What was Example Co FY2024 revenue?",
+        },
+        reasons=["the answer has a material numeric finance claim"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_only").validate(
+        run_id="run-finance-verify",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert observation.status == "ok"
+    assert observation.content["verifier_status"] == "failed"
+    assert observation.content["repair_guidance"]["schema"] == "holo.kernel_v3.finance_numeric_repair_guidance.v1"
+    assert observation.content["repair_guidance"]["issue_codes"] == [
+        "unsupported_answer_number",
+        "ledger_extraction_gap",
+    ]
+    assert observation.content["missing_value_examples"] == [
+        {"raw": "$12 million", "value": "12000000", "unit": "million", "slot": ""}
+    ]
+    repair_options = " ".join(observation.content["repair_options"])
+    assert "remove or replace unsupported answer numbers" in repair_options
+    assert "FinanceFact records" in repair_options
+    assert "model still owns semantic repair" in observation.content["repair_guidance"]["host_boundary"]
+
+
+def test_finance_numeric_verifier_tool_observation_exposes_unit_mismatch_examples() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    fact = FinanceFact(
+        fact_id="fact-revenue",
+        entity="Example Co",
+        ticker="EXM",
+        period="FY2024",
+        fiscal_year=2024,
+        metric="revenue",
+        value="10",
+        unit="USD",
+        scale=None,
+        source_ref="src-1",
+        evidence_ref="ev-1",
+        citation_ref="cite-1",
+        metadata={},
+    )
+    action = CandidateAction(
+        action_id="act-verify-unit-repair",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify model answer numeric support",
+        score=0.9,
+        payload={
+            "answer": "Example Co FY2024 revenue was 10%.",
+            "facts": [fact.to_dict()],
+            "question": "What was Example Co FY2024 revenue?",
+        },
+        reasons=["the answer has a material numeric finance claim"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_only").validate(
+        run_id="run-finance-verify",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert observation.status == "ok"
+    assert observation.content["verifier_status"] == "failed"
+    assert observation.content["repair_guidance"]["issue_codes"] == ["unit_mismatch"]
+    assert observation.content["missing_value_examples"] == []
+    assert observation.content["unit_mismatch_examples"] == [
+        {
+            "raw": "10%",
+            "value": "10",
+            "unit": "percent",
+            "support_units": ["usd"],
+            "support_kinds": ["finance_fact"],
+            "support_refs": ["fact-revenue"],
+        }
+    ]
+    repair_options = " ".join(observation.content["repair_options"])
+    assert "unit or scale wording" in repair_options
+    assert "model still owns semantic repair" in observation.content["repair_guidance"]["host_boundary"]
+
+
+def test_finance_numeric_verifier_tool_schema_rejects_non_object_fact_rows() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-verify-bad-facts",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify bad payload",
+        score=0.9,
+        payload={
+            "answer": "Example Co FY2024 revenue was $10 million.",
+            "facts": ["not-a-finance-fact-object"],
+        },
+        reasons=["schema_boundary_test"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_only").validate(
+        run_id="run-finance-verify",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "blocked"
+    assert observation.content["reason"] == "invalid_tool_payload"
+    assert observation.content["error"] == "invalid_field_type:facts:list[object]"
+
+
+def test_formula_planner_routes_segment_growth_driver_to_rank_scaffold_not_yoy() -> None:
     plan = plan_finance_formula(
         question="If we exclude the impact of M&A, which segment dragged down 3M's overall growth in 2022?",
         facts=[],
     )
 
-    assert plan.status == "not_applicable"
-    assert plan.formula_name is None
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "category_metric_rank"
+    assert plan.missing_facts == ["ranked_category_metric_table"]
+    assert plan.diagnostics["rank_direction"] == "min"
 
 
 def test_formula_planner_keeps_explicit_growth_rate_formula() -> None:
@@ -331,7 +1076,7 @@ def test_finance_fact_ledger_preserves_specific_revenue_concepts() -> None:
     assert by_metric[("sales and other operating revenues", 2024)].value == "193414000000"
 
 
-def test_finance_fact_context_ranks_metric_intent_competitors_for_model() -> None:
+def test_finance_fact_context_keeps_competing_facts_model_owned() -> None:
     facts = [
         FinanceFact(
             fact_id="generic-revenues",
@@ -384,15 +1129,95 @@ def test_finance_fact_context_ranks_metric_intent_competitors_for_model() -> Non
         question="What was Chevron's total revenues for fiscal year 2024?",
     )
 
-    assert [fact.fact_id for fact in ranked] == ["sales-other-operating", "generic-revenues"]
+    assert [fact.fact_id for fact in ranked] == ["generic-revenues", "sales-other-operating"]
     summary = _finance_fact_judge_summary(ranked[0])
-    intent = summary["metadata"]["finance_metric_intent"]
-    assert intent["active"] is True
-    assert intent["score"] > ranked[1].metadata["finance_metric_intent"]["score"]
-    assert "metric=sales and other operating revenues" in intent["matched_preferred"]
+    assert "finance_metric_intent" not in summary["metadata"]
+    assert "finance_question_period_scope" not in summary["metadata"]
+    assert summary["metadata"]["concept"] == "Revenues"
 
 
-def test_finance_fact_context_prefers_annual_fact_over_quarterly_exact_caption_for_fiscal_year() -> None:
+def test_finance_fact_context_exposes_competing_clusters_to_synthesizer_prompt() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-total-revenues",
+            title="Chevron 2024 Form 10-K companyfacts",
+            uri="https://data.sec.gov/api/xbrl/companyfacts/CIK0000093410.json",
+            text=(
+                "SEC companyfacts official financial statement entityName=Chevron Corp "
+                "concept=Revenues label=Revenues metric=revenue unit=USD period=annual fy=2024 "
+                "form=10-K value=202792000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="evidence-sales-revenues",
+            title="Chevron 2024 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/93410/000009341025000009/cvx-20241231.htm",
+            text=(
+                "SEC filing statement entityName=Chevron Corp concept=SalesAndOtherOperatingRevenue "
+                "label=Sales and Other Operating Revenues metric=sales and other operating revenues "
+                "unit=USD period=annual fy=2024 form=10-K value=193414000000"
+            ),
+        ),
+    ]
+    evidence[0].diagnostics.update(
+        {
+            "span_metadata": {
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 2.5,
+                    "matched_preferred": ["metric=revenue"],
+                    "matched_demoted": [],
+                }
+            }
+        }
+    )
+    evidence[1].diagnostics.update(
+        {
+            "span_metadata": {
+                "target_line_item": "total revenues",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 13.5,
+                    "matched_preferred": ["metric=sales and other operating revenues"],
+                    "matched_demoted": [],
+                },
+            }
+        }
+    )
+    citations = [_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence]
+    report = _report_with_finance_fact_context(
+        _retrieval_report(evidence=evidence, citations=citations),
+        recipe=task_recipe(
+            "retrieval_answer",
+            metadata={"goal": "What was Chevron's total revenues for fiscal year 2024?"},
+        ),
+        evidence=evidence,
+        citations=citations,
+    )
+
+    prompt_payload = json.loads(_synthesizer_prompt(report, evidence, citations))
+    diagnostics = prompt_payload["retrieval_report"]["diagnostics"]
+    clusters = diagnostics["finance_competing_fact_clusters"]
+    policy = diagnostics["finance_competing_fact_cluster_policy"]
+    metric_hints = diagnostics["finance_metric_intent_hints"]
+
+    assert clusters
+    assert policy["semantic_decision_owner"] == "model"
+    assert policy["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert clusters[0]["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert clusters[0]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
+    assert diagnostics["finance_metric_intent_hint_policy"]["semantic_decision_owner"] == "model"
+    assert diagnostics["finance_metric_intent_hint_policy"]["host_role"] == "weak_attention_hint_carrier_only"
+    assert [item["value"] for item in metric_hints] == ["202792000000", "193414000000"]
+    assert metric_hints[1]["target_line_item"] == "total revenues"
+    assert metric_hints[1]["intent"]["matched_preferred"] == ["metric=sales and other operating revenues"]
+    assert any("not a host ranking" in item for item in prompt_payload["answer_requirements"])
+
+
+def test_finance_fact_context_does_not_host_prefer_annual_over_quarterly() -> None:
     facts = [
         FinanceFact(
             fact_id="quarterly-net-revenues",
@@ -464,9 +1289,13 @@ def test_finance_fact_context_prefers_annual_fact_over_quarterly_exact_caption_f
         question="What was Mastercard's net revenues for fiscal year 2024?",
     )
 
-    assert ranked[0].fact_id == "annual-revenues"
-    assert ranked[0].metadata["finance_question_period_scope"] == "annual"
-    assert ranked[-1].fact_id == "quarterly-net-revenues"
+    assert [fact.fact_id for fact in ranked] == [
+        "quarterly-net-revenues",
+        "annual-revenues",
+        "annual-contract-liability-revenue",
+    ]
+    summary = _finance_fact_judge_summary(ranked[0])
+    assert "finance_question_period_scope" not in summary["metadata"]
 
 
 def test_companyfacts_readable_text_prioritizes_target_year_missing_slots() -> None:
@@ -869,6 +1698,850 @@ def test_finance_capability_profile_uses_model_evaluator() -> None:
     assert profile.planner_mode == "model"
     assert profile.evaluator_mode == "model"
     assert profile.synthesizer_mode == "model"
+
+
+def test_toolchain_state_for_prompt_summarizes_tools_without_controlling_next_action() -> None:
+    journal = JournalStore.in_memory()
+    _append_toolchain_state_fixture(journal)
+
+    state = _toolchain_state_for_prompt(journal, task_id="task-toolchain", run_id="run-1")
+
+    assert state["schema"] == "holo.kernel_v3.toolchain_state.v1"
+    assert state["action_count"] == 3
+    assert state["observation_count"] == 2
+    assert state["tool_source_counts"] == {
+        "tool:calculator.compute": 1,
+        "tool:retrieval.run": 1,
+    }
+    assert state["failed_tool_count"] == 1
+    assert state["failed_tools"][0]["source"] == "tool:retrieval.run"
+    assert state["failed_tools"][0]["observation_diagnostics"]["error"] == "network_failed"
+    assert state["repeated_tool_names"] == ["calculator.compute"]
+    assert len(state["repeated_action_fingerprints"]) == 1
+    assert state["recent_tool_actions"][0]["payload_summary"]["query_preview"] == "example finance filing"
+    calc_summary = state["recent_tool_actions"][1]["payload_summary"]
+    assert calc_summary["payload_keys"] == ["expression", "variables"]
+    assert calc_summary["expression_fingerprint"]
+    assert calc_summary["variable_names"] == ["assets", "revenue"]
+    assert "expression" not in calc_summary
+    assert state["repeated_action_groups"][0]["tool"] == "calculator.compute"
+    assert state["repeated_action_groups"][0]["attempt_count"] == 2
+    assert state["repeated_action_groups"][0]["latest_observation_status"] == "ok"
+    assert state["toolchain_presence"] == {
+        "retrieval": True,
+        "calculator": True,
+        "finance_verify_numeric": False,
+    }
+    assert state["terminal_seen"] is True
+    assert state["post_final_record_count"] == 1
+    assert state["post_final_record_kind_counts"] == {"memory_proposal": 1}
+    assert state["host_boundary"].startswith("observational compact state only")
+    assert any("failed tool" in item for item in state["model_attention"])
+    assert any("observation diagnostics" in item for item in state["model_attention"])
+    assert any("terminal record" in item for item in state["model_attention"])
+
+
+def test_toolchain_state_exposes_compact_verifier_repair_guidance_without_raw_tool_body() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-toolchain-verifier",
+        run_id="run-1",
+        step_id="step-verify",
+        kind="observation",
+        data={
+            "source": f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}",
+            "status": "ok",
+            "observation_id": "obs-verify",
+            "action_id": "act-verify",
+            "content": {
+                "verifier_status": "failed",
+                "issue_count": 2,
+                "matched_value_count": 0,
+                "missing_value_count": 1,
+                "verification": {
+                    "status": "failed",
+                    "issues": [{"code": "unsupported_answer_number"}],
+                    "raw_large_body": "RAW_PROVIDER_BODY_SHOULD_NOT_LEAK",
+                },
+                "repair_guidance": {
+                    "schema": "holo.kernel_v3.finance_numeric_repair_guidance.v1",
+                    "issue_codes": ["unsupported_answer_number", "ledger_extraction_gap"],
+                    "repair_options": [
+                        "ask synthesis to remove or replace unsupported answer numbers using only supported facts",
+                        "retrieve or parse authoritative finance evidence to produce FinanceFact records",
+                    ],
+                    "missing_value_examples": [
+                        {"raw": "$12 million", "value": "12000000", "unit": "million", "slot": "revenue"}
+                    ],
+                    "host_boundary": "diagnostic verifier guidance only; the model still owns semantic repair",
+                },
+            },
+        },
+    )
+
+    state = _toolchain_state_for_prompt(journal, task_id="task-toolchain-verifier", run_id="run-1")
+
+    assert state["toolchain_presence"]["finance_verify_numeric"] is True
+    diagnostics = state["recent_tool_observations"][-1]["observation_diagnostics"]
+    assert diagnostics["verifier_status"] == "failed"
+    assert diagnostics["issue_codes"] == ["unsupported_answer_number", "ledger_extraction_gap"]
+    assert diagnostics["repair_options"][0].startswith("ask synthesis to remove")
+    assert diagnostics["missing_value_examples"] == [
+        {"raw": "$12 million", "value": "12000000", "unit": "million", "slot": "revenue"}
+    ]
+    encoded = json.dumps(state, ensure_ascii=False)
+    assert "RAW_PROVIDER_BODY_SHOULD_NOT_LEAK" not in encoded
+    assert "model still owns semantic repair" in diagnostics["host_boundary"]
+    assert any("observation diagnostics" in item for item in state["model_attention"])
+
+
+def test_toolchain_state_for_prompt_is_absent_without_tool_history() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-no-tools",
+        run_id="run-1",
+        step_id="step-1",
+        kind="action",
+        data={
+            "kind": "respond",
+            "name": None,
+            "action_id": "act-respond",
+            "payload": {"text": "hello"},
+            "side_effect_class": "none",
+        },
+    )
+    journal.append(
+        task_id="task-no-tools",
+        run_id="run-1",
+        step_id="step-1",
+        kind="observation",
+        data={
+            "source": "respond",
+            "status": "ok",
+            "observation_id": "obs-respond",
+            "content": {"text": "hello"},
+        },
+    )
+
+    state = _toolchain_state_for_prompt(journal, task_id="task-no-tools", run_id="run-1")
+
+    assert state == {}
+
+
+def test_agent_context_compiler_injects_compact_toolchain_state_for_model_planner() -> None:
+    journal = JournalStore.in_memory()
+    _append_toolchain_state_fixture(journal)
+    profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
+    recipe = task_recipe("retrieval_answer", metadata=profile_metadata)
+    registry = register_finance_tools(ToolRegistry())
+    compiler = _AgentContextCompiler(recipe=recipe, tool_manifests=registry.manifests())
+
+    context = compiler.compile(
+        TaskState(
+            task_id="task-toolchain",
+            run_id="run-1",
+            thread_id="thread-toolchain",
+            input_text="Compute a supported finance metric.",
+            status="running",
+            step_id="step-3",
+        ),
+        journal,
+    )
+
+    toolchain_state = context.state["toolchain_state"]
+    assert toolchain_state["toolchain_presence"]["retrieval"] is True
+    assert toolchain_state["toolchain_presence"]["calculator"] is True
+    assert toolchain_state["repeated_tool_names"] == ["calculator.compute"]
+    assert toolchain_state["recent_tool_actions"][-1]["payload_fingerprint"]
+    assert toolchain_state["recent_tool_actions"][-1]["payload_summary"]["expression_fingerprint"]
+    assert toolchain_state["repeated_action_groups"][0]["payload_summary"]["variable_names"] == ["assets", "revenue"]
+    assert "revenue / assets" not in json.dumps(toolchain_state, ensure_ascii=False)
+    assert "model still chooses the next action" in toolchain_state["host_boundary"]
+
+
+def test_finance_working_state_for_prompt_summarizes_facts_traces_and_verifier_without_deciding_answer() -> None:
+    journal = JournalStore.in_memory()
+    _append_finance_working_state_fixture(journal)
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-state", run_id="run-1")
+
+    assert state["schema"] == "holo.kernel_v3.finance_working_state.v1"
+    assert state["fact_count"] == 2
+    assert state["facts"][0]["fact_id"] == "finfact-revenue"
+    assert state["facts"][0]["metric"] == "revenue"
+    assert state["slot_frame"]["task_type"] == "compute"
+    assert state["slot_frame"]["evidence_policy"]["required_source_families"] == ["sec_filing"]
+    assert state["slot_bind"]["decision"] == "ready"
+    assert state["slot_bind"]["accepted_formula_plan_count"] == 1
+    assert state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert state["slot_bind"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
+    assert state["missing_slots"] == ["net_income", "margin"]
+    assert state["transform_plan"]["method"] == "margin"
+    assert state["formula_trace_count"] == 1
+    assert state["formula_traces"][0]["formula_name"] == "gross_margin"
+    assert state["formula_trace_support"][0]["support_status"] == "linked_to_fact_ledger"
+    assert state["formula_trace_support"][0]["citation_refs"] == ["cite-profit", "cite-revenue"]
+    assert state["numeric_verification"]["status"] == "failed"
+    assert state["numeric_verification"]["issue_codes"] == ["missing_margin"]
+    assert state["numeric_verification"]["missing_value_examples"][0]["slot"] == "net_income"
+    assert "inspect missing numeric values" in state["numeric_verification"]["repair_options"][0]
+    assert state["presence"] == {
+        "finance_facts": True,
+        "slot_frame": True,
+        "slot_bind": True,
+        "missing_slots": True,
+        "formula_trace": True,
+        "numeric_verification": True,
+    }
+    encoded = json.dumps(state, ensure_ascii=False)
+    assert "gross profit / revenue" in encoded
+    assert "RAW_PROVIDER_BODY_SHOULD_NOT_LEAK" not in encoded
+    assert "model owns metric binding" in state["host_boundary"]
+
+
+def test_finance_working_state_verifier_repair_options_are_model_visible_without_deciding_answer() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-finance-repair-options",
+        run_id="run-1",
+        step_id="step-verify",
+        kind="finance_numeric_verification",
+        data={
+            "schema": "holo.kernel_v3.finance_numeric_verification.v1",
+            "status": "failed",
+            "issues": [
+                {"code": "unsupported_answer_number"},
+                {"code": "missing_formula_trace"},
+                {"code": "primary_source_numeric_binding_failed"},
+            ],
+            "matched_values": [],
+            "missing_values": [{"raw": "$43.0B", "value": "43000000000", "unit": "USD", "slot": "enterprise_value"}],
+            "formula_traces": [],
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-repair-options", run_id="run-1")
+
+    verification = state["numeric_verification"]
+    assert verification["issue_codes"] == [
+        "unsupported_answer_number",
+        "missing_formula_trace",
+        "primary_source_numeric_binding_failed",
+    ]
+    assert verification["missing_value_examples"] == [
+        {"raw": "$43.0B", "value": "43000000000", "unit": "USD", "slot": "enterprise_value"}
+    ]
+    repair_options = " ".join(verification["repair_options"])
+    assert "remove or replace unsupported answer numbers" in repair_options
+    assert "calculator.compute" in repair_options
+    assert "target document" in repair_options
+    assert "model owns metric binding" in state["host_boundary"]
+
+
+def test_finance_working_state_exposes_unit_mismatch_examples_without_deciding_answer() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-finance-unit-repair",
+        run_id="run-1",
+        step_id="step-verify",
+        kind="finance_numeric_verification",
+        data={
+            "schema": "holo.kernel_v3.finance_numeric_verification.v1",
+            "status": "failed",
+            "issues": [{"code": "unit_mismatch"}],
+            "matched_values": [
+                {
+                    "raw": "10%",
+                    "value": "10",
+                    "unit": "percent",
+                    "support": {"kind": "finance_fact", "ref": "fact-revenue", "unit": "usd"},
+                }
+            ],
+            "missing_values": [],
+            "unit_mismatches": [
+                {
+                    "code": "unit_mismatch",
+                    "value": {"raw": "10%", "value": "10", "unit": "percent"},
+                    "support_units": ["usd"],
+                    "support_kinds": ["finance_fact"],
+                    "support_refs": ["fact-revenue"],
+                }
+            ],
+            "formula_traces": [],
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-unit-repair", run_id="run-1")
+
+    verification = state["numeric_verification"]
+    assert verification["issue_codes"] == ["unit_mismatch"]
+    assert verification["missing_value_examples"] == []
+    assert verification["unit_mismatch_examples"] == [
+        {
+            "raw": "10%",
+            "value": "10",
+            "unit": "percent",
+            "support_units": ["usd"],
+            "support_kinds": ["finance_fact"],
+            "support_refs": ["fact-revenue"],
+        }
+    ]
+    assert "unit or scale wording" in " ".join(verification["repair_options"])
+    assert "model owns metric binding" in state["host_boundary"]
+
+
+def test_finance_working_state_includes_verify_numeric_tool_observation() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-finance-tool-verifier-state",
+        run_id="run-1",
+        step_id="step-verify-tool",
+        kind="observation",
+        data={
+            "observation_id": "obs-verify-tool",
+            "source": f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}",
+            "kind": "finance_numeric_verification",
+            "status": "ok",
+            "content": {
+                "verifier_status": "failed",
+                "verification": {
+                    "schema": "holo.kernel_v3.finance_numeric_verification.v1",
+                    "status": "failed",
+                    "issues": [{"code": "unsupported_answer_number"}],
+                    "matched_values": [],
+                    "missing_values": [
+                        {"raw": "21.91x", "value": "21.91", "unit": "x", "slot": "ev_revenue_multiple"}
+                    ],
+                    "formula_traces": [],
+                },
+            },
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-tool-verifier-state", run_id="run-1")
+
+    assert state["presence"]["numeric_verification"] is True
+    verification = state["numeric_verification"]
+    assert verification["status"] == "failed"
+    assert verification["issue_codes"] == ["unsupported_answer_number"]
+    assert verification["missing_value_examples"] == [
+        {"raw": "21.91x", "value": "21.91", "unit": "x", "slot": "ev_revenue_multiple"}
+    ]
+    assert "remove or replace unsupported answer numbers" in " ".join(verification["repair_options"])
+    assert any("latest finance numeric verification failed" in item for item in state["model_attention"])
+
+
+def test_finance_working_state_includes_slot_bind_basis_without_fact_ledger() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-finance-slot-basis-only",
+        run_id="run-1",
+        step_id="step-slot-bind",
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "ready",
+            "decision": "ready",
+            "accepted_formula_plan_count": 1,
+            "period_basis": [
+                {
+                    "slot_name": "revenue",
+                    "fact_id": "finfact-revenue",
+                    "selected_period": "FY2024",
+                    "raw_fields_used": ["form", "fp", "start", "end"],
+                    "reason": "Model selected the annual FY fact.",
+                }
+            ],
+            "line_item_basis": [
+                {
+                    "slot_name": "revenue",
+                    "fact_id": "finfact-revenue",
+                    "selected_line_item": "Revenue",
+                    "raw_fields_used": ["concept", "label"],
+                    "reason": "Model selected the revenue line item.",
+                }
+            ],
+            "reason_summary": "Model-owned slot binding basis is available before synthesis.",
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-slot-basis-only", run_id="run-1")
+
+    assert state["presence"]["slot_bind"] is True
+    assert state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert state["slot_bind"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
+    assert any("model-owned slot binding basis" in item for item in state["model_attention"])
+    assert "model owns metric binding" in state["host_boundary"]
+
+
+def test_finance_working_state_for_prompt_is_absent_without_finance_anchor() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-generic-state",
+        run_id="run-1",
+        step_id="step-slot",
+        kind="slot_frame",
+        data={
+            "schema": "holo.kernel_v3.slot_frame.v1",
+            "source": "generic_source_grounded_workflow_trace",
+            "domain": "source_grounded_research",
+            "task_type": "summarize",
+            "missing_slots": ["citation"],
+        },
+    )
+    journal.append(
+        task_id="task-generic-state",
+        run_id="run-1",
+        step_id="step-transform",
+        kind="transform_plan",
+        data={
+            "schema": "holo.kernel_v3.transform_plan.v1",
+            "domain": "source_grounded_research",
+            "operation": "synthesize",
+            "status": "missing_slots",
+            "method": "source_grounded_synthesis",
+            "missing_slots": ["citation"],
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-generic-state", run_id="run-1")
+
+    assert state == {}
+
+
+def test_agent_context_compiler_injects_compact_finance_working_state_for_model_planner() -> None:
+    journal = JournalStore.in_memory()
+    _append_finance_working_state_fixture(journal)
+    profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
+    recipe = task_recipe("retrieval_answer", metadata=profile_metadata)
+    registry = register_finance_tools(ToolRegistry())
+    compiler = _AgentContextCompiler(recipe=recipe, tool_manifests=registry.manifests())
+
+    context = compiler.compile(
+        TaskState(
+            task_id="task-finance-state",
+            run_id="run-1",
+            thread_id="thread-finance-state",
+            input_text="Compute a supported finance metric.",
+            status="running",
+            step_id="step-3",
+        ),
+        journal,
+    )
+
+    finance_state = context.state["finance_working_state"]
+    assert finance_state["presence"]["finance_facts"] is True
+    assert finance_state["presence"]["formula_trace"] is True
+    assert finance_state["numeric_verification"]["status"] == "failed"
+    assert finance_state["formula_trace_support"][0]["input_fact_ids"] == ["finfact-profit", "finfact-revenue"]
+    assert "model owns metric binding" in finance_state["host_boundary"]
+
+
+def test_loop_recompiles_context_so_second_planner_step_sees_finance_working_state() -> None:
+    journal = JournalStore.in_memory()
+    profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))
+    recipe = task_recipe("retrieval_answer", metadata=profile_metadata)
+    registry = ToolRegistry.with_builtin_respond()
+    registry.register("finance.seed_state", _finance_seed_state_executor(journal))
+
+    class CapturingPlanner:
+        def __init__(self) -> None:
+            self.context_states: list[dict] = []
+
+        def propose(self, context: ContextBundle, feedback=None):
+            self.context_states.append(context.state)
+            if len(self.context_states) == 1:
+                assert context.state.get("finance_working_state") == {}
+                return CandidateAction(
+                    action_id="act-seed-finance-state",
+                    kind="tool",
+                    name="finance.seed_state",
+                    description="seed finance state for loop context refresh",
+                    payload={},
+                    score=1.0,
+                    reasons=["test first step"],
+                    side_effect_class="read",
+                )
+            finance_state = context.state["finance_working_state"]
+            assert finance_state["presence"]["finance_facts"] is True
+            assert finance_state["presence"]["formula_trace"] is True
+            assert finance_state["formula_trace_support"][0]["citation_refs"] == ["cite-profit", "cite-revenue"]
+            return CandidateAction(
+                action_id="act-final",
+                kind="respond",
+                name=None,
+                description="final answer after refreshed finance state",
+                payload={"text": "The refreshed finance working state is visible."},
+                score=1.0,
+                reasons=["test second step"],
+                side_effect_class="none",
+            )
+
+    class ContinueThenStopEvaluator:
+        def __init__(self) -> None:
+            self.count = 0
+            self.context_states: list[dict] = []
+
+        def evaluate(self, context: ContextBundle, observation: Observation) -> Feedback:
+            self.count += 1
+            self.context_states.append(context.state)
+            if self.count == 1:
+                finance_state = context.state["finance_working_state"]
+                assert finance_state["presence"]["finance_facts"] is True
+                assert finance_state["presence"]["formula_trace"] is True
+                return Feedback(
+                    feedback_id="fb-continue",
+                    run_id=observation.run_id,
+                    status="continue",
+                    answer=None,
+                    stop_reason=None,
+                    missing_evidence=["finance_working_state_refresh"],
+                )
+            return Feedback(
+                feedback_id="fb-final",
+                run_id=observation.run_id,
+                status="final_answer_ready",
+                answer="The refreshed finance working state is visible.",
+                stop_reason="completed",
+                    missing_evidence=[],
+                )
+
+    planner = CapturingPlanner()
+    evaluator = ContinueThenStopEvaluator()
+    result = LoopControllerV3(
+        journal=journal,
+        context_compiler=_AgentContextCompiler(recipe=recipe, tool_manifests=registry.manifests()),
+        planner=planner,
+        policy_gate=PolicyGate(),
+        tool_registry=registry,
+        evaluator=evaluator,
+        max_steps=3,
+    ).run("Compute a supported finance metric.")
+
+    assert result.status == "completed"
+    assert len(planner.context_states) == 2
+    assert evaluator.context_states[0]["finance_working_state"]["presence"]["formula_trace"] is True
+    assert planner.context_states[1]["finance_working_state"]["fact_count"] == 2
+    context_records = journal.records(kind="context")
+    assert len(context_records) == 2
+    assert context_records[-1].data["state"]["finance_working_state"]["presence"]["formula_trace"] is True
+
+
+def _append_toolchain_state_fixture(journal: JournalStore) -> None:
+    journal.append(
+        task_id="task-toolchain",
+        run_id="run-1",
+        step_id="step-1",
+        kind="action",
+        data={
+            "kind": "tool",
+            "name": "retrieval.run",
+            "action_id": "act-retrieve",
+            "payload": {"query": "example finance filing"},
+            "side_effect_class": "network",
+        },
+    )
+    for action_id in ("act-calc-1", "act-calc-2"):
+        journal.append(
+            task_id="task-toolchain",
+            run_id="run-1",
+            step_id="step-2",
+            kind="action",
+            data={
+                "kind": "tool",
+                "name": "calculator.compute",
+                "action_id": action_id,
+                "payload": {"expression": "revenue / assets", "variables": {"revenue": 10, "assets": 5}},
+                "side_effect_class": "read",
+            },
+        )
+    journal.append(
+        task_id="task-toolchain",
+        run_id="run-1",
+        step_id="step-1",
+        kind="observation",
+        data={
+            "source": "tool:retrieval.run",
+            "status": "failed",
+            "observation_id": "obs-retrieve",
+            "action_id": "act-retrieve",
+            "content": {"error": "network_failed", "query": "example finance filing"},
+        },
+    )
+    journal.append(
+        task_id="task-toolchain",
+        run_id="run-1",
+        step_id="step-2",
+        kind="observation",
+        data={
+            "source": "tool:calculator.compute",
+            "status": "ok",
+            "observation_id": "obs-calc",
+            "action_id": "act-calc-1",
+            "content": {"formula_trace": {"formula_id": "formula-1", "result_value": "2"}},
+        },
+    )
+    journal.append(
+        task_id="task-toolchain",
+        run_id="run-1",
+        step_id="step-final",
+        kind="agent_final_answer",
+        data={"answer": "Final answer."},
+    )
+    journal.append(
+        task_id="task-toolchain",
+        run_id="run-1",
+        step_id="step-post",
+        kind="memory_proposal",
+        data={"status": "pending"},
+    )
+
+
+def _append_finance_working_state_fixture(journal: JournalStore) -> None:
+    facts = [
+        FinanceFact(
+            fact_id="finfact-revenue",
+            entity="ExampleCo",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="1000",
+            unit="USD",
+            scale="millions",
+            source_ref="src-10k",
+            evidence_ref="ev-revenue",
+            citation_ref="cite-revenue",
+            metadata={
+                "concept": "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "label": "Net revenues",
+                "form": "10-K",
+                "fp": "FY",
+                "source_uri": "https://example.test/10k",
+                "raw_body": "RAW_PROVIDER_BODY_SHOULD_NOT_LEAK",
+            },
+        ),
+        FinanceFact(
+            fact_id="finfact-profit",
+            entity="ExampleCo",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="gross_profit",
+            value="400",
+            unit="USD",
+            scale="millions",
+            source_ref="src-10k",
+            evidence_ref="ev-profit",
+            citation_ref="cite-profit",
+            metadata={
+                "concept": "GrossProfit",
+                "label": "Gross profit",
+                "form": "10-K",
+                "fp": "FY",
+                "source_uri": "https://example.test/10k",
+            },
+        ),
+    ]
+    journal.append(
+        task_id="task-finance-state",
+        run_id="run-1",
+        step_id="step-ledger",
+        kind="finance_fact_ledger",
+        data={
+            "schema": "holo.kernel_v3.finance_fact_ledger.v1",
+            "fact_count": len(facts),
+            "facts": [fact.to_dict() for fact in facts],
+        },
+    )
+    journal.append(
+        task_id="task-finance-state",
+        run_id="run-1",
+        step_id="step-slot",
+        kind="slot_frame",
+        data={
+            "schema": "holo.kernel_v3.slot_frame.v1",
+            "source": "test_fixture",
+            "task_type": "compute",
+            "required_slots": [{"name": "revenue"}, {"name": "gross_profit"}, {"name": "margin"}],
+            "filled_slots": [{"slot_name": "revenue", "value": "1000"}],
+            "missing_slots": ["net_income", "margin"],
+            "evidence_policy": {
+                "required_source_families": ["sec_filing"],
+                "authority": "primary",
+            },
+        },
+    )
+    journal.append(
+        task_id="task-finance-state",
+        run_id="run-1",
+        step_id="step-transform",
+        kind="transform_plan",
+        data={
+            "schema": "holo.kernel_v3.transform_plan.v1",
+            "domain": "finance",
+            "operation": "compute",
+            "status": "missing_slots",
+            "method": "margin",
+            "input_claim_ids": ["claim-profit", "claim-revenue"],
+            "output_attribute": "gross_margin",
+            "missing_slots": ["margin"],
+        },
+    )
+    journal.append(
+        task_id="task-finance-state",
+        run_id="run-1",
+        step_id="step-slot-bind",
+        kind="finance_slot_bind",
+        data={
+            "schema": "holo.kernel_v3.finance_slot_bind.v1",
+            "status": "ready",
+            "decision": "ready",
+            "processor_status": "ok",
+            "repair_attempted": False,
+            "accepted_formula_plan_count": 1,
+            "missing_slots": [],
+            "reason_summary": "Model selected FY revenue and gross profit from the 10-K.",
+            "period_basis": [
+                {
+                    "slot_name": "revenue",
+                    "fact_id": "finfact-revenue",
+                    "selected_period": "FY2024",
+                    "raw_fields_used": ["form", "fp"],
+                    "reason": "10-K FY fact matches requested fiscal year.",
+                }
+            ],
+            "line_item_basis": [
+                {
+                    "slot_name": "revenue",
+                    "fact_id": "finfact-revenue",
+                    "selected_line_item": "Revenue",
+                    "raw_fields_used": ["concept", "label"],
+                    "reason": "Revenue concept and label match the requested line item.",
+                }
+            ],
+        },
+    )
+    trace = FormulaTrace(
+        formula_id="formula-margin",
+        formula_name="gross_margin",
+        expression="gross profit / revenue",
+        input_fact_ids=["finfact-profit", "finfact-revenue"],
+        result_value="0.4",
+        unit="ratio",
+        diagnostics={"source": "finance_slot_bind_model", "formatted_value": "40.0%"},
+    )
+    journal.append(
+        task_id="task-finance-state",
+        run_id="run-1",
+        step_id="step-calc",
+        kind="observation",
+        data={
+            "source": f"tool:{CALCULATOR_TOOL_NAME}",
+            "status": "ok",
+            "content": {"formula_trace": trace.to_dict()},
+        },
+    )
+    journal.append(
+        task_id="task-finance-state",
+        run_id="run-1",
+        step_id="step-verify",
+        kind="finance_numeric_verification",
+        data={
+            "schema": "holo.kernel_v3.finance_numeric_verification.v1",
+            "status": "failed",
+            "issues": [{"code": "missing_margin"}],
+            "matched_values": [{"value": "0.4"}],
+            "missing_values": [{"slot": "net_income"}],
+            "formula_traces": [trace.to_dict()],
+            "verifier_gate_result": {"status": "failed"},
+        },
+    )
+
+
+def _finance_seed_state_executor(journal: JournalStore):
+    def execute(action: CandidateAction) -> Observation:
+        host_context = action.payload.get("_host_context") if isinstance(action.payload, dict) else {}
+        host_context = host_context if isinstance(host_context, dict) else {}
+        task_id = str(host_context.get("task_id") or "task-loop-finance-state")
+        run_id = str(host_context.get("run_id") or "run-1")
+        step_id = str(host_context.get("step_id") or "step-seed")
+        facts = [
+            FinanceFact(
+                fact_id="finfact-revenue",
+                entity="ExampleCo",
+                ticker="EXM",
+                period="FY2024",
+                fiscal_year=2024,
+                metric="revenue",
+                value="1000",
+                unit="USD",
+                scale="millions",
+                source_ref="src-10k",
+                evidence_ref="ev-revenue",
+                citation_ref="cite-revenue",
+                metadata={"concept": "Revenues", "label": "Revenue", "form": "10-K", "fp": "FY"},
+            ),
+            FinanceFact(
+                fact_id="finfact-profit",
+                entity="ExampleCo",
+                ticker="EXM",
+                period="FY2024",
+                fiscal_year=2024,
+                metric="gross_profit",
+                value="400",
+                unit="USD",
+                scale="millions",
+                source_ref="src-10k",
+                evidence_ref="ev-profit",
+                citation_ref="cite-profit",
+                metadata={"concept": "GrossProfit", "label": "Gross profit", "form": "10-K", "fp": "FY"},
+            ),
+        ]
+        journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            kind="finance_fact_ledger",
+            data={
+                "schema": "holo.kernel_v3.finance_fact_ledger.v1",
+                "fact_count": len(facts),
+                "facts": [fact.to_dict() for fact in facts],
+            },
+        )
+        trace = FormulaTrace(
+            formula_id="formula-margin",
+            formula_name="gross_margin",
+            expression="gross_profit / revenue",
+            input_fact_ids=["finfact-profit", "finfact-revenue"],
+            result_value="0.4",
+            unit="ratio",
+            diagnostics={"source": "finance_slot_bind_model", "formatted_value": "40.0%"},
+        )
+        journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            kind="observation",
+            data={
+                "source": f"tool:{CALCULATOR_TOOL_NAME}",
+                "status": "ok",
+                "content": {"formula_trace": trace.to_dict()},
+            },
+        )
+        return Observation(
+            observation_id="obs-seed-finance-state",
+            run_id=run_id,
+            kind="tool_result",
+            status="ok",
+            source="tool:finance.seed_state",
+            content={"status": "seeded"},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
 
 
 def test_planner_processor_failure_rescues_to_targeted_finance_retrieval() -> None:
@@ -1674,6 +3347,28 @@ def test_finance_fact_ledger_extracts_modeling_cash_flow_metrics() -> None:
     assert by_metric["capital expenditures"] == "710000000"
 
 
+def test_finance_fact_ledger_preserves_current_liabilities_metric() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="adbe-current-liabilities",
+            text=(
+                "entityName=Adobe ticker=ADBE facts="
+                "concept=LiabilitiesCurrent metric=total current liabilities unit=USD fy=2017 form=10-K value=3527457000 ; "
+                "concept=Liabilities metric=total liabilities unit=USD fy=2017 form=10-K value=6075687000"
+            ),
+        )
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-adbe-liabilities")],
+    )
+    by_metric = {fact.metric: fact.value for fact in facts}
+
+    assert by_metric["current liabilities"] == "3527457000"
+    assert by_metric["liabilities"] == "6075687000"
+
+
 def test_finance_fact_ledger_extracts_ppe_purchase_rows_with_millions_header() -> None:
     evidence = [
         _finance_evidence(
@@ -1695,6 +3390,150 @@ def test_finance_fact_ledger_extracts_ppe_purchase_rows_with_millions_header() -
 
     capex_values = {fact.value for fact in facts if fact.metric == "capital expenditures"}
     assert "-1577000000" in capex_values
+
+
+def test_finance_fact_ledger_extracts_html_column_cash_flow_rows() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="ppe-html-column-table",
+            title="3M 2018 Form 10-K",
+            text=(
+                "Cash Flows from Investing Activities: scale=millions "
+                "html_table_165_row_1: Years ended December 31 | | | | | | | | | | "
+                "html_table_165_row_2: (Millions) | | 2018 | | 2017 | | 2016 | "
+                "html_table_165_row_3: Years_ended_December_31=Purchases of property, plant and equipment (PP&E) "
+                "column_2= column_3=$ column_4=(1,577) column_5= column_6=$ column_7=(1,373) "
+                "column_8= column_9=$ column_10=(1,420) column_11= "
+                "html_table_165_row_4: Years_ended_December_31=Proceeds from sale of PP&E and other assets "
+                "column_2= column_3= column_4=262 column_5= column_6= column_7=49"
+            ),
+        )
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-ppe-html-column-table")],
+    )
+    capex_by_year = {
+        fact.fiscal_year: fact
+        for fact in facts
+        if fact.metric == "capital expenditures" and fact.metadata.get("source") == "natural_table_row"
+    }
+
+    assert capex_by_year[2018].value == "-1577000000"
+    assert capex_by_year[2017].value == "-1373000000"
+    assert capex_by_year[2016].value == "-1420000000"
+    assert capex_by_year[2018].metadata["row_marker"] == "purchases of property, plant and equipment"
+    assert "column_4=(1,577)" in capex_by_year[2018].metadata["context"]
+
+
+def test_finance_fact_ledger_canonicalizes_cash_flow_activity_and_store_count_metrics() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="activity-and-store-facts",
+            text=(
+                "entityName=Retailer ticker=RTL metric=Net cash provided by investing activities "
+                "unit=USD fy=2022 value=-200 ; "
+                "metric=Net cash provided by financing activities unit=USD fy=2022 value=50 ; "
+                "metric=Number of stores unit=count fy=2022 value=120"
+            ),
+        )
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(evidence[0], citation_id="cite-activity-and-store-facts")],
+    )
+    metrics = {fact.metric: fact.value for fact in facts}
+
+    assert metrics["investing cash flow"] == "-200"
+    assert metrics["financing cash flow"] == "50"
+    assert metrics["store count"] == "120"
+
+
+def test_html_table_fact_lines_preserve_parenthesized_capex_values() -> None:
+    document = FetchedDocument(
+        document_id="doc-3m-2022",
+        goal_id="goal-3m-2022",
+        source_id="src-3m-2022",
+        uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.htm",
+        title="3M 2022 Form 10-K",
+        artifact_id="artifact-3m-2022",
+        payload_hash="hash-3m-2022",
+        preview="",
+        size_bytes=0,
+        metadata={"mime_type": "text/html"},
+    )
+    body = """
+    <html><body>
+      <table>
+        <tr><td>(Millions)</td><td>2022</td><td>2021</td><td>2020</td></tr>
+        <tr><td>Net cash provided by (used in) operating activities</td><td>5,591</td><td>7,454</td><td>8,113</td></tr>
+        <tr><td>Purchases of property, plant and equipment (PP&amp;E)</td><td>( 1,749 )</td><td>( 1,603 )</td><td>( 1,501 )</td></tr>
+      </table>
+    </body></html>
+    """
+
+    text, mode = readable_document_text(body, document=document)
+    evidence = _finance_evidence(
+        evidence_id="html-parenthesized-capex",
+        title="3M 2022 Form 10-K",
+        text=text,
+    )
+    facts = build_finance_fact_ledger(
+        evidence=[evidence],
+        citations=[_finance_citation(evidence, citation_id="cite-html-parenthesized-capex")],
+    )
+    capex = next(fact for fact in facts if fact.metric == "capital expenditures" and fact.fiscal_year == 2022)
+
+    assert mode == "html_readable_text"
+    assert "html_table_fact_1_3_2022" in text
+    assert "value=(1,749)" in text
+    assert capex.value == "-1749000000"
+    assert capex.scale == "millions"
+
+
+def test_html_table_fact_lines_extract_balance_sheet_ppe_and_assets() -> None:
+    document = FetchedDocument(
+        document_id="doc-3m-2022-balance",
+        goal_id="goal-3m-2022-balance",
+        source_id="src-3m-2022-balance",
+        uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.htm",
+        title="3M 2022 Form 10-K",
+        artifact_id="artifact-3m-2022-balance",
+        payload_hash="hash-3m-2022-balance",
+        preview="",
+        size_bytes=0,
+        metadata={"mime_type": "text/html"},
+    )
+    body = """
+    <html><body>
+      <table>
+        <tr><td>(Dollars in millions)</td><td>2022</td><td>2021</td></tr>
+        <tr><td>Property, plant and equipment - net</td><td>9,178</td><td>9,471</td></tr>
+        <tr><td>Total assets</td><td>46,455</td><td>47,072</td></tr>
+      </table>
+    </body></html>
+    """
+
+    text, mode = readable_document_text(body, document=document)
+    evidence = _finance_evidence(
+        evidence_id="html-balance-sheet-ppe-assets",
+        title="3M 2022 Form 10-K",
+        text=text,
+    )
+    facts = build_finance_fact_ledger(
+        evidence=[evidence],
+        citations=[_finance_citation(evidence, citation_id="cite-html-balance-sheet-ppe-assets")],
+    )
+    by_metric_year = {(fact.metric, fact.fiscal_year): fact for fact in facts}
+
+    assert mode == "html_readable_text"
+    assert "html_table_fact_1_2_2022" in text
+    assert "html_table_fact_1_3_2022" in text
+    assert by_metric_year[("property plant and equipment net", 2022)].value == "9178000000"
+    assert by_metric_year[("assets", 2022)].value == "46455000000"
+    assert by_metric_year[("property plant and equipment net", 2022)].scale == "millions"
 
 
 def test_finance_fallback_prefers_sec_companyfacts_over_secondary_market_sources() -> None:
@@ -2078,6 +3917,1162 @@ def test_finance_task_compiler_emits_capital_intensity_program_missing_slots() -
     assert tool_chain["recommended_steps"][-1]["tool"] == "host.verifier_gate"
 
 
+def test_finance_task_compiler_emits_direct_metric_evidence_for_capex_lookup() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is the FY2018 capital expenditure amount (in USD millions) for 3M? "
+            "Give a response by relying on the details shown in the cash flow statement."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "filing_metric_lookup"
+    assert program.task_spec.diagnostics["formula_name"] == "metric_lookup"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["capital_expenditures"]
+    assert program.transform_specs[0].name == "metric_lookup"
+    assert program.transform_specs[0].required_slots == ["capital_expenditures"]
+    assert program.transform_specs[0].expression is None
+    assert program.evidence_specs
+    spec = program.evidence_specs[0]
+    assert spec.slot_name == "capital_expenditures"
+    assert spec.statement == "cash_flow_statement"
+    assert spec.line_item == "capital expenditures"
+    assert "capex" in spec.accepted_attributes
+    assert spec.diagnostics["source"] == "finance_task_compiler"
+    assert program.diagnostics["tool_chain_plan"]["next_action_candidates"][0]["tool"] == "retrieval.run"
+
+
+def test_finance_task_compiler_emits_direct_metric_evidence_for_separation_payment() -> None:
+    program = compile_finance_task_program(
+        question="How much does Pfizer expect to pay to spin off Upjohn in the future in USD million?",
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "filing_metric_lookup"
+    assert program.task_spec.diagnostics["formula_name"] == "metric_lookup"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["separation_payment"]
+    spec = {item.slot_name: item for item in program.evidence_specs}["separation_payment"]
+    assert spec.statement == "transaction_or_separation_note"
+    assert spec.line_item == "expected separation payment"
+    assert "upjohn" in spec.accepted_attributes
+
+
+def test_finance_task_compiler_emits_direct_disclosure_evidence_for_legal_lookup() -> None:
+    program = compile_finance_task_program(
+        question="Has Boeing reported any materially important ongoing legal battles from FY2022?",
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "disclosure_analysis"
+    assert program.task_spec.diagnostics["formula_name"] == "disclosure_lookup"
+    assert program.transform_specs == []
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["material_legal_proceedings"].statement == "legal_proceedings"
+    assert evidence_slots["material_legal_proceedings"].line_item == "material legal proceedings"
+    assert "litigation" in evidence_slots["material_legal_proceedings"].accepted_attributes
+
+
+def test_finance_task_compiler_emits_disclosure_lookup_programs() -> None:
+    cases = [
+        (
+            "Which debt securities are registered to trade on a national securities exchange under 3M's name as of Q2 of 2023?",
+            "registered_debt_securities",
+            "registered_securities",
+            "debt securities registered on national securities exchange",
+        ),
+        (
+            "What are major acquisitions that Best Buy has done in FY2023, FY2022 and FY2021?",
+            "acquisitions",
+            "business_combinations",
+            "acquisitions",
+        ),
+        (
+            "Did AMD report customer concentration in FY22?",
+            "customers",
+            "business",
+            "customers",
+        ),
+        (
+            "As of FY2023Q1, why did Pepsico raise full year guidance for FY2023?",
+            "guidance",
+            "earnings_release_or_md&a",
+            "guidance",
+        ),
+        (
+            "What drove the increase in Ulta Beauty's merchandise inventories balance at end of FY2023?",
+            "inventory_driver_discussion",
+            "md&a_or_inventory_note",
+            "inventory balance drivers",
+        ),
+        (
+            "As of Q2'2023, is Pfizer spinning off any large business segments?",
+            "separation_or_discontinued_operation",
+            "business_combinations_or_subsequent_events",
+            "separation or discontinued operation",
+        ),
+    ]
+
+    for question, slot_name, statement, line_item in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "disclosure_analysis"
+        assert program.task_spec.diagnostics["formula_name"] == "disclosure_lookup"
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == [slot_name]
+        assert program.transform_specs == []
+        spec = {item.slot_name: item for item in program.evidence_specs}[slot_name]
+        assert spec.statement == statement
+        assert spec.line_item == line_item
+        assert spec.accepted_attributes
+
+
+def test_finance_task_compiler_emits_cogs_margin_transform_and_specific_evidence() -> None:
+    question = (
+        "What is Coca Cola's FY2021 COGS % margin? Calculate what was asked by utilizing "
+        "the line items clearly shown in the income statement."
+    )
+    plan = plan_finance_formula(question=question, facts=[], existing_traces=[])
+    program = compile_finance_task_program(question=question, facts=[], plan=plan)
+
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "margin"
+    assert plan.missing_facts == ["cogs_numerator", "revenue_denominator"]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["cogs_numerator"].statement == "income_statement"
+    assert evidence_slots["cogs_numerator"].line_item == "cost of goods sold"
+    assert evidence_slots["revenue_denominator"].statement == "income_statement"
+    assert evidence_slots["revenue_denominator"].line_item == "revenue"
+    assert program.transform_specs[0].name == "margin"
+    assert program.transform_specs[0].required_slots == ["cogs_numerator", "revenue_denominator"]
+    assert program.transform_specs[0].expression == "cogs_numerator / revenue_denominator"
+
+
+def test_finance_task_compiler_emits_common_balance_sheet_ratio_programs() -> None:
+    cases = [
+        (
+            "Does 3M have a reasonably healthy liquidity profile based on its quick ratio for Q2 of FY2023?",
+            "quick_ratio",
+            ["cash_and_equivalents", "marketable_securities", "accounts_receivable", "total_current_liabilities"],
+            "(cash_and_equivalents + marketable_securities + accounts_receivable) / total_current_liabilities",
+        ),
+        (
+            "What is Block's FY2016 working capital ratio? Define working capital ratio as total current assets divided by total current liabilities.",
+            "working_capital_ratio",
+            ["total_current_assets", "total_current_liabilities"],
+            "total_current_assets / total_current_liabilities",
+        ),
+        (
+            "What is Lockheed Martin's FY2021 net working capital? Define net working capital as total current assets less total current liabilities.",
+            "net_working_capital",
+            ["total_current_assets", "total_current_liabilities"],
+            "total_current_assets - total_current_liabilities",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+        for slot in missing_slots:
+            assert slot in evidence_slots
+        assert evidence_slots[missing_slots[-1]].statement == "balance_sheet"
+
+
+def test_finance_task_compiler_emits_common_cash_flow_and_turnover_programs() -> None:
+    cases = [
+        (
+            "What is FY2020 free cash flow (FCF)? FCF here is defined as cash from operations - capex.",
+            "free_cash_flow",
+            ["operating_cash_flow", "capital_expenditures"],
+            "operating_cash_flow - capital_expenditures",
+        ),
+        (
+            "What is FY2019 inventory turnover ratio? Inventory turnover ratio is defined as COGS / average inventory.",
+            "inventory_turnover",
+            ["inventory_begin", "inventory_end", "cogs"],
+            "cogs / ((inventory_begin + inventory_end) / 2)",
+        ),
+        (
+            "What is FY2022 dividend payout ratio using total cash dividends paid and net income?",
+            "dividend_payout_ratio",
+            ["dividends_paid", "net_income"],
+            "dividends_paid / net_income",
+        ),
+        (
+            "What is FY2022 retention ratio using total cash dividends paid and net income?",
+            "retention_ratio",
+            ["dividends_paid", "net_income"],
+            "1 - dividends_paid / net_income",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
+
+
+def test_finance_task_compiler_emits_dpo_inventory_adjusted_program() -> None:
+    question = (
+        "What is Amazon's FY2017 days payable outstanding (DPO)? DPO is defined as: "
+        "365 * (average accounts payable between FY2016 and FY2017) / "
+        "(FY2017 COGS + change in inventory between FY2016 and FY2017)."
+    )
+    program = compile_finance_task_program(question=question, facts=[])
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "dpo_inventory_adjusted"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == [
+        "accounts_payable_begin",
+        "accounts_payable_end",
+        "cogs",
+        "inventory_begin",
+        "inventory_end",
+    ]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["accounts_payable_begin"].statement == "balance_sheet"
+    assert evidence_slots["accounts_payable_end"].line_item == "accounts payable"
+    assert evidence_slots["cogs"].statement == "income_statement"
+    assert evidence_slots["inventory_end"].statement == "balance_sheet"
+    transform = program.transform_specs[0]
+    assert transform.name == "dpo_inventory_adjusted"
+    assert transform.expression == (
+        "fiscal_days * ((accounts_payable_begin + accounts_payable_end) / 2) / "
+        "(cogs + (inventory_end - inventory_begin))"
+    )
+
+
+def test_finance_task_compiler_emits_average_capex_to_revenue_program() -> None:
+    question = (
+        "What is the FY2017 - FY2019 3 year average of capex as a % of revenue for Activision Blizzard? "
+        "Answer in units of percents and round to one decimal place."
+    )
+    program = compile_finance_task_program(question=question, facts=[])
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "average_capex_to_revenue"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == [
+        "capital_expenditures_2017",
+        "revenue_2017",
+        "capital_expenditures_2018",
+        "revenue_2018",
+        "capital_expenditures_2019",
+        "revenue_2019",
+    ]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["capital_expenditures_2017"].statement == "cash_flow_statement"
+    assert evidence_slots["capital_expenditures_2017"].line_item == "capital expenditures"
+    assert evidence_slots["revenue_2019"].statement == "income_statement"
+    assert evidence_slots["revenue_2019"].line_item == "revenue"
+    transform = program.transform_specs[0]
+    assert transform.name == "average_capex_to_revenue"
+    assert transform.required_slots == program.slot_frame.missing_slots
+    assert transform.expression == (
+        "((capital_expenditures_2017 / revenue_2017) + "
+        "(capital_expenditures_2018 / revenue_2018) + "
+        "(capital_expenditures_2019 / revenue_2019)) / 3"
+    )
+
+
+def test_finance_task_compiler_emits_asset_turnover_and_average_cogs_programs() -> None:
+    asset_program = compile_finance_task_program(
+        question="What is Lockheed Martin's FY2020 asset turnover ratio using revenue divided by average total assets?",
+        facts=[],
+    )
+
+    assert asset_program.task_spec.task_type == "compute"
+    assert asset_program.task_spec.diagnostics["formula_name"] == "asset_turnover"
+    assert asset_program.slot_frame is not None
+    assert asset_program.slot_frame.missing_slots == ["revenue", "assets_current", "assets_prior"]
+    assert asset_program.transform_specs[0].expression == "revenue / ((assets_current + assets_prior) / 2)"
+    evidence_slots = {spec.slot_name: spec for spec in asset_program.evidence_specs}
+    assert evidence_slots["revenue"].statement == "income_statement"
+    assert evidence_slots["assets_current"].statement == "balance_sheet"
+    assert evidence_slots["assets_prior"].line_item == "total assets"
+
+    cogs_program = compile_finance_task_program(
+        question="What is Nike's FY2020 - FY2022 three year average COGS as a % of revenue?",
+        facts=[],
+    )
+
+    assert cogs_program.task_spec.task_type == "compute"
+    assert cogs_program.task_spec.diagnostics["formula_name"] == "average_cogs_to_revenue"
+    assert cogs_program.slot_frame is not None
+    assert cogs_program.slot_frame.missing_slots == [
+        "cogs_2020",
+        "revenue_2020",
+        "cogs_2021",
+        "revenue_2021",
+        "cogs_2022",
+        "revenue_2022",
+    ]
+    cogs_evidence_slots = {spec.slot_name: spec for spec in cogs_program.evidence_specs}
+    assert cogs_evidence_slots["cogs_2020"].statement == "income_statement"
+    assert cogs_evidence_slots["cogs_2020"].line_item == "cost of goods sold"
+    assert cogs_evidence_slots["revenue_2022"].line_item == "revenue"
+    assert cogs_program.transform_specs[0].expression == (
+        "((cogs_2020 / revenue_2020) + "
+        "(cogs_2021 / revenue_2021) + "
+        "(cogs_2022 / revenue_2022)) / 3"
+    )
+
+
+def test_finance_task_compiler_emits_liquidation_debt_change_component_programs() -> None:
+    cases = [
+        (
+            "If JPMorgan liquidated all of its assets and paid liabilities, how much could it pay per share in FY2022?",
+            "liquidation_value_per_share",
+            ["assets", "liabilities", "shares_outstanding"],
+            "(assets - liabilities) / shares_outstanding",
+        ),
+        (
+            "By how much did Verizon's total debt increase between FY2021 and FY2022 on the balance sheet?",
+            "debt_change",
+            ["prior_debt", "current_debt"],
+            "current_debt - prior_debt",
+        ),
+        (
+            "What percentage of total stock repurchase spend occurred in Q4?",
+            "component_percent_of_total",
+            ["component_amount", "total_amount"],
+            "component_amount / total_amount",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
+
+
+def test_finance_task_compiler_emits_period_change_and_cash_flow_activity_programs() -> None:
+    cases = [
+        (
+            "Was there any drop in Cash & Cash equivalents between FY2023 and Q2 of FY2024?",
+            "cash_and_equivalents_change",
+            ["cash_and_equivalents_prior", "cash_and_equivalents_current"],
+            "cash_and_equivalents_current - cash_and_equivalents_prior",
+        ),
+        (
+            "Looking at VaR, did the risk that JPM faced in the second fiscal quarter of 2023 decrease compared to the same period in the prior year?",
+            "market_risk_var_change",
+            ["market_risk_var_prior", "market_risk_var_current"],
+            "market_risk_var_current - market_risk_var_prior",
+        ),
+        (
+            "Did JnJ's net earnings as a percent of sales increase in Q2 of FY2023 compared to Q2 of FY2022?",
+            "percent_of_sales_change",
+            ["prior_percent_of_sales", "current_percent_of_sales"],
+            "current_percent_of_sales - prior_percent_of_sales",
+        ),
+        (
+            "Did Pfizer grow its PPNE between FY20 and FY21?",
+            "property_plant_and_equipment_change",
+            ["property_plant_and_equipment_net_prior", "property_plant_and_equipment_net_current"],
+            "property_plant_and_equipment_net_current - property_plant_and_equipment_net_prior",
+        ),
+        (
+            "Was there any change in the number of Best Buy stores between Q2 of FY2024 and FY2023?",
+            "store_count_change",
+            ["store_count_prior", "store_count_current"],
+            "store_count_current - store_count_prior",
+        ),
+        (
+            "Among operations, investing, and financing activities, which brought in the most (or lost the least) cash flow for AMD in FY22?",
+            "cash_flow_activity_comparison",
+            ["operating_cash_flow", "investing_cash_flow", "financing_cash_flow"],
+            "max(operating_cash_flow, investing_cash_flow, financing_cash_flow)",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        expected_task_type = "compare_compute" if formula_name in {"market_risk_var_change", "percent_of_sales_change"} else "compute"
+        assert program.task_spec.task_type == expected_task_type
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
+
+
+def test_finance_task_compiler_emits_margin_profile_and_consistency_programs() -> None:
+    cases = [
+        (
+            "Does Adobe have an improving operating margin profile as of FY2022? If operating margin is not a useful metric for a company like this, then state that and explain why.",
+            "margin_profile_change",
+            [
+                "operating_income_2020",
+                "revenue_2020",
+                "operating_income_2021",
+                "revenue_2021",
+                "operating_income_2022",
+                "revenue_2022",
+            ],
+            "(operating_income_2022 / revenue_2022) - (operating_income_2020 / revenue_2020)",
+        ),
+        (
+            "Are Best Buy's gross margins historically consistent (not fluctuating more than roughly 2% each year) as of FY2022?",
+            "margin_consistency_range",
+            [
+                "gross_profit_2020",
+                "revenue_2020",
+                "gross_profit_2021",
+                "revenue_2021",
+                "gross_profit_2022",
+                "revenue_2022",
+            ],
+            (
+                "max((gross_profit_2020 / revenue_2020), (gross_profit_2021 / revenue_2021), "
+                "(gross_profit_2022 / revenue_2022)) - min((gross_profit_2020 / revenue_2020), "
+                "(gross_profit_2021 / revenue_2021), (gross_profit_2022 / revenue_2022))"
+            ),
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+        assert evidence_slots[missing_slots[0]].statement == "income_statement"
+        assert evidence_slots[missing_slots[1]].line_item == "revenue"
+
+
+def test_finance_task_compiler_emits_category_metric_rank_programs() -> None:
+    cases = [
+        (
+            "Which Best Buy product category performed the best (by top line) in the domestic (USA) Market during Q2 of FY2024?",
+            "max(category_metric_values)",
+            "segment_note",
+            "product category revenue",
+        ),
+        (
+            "Which of JPM's business segments had the lowest net revenue in 2021 Q1?",
+            "min(category_metric_values)",
+            "segment_note",
+            "segment revenue",
+        ),
+        (
+            "Among all of the derivative instruments Verizon used, which one had the highest notional value in FY 2021?",
+            "max(category_metric_values)",
+            "derivatives_note_or_market_risk",
+            "derivative instruments notional value",
+        ),
+        (
+            "Which type of debt received the largest investment among the short term investments for MGM in H1 FY2023?",
+            "max(category_metric_values)",
+            "investment_or_fair_value_note",
+            "short-term investments by debt security type",
+        ),
+        (
+            "For Pfizer, which geographic region had the biggest drop in Q2 2023 year over year revenues on a percentage basis?",
+            "min(category_metric_values)",
+            "segment_note",
+            "geographic revenue",
+        ),
+    ]
+
+    for question, expression, statement, line_item in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.diagnostics["formula_name"] == "category_metric_rank"
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == ["ranked_category_metric_table"]
+        assert program.transform_specs[0].expression == expression
+        assert program.transform_specs[0].output_attribute == "category_metric_rank_value"
+        assert "LLM maps" in program.transform_specs[0].diagnostics["semantic_decision_policy"]
+        evidence_slot = {spec.slot_name: spec for spec in program.evidence_specs}["ranked_category_metric_table"]
+        assert evidence_slot.statement == statement
+        assert evidence_slot.line_item == line_item
+
+
+def test_finance_task_compiler_emits_tax_working_capital_and_interest_programs() -> None:
+    cases = [
+        (
+            "How much has the effective tax rate of American Express changed between FY2021 and FY2022?",
+            "effective_tax_rate_change",
+            ["prior_effective_tax_rate", "current_effective_tax_rate"],
+            "(current_effective_tax_rate - prior_effective_tax_rate) * 100",
+        ),
+        (
+            "Does Corning have positive working capital based on FY2022 data?",
+            "net_working_capital",
+            ["total_current_assets", "total_current_liabilities"],
+            "total_current_assets - total_current_liabilities",
+        ),
+        (
+            "What was MGM's interest coverage ratio using FY2022 Adjusted EBIT as the numerator and annual Interest Expense as the denominator?",
+            "interest_coverage_ratio",
+            ["adjusted_ebit_or_ebit", "interest_expense"],
+            "adjusted_ebit_or_ebit / interest_expense",
+        ),
+    ]
+
+    for question, formula_name, missing_slots, expression in cases:
+        program = compile_finance_task_program(question=question, facts=[])
+
+        assert program.task_spec.task_type == "compute"
+        assert program.task_spec.diagnostics["formula_name"] == formula_name
+        assert program.slot_frame is not None
+        assert program.slot_frame.missing_slots == missing_slots
+        assert program.transform_specs[0].required_slots == missing_slots
+        assert program.transform_specs[0].expression == expression
+        assert {spec.slot_name for spec in program.evidence_specs}.issuperset(missing_slots)
+
+
+def test_finance_task_compiler_emits_unadjusted_ebitda_less_capex_program() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is the FY2022 unadjusted EBITDA less capex for PepsiCo? Define unadjusted EBITDA "
+            "as unadjusted operating income + depreciation and amortization from the cash flow statement."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "unadjusted_ebitda_less_capex"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == [
+        "operating_income",
+        "depreciation_and_amortization",
+        "capital_expenditures",
+    ]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["operating_income"].statement == "income_statement"
+    assert evidence_slots["depreciation_and_amortization"].statement == "cash_flow_statement"
+    assert evidence_slots["capital_expenditures"].statement == "cash_flow_statement"
+    assert program.transform_specs[0].expression == (
+        "operating_income + depreciation_and_amortization - capital_expenditures"
+    )
+
+
+def test_finance_formula_planner_computes_free_cash_flow_and_return_on_assets() -> None:
+    fcf_plan = plan_finance_formula(
+        question="What is FY2020 free cash flow? FCF is operating cash flow less capex.",
+        facts=[
+            _year_fact("operating cash flow", "1000", 2020, fact_id="ocf-2020"),
+            _year_fact("capital expenditures", "-250", 2020, fact_id="capex-2020"),
+        ],
+        existing_traces=[],
+    )
+
+    assert fcf_plan.status == "ready"
+    assert fcf_plan.formula_name == "free_cash_flow"
+    assert fcf_plan.payload["expression"] == "operating_cash_flow - capital_expenditures"
+    assert fcf_plan.payload["variables"] == {"operating_cash_flow": "1000", "capital_expenditures": "250"}
+
+    roa_plan = plan_finance_formula(
+        question="What is FY2021 return on assets (ROA)? ROA is net income / average total assets between FY2020 and FY2021.",
+        facts=[
+            _year_fact("net income", "120", 2021, fact_id="net-income-2021"),
+            _year_fact("assets", "900", 2020, fact_id="assets-2020"),
+            _year_fact("assets", "1100", 2021, fact_id="assets-2021"),
+        ],
+        existing_traces=[],
+    )
+
+    assert roa_plan.status == "ready"
+    assert roa_plan.formula_name == "return_on_assets"
+    assert roa_plan.payload["expression"] == "net_income / ((assets_current + assets_prior) / 2)"
+    assert roa_plan.payload["variables"] == {"net_income": "120", "assets_current": "1100", "assets_prior": "900"}
+
+
+def test_finance_formula_planner_computes_dpo_and_average_capex_to_revenue() -> None:
+    dpo_question = (
+        "What is Amazon's FY2017 days payable outstanding (DPO)? DPO is defined as: "
+        "365 * (average accounts payable between FY2016 and FY2017) / "
+        "(FY2017 COGS + change in inventory between FY2016 and FY2017)."
+    )
+    dpo_plan = plan_finance_formula(
+        question=dpo_question,
+        facts=[
+            _year_fact("accounts payable", "200", 2016, fact_id="ap-2016", metadata={"end": "2016-12-31"}),
+            _year_fact("accounts payable", "260", 2017, fact_id="ap-2017", metadata={"end": "2017-12-31"}),
+            _year_fact("cost of sales", "1200", 2017, fact_id="cogs-2017"),
+            _year_fact("inventories", "300", 2016, fact_id="inventory-2016", metadata={"end": "2016-12-31"}),
+            _year_fact("inventories", "330", 2017, fact_id="inventory-2017", metadata={"end": "2017-12-31"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert dpo_plan.status == "ready"
+    assert dpo_plan.formula_name == "dpo_inventory_adjusted"
+    assert dpo_plan.payload["expression"] == (
+        "fiscal_days * ((accounts_payable_begin + accounts_payable_end) / 2) / "
+        "(cogs + (inventory_end - inventory_begin))"
+    )
+    assert dpo_plan.payload["variables"] == {
+        "fiscal_days": 365,
+        "accounts_payable_begin": "200",
+        "accounts_payable_end": "260",
+        "cogs": "1200",
+        "inventory_begin": "300",
+        "inventory_end": "330",
+    }
+
+    capex_question = (
+        "What is the FY2017 - FY2019 3 year average of capex as a % of revenue for Activision Blizzard?"
+    )
+    capex_plan = plan_finance_formula(
+        question=capex_question,
+        facts=[
+            _year_fact("capital expenditures", "-10", 2017, fact_id="capex-2017"),
+            _year_fact("revenue", "100", 2017, fact_id="revenue-2017"),
+            _year_fact("capital expenditures", "-20", 2018, fact_id="capex-2018"),
+            _year_fact("revenue", "200", 2018, fact_id="revenue-2018"),
+            _year_fact("capital expenditures", "-30", 2019, fact_id="capex-2019"),
+            _year_fact("revenue", "300", 2019, fact_id="revenue-2019"),
+        ],
+        existing_traces=[],
+    )
+
+    assert capex_plan.status == "ready"
+    assert capex_plan.formula_name == "average_capex_to_revenue"
+    assert capex_plan.payload["expression"] == (
+        "((capital_expenditures_2017 / revenue_2017) + "
+        "(capital_expenditures_2018 / revenue_2018) + "
+        "(capital_expenditures_2019 / revenue_2019)) / 3"
+    )
+    assert capex_plan.payload["variables"]["capital_expenditures_2017"] == "10"
+    assert capex_plan.payload["variables"]["revenue_2019"] == "300"
+
+
+def test_finance_formula_planner_computes_tax_interest_and_unadjusted_ebitda() -> None:
+    tax_plan = plan_finance_formula(
+        question="How much has the effective tax rate changed between FY2021 and FY2022?",
+        facts=[
+            _year_fact("effective tax rate", "18", 2021, fact_id="tax-2021"),
+            _year_fact("effective tax rate", "21", 2022, fact_id="tax-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert tax_plan.status == "ready"
+    assert tax_plan.formula_name == "effective_tax_rate_change"
+    assert tax_plan.payload["expression"] == "(current_effective_tax_rate - prior_effective_tax_rate) * 100"
+    assert tax_plan.payload["variables"] == {
+        "prior_effective_tax_rate": "0.18",
+        "current_effective_tax_rate": "0.21",
+    }
+
+    coverage_plan = plan_finance_formula(
+        question="What was FY2022 interest coverage ratio using Adjusted EBIT / Interest Expense?",
+        facts=[
+            _year_fact("adjusted ebit", "900", 2022, fact_id="ebit-2022"),
+            _year_fact("interest expense", "-150", 2022, fact_id="interest-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert coverage_plan.status == "ready"
+    assert coverage_plan.formula_name == "interest_coverage_ratio"
+    assert coverage_plan.payload["variables"] == {
+        "adjusted_ebit_or_ebit": "900",
+        "interest_expense": "150",
+    }
+
+    ebitda_plan = plan_finance_formula(
+        question="What is FY2022 unadjusted EBITDA less capex?",
+        facts=[
+            _year_fact("operating income", "1000", 2022, fact_id="op-income-2022"),
+            _year_fact("depreciation and amortization", "200", 2022, fact_id="da-2022"),
+            _year_fact("capital expenditures", "-300", 2022, fact_id="capex-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert ebitda_plan.status == "ready"
+    assert ebitda_plan.formula_name == "unadjusted_ebitda_less_capex"
+    assert ebitda_plan.payload["expression"] == "operating_income + depreciation_and_amortization - capital_expenditures"
+    assert ebitda_plan.payload["variables"] == {
+        "operating_income": "1000",
+        "depreciation_and_amortization": "200",
+        "capital_expenditures": "300",
+    }
+
+
+def test_finance_formula_planner_computes_asset_liquidation_and_component_formulas() -> None:
+    asset_plan = plan_finance_formula(
+        question="What is FY2020 asset turnover ratio using revenue divided by average total assets?",
+        facts=[
+            _year_fact("revenue", "1000", 2020, fact_id="revenue-2020"),
+            _year_fact("assets", "400", 2019, fact_id="assets-2019"),
+            _year_fact("assets", "600", 2020, fact_id="assets-2020"),
+        ],
+        existing_traces=[],
+    )
+
+    assert asset_plan.status == "ready"
+    assert asset_plan.formula_name == "asset_turnover"
+    assert asset_plan.payload["expression"] == "revenue / ((assets_current + assets_prior) / 2)"
+    assert asset_plan.payload["variables"] == {"revenue": "1000", "assets_current": "600", "assets_prior": "400"}
+
+    cogs_plan = plan_finance_formula(
+        question="What is the FY2020 - FY2022 three year average COGS as a % of revenue?",
+        facts=[
+            _year_fact("cost of sales", "50", 2020, fact_id="cogs-2020"),
+            _year_fact("revenue", "100", 2020, fact_id="sales-2020"),
+            _year_fact("cost of sales", "60", 2021, fact_id="cogs-2021"),
+            _year_fact("revenue", "120", 2021, fact_id="sales-2021"),
+            _year_fact("cost of sales", "70", 2022, fact_id="cogs-2022"),
+            _year_fact("revenue", "140", 2022, fact_id="sales-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert cogs_plan.status == "ready"
+    assert cogs_plan.formula_name == "average_cogs_to_revenue"
+    assert cogs_plan.payload["expression"] == (
+        "((cogs_2020 / revenue_2020) + "
+        "(cogs_2021 / revenue_2021) + "
+        "(cogs_2022 / revenue_2022)) / 3"
+    )
+    assert cogs_plan.payload["variables"]["cogs_2020"] == "50"
+    assert cogs_plan.payload["variables"]["revenue_2022"] == "140"
+
+    liquidation_plan = plan_finance_formula(
+        question="If the company liquidated all assets and paid liabilities, how much could it pay shareholders per share in FY2022?",
+        facts=[
+            _year_fact("assets", "100", 2022, fact_id="assets-2022"),
+            _year_fact("liabilities", "60", 2022, fact_id="liabilities-2022"),
+            _year_fact("shares outstanding", "2", 2022, fact_id="shares-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert liquidation_plan.status == "ready"
+    assert liquidation_plan.formula_name == "liquidation_value_per_share"
+    assert liquidation_plan.payload["variables"] == {"assets": "100", "liabilities": "60", "shares_outstanding": "2"}
+
+    debt_plan = plan_finance_formula(
+        question="By how much did total debt increase between FY2021 and FY2022 on the balance sheet?",
+        facts=[
+            _year_fact("debt", "70", 2021, fact_id="debt-2021"),
+            _year_fact("debt", "90", 2022, fact_id="debt-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert debt_plan.status == "ready"
+    assert debt_plan.formula_name == "debt_change"
+    assert debt_plan.payload["variables"] == {"prior_debt": "70", "current_debt": "90"}
+
+    component_plan = plan_finance_formula(
+        question="What percentage of total stock repurchase spend occurred in Q4?",
+        facts=[
+            _year_fact("share repurchases", "25", 2024, fact_id="repurchases-q4", metadata={"context": "Q4"}),
+            _year_fact("share repurchases", "100", 2024, fact_id="repurchases-year", metadata={"context": "total fiscal year"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert component_plan.status == "ready"
+    assert component_plan.formula_name == "component_percent_of_total"
+    assert component_plan.payload["variables"] == {"component_amount": "25", "total_amount": "100"}
+
+
+def test_finance_formula_planner_computes_period_change_and_cash_flow_activity_formulas() -> None:
+    cash_plan = plan_finance_formula(
+        question="Was there any drop in Cash & Cash equivalents between FY2023 and Q2 of FY2024?",
+        facts=[
+            _year_fact("cash and cash equivalents", "500", 2023, fact_id="cash-2023"),
+            _year_fact("cash and cash equivalents", "450", 2024, fact_id="cash-2024", metadata={"fp": "Q2"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert cash_plan.status == "ready"
+    assert cash_plan.formula_name == "cash_and_equivalents_change"
+    assert cash_plan.payload["variables"] == {
+        "cash_and_equivalents_prior": "500",
+        "cash_and_equivalents_current": "450",
+    }
+
+    ppe_plan = plan_finance_formula(
+        question="Did Pfizer grow its PPNE between FY20 and FY21?",
+        facts=[
+            _year_fact("property plant and equipment net", "100", 2020, fact_id="ppe-2020"),
+            _year_fact("property plant and equipment net", "125", 2021, fact_id="ppe-2021"),
+        ],
+        existing_traces=[],
+    )
+
+    assert ppe_plan.status == "ready"
+    assert ppe_plan.formula_name == "property_plant_and_equipment_change"
+    assert ppe_plan.payload["variables"] == {
+        "property_plant_and_equipment_net_prior": "100",
+        "property_plant_and_equipment_net_current": "125",
+    }
+
+    var_plan = plan_finance_formula(
+        question="Looking at VaR, did the risk faced in Q2 2023 decrease compared to the same period in the prior year?",
+        facts=[
+            _year_fact("value at risk", "90", 2022, fact_id="var-2022", metadata={"fp": "Q2"}),
+            _year_fact("value at risk", "75", 2023, fact_id="var-2023", metadata={"fp": "Q2"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert var_plan.status == "ready"
+    assert var_plan.formula_name == "market_risk_var_change"
+    assert var_plan.payload["variables"] == {
+        "market_risk_var_prior": "90",
+        "market_risk_var_current": "75",
+    }
+
+    percent_plan = plan_finance_formula(
+        question="Did net earnings as a percent of sales increase in Q2 of FY2023 compared to Q2 of FY2022?",
+        facts=[
+            _year_fact("net earnings as a percent of sales", "9.0", 2022, fact_id="net-earnings-sales-2022"),
+            _year_fact("net earnings as a percent of sales", "11.0", 2023, fact_id="net-earnings-sales-2023"),
+        ],
+        existing_traces=[],
+    )
+
+    assert percent_plan.status == "ready"
+    assert percent_plan.formula_name == "percent_of_sales_change"
+    assert percent_plan.payload["variables"] == {
+        "prior_percent_of_sales": "9.0",
+        "current_percent_of_sales": "11.0",
+    }
+
+    activity_plan = plan_finance_formula(
+        question="Among operations, investing, and financing activities, which brought in the most cash flow in FY2022?",
+        facts=[
+            _year_fact("operating cash flow", "300", 2022, fact_id="operating-cf-2022"),
+            _year_fact("investing cash flow", "-200", 2022, fact_id="investing-cf-2022"),
+            _year_fact("financing cash flow", "50", 2022, fact_id="financing-cf-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert activity_plan.status == "ready"
+    assert activity_plan.formula_name == "cash_flow_activity_comparison"
+    assert activity_plan.payload["expression"] == "max(operating_cash_flow, investing_cash_flow, financing_cash_flow)"
+    assert activity_plan.payload["variables"] == {
+        "operating_cash_flow": "300",
+        "investing_cash_flow": "-200",
+        "financing_cash_flow": "50",
+    }
+
+
+def test_finance_formula_planner_computes_margin_profile_and_consistency_formulas() -> None:
+    operating_plan = plan_finance_formula(
+        question="What drove operating margin change as of FY2022?",
+        facts=[
+            _year_fact("operating income", "20", 2020, fact_id="op-income-2020"),
+            _year_fact("revenue", "100", 2020, fact_id="revenue-2020"),
+            _year_fact("operating income", "30", 2021, fact_id="op-income-2021"),
+            _year_fact("revenue", "120", 2021, fact_id="revenue-2021"),
+            _year_fact("operating income", "40", 2022, fact_id="op-income-2022"),
+            _year_fact("revenue", "160", 2022, fact_id="revenue-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert operating_plan.status == "ready"
+    assert operating_plan.formula_name == "margin_profile_change"
+    assert operating_plan.payload["expression"] == "(operating_income_2022 / revenue_2022) - (operating_income_2020 / revenue_2020)"
+    assert operating_plan.payload["variables"]["operating_income_2020"] == "20"
+    assert operating_plan.payload["variables"]["revenue_2022"] == "160"
+
+    gross_plan = plan_finance_formula(
+        question="Are gross margins historically consistent as of FY2022?",
+        facts=[
+            _year_fact("cost of sales", "60", 2020, fact_id="cogs-2020"),
+            _year_fact("revenue", "100", 2020, fact_id="gross-revenue-2020"),
+            _year_fact("gross profit", "44", 2021, fact_id="gross-profit-2021"),
+            _year_fact("revenue", "110", 2021, fact_id="gross-revenue-2021"),
+            _year_fact("cost of sales", "72", 2022, fact_id="cogs-2022"),
+            _year_fact("revenue", "120", 2022, fact_id="gross-revenue-2022"),
+        ],
+        existing_traces=[],
+    )
+
+    assert gross_plan.status == "ready"
+    assert gross_plan.formula_name == "margin_consistency_range"
+    assert gross_plan.payload["expression"] == (
+        "max(((revenue_2020 - cogs_2020) / revenue_2020), (gross_profit_2021 / revenue_2021), "
+        "((revenue_2022 - cogs_2022) / revenue_2022)) - min(((revenue_2020 - cogs_2020) / revenue_2020), "
+        "(gross_profit_2021 / revenue_2021), ((revenue_2022 - cogs_2022) / revenue_2022))"
+    )
+    assert gross_plan.payload["variables"]["cogs_2020"] == "60"
+    assert gross_plan.payload["variables"]["gross_profit_2021"] == "44"
+
+
+def test_finance_formula_planner_computes_category_metric_rank_formulas() -> None:
+    revenue_plan = plan_finance_formula(
+        question="Which segment had the highest net revenue in FY2022?",
+        facts=[
+            _year_fact("segment revenue", "100", 2022, fact_id="consumer-revenue", metadata={"category": "Consumer"}),
+            _year_fact("segment revenue", "140", 2022, fact_id="business-revenue", metadata={"category": "Business"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert revenue_plan.status == "ready"
+    assert revenue_plan.formula_name == "category_metric_rank"
+    assert revenue_plan.payload["expression"] == "max(category_1, category_2)"
+    assert revenue_plan.payload["variables"] == {"category_1": "140", "category_2": "100"}
+    assert revenue_plan.payload["diagnostics"]["variable_category_map"]["category_1"]["category"] == "Business"
+    assert "LLM must map" in revenue_plan.payload["diagnostics"]["semantic_decision_policy"]
+
+    low_plan = plan_finance_formula(
+        question="Which segment had the lowest net income in FY2022?",
+        facts=[
+            _year_fact("segment net income", "10", 2022, fact_id="consumer-income", metadata={"category": "Consumer"}),
+            _year_fact("segment net income", "5", 2022, fact_id="business-income", metadata={"category": "Business"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert low_plan.status == "ready"
+    assert low_plan.payload["expression"] == "min(category_1, category_2)"
+    assert low_plan.payload["diagnostics"]["rank_direction"] == "min"
+
+    growth_plan = plan_finance_formula(
+        question="From FY21 to FY22, excluding Embedded, in which AMD reporting segment did sales proportionally increase the most?",
+        facts=[
+            _year_fact("segment revenue", "100", 2021, fact_id="gaming-2021", metadata={"category": "Gaming"}),
+            _year_fact("segment revenue", "150", 2022, fact_id="gaming-2022", metadata={"category": "Gaming"}),
+            _year_fact("segment revenue", "200", 2021, fact_id="data-center-2021", metadata={"category": "Data Center"}),
+            _year_fact("segment revenue", "260", 2022, fact_id="data-center-2022", metadata={"category": "Data Center"}),
+            _year_fact("segment revenue", "10", 2021, fact_id="embedded-2021", metadata={"category": "Embedded"}),
+            _year_fact("segment revenue", "100", 2022, fact_id="embedded-2022", metadata={"category": "Embedded"}),
+        ],
+        existing_traces=[],
+    )
+
+    assert growth_plan.status == "ready"
+    assert growth_plan.formula_name == "category_metric_rank"
+    assert growth_plan.payload["expression"] == (
+        "max(((category_1_current - category_1_prior) / abs(category_1_prior)), "
+        "((category_2_current - category_2_prior) / abs(category_2_prior)))"
+    )
+    assert growth_plan.payload["diagnostics"]["rank_mode"] == "growth_rate"
+    category_map = growth_plan.payload["diagnostics"]["variable_category_map"]
+    assert {item["category"] for item in category_map.values()} == {"Data Center", "Gaming"}
+
+
+def test_finance_formula_planner_computes_direct_metric_lookup_formulas() -> None:
+    missing_plan = plan_finance_formula(
+        question="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        facts=[],
+        existing_traces=[],
+    )
+
+    assert missing_plan.status == "missing_facts"
+    assert missing_plan.formula_name == "metric_lookup"
+    assert missing_plan.missing_facts == ["capital_expenditures"]
+
+    ready_plan = plan_finance_formula(
+        question="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        facts=[
+            _year_fact(
+                "capital expenditures",
+                "-1577",
+                2018,
+                fact_id="capex-2018",
+                metadata={"label": "Purchases of property, plant and equipment"},
+            )
+        ],
+        existing_traces=[],
+    )
+
+    assert ready_plan.status == "ready"
+    assert ready_plan.formula_name == "metric_lookup"
+    assert ready_plan.payload["expression"] == "capital_expenditures"
+    assert ready_plan.payload["variables"] == {"capital_expenditures": "1577"}
+    assert ready_plan.payload["diagnostics"]["bound_line_item"]["label"] == "Purchases of property, plant and equipment"
+
+    net_income_plan = plan_finance_formula(
+        question="What is Amazon's FY2019 net income attributable to shareholders in USD millions?",
+        facts=[
+            _year_fact("income tax expense", "100", 2019, fact_id="tax-2019"),
+            _year_fact("net income", "11588", 2019, fact_id="net-income-2019"),
+        ],
+        existing_traces=[],
+    )
+
+    assert net_income_plan.status == "ready"
+    assert net_income_plan.payload["variables"] == {"net_income": "11588"}
+
+    separation_payment_plan = plan_finance_formula(
+        question="How much does Pfizer expect to pay to spin off Upjohn in the future in USD million?",
+        facts=[],
+        existing_traces=[],
+    )
+
+    assert separation_payment_plan.status == "missing_facts"
+    assert separation_payment_plan.formula_name == "metric_lookup"
+    assert separation_payment_plan.missing_facts == ["separation_payment"]
+
+
+def test_finance_formula_planner_routes_disclosure_lookup_slots() -> None:
+    cases = [
+        (
+            "Which debt securities are registered to trade on a national securities exchange under 3M's name as of Q2 of 2023?",
+            "registered_debt_securities",
+        ),
+        (
+            "What are the major products and services that AMD sells as of FY22?",
+            "products_and_services",
+        ),
+        (
+            "Has Boeing reported any materially important ongoing legal battles from FY2022?",
+            "material_legal_proceedings",
+        ),
+        (
+            "Were there any board member nominees who had substantially more votes against joining than the other nominees?",
+            "shareholder_vote_results",
+        ),
+        (
+            "What drove revenue change as of the FY22 for AMD?",
+            "revenue_driver_discussion",
+        ),
+    ]
+
+    for question, slot_name in cases:
+        plan = plan_finance_formula(question=question, facts=[], existing_traces=[])
+
+        assert plan.status == "missing_facts"
+        assert plan.formula_name == "disclosure_lookup"
+        assert plan.missing_facts == [slot_name]
+        assert "LLM must read cited filing evidence" in plan.diagnostics["semantic_decision_policy"]
+
+
+def test_operating_cash_flow_ratio_planner_handles_financebench_definition() -> None:
+    question = (
+        "What is the FY2017 operating cash flow ratio for Adobe? Operating cash flow ratio is defined as: "
+        "cash from operations / total current liabilities. Round your answer to two decimal places."
+    )
+
+    missing_plan = plan_finance_formula(question=question, facts=[], existing_traces=[])
+
+    assert missing_plan.status == "missing_facts"
+    assert missing_plan.formula_name == "operating_cash_flow_ratio"
+    assert missing_plan.missing_facts == ["operating_cash_flow", "total_current_liabilities"]
+
+    ready_plan = plan_finance_formula(
+        question=question,
+        facts=[
+            FinanceFact(
+                fact_id="adbe-ocf-2017",
+                entity="Adobe",
+                ticker="ADBE",
+                period="FY2017",
+                fiscal_year=2017,
+                metric="operating cash flow",
+                value="2912853",
+                unit="USD thousands",
+                scale="thousand",
+                source_ref="cite-cash-flow",
+                evidence_ref="ev-cash-flow",
+                citation_ref="cite-cash-flow",
+                metadata={"label": "Net cash provided by operating activities"},
+            ),
+            FinanceFact(
+                fact_id="adbe-current-liabilities-2017",
+                entity="Adobe",
+                ticker="ADBE",
+                period="FY2017",
+                fiscal_year=2017,
+                metric="liabilities",
+                value="3527457",
+                unit="USD thousands",
+                scale="thousand",
+                source_ref="cite-balance-sheet",
+                evidence_ref="ev-balance-sheet",
+                citation_ref="cite-balance-sheet",
+                metadata={"label": "Total current liabilities", "concept": "LiabilitiesCurrent"},
+            ),
+        ],
+        existing_traces=[],
+    )
+
+    assert ready_plan.status == "ready"
+    assert ready_plan.payload["expression"] == "operating_cash_flow / total_current_liabilities"
+    assert ready_plan.payload["variables"] == {
+        "operating_cash_flow": "2912853",
+        "total_current_liabilities": "3527457",
+    }
+    assert ready_plan.input_fact_ids == ["adbe-ocf-2017", "adbe-current-liabilities-2017"]
+
+
+def test_finance_task_compiler_emits_operating_cash_flow_ratio_program() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is the FY2017 operating cash flow ratio for Adobe? Operating cash flow ratio is defined as: "
+            "cash from operations / total current liabilities."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "operating_cash_flow_ratio"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["operating_cash_flow", "total_current_liabilities"]
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["operating_cash_flow"].statement == "cash_flow_statement"
+    assert evidence_slots["operating_cash_flow"].line_item == "operating cash flow"
+    assert evidence_slots["total_current_liabilities"].statement == "balance_sheet"
+    assert evidence_slots["total_current_liabilities"].line_item == "total current liabilities"
+    assert [spec.name for spec in program.transform_specs] == ["operating_cash_flow_ratio"]
+    assert program.transform_specs[0].expression == "operating_cash_flow / total_current_liabilities"
+    assert program.diagnostics["tool_chain_plan"]["decision_owner"] == "model"
+
+
+def test_finance_task_compiler_emits_yoy_operating_income_evidence_specs() -> None:
+    program = compile_finance_task_program(
+        question=(
+            "What is Adobe's year-over-year change in unadjusted operating income from FY2015 to FY2016 "
+            "(in units of percents and round to one decimal place)? Give a solution by using the income statement."
+        ),
+        facts=[],
+    )
+
+    assert program.task_spec.task_type == "compute"
+    assert program.task_spec.diagnostics["formula_name"] == "yoy_growth"
+    evidence_slots = {spec.slot_name: spec for spec in program.evidence_specs}
+    assert evidence_slots["prior_period_value"].statement == "income_statement"
+    assert evidence_slots["prior_period_value"].line_item == "operating income"
+    assert evidence_slots["current_period_value"].statement == "income_statement"
+    assert evidence_slots["current_period_value"].line_item == "operating income"
+    assert program.transform_specs[0].name == "yoy_growth"
+    assert program.transform_specs[0].expression == "current_period_value / prior_period_value - 1"
+    assert program.transform_specs[0].output_unit == "percent"
+    assert program.slot_frame is not None
+    assert program.slot_frame.missing_slots == ["prior_period_value", "current_period_value"]
+
+
 def test_finance_task_compiler_emits_fixed_asset_turnover_program_missing_slots() -> None:
     program = compile_finance_task_program(
         question=(
@@ -2360,6 +5355,214 @@ def test_model_first_finance_task_compiler_overrides_host_scaffold() -> None:
     assert program.diagnostics["tool_chain_plan"]["decision_owner"] == "model"
 
 
+def test_finance_task_compile_prompt_keeps_cacheable_contract_before_dynamic_packet() -> None:
+    question = (
+        "For NYSE: HD and NYSE: LOW, calculate FY2024 days inventory outstanding (DIO) "
+        "and compare inventory efficiency. Use public filings and show the formula inputs."
+    )
+    facts = [
+        FinanceFact(
+            fact_id=f"fact-{index}",
+            entity="Home Depot" if index % 2 == 0 else "Lowe's",
+            ticker="HD" if index % 2 == 0 else "LOW",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="inventory" if index % 3 else "cost of revenue",
+            value=str(1000 + index),
+            unit="USD",
+            scale="millions",
+            source_ref=f"source-{index}",
+            evidence_ref=f"evidence-{index}",
+            citation_ref=f"cite-{index}",
+            metadata={
+                "form": "10-K",
+                "concept": "InventoryNet",
+                "label": "Inventories, net " + ("x" * 200),
+                "statement": "balance_sheet",
+                "line_item": "inventory",
+                "source_title": "long dynamic title should stay out of task.compile prompt",
+            },
+        )
+        for index in range(80)
+    ]
+    fallback = compile_finance_task_program(
+        question=question,
+        facts=facts,
+        target_binding={"company": "HD LOW", "doc_period": "FY2024", "doc_type": "10-K"},
+    )
+
+    prompt = _model_task_compile_prompt(
+        question=question,
+        facts=facts,
+        target_binding={"company": "HD LOW", "doc_period": "FY2024", "doc_type": "10-K"},
+        fallback=fallback,
+    )
+    payload = json.loads(prompt)
+    packet = payload["task_packet"]
+
+    assert prompt.index('"contract"') < prompt.index('"task_packet"')
+    assert prompt.index('"output_schema"') < prompt.index('"task_packet"')
+    assert list(packet).index("fact_ledger") < list(packet).index("objective")
+    assert len(prompt) < 22000
+    assert len(packet["fact_ledger"]) == TASK_COMPILE_FACT_LIMIT
+    assert packet["fact_ledger_count"] == len(facts)
+    assert all("source_title" not in item.get("metadata", {}) for item in packet["fact_ledger"])
+    assert "host_boundary" not in json.dumps(packet["host_fallback_program"], ensure_ascii=False)
+    assert "calculator.compute" in json.dumps(packet["host_fallback_program"], ensure_ascii=False)
+
+
+def test_finance_task_compile_prompt_guides_capital_intensity_roa_program() -> None:
+    fallback = compile_finance_task_program(
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+        facts=[],
+        target_binding={"company": "3M", "doc_period": "FY2022", "doc_type": "10-K"},
+    )
+
+    prompt = _model_task_compile_prompt(
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+        facts=[],
+        target_binding={"company": "3M", "doc_period": "FY2022", "doc_type": "10-K"},
+        fallback=fallback,
+    )
+    payload = json.loads(prompt)
+    risks = payload["task_packet"]["host_fallback_risks"]
+
+    assert "return on assets" in payload["contract"]
+    assert "net_income / assets" in payload["contract"]
+    assert any(item["risk"] == "capital_intensity_needs_complete_ratio_lens" for item in risks)
+
+
+def test_model_first_finance_task_compiler_retries_invalid_model_json_with_model_recompile() -> None:
+    valid_program = {
+        "task_spec": {
+            "task_type": "filing_metric_lookup",
+            "objective": "Find Adobe FY2018 capex from the target filing.",
+            "target_entities": ["Adobe"],
+            "target_periods": ["FY2018"],
+            "success_criteria": ["primary filing row supports the metric"],
+        },
+        "evidence_specs": [
+            {
+                "slot_name": "capital_expenditures",
+                "accepted_attributes": ["capital expenditures", "purchases of property and equipment"],
+                "source_role": "primary_filing",
+                "required_source_families": ["SEC 10-K"],
+                "target_period": "FY2018",
+                "statement": "cash_flow_statement",
+                "line_item": "purchases of property and equipment",
+                "required": True,
+            }
+        ],
+        "transform_specs": [],
+        "slot_frame": {
+            "task_type": "filing_metric_lookup",
+            "required_slots": [{"name": "capital_expenditures"}],
+            "missing_slots": ["capital_expenditures"],
+        },
+        "tool_chain_plan": {
+            "decision_owner": "model",
+            "recommended_steps": [{"tool": "retrieval.run", "reason": "read target filing"}],
+        },
+        "reason_summary": "The retry returns a valid model-owned work program.",
+    }
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "task.compile": [
+                        {"task_spec": {}, "evidence_specs": "bad", "transform_specs": []},
+                        valid_program,
+                    ]
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+
+    program = compile_finance_task_program_model_first(
+        question="What was Adobe's capital expenditures in FY2018?",
+        facts=[],
+        target_binding={"company": "Adobe", "doc_period": "FY2018", "doc_type": "10-K"},
+        processor_fabric=fabric,
+        task_id="task-retry-compile",
+        step_id="task-compile",
+        llm_judgment_required=True,
+    )
+
+    assert program.diagnostics["source"] == "task_compile_model"
+    assert program.task_spec.task_type == "filing_metric_lookup"
+    assert program.evidence_specs[0].slot_name == "capital_expenditures"
+    requests = journal.records(task_id="task-retry-compile", kind="processor_request")
+    assert [record.data["processor"] for record in requests] == ["task.compile", "task.compile"]
+    assert requests[-1].step_id == "task-compile-retry"
+
+
+def test_model_first_finance_task_compiler_retry_prompt_has_structured_feedback() -> None:
+    valid_program = {
+        "task_spec": {
+            "task_type": "filing_metric_lookup",
+            "objective": "Find Adobe FY2018 capex from the target filing.",
+            "target_entities": ["Adobe"],
+            "target_periods": ["FY2018"],
+            "success_criteria": ["primary filing row supports the metric"],
+        },
+        "evidence_specs": [
+            {
+                "slot_name": "capital_expenditures",
+                "accepted_attributes": ["capital expenditures"],
+                "source_role": "primary_filing",
+                "required_source_families": ["SEC 10-K"],
+                "target_period": "FY2018",
+                "statement": "cash_flow_statement",
+                "line_item": "purchases of property and equipment",
+                "required": True,
+            }
+        ],
+        "transform_specs": [],
+        "slot_frame": {
+            "task_type": "filing_metric_lookup",
+            "required_slots": [{"name": "capital_expenditures"}],
+            "missing_slots": ["capital_expenditures"],
+        },
+        "tool_chain_plan": {
+            "decision_owner": "model",
+            "recommended_steps": [{"tool": "retrieval.run", "reason": "read target filing"}],
+        },
+        "reason_summary": "The retry returns a valid model-owned work program.",
+    }
+    provider = MalformedThenTaskJsonProvider("task.compile", valid_program)
+    fabric = ProcessorFabric(
+        providers={"fake_repair": provider},
+        router=ProcessorRouter(default_provider="fake_repair", default_model="fake-repair"),
+        journal=JournalStore.in_memory(),
+    )
+
+    program = compile_finance_task_program_model_first(
+        question="What was Adobe's capital expenditures in FY2018?",
+        facts=[],
+        target_binding={"company": "Adobe", "doc_period": "FY2018", "doc_type": "10-K"},
+        processor_fabric=fabric,
+        task_id="task-compile-structured-repair",
+        step_id="task-compile",
+        llm_judgment_required=True,
+    )
+
+    assert program.diagnostics["source"] == "task_compile_model"
+    assert len(provider.prompts) == 2
+    retry_prompt = json.loads(provider.prompts[-1])
+    assert list(retry_prompt)[:3] == ["contract", "output_schema", "previous_failure"]
+    assert provider.prompts[-1].index('"contract"') < provider.prompts[-1].index('"previous_failure"')
+    assert provider.prompts[-1].index('"output_schema"') < provider.prompts[-1].index('"previous_failure"')
+    assert provider.prompts[-1].index('"previous_failure"') < provider.prompts[-1].index('"task_packet"')
+    structured_feedback = retry_prompt["previous_failure"]["structured_feedback"]
+    assert structured_feedback["schema"] == "holo.kernel_v3.task_compile_repair_feedback.v1"
+    assert structured_feedback["category"] == "malformed_json"
+    assert structured_feedback["required_fields"] == ["task_spec", "evidence_specs", "transform_specs"]
+    assert "Return exactly one JSON object" in structured_feedback["repair_checklist"][0]
+
+
 def test_model_first_finance_task_compiler_does_not_let_fallback_override_model_judgment() -> None:
     fabric = ProcessorFabric(
         providers={
@@ -2425,6 +5628,92 @@ def test_model_first_finance_task_compiler_does_not_let_fallback_override_model_
     assert program.diagnostics["semantic_decision_owner"] == "model"
     assert program.diagnostics["host_fallback_role"] == "scaffold_only_no_semantic_override"
     assert program.diagnostics["tool_chain_plan"]["decision_owner"] == "model"
+
+
+def test_model_first_capital_intensity_compile_preserves_fallback_roa_scaffold() -> None:
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "task.compile": {
+                        "task_spec": {
+                            "task_type": "compute",
+                            "objective": "Assess 3M FY2022 capital intensity.",
+                            "target_entities": ["3M"],
+                            "target_periods": ["2022"],
+                            "success_criteria": ["compute capex/revenue, capex/OCF, and PP&E/assets"],
+                            "diagnostics": {"formula_name": "capital_intensity"},
+                        },
+                        "evidence_specs": [
+                            {"slot_name": "capital_expenditures", "line_item": "capital expenditures", "required": True},
+                            {"slot_name": "revenue", "line_item": "revenue", "required": True},
+                            {"slot_name": "operating_cash_flow", "line_item": "operating cash flow", "required": True},
+                            {
+                                "slot_name": "property_plant_and_equipment_net",
+                                "line_item": "property plant and equipment net",
+                                "required": True,
+                            },
+                            {"slot_name": "assets", "line_item": "assets", "required": True},
+                        ],
+                        "transform_specs": [
+                            {
+                                "name": "capital_intensity_capex_revenue",
+                                "required_slots": ["capital_expenditures", "revenue"],
+                                "expression": "capital_expenditures / revenue",
+                                "output_unit": "percent",
+                            },
+                            {
+                                "name": "capital_intensity_capex_operating_cash_flow",
+                                "required_slots": ["capital_expenditures", "operating_cash_flow"],
+                                "expression": "capital_expenditures / operating_cash_flow",
+                                "output_unit": "percent",
+                            },
+                            {
+                                "name": "capital_intensity_ppe_assets",
+                                "required_slots": ["property_plant_and_equipment_net", "assets"],
+                                "expression": "property_plant_and_equipment_net / assets",
+                                "output_unit": "percent",
+                            },
+                        ],
+                        "slot_frame": {
+                            "task_type": "compute",
+                            "required_slots": [
+                                {"name": "capital_expenditures"},
+                                {"name": "revenue"},
+                                {"name": "operating_cash_flow"},
+                                {"name": "property_plant_and_equipment_net"},
+                                {"name": "assets"},
+                            ],
+                            "missing_slots": [
+                                "capital_expenditures",
+                                "revenue",
+                                "operating_cash_flow",
+                                "property_plant_and_equipment_net",
+                                "assets",
+                            ],
+                        },
+                        "tool_chain_plan": {"decision_owner": "model", "recommended_steps": [{"tool": "retrieval.run"}]},
+                    }
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=JournalStore.in_memory(),
+    )
+
+    program = compile_finance_task_program_model_first(
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+        facts=[],
+        processor_fabric=fabric,
+    )
+
+    evidence_slots = {spec.slot_name for spec in program.evidence_specs}
+    transform_names = {spec.name for spec in program.transform_specs}
+    assert "net_income" in evidence_slots
+    assert "capital_intensity_return_on_assets" in transform_names
+    assert program.slot_frame is not None
+    assert "net_income" in program.slot_frame.missing_slots
+    assert program.slot_frame.diagnostics["fallback_formula_contract_preserved"] is True
 
 
 def test_model_first_finance_task_compiler_falls_back_on_invalid_model_output() -> None:
@@ -2603,6 +5892,7 @@ def test_finance_fast_recipe_exposes_composable_toolchain_tools(tmp_path) -> Non
 
     assert "retrieval.run" in recipe.allowed_tools
     assert CALCULATOR_TOOL_NAME in recipe.allowed_tools
+    assert FINANCE_VERIFY_NUMERIC_TOOL_NAME in recipe.allowed_tools
     assert "workspace.list" in recipe.allowed_tools
     assert "workspace.search" in recipe.allowed_tools
     assert "file.read" in recipe.allowed_tools
@@ -2613,7 +5903,7 @@ def test_finance_fast_recipe_exposes_composable_toolchain_tools(tmp_path) -> Non
     registry = runtime._registry(recipe, "Analyze local finance evidence with a temporary script.")
     manifests = {manifest.name: manifest for manifest in registry.manifests()}
 
-    assert {"retrieval.run", CALCULATOR_TOOL_NAME, "workspace.search", "file.read", "shell.exec"} <= set(manifests)
+    assert {"retrieval.run", CALCULATOR_TOOL_NAME, FINANCE_VERIFY_NUMERIC_TOOL_NAME, "workspace.search", "file.read", "shell.exec"} <= set(manifests)
     shell_action = CandidateAction(
         action_id="act-shell-readonly-analysis",
         kind="tool",
@@ -2705,11 +5995,86 @@ def test_finance_fast_planner_directive_shows_composable_toolchain() -> None:
 
     assert "retrieval.run" in tool_names
     assert CALCULATOR_TOOL_NAME in tool_names
+    assert FINANCE_VERIFY_NUMERIC_TOOL_NAME in tool_names
     assert "workspace.list" in tool_names
     assert "workspace.search" in tool_names
     assert "file.read" in tool_names
     assert "shell.exec" in tool_names
     assert "shell.exec" not in directive["forbidden"]
+
+
+def test_finance_fast_model_planner_can_select_verify_numeric_tool() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+    )
+    fact = FinanceFact(
+        fact_id="fact-revenue",
+        entity="Example Co",
+        ticker="EXM",
+        period="FY2024",
+        fiscal_year=2024,
+        metric="revenue",
+        value="10000000",
+        unit="USD",
+        scale=None,
+        source_ref="src-1",
+        evidence_ref="ev-1",
+        citation_ref="cite-1",
+        metadata={},
+    )
+    action_payload = {
+        "action_id": "act-verify-from-planner",
+        "kind": "tool",
+        "name": FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        "description": "verify draft answer numeric support",
+        "payload": {
+            "answer": "Example Co FY2024 revenue was $10 million.",
+            "facts": [fact.to_dict()],
+            "formula_traces": [],
+            "citations": [],
+            "evidence": [],
+            "question": "What was Example Co FY2024 revenue?",
+        },
+        "score": 0.92,
+        "reasons": ["draft answer should be checked against finance facts"],
+        "side_effect_class": "read",
+    }
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={"fake_json": FakeJsonProvider({"planner.propose": action_payload})},
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    planner = ModelPlanner(
+        fabric=fabric,
+        allowed_tool_names=_planner_allowed_tool_names(recipe),
+    )
+    context = ContextBundle(
+        context_id="ctx-verify-tool",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-verify-tool", "run_id": "run-verify-tool", "input_text": "verify finance answer"},
+        token_budget=4096,
+    )
+    runtime = AgentRuntime(journal=journal)
+    registry = runtime._registry(recipe, "verify finance answer")
+
+    action = planner.propose(context)
+    decision = PolicyGate(permission=recipe.permission_profile).validate(
+        run_id="run-verify-tool",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert action.name == FINANCE_VERIFY_NUMERIC_TOOL_NAME
+    assert FINANCE_VERIFY_NUMERIC_TOOL_NAME in _planner_allowed_tool_names(recipe)
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.source == f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}"
+    assert observation.content["verification"]["status"] == "passed"
 
 
 def test_finance_capability_planner_directive_shows_script_toolchain() -> None:
@@ -3108,7 +6473,7 @@ def test_toolchain_grounding_journals_failed_script_observation_for_replanning()
     assert executed[-1].data["status"] == "failed"
 
 
-def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_formula() -> None:
+def test_finance_formula_planner_scaffolds_margin_driver_without_claiming_driver() -> None:
     plan = plan_finance_formula(
         question=(
             "What drove operating margin change as of FY2022 for 3M? "
@@ -3117,7 +6482,17 @@ def test_finance_formula_planner_does_not_turn_driver_explanation_into_margin_fo
         facts=[],
     )
 
-    assert plan.status == "not_applicable"
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "margin_profile_change"
+    assert plan.missing_facts == [
+        "operating_income_2020",
+        "revenue_2020",
+        "operating_income_2021",
+        "revenue_2021",
+        "operating_income_2022",
+        "revenue_2022",
+    ]
+    assert "LLM decides" in plan.diagnostics["semantic_decision_policy"]
 
 
 def test_finance_formula_planner_still_allows_explicit_margin_calculation() -> None:
@@ -3250,6 +6625,63 @@ def test_finance_formula_planner_uses_gross_profit_for_gross_margin() -> None:
     assert plan.input_fact_ids == ["nvda-gross-profit", "nvda-revenue"]
 
 
+def test_finance_formula_planner_accepts_statement_revenue_denominator_variants() -> None:
+    plan = plan_finance_formula(
+        question="Calculate FY2024 net margin for Chevron.",
+        facts=[
+            _year_fact(
+                "sales and other operating revenues",
+                "193414000000",
+                2024,
+                fact_id="cvx-sales-other-operating",
+                metadata={
+                    "concept": "SalesAndOtherOperatingRevenue",
+                    "label": "Sales and Other Operating Revenues",
+                    "form": "10-K",
+                    "fp": "FY",
+                },
+            ),
+            _year_fact(
+                "total revenues and other income",
+                "202792000000",
+                2024,
+                fact_id="cvx-total-revenues-other-income",
+                metadata={
+                    "concept": "TotalRevenuesAndOtherIncome",
+                    "label": "Total Revenues and Other Income",
+                    "form": "10-K",
+                    "fp": "FY",
+                },
+            ),
+            _year_fact("net income", "17661000000", 2024, fact_id="cvx-net-income"),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload["variables"] == {"numerator": "17661000000", "denominator": "193414000000"}
+    assert plan.input_fact_ids == ["cvx-net-income", "cvx-sales-other-operating"]
+
+
+def test_finance_formula_planner_accepts_operating_revenues_concept_as_denominator() -> None:
+    plan = plan_finance_formula(
+        question="Calculate FY2024 operating margin for UtilityCo.",
+        facts=[
+            _year_fact("operating income", "1200000000", 2024, fact_id="utility-operating-income"),
+            _year_fact(
+                "operating revenues",
+                "6400000000",
+                2024,
+                fact_id="utility-operating-revenues",
+                metadata={"concept": "OperatingRevenues", "label": "Operating revenues", "form": "10-K", "fp": "FY"},
+            ),
+        ],
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload["variables"] == {"numerator": "1200000000", "denominator": "6400000000"}
+    assert plan.input_fact_ids == ["utility-operating-income", "utility-operating-revenues"]
+
+
 def test_finance_formula_planner_uses_requested_metric_for_growth() -> None:
     plan = plan_finance_formula(
         question="What was Meta's net income growth from fiscal year 2023 to 2024?",
@@ -3271,8 +6703,20 @@ def test_finance_formula_planner_supports_debt_to_equity_ratio() -> None:
     plan = plan_finance_formula(
         question="What was JPMorgan Chase's debt-to-equity ratio as of year-end 2024?",
         facts=[
-            _year_fact("liabilities", "3658056000000", 2024, fact_id="jpm-liabilities"),
-            _year_fact("shareholders equity", "344758000000", 2024, fact_id="jpm-equity"),
+            _year_fact(
+                "liabilities",
+                "3658056000000",
+                2024,
+                fact_id="jpm-liabilities",
+                metadata={"label": "Total liabilities", "concept": "Liabilities"},
+            ),
+            _year_fact(
+                "shareholders equity",
+                "344758000000",
+                2024,
+                fact_id="jpm-equity",
+                metadata={"label": "Total stockholders' equity", "concept": "StockholdersEquity"},
+            ),
         ],
     )
 
@@ -3282,6 +6726,10 @@ def test_finance_formula_planner_supports_debt_to_equity_ratio() -> None:
         "liabilities_or_debt": "3658056000000",
         "shareholders_equity": "344758000000",
     }
+    assert plan.payload["diagnostics"]["numerator_slot"] == "total_liabilities"
+    assert plan.payload["diagnostics"]["denominator_slot"] == "shareholders_equity"
+    assert plan.payload["diagnostics"]["bound_line_items"]["numerator"]["label"] == "Total liabilities"
+    assert "do not silently present it as debt-only" in plan.payload["diagnostics"]["answer_wording_policy"]
 
 
 def test_finance_formula_planner_generates_capital_intensity_payload() -> None:
@@ -3577,6 +7025,44 @@ def test_capital_intensity_model_outputs_support_verifier_answer_numbers() -> No
     )
 
     assert verification.status == "passed"
+
+
+def test_numeric_verifier_accepts_absolute_percent_display_from_negative_capex_trace() -> None:
+    traces = [
+        FormulaTrace(
+            formula_id="formula-capex-revenue",
+            formula_name="capex_to_revenue",
+            expression="capex_raw / revenue",
+            input_fact_ids=["capex", "revenue"],
+            result_value="-0.05109702299219959683309474422",
+            unit="percent",
+            diagnostics={"variables": {"capex_raw": "-1749000000", "revenue": "34229000000"}},
+        ),
+        FormulaTrace(
+            formula_id="formula-capex-ocf",
+            formula_name="capex_to_ocf",
+            expression="capex_raw / ocf",
+            input_fact_ids=["capex", "ocf"],
+            result_value="-0.3128241817206224289035950635",
+            unit="percent",
+            diagnostics={"variables": {"capex_raw": "-1749000000", "ocf": "5591000000"}},
+        ),
+    ]
+
+    verification = verify_finance_answer(
+        answer=(
+            "FY2022 capex was $1,749 million, revenue was $34,229 million, and operating cash flow was "
+            "$5,591 million. Capex/revenue was 5.1% and capex/operating cash flow was 31.3%, so 3M "
+            "does not look highly capital-intensive on these measures."
+        ),
+        facts=[],
+        formula_traces=traces,
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+    )
+
+    assert verification.status == "passed"
+    assert verification.missing_values == []
+    assert verification.unit_mismatches == []
 
 
 def test_finance_formula_planner_does_not_fill_capital_intensity_with_wrong_year_or_cost_of_revenue() -> None:
@@ -4383,11 +7869,14 @@ def test_finance_dio_retrieval_augmentation_adds_inventory_and_cogs_companyfacts
     )
 
     joined_queries = " ".join(payload["queries"])
-    assert "cost of revenue" in payload["query"].lower()
+    assert payload["query"] == "HD LOW FY2024 DIO inventory"
+    assert "cost of revenue" in joined_queries.lower()
     assert "HD SEC companyfacts inventory cost of revenue cost of sales COGS 10-K" in joined_queries
     assert "LOW SEC companyfacts inventory cost of revenue cost of sales COGS 10-K" in joined_queries
     assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000354950.json" in payload["source_urls"]
     assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000060667.json" in payload["source_urls"]
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000354950/us-gaap/InventoryNet.json" in payload["source_urls"]
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000060667/us-gaap/CostOfGoodsAndServicesSold.json" in payload["source_urls"]
     assert payload["metadata"]["target_inventory_and_cogs_structured_source_required"] is True
 
 
@@ -4406,7 +7895,26 @@ def test_finance_missing_fact_payload_for_capital_intensity_seeds_companyfacts()
     source_urls = payload["metadata"]["source_urls"]
     assert "https://data.sec.gov/submissions/CIK0000066740.json" in source_urls
     assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/Revenues.json" in source_urls
+    assert (
+        "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/PaymentsToAcquirePropertyPlantAndEquipment.json"
+        in source_urls
+    )
+    assert (
+        "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/NetCashProvidedByUsedInOperatingActivities.json"
+        in source_urls
+    )
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/PropertyPlantAndEquipmentNet.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/Assets.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/NetIncomeLoss.json" in source_urls
+    assert source_urls.index("https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/Assets.json") < source_urls.index(
+        "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/RevenueFromContractWithCustomerExcludingAssessedTax.json"
+    )
+    assert source_urls.index("https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/NetIncomeLoss.json") < source_urls.index(
+        "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/SalesRevenueNet.json"
+    )
     assert payload["source_urls"] == source_urls
+    assert any("net income" in query.lower() for query in payload["queries"])
     assert payload["metadata"]["missing_slots"] == [
         "capital_expenditures",
         "operating_cash_flow",
@@ -4414,6 +7922,160 @@ def test_finance_missing_fact_payload_for_capital_intensity_seeds_companyfacts()
         "assets",
         "net_income",
     ]
+
+
+def test_finance_missing_fact_payload_for_operating_cash_flow_ratio_seeds_companyfacts() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="operating_cash_flow_ratio",
+        missing=["operating_cash_flow", "total_current_liabilities"],
+        goal="3M FY2022 operating cash flow ratio cash from operations total current liabilities",
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/submissions/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in source_urls
+    assert (
+        "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/NetCashProvidedByUsedInOperatingActivities.json"
+        in source_urls
+    )
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/LiabilitiesCurrent.json" in source_urls
+    assert payload["source_urls"] == source_urls
+    assert payload["metadata"]["target_operating_cash_flow_ratio_structured_source_required"] is True
+    assert payload["metadata"]["missing_slots"] == ["operating_cash_flow", "total_current_liabilities"]
+    assert any("LiabilitiesCurrent" in query for query in payload["queries"])
+
+
+def test_finance_missing_fact_payload_for_yoy_operating_income_seeds_companyfacts() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="yoy_growth",
+        missing=["prior_period_value", "current_period_value"],
+        goal="3M FY2024 year-over-year operating income change",
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/submissions/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/OperatingIncomeLoss.json" in source_urls
+    assert payload["source_urls"] == source_urls
+    assert payload["metadata"]["target_yoy_growth_structured_source_required"] is True
+    assert payload["metadata"]["missing_slots"] == ["prior_period_value", "current_period_value"]
+    assert any("OperatingIncomeLoss" in query for query in payload["queries"])
+
+
+def test_finance_missing_fact_payload_for_quick_ratio_seeds_statement_companyfacts() -> None:
+    payload = _finance_missing_fact_retrieval_payload(
+        formula_name="quick_ratio",
+        missing=[
+            "cash_and_equivalents",
+            "marketable_securities",
+            "accounts_receivable",
+            "total_current_liabilities",
+        ],
+        goal="3M FY2023 quick ratio",
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/submissions/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/LiabilitiesCurrent.json" in source_urls
+    assert payload["metadata"]["target_statement_formula_structured_source_required"] is True
+    assert payload["metadata"]["missing_slots"] == [
+        "cash_and_equivalents",
+        "marketable_securities",
+        "accounts_receivable",
+        "total_current_liabilities",
+    ]
+    assert any("LiabilitiesCurrent" in query for query in payload["queries"])
+
+
+def test_finance_modeling_payload_uses_model_compiled_capital_intensity_program_for_source_urls() -> None:
+    goal = (
+        "Benchmark target source follows. Source URL: "
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf Company: 3M Document: 3M_2022_10K Document type: 10k "
+        "Document period: 2022 Is 3M a capital-intensive business based on FY2022 data?"
+    )
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "execution_program": {
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "source": "task_compile_model",
+                "task_spec": {
+                    "task_type": "compute",
+                    "objective": "Assess FY2022 capital intensity from filing facts.",
+                    "diagnostics": {"formula_name": "capital_intensity"},
+                },
+                "evidence_specs": [],
+                "transform_specs": [
+                    {
+                        "name": "capital_intensity_capex_revenue",
+                        "required_slots": ["capital_expenditures", "revenue"],
+                    }
+                ],
+                "slot_frame": {"missing_slots": ["capital_expenditures", "revenue", "assets", "net_income"]},
+            },
+        },
+    )
+
+    payload = _augment_finance_modeling_retrieval_payload(
+        {"query": "model selected first retrieval query", "queries": ["model selected first retrieval query"], "metadata": {}},
+        root_goal=goal,
+        recipe=recipe,
+    )
+
+    assert payload["query"] == "model selected first retrieval query"
+    assert "model selected first retrieval query" in payload["queries"]
+    assert any("capital expenditures" in query.lower() and "net income" in query.lower() for query in payload["queries"])
+    source_urls = payload["metadata"]["source_urls"]
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/Revenues.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/Assets.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/NetIncomeLoss.json" in source_urls
+    assert payload["metadata"]["target_capital_intensity_structured_source_required"] is True
+    assert payload["max_fetches"] >= 20
+
+
+def test_benchmark_binding_enforce_adds_capital_intensity_structured_sources_from_compiled_hint() -> None:
+    goal = (
+        "Benchmark target source follows. Source URL: "
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf Company: 3M Document: 3M_2022_10K Document type: 10k "
+        "Document period: 2022 Is 3M a capital-intensive business based on FY2022 data?"
+    )
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "goal": goal,
+            "execution_program": {
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "source": "task_compile_model",
+                "task_spec": {
+                    "task_type": "compute",
+                    "objective": "Assess FY2022 capital intensity.",
+                    "diagnostics": {"formula_name": "capital_intensity"},
+                },
+                "evidence_specs": [],
+                "transform_specs": [{"name": "capital_intensity_ppe_assets", "required_slots": ["property_plant_and_equipment_net", "assets"]}],
+                "slot_frame": {"missing_slots": ["property_plant_and_equipment_net", "assets", "net_income"]},
+            },
+        },
+    )
+
+    payload = _enforce_benchmark_doc_retrieval_binding(
+        {"query": "model query", "metadata": {}},
+        goal=goal,
+        recipe=recipe,
+        preserve_query=True,
+    )
+
+    source_urls = payload["metadata"]["source_urls"]
+    assert payload["max_fetches"] >= 20
+    assert payload["source_urls"] == source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/Assets.json" in source_urls
+    assert "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/NetIncomeLoss.json" in source_urls
+    assert payload["metadata"]["target_capital_intensity_structured_source_required"] is True
 
 
 def test_finance_missing_fact_payload_for_fixed_asset_turnover_seeds_companyfacts() -> None:
@@ -5467,6 +9129,399 @@ def test_finance_formula_planner_generates_ev_ebitda_payload() -> None:
     assert plan.payload["variables"]["ebitda"] == "3000"
 
 
+def test_finance_fact_ledger_extracts_fixed_charge_coverage_line_items_from_structured_facts() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="fixed-charge-earnings",
+            text=(
+                "entityName=Retailer ticker=RTL taxonomy=us-gaap concept=EarningsAvailableForFixedCharges "
+                "label='Earnings available for fixed charges' unit=USD fy=2024 form=10-K value=19500000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="fixed-charges",
+            text=(
+                "entityName=Retailer ticker=RTL taxonomy=us-gaap concept=FixedCharges "
+                "label='Total fixed charges' unit=USD fy=2024 form=10-K value=1500000000"
+            ),
+        ),
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence],
+    )
+
+    by_metric = {fact.metric: fact for fact in facts}
+    assert by_metric["earnings available for fixed charges"].value == "19500000000"
+    assert by_metric["fixed charges"].value == "1500000000"
+
+
+def test_finance_formula_planner_generates_fixed_charge_coverage_payload() -> None:
+    facts = [
+        _year_fact(
+            "earnings available for fixed charges",
+            "19500000000",
+            2024,
+            fact_id="rtl-fixed-charge-earnings",
+        ),
+        _year_fact("fixed charges", "1500000000", 2024, fact_id="rtl-fixed-charges"),
+        _year_fact(
+            "ratio of earnings to fixed charges",
+            "13",
+            2024,
+            fact_id="rtl-disclosed-fixed-charge-ratio",
+            metadata={"label": "Ratio of earnings to fixed charges"},
+        ),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, calculate the fixed-charge coverage ratio.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "fixed_charge_coverage"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "earnings_available_for_fixed_charges / fixed_charges"
+    assert plan.payload["variables"] == {
+        "earnings_available_for_fixed_charges": "19500000000",
+        "fixed_charges": "1500000000",
+    }
+    assert plan.payload["input_fact_ids"] == ["rtl-fixed-charge-earnings", "rtl-fixed-charges"]
+    assert plan.payload["diagnostics"]["earnings_basis"] == "direct_disclosure"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("13")
+    assert trace.diagnostics["formatted_value"] == "13 x"
+
+
+def test_finance_formula_planner_derives_fixed_charge_coverage_from_pretax_income() -> None:
+    facts = [
+        _year_fact("pretax income", "18000000000", 2024, fact_id="rtl-pretax-income"),
+        _year_fact("fixed charges", "1500000000", 2024, fact_id="rtl-fixed-charges"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, compute fixed charge coverage using earnings before fixed charges.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "fixed_charge_coverage"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "(pretax_income + fixed_charges) / fixed_charges"
+    assert plan.payload["variables"] == {
+        "pretax_income": "18000000000",
+        "fixed_charges": "1500000000",
+    }
+    assert plan.payload["diagnostics"]["earnings_basis"] == "derived_from_pretax_income_plus_fixed_charges"
+    assert (
+        plan.payload["diagnostics"]["model_outputs"]["earnings_available_for_fixed_charges"]
+        == "19500000000"
+    )
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("13")
+
+
+def test_finance_fact_ledger_extracts_mlr_rebate_line_items_from_structured_facts() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="mlr-ratio",
+            text=(
+                "entityName=HealthCo ticker=HLC concept=MedicalLossRatio "
+                "label='Medical loss ratio' unit=percent fy=2024 form=10-K value=82"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="mlr-standard",
+            text=(
+                "entityName=HealthCo ticker=HLC concept=MLRStandard "
+                "label='Minimum MLR' unit=percent fy=2024 form=regulatory value=85"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="mlr-premium",
+            text=(
+                "entityName=HealthCo ticker=HLC concept=AdjustedPremiumRevenue "
+                "label='Adjusted premium revenue' unit=USD fy=2024 form=regulatory value=10000000000"
+            ),
+        ),
+        _finance_evidence(
+            evidence_id="mlr-numerator",
+            text=(
+                "entityName=HealthCo ticker=HLC concept=ClaimsAndQualityImprovementExpenses "
+                "label='Claims and quality improvement expenses' unit=USD fy=2024 form=regulatory value=8200000000"
+            ),
+        ),
+    ]
+
+    facts = build_finance_fact_ledger(
+        evidence=evidence,
+        citations=[_finance_citation(item, citation_id=f"cite-{item.evidence_id}") for item in evidence],
+    )
+
+    by_metric = {fact.metric: fact for fact in facts}
+    assert by_metric["medical loss ratio"].value == "82"
+    assert by_metric["mlr standard"].value == "85"
+    assert by_metric["adjusted premium revenue"].value == "10000000000"
+    assert by_metric["mlr numerator"].value == "8200000000"
+
+
+def test_finance_formula_planner_generates_mlr_rebate_from_reported_ratio() -> None:
+    facts = [
+        _year_fact("medical loss ratio", "82", 2024, fact_id="hlc-actual-mlr"),
+        _year_fact("mlr standard", "85", 2024, fact_id="hlc-mlr-standard"),
+        _year_fact("adjusted premium revenue", "10000000000", 2024, fact_id="hlc-adjusted-premium"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, calculate the MLR rebate owed using the reported medical loss ratio.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "mlr_rebate"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "(mlr_standard - actual_mlr) * adjusted_premium_revenue"
+    assert plan.payload["variables"] == {
+        "mlr_standard": "0.85",
+        "actual_mlr": "0.82",
+        "adjusted_premium_revenue": "10000000000",
+    }
+    assert plan.payload["diagnostics"]["standard_source"] == "fact"
+    assert plan.payload["diagnostics"]["model_outputs"]["mlr_rebate"] == "300000000"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("300000000")
+
+
+def test_finance_formula_planner_mlr_rebate_uses_labeled_question_standard() -> None:
+    facts = [
+        _year_fact("medical loss ratio", "82", 2024, fact_id="hlc-actual-mlr"),
+        _year_fact("adjusted premium revenue", "10000000000", 2024, fact_id="hlc-adjusted-premium"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, the actual MLR was 82%; calculate the rebate against the required standard of 85%.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["variables"]["mlr_standard"] == "0.85"
+    assert plan.payload["diagnostics"]["standard_source"] == "question"
+    assert plan.payload["diagnostics"]["model_outputs"]["mlr_rebate"] == "300000000"
+
+
+def test_finance_formula_planner_derives_mlr_rebate_from_claims_and_quality_expenses() -> None:
+    facts = [
+        _year_fact("medical claims", "7900000000", 2024, fact_id="hlc-medical-claims"),
+        _year_fact("quality improvement expenses", "300000000", 2024, fact_id="hlc-quality-improvement"),
+        _year_fact("adjusted premium revenue", "10000000000", 2024, fact_id="hlc-adjusted-premium"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024 large group coverage, estimate the MLR rebate from claims, QI expenses, and premiums.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "mlr_rebate"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "(mlr_standard - (mlr_numerator / adjusted_premium_revenue)) * adjusted_premium_revenue"
+    assert plan.payload["variables"] == {
+        "mlr_standard": "0.85",
+        "mlr_numerator": "8200000000",
+        "adjusted_premium_revenue": "10000000000",
+    }
+    assert plan.payload["diagnostics"]["standard_source"] == "question_market_segment"
+    assert plan.payload["diagnostics"]["numerator_basis"] == "derived_from_claims_plus_quality_improvement"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("300000000")
+
+
+def test_finance_formula_planner_mlr_rebate_is_zero_when_ratio_meets_standard() -> None:
+    facts = [
+        _year_fact("medical loss ratio", "88", 2024, fact_id="hlc-actual-mlr"),
+        _year_fact("mlr standard", "85", 2024, fact_id="hlc-mlr-standard"),
+        _year_fact("adjusted premium revenue", "10000000000", 2024, fact_id="hlc-adjusted-premium"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For FY2024, calculate whether a medical loss ratio rebate is owed.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "mlr_rebate"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "adjusted_premium_revenue * 0"
+    assert plan.payload["diagnostics"]["rebate_required"] is False
+    assert plan.payload["diagnostics"]["model_outputs"]["mlr_rebate"] == "0"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value) == Decimal("0")
+
+
+def test_finance_formula_planner_generates_purchase_price_allocation_payload() -> None:
+    facts = [
+        _year_fact("purchase consideration", "43000000000", 2023, fact_id="pfe-seagen-consideration"),
+        _year_fact("goodwill", "26000000000", 2023, fact_id="pfe-seagen-goodwill"),
+        _year_fact(
+            "intangible assets",
+            "12000000000",
+            2023,
+            fact_id="pfe-seagen-intangibles",
+            metadata={"label": "Total identifiable intangible assets acquired"},
+        ),
+    ]
+
+    plan = plan_finance_formula(
+        question=(
+            "For Pfizer's Seagen acquisition, calculate the purchase price allocation "
+            "share assigned to goodwill and identifiable intangible assets."
+        ),
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "purchase_price_allocation"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "(goodwill + intangible_assets) / purchase_consideration"
+    assert plan.payload["variables"] == {
+        "purchase_consideration": "43000000000",
+        "goodwill": "26000000000",
+        "intangible_assets": "12000000000",
+    }
+    assert plan.payload["input_fact_ids"] == [
+        "pfe-seagen-consideration",
+        "pfe-seagen-goodwill",
+        "pfe-seagen-intangibles",
+    ]
+    assert plan.payload["diagnostics"]["output_attribute"] == "goodwill_and_intangible_assets_to_consideration"
+    assert (
+        plan.payload["diagnostics"]["model_outputs"]["goodwill_and_intangible_assets_to_consideration"]
+        == "0.8837209302325581395348837209"
+    )
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value).quantize(Decimal("0.0001")) == Decimal("0.8837")
+    assert trace.diagnostics["formatted_value"] == "88.37209302325581395348837209%"
+
+
+def test_finance_formula_planner_purchase_price_allocation_prefers_acquisition_context_facts() -> None:
+    facts = [
+        _year_fact("purchase consideration", "43000000000", 2023, fact_id="acquisition-consideration"),
+        _year_fact(
+            "goodwill",
+            "95000000000",
+            2023,
+            fact_id="balance-sheet-goodwill",
+            metadata={"label": "Goodwill", "context": "Consolidated balance sheets"},
+        ),
+        _year_fact(
+            "goodwill",
+            "26000000000",
+            2023,
+            fact_id="acquired-goodwill",
+            metadata={"label": "Goodwill", "context": "Purchase price allocation for the acquired business"},
+        ),
+        _year_fact(
+            "intangible assets",
+            "55000000000",
+            2023,
+            fact_id="balance-sheet-intangibles",
+            metadata={"label": "Intangible assets, net", "context": "Consolidated balance sheets"},
+        ),
+        _year_fact(
+            "intangible assets",
+            "12000000000",
+            2023,
+            fact_id="acquired-intangibles",
+            metadata={"label": "Total identifiable intangible assets acquired", "context": "Business combination"},
+        ),
+    ]
+
+    plan = plan_finance_formula(
+        question="Calculate the PPA share allocated to goodwill and identifiable intangible assets.",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    assert plan.payload["variables"] == {
+        "purchase_consideration": "43000000000",
+        "goodwill": "26000000000",
+        "intangible_assets": "12000000000",
+    }
+    assert plan.payload["input_fact_ids"] == [
+        "acquisition-consideration",
+        "acquired-goodwill",
+        "acquired-intangibles",
+    ]
+
+
+def test_finance_formula_planner_purchase_price_allocation_can_focus_goodwill() -> None:
+    facts = [
+        _year_fact("purchase consideration", "43000000000", 2023, fact_id="pfe-seagen-consideration"),
+        _year_fact("goodwill", "26000000000", 2023, fact_id="pfe-seagen-goodwill"),
+        _year_fact("intangible assets", "12000000000", 2023, fact_id="pfe-seagen-intangibles"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For the business combination, what percent of purchase consideration was allocated to goodwill?",
+        facts=facts,
+    )
+
+    assert plan.status == "ready"
+    assert plan.formula_name == "purchase_price_allocation"
+    assert plan.payload is not None
+    assert plan.payload["expression"] == "goodwill / purchase_consideration"
+    assert plan.payload["variables"] == {
+        "purchase_consideration": "43000000000",
+        "goodwill": "26000000000",
+    }
+    assert plan.payload["diagnostics"]["output_attribute"] == "goodwill_to_consideration"
+
+    trace = compute_formula(**plan.payload)
+
+    assert Decimal(trace.result_value).quantize(Decimal("0.0001")) == Decimal("0.6047")
+    assert trace.diagnostics["formatted_value"] == "60.46511627906976744186046512%"
+
+
+def test_finance_formula_planner_purchase_price_allocation_rejects_per_share_consideration() -> None:
+    facts = [
+        _year_fact(
+            "purchase price",
+            "229",
+            2023,
+            fact_id="pfe-seagen-per-share-price",
+            metadata={"per_share": True, "context": "$229 per Seagen share in cash"},
+        ),
+        _year_fact("goodwill", "26000000000", 2023, fact_id="pfe-seagen-goodwill"),
+    ]
+
+    plan = plan_finance_formula(
+        question="For Pfizer's Seagen acquisition, calculate purchase price allocation to goodwill.",
+        facts=facts,
+    )
+
+    assert plan.status == "missing_facts"
+    assert plan.formula_name == "purchase_price_allocation"
+    assert "purchase_consideration" in plan.missing_facts
+    assert plan.payload is None
+    assert plan.input_fact_ids == ["pfe-seagen-goodwill"]
+
+
 def test_finance_formula_preflight_returns_missing_plan_when_no_entity_is_ready() -> None:
     evidence = [
         _finance_evidence(
@@ -5959,6 +10014,76 @@ def test_finance_missing_fact_retrieval_action_supports_ev_ebitda() -> None:
     assert "ebitda" in action.payload["query"].lower()
 
 
+def test_finance_missing_fact_retrieval_action_supports_fixed_charge_coverage() -> None:
+    plan = plan_finance_formula(question="Compare TGT and WMT fixed-charge coverage ratios.", facts=[])
+    source_action = CandidateAction(
+        action_id="act-source",
+        kind="respond",
+        name=None,
+        description="fallback",
+        score=0.1,
+        payload={"text": "fallback"},
+        reasons=["fallback"],
+        side_effect_class="none",
+    )
+
+    action = _finance_missing_fact_retrieval_action(
+        source_action,
+        plan=plan,
+        goal="Compare TGT and WMT fixed-charge coverage ratios using public filings.",
+        call_index=1,
+    )
+
+    assert action is not None
+    assert action.name == "retrieval.run"
+    assert action.payload["metadata"]["finance_formula_name"] == "fixed_charge_coverage"
+    assert action.payload["metadata"]["target_fixed_charge_coverage_structured_source_required"] is True
+    slot_specs = action.payload["metadata"]["slot_frame"]["required_slots"]
+    assert [slot["name"] for slot in slot_specs] == [
+        "earnings_available_for_fixed_charges_or_pretax_income",
+        "fixed_charges",
+    ]
+    assert slot_specs[0]["accepted_attributes"] == ["earnings available for fixed charges", "pretax income"]
+    assert slot_specs[1]["accepted_attributes"] == ["fixed charges"]
+    assert "fixed charges" in action.payload["query"].lower()
+    assert any("EarningsAvailableForFixedCharges" in query for query in action.payload["queries"])
+
+
+def test_finance_missing_fact_retrieval_action_supports_mlr_rebate() -> None:
+    plan = plan_finance_formula(question="Calculate CNC's medical loss ratio rebate for FY2024.", facts=[])
+    source_action = CandidateAction(
+        action_id="act-source",
+        kind="respond",
+        name=None,
+        description="fallback",
+        score=0.1,
+        payload={"text": "fallback"},
+        reasons=["fallback"],
+        side_effect_class="none",
+    )
+
+    action = _finance_missing_fact_retrieval_action(
+        source_action,
+        plan=plan,
+        goal="Calculate CNC's medical loss ratio rebate for FY2024 using public filings and regulatory evidence.",
+        call_index=1,
+    )
+
+    assert action is not None
+    assert action.name == "retrieval.run"
+    assert action.payload["metadata"]["finance_formula_name"] == "mlr_rebate"
+    assert action.payload["metadata"]["target_mlr_rebate_regulatory_source_required"] is True
+    slot_specs = action.payload["metadata"]["slot_frame"]["required_slots"]
+    assert [slot["name"] for slot in slot_specs] == [
+        "actual_mlr_or_complete_mlr_numerator",
+        "adjusted_premium_revenue_or_mlr_denominator",
+        "mlr_standard_or_market_segment",
+        "rebate_basis_or_adjusted_premium_revenue",
+    ]
+    assert "medical loss ratio" in action.payload["query"].lower()
+    assert any("CMS medical loss ratio rebate" in query for query in action.payload["queries"])
+
+
 def test_finance_missing_fact_retrieval_action_preserves_target_document_binding() -> None:
     goal = (
         "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
@@ -6194,7 +10319,10 @@ def test_finance_fact_ledger_maps_pretax_income_concept_without_interest_polluti
 def test_finance_fact_fast_recipe_allows_calculator_tool() -> None:
     recipe = task_recipe(
         "retrieval_answer",
-        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))},
+        metadata={
+            "execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "host_semantic_fallbacks": {"enabled": True},
+        },
     )
 
     assert "retrieval.run" in recipe.allowed_tools
@@ -6294,6 +10422,147 @@ def test_retrieval_finalization_runs_finance_formula_preflight_before_synthesis(
     assert Decimal(trace["result_value"]).quantize(Decimal("0.01")) == Decimal("80.30")
 
 
+def test_finance_capability_model_compiled_transform_authorizes_calculator_preflight() -> None:
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "task.compile": {
+                        "task_spec": {
+                            "task_type": "compute",
+                            "objective": "Calculate FY2024 DIO in days.",
+                            "target_entities": ["Retailer"],
+                            "target_periods": ["FY2024"],
+                            "success_criteria": ["calculator trace supports DIO"],
+                        },
+                        "evidence_specs": [
+                            {"slot_name": "inventory_begin", "accepted_attributes": ["inventory"], "required": True},
+                            {"slot_name": "inventory_end", "accepted_attributes": ["inventory"], "required": True},
+                            {"slot_name": "cogs", "accepted_attributes": ["cost of sales"], "required": True},
+                        ],
+                        "transform_specs": [
+                            {
+                                "name": "dio",
+                                "required_slots": ["inventory_begin", "inventory_end", "cogs", "fiscal_days"],
+                                "expression": "(inventory_begin + inventory_end) / 2 / cogs * fiscal_days",
+                                "output_unit": "days",
+                                "output_attribute": "dio",
+                            }
+                        ],
+                        "slot_frame": {
+                            "task_type": "compute",
+                            "required_slots": [
+                                {"name": "inventory_begin"},
+                                {"name": "inventory_end"},
+                                {"name": "cogs"},
+                                {"name": "fiscal_days"},
+                            ],
+                            "missing_slots": [],
+                        },
+                        "tool_chain_plan": {
+                            "decision_owner": "model",
+                            "recommended_steps": [{"tool": "calculator.compute", "reason": "supported numeric transform"}],
+                        },
+                    },
+                    "finance.slot_bind": {
+                        "decision": "ready",
+                        "slot_bindings": [
+                            {"slot_name": "inventory_begin", "variable_name": "inventory_begin", "fact_id": "finfact-4254638f637a"},
+                            {"slot_name": "inventory_end", "variable_name": "inventory_end", "fact_id": "finfact-9a157996131a"},
+                            {"slot_name": "cogs", "variable_name": "cogs", "fact_id": "finfact-844cae959a62"},
+                        ],
+                        "calculations": [
+                            {
+                                "formula_name": "average_inventory",
+                                "expression": "(inventory_begin + inventory_end) / 2",
+                                "variables": {
+                                    "inventory_begin": {"fact_id": "finfact-4254638f637a"},
+                                    "inventory_end": {"fact_id": "finfact-9a157996131a"},
+                                },
+                                "unit": "USD",
+                            },
+                            {
+                                "formula_name": "dio",
+                                "expression": "average_inventory / cogs * fiscal_days",
+                                "variables": {
+                                    "average_inventory": "average_inventory",
+                                    "cogs": {"fact_id": "finfact-844cae959a62"},
+                                    "fiscal_days": 365,
+                                },
+                                "unit": "days",
+                            }
+                        ],
+                        "missing_slots": [],
+                        "next_action": "respond",
+                        "reason_summary": "Model bound all calculator variables to observed facts.",
+                    },
+                    "synthesizer.answer": {
+                        "answer": "Retailer FY2024 DIO is 80.3 days, supported by cite-1, cite-2, and cite-3.",
+                        "citation_refs": ["cite-1", "cite-2", "cite-3"],
+                        "confidence": 0.9,
+                        "limitations": [],
+                        "used_evidence": ["evidence-1", "evidence-2", "evidence-3"],
+                    },
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    runtime = AgentRuntime(journal=journal, processor_fabric=fabric)
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-1",
+            text="entityName=Retailer ticker=RTL metric=inventory unit=USD fy=2023 form=10-K value=200",
+        ),
+        _finance_evidence(
+            evidence_id="evidence-2",
+            text="entityName=Retailer ticker=RTL metric=inventory unit=USD fy=2024 form=10-K value=240",
+        ),
+        _finance_evidence(
+            evidence_id="evidence-3",
+            text="entityName=Retailer ticker=RTL metric=cost of sales unit=USD fy=2024 form=10-K value=1000",
+        ),
+    ]
+    citations = [_finance_citation(item, citation_id=f"cite-{index}") for index, item in enumerate(evidence, start=1)]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "Calculate FY2024 DIO in days.",
+            "execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-capability")),
+        },
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-finance-capability-dio",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    preflight = journal.records(task_id="task-finance-capability-dio", kind="finance_numeric_preflight")
+    assert any(record.data["status"] == "model_authorized" for record in preflight)
+    compactions = journal.records(task_id="task-finance-capability-dio", kind="finance_synthesis_compaction")
+    assert compactions
+    assert compactions[-1].data["compact_evidence_count"] <= compactions[-1].data["original_evidence_count"]
+    observations = journal.records(task_id="task-finance-capability-dio", kind="observation")
+    assert any(record.data.get("source") == f"tool:{CALCULATOR_TOOL_NAME}" for record in observations)
+    trace = observations[-1].data["content"]["formula_trace"]
+    assert trace["formula_name"] == "dio"
+    assert set(trace["input_fact_ids"]) == {
+        "finfact-4254638f637a",
+        "finfact-9a157996131a",
+        "finfact-844cae959a62",
+    }
+    assert Decimal(trace["result_value"]).quantize(Decimal("0.01")) == Decimal("80.30")
+
+
 def test_retrieval_finalization_repairs_unsupported_finance_numbers_without_calculator_trace() -> None:
     journal = JournalStore.in_memory()
     runtime = _runtime_with_synthesizer(
@@ -6303,7 +10572,10 @@ def test_retrieval_finalization_repairs_unsupported_finance_numbers_without_calc
     evidence, citations = _sec_revenue_evidence(value="391035000000")
     recipe = task_recipe(
         "retrieval_answer",
-        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))},
+        metadata={
+            "execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "host_semantic_fallbacks": {"enabled": True},
+        },
     )
 
     final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
@@ -6517,6 +10789,7 @@ def test_retrieval_fallback_prefers_fact_ledger_and_suppresses_accession_numbers
         "retrieval_answer",
         metadata={
             **execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "host_semantic_fallbacks": {"enabled": True},
             "goal": "What was 3M's FY2018 capital expenditures in USD millions?",
         },
     )
@@ -6536,7 +10809,7 @@ def test_retrieval_fallback_prefers_fact_ledger_and_suppresses_accession_numbers
     assert "$9.1 billion" not in final.answer
     assert "000470" not in final.answer
     assert "1577" in final.answer
-    assert "已由证据账本支持的关键数值" in final.answer
+    assert "已由证据账本支持的关键数值" in final.answer or "已完成的确定性计算" in final.answer
     assert final.citation_refs == ["cite-mmm"]
     synthesis_gates = journal.records(task_id="task-mmm-capex", kind="synthesis_gate_result")
     assert synthesis_gates[0].data["status"] == "failed"
@@ -6666,7 +10939,7 @@ def test_finance_numeric_judge_semantic_pass_accepts_core_answer() -> None:
             "unsupported_core_values": [],
         }
     )
-    assert _finance_numeric_judge_accepts_answer(
+    assert not _finance_numeric_judge_accepts_answer(
         {
             "decision": "repair_answer",
             "answer_addresses_question": True,
@@ -6683,6 +10956,1356 @@ def test_finance_numeric_judge_semantic_pass_accepts_core_answer() -> None:
             "unsupported_core_values": ["unsupported revenue value"],
         }
     )
+
+
+def test_finance_numeric_judge_prompt_compacts_dynamic_context_for_cache() -> None:
+    question = "What was Apple FY2024 revenue?"
+    answer_text = "Apple FY2024 revenue was $999 billion. " + ("unsupported detail " * 700)
+    evidence = [
+        _finance_evidence(
+            evidence_id=f"evidence-{index}",
+            title=f"Apple filing row {index}",
+            uri=f"https://www.sec.gov/example/{index}",
+            text=(
+                "entityName=Apple ticker=AAPL metric=revenue unit=USD fy=2024 form=10-K "
+                "value=391035000000 " + ("long extracted filing text " * 80)
+            ),
+        )
+        for index in range(50)
+    ]
+    citations = [_finance_citation(item, citation_id=f"cite-{index}") for index, item in enumerate(evidence)]
+    facts = [
+        FinanceFact(
+            fact_id=f"fact-{index}",
+            entity="Apple Inc.",
+            ticker="AAPL",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="391035000000",
+            unit="USD",
+            scale="actual",
+            source_ref=f"source-{index}",
+            evidence_ref=f"evidence-{index % len(evidence)}",
+            citation_ref=f"cite-{index % len(citations)}",
+            metadata={
+                "form": "10-K",
+                "concept": "Revenues",
+                "label": "Revenue " + ("x" * 400),
+                "finance_metric_intent": {"score": 0.97, "matched_terms": ["revenue"]},
+            },
+        )
+        for index in range(90)
+    ]
+    verification = verify_finance_answer(
+        answer=answer_text,
+        facts=facts,
+        citations=citations,
+        evidence=evidence,
+        question=question,
+    )
+    final = FinalAnswer(
+        answer=answer_text,
+        citation_refs=["cite-0"],
+        used_evidence=["evidence-0"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-cache",
+        run_id="run-judge-cache",
+        trace_refs=[],
+    )
+
+    report = replace(
+        _retrieval_report(evidence=evidence, citations=citations),
+        diagnostics={
+            "finance_slot_bind_state": {
+                "decision": "ready",
+                "period_basis": [{"slot_name": "revenue", "fact_id": "fact-0", "selected_period": "FY2024"}],
+                "line_item_basis": [{"slot_name": "revenue", "fact_id": "fact-0", "selected_line_item": "Revenue"}],
+            }
+        },
+    )
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=report,
+        facts=facts,
+        formula_traces=[],
+        evidence=evidence,
+        citations=citations,
+        attempt="initial",
+    )
+    payload = json.loads(prompt)
+    packet = payload["judge_packet"]
+
+    assert prompt.index('"contract"') < prompt.index('"judge_packet"')
+    assert len(prompt) < 55000
+    assert packet["answer"]["truncated"] is True
+    assert packet["answer"]["text_chars"] == len(answer_text)
+    assert len(packet["answer"]["text"]) <= 6003
+    assert len(packet["finance_facts"]) == 48
+    assert len(packet["evidence"]) == 16
+    assert len(packet["citations"]) == 16
+    assert packet["finance_fact_count"] == len(facts)
+    assert "finance_metric_intent" not in packet["finance_facts"][0]["metadata"]
+    assert packet["finance_slot_bind_state"]["period_basis"][0]["selected_period"] == "FY2024"
+    assert packet["finance_slot_bind_state"]["line_item_basis"][0]["selected_line_item"] == "Revenue"
+
+
+def test_finance_numeric_judge_prompt_exposes_competing_fact_clusters() -> None:
+    question = "What was Chevron's total revenues for fiscal year 2024?"
+    facts = [
+        FinanceFact(
+            fact_id="generic-revenues",
+            entity="Chevron Corp",
+            ticker="CVX",
+            period="annual",
+            fiscal_year=2024,
+            metric="revenue",
+            value="202792000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-companyfacts",
+            evidence_ref="evidence-total-revenues",
+            citation_ref="cite-total-revenues",
+            metadata={"concept": "Revenues", "label": "Revenues", "form": "10-K", "fp": "FY"},
+        ),
+        FinanceFact(
+            fact_id="sales-other-operating",
+            entity="Chevron Corp",
+            ticker="CVX",
+            period="annual",
+            fiscal_year=2024,
+            metric="sales and other operating revenues",
+            value="193414000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-filing",
+            evidence_ref="evidence-sales-revenues",
+            citation_ref="cite-sales-revenues",
+            metadata={
+                "concept": "SalesAndOtherOperatingRevenue",
+                "label": "Sales and Other Operating Revenues",
+                "form": "10-K",
+                "fp": "FY",
+            },
+        ),
+    ]
+    final = FinalAnswer(
+        answer="Chevron FY2024 total revenues were $202.792 billion.",
+        citation_refs=["cite-total-revenues"],
+        used_evidence=["evidence-total-revenues"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-clusters",
+        run_id="run-judge-clusters",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(answer=final.answer, facts=facts, question=question)
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    packet = json.loads(prompt)["judge_packet"]
+    clusters = packet["competing_fact_clusters"]
+
+    assert clusters
+    assert packet["competing_fact_cluster_policy"]["semantic_decision_owner"] == "model"
+    assert clusters[0]["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert clusters[0]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["fact_id"] for item in clusters[0]["candidates"]] == ["generic-revenues", "sales-other-operating"]
+    assert [item["value"] for item in clusters[0]["candidates"]] == ["202792000000", "193414000000"]
+
+
+def test_finance_numeric_judge_prompt_exposes_metric_intent_hints_without_polluting_facts() -> None:
+    question = "What was Chevron's total revenues for fiscal year 2024?"
+    facts = [
+        FinanceFact(
+            fact_id="generic-revenues",
+            entity="Chevron Corp",
+            ticker="CVX",
+            period="annual",
+            fiscal_year=2024,
+            metric="revenue",
+            value="202792000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-companyfacts",
+            evidence_ref="evidence-total-revenues",
+            citation_ref="cite-total-revenues",
+            metadata={
+                "concept": "Revenues",
+                "label": "Revenues",
+                "form": "10-K",
+                "fp": "FY",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 2.5,
+                    "matched_preferred": ["metric=revenue"],
+                    "matched_demoted": [],
+                },
+            },
+        ),
+        FinanceFact(
+            fact_id="sales-other-operating",
+            entity="Chevron Corp",
+            ticker="CVX",
+            period="annual",
+            fiscal_year=2024,
+            metric="sales and other operating revenues",
+            value="193414000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-filing",
+            evidence_ref="evidence-sales-revenues",
+            citation_ref="cite-sales-revenues",
+            metadata={
+                "concept": "SalesAndOtherOperatingRevenue",
+                "label": "Sales and Other Operating Revenues",
+                "form": "10-K",
+                "fp": "FY",
+                "target_line_item": "total revenues",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 13.5,
+                    "matched_preferred": ["metric=sales and other operating revenues"],
+                    "matched_demoted": [],
+                },
+            },
+        ),
+    ]
+    final = FinalAnswer(
+        answer="Chevron FY2024 total revenues were $202.792 billion.",
+        citation_refs=["cite-total-revenues"],
+        used_evidence=["evidence-total-revenues"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-intent",
+        run_id="run-judge-intent",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(answer=final.answer, facts=facts, question=question)
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    payload = json.loads(prompt)
+    packet = payload["judge_packet"]
+
+    assert "metric_intent_hints" in payload["contract"]
+    assert packet["metric_intent_hint_policy"]["semantic_decision_owner"] == "model"
+    assert packet["metric_intent_hint_policy"]["host_role"] == "weak_attention_hint_carrier_only"
+    assert packet["metric_intent_hint_policy"]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["fact_id"] for item in packet["metric_intent_hints"]] == ["generic-revenues", "sales-other-operating"]
+    assert [item["value"] for item in packet["metric_intent_hints"]] == ["202792000000", "193414000000"]
+    assert packet["metric_intent_hints"][1]["target_line_item"] == "total revenues"
+    assert packet["metric_intent_hints"][1]["intent"]["matched_preferred"] == [
+        "metric=sales and other operating revenues"
+    ]
+    assert "finance_metric_intent" not in packet["finance_facts"][0]["metadata"]
+    assert "finance_metric_intent" not in packet["finance_facts"][1]["metadata"]
+
+
+def test_finance_numeric_judge_prompt_exposes_question_numeric_premise_hints() -> None:
+    question = "ExampleCo FY2024 revenue was $999 billion; what was the actual filing revenue?"
+    facts = [
+        FinanceFact(
+            fact_id="example-revenue",
+            entity="ExampleCo",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="193414000000",
+            unit="USD",
+            scale=None,
+            source_ref="sec-filing",
+            evidence_ref="evidence-revenue",
+            citation_ref="cite-revenue",
+            metadata={"concept": "Revenues", "label": "Revenues", "form": "10-K", "fp": "FY"},
+        )
+    ]
+    final = FinalAnswer(
+        answer="ExampleCo FY2024 filing revenue was $193.414 billion.",
+        citation_refs=["cite-revenue"],
+        used_evidence=["evidence-revenue"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-premise",
+        run_id="run-judge-premise",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(answer=final.answer, facts=facts, question=question)
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    payload = json.loads(prompt)
+    packet = payload["judge_packet"]
+    hints = packet["question_numeric_premise_hints"]
+
+    assert "question_numeric_premise_hints" in payload["contract"]
+    assert packet["question_numeric_premise_hint_policy"]["semantic_decision_owner"] == "model"
+    assert hints[0]["raw"] == "$999 billion"
+    assert hints[0]["relation_to_supported_values"] == "different_from_supported_values"
+    assert hints[0]["closest_supported_value"]["value"] == "193.414"
+    assert hints[0]["closest_supported_value"]["unit"] == "billion"
+    assert hints[0]["closest_supported_value"]["ref"] == "example-revenue"
+
+
+def test_finance_numeric_judge_prompt_exposes_unit_mismatch_examples() -> None:
+    question = "What was Example Co FY2024 revenue?"
+    facts = [
+        FinanceFact(
+            fact_id="fact-revenue",
+            entity="Example Co",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="10",
+            unit="USD",
+            scale=None,
+            source_ref="src-1",
+            evidence_ref="ev-1",
+            citation_ref="cite-1",
+            metadata={},
+        )
+    ]
+    final = FinalAnswer(
+        answer="Example Co FY2024 revenue was 10%.",
+        citation_refs=["cite-1"],
+        used_evidence=["ev-1"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-unit",
+        run_id="run-judge-unit",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(answer=final.answer, facts=facts, question=question)
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    verifier = json.loads(prompt)["judge_packet"]["host_verifier_diagnostics"]
+
+    assert verifier["status"] == "failed"
+    assert verifier["unit_mismatches"][0]["value"]["raw"] == "10%"
+    assert verifier["unit_mismatch_examples"] == [
+        {
+            "raw": "10%",
+            "value": "10",
+            "unit": "percent",
+            "support_units": ["usd"],
+            "support_kinds": ["finance_fact"],
+            "support_refs": ["fact-revenue"],
+        }
+    ]
+    assert "unit or scale wording" in " ".join(verifier["repair_options"])
+    assert "model still owns semantic repair" in verifier["host_boundary"]
+
+
+def test_finance_numeric_judge_prompt_exposes_primary_source_binding_diagnostics() -> None:
+    question = "What was Example Co FY2024 revenue from the 2024 10-K?"
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "Example Co",
+            "doc_link": "https://www.sec.gov/Archives/example/example-2024-10k.htm",
+            "doc_period": "2024",
+            "doc_type": "10-K",
+            "required_statement": "income_statement",
+            "required_line_item": "revenue",
+            "primary_source_required": True,
+        }
+    )
+    facts = [
+        FinanceFact(
+            fact_id="secondary-revenue",
+            entity="Example Co",
+            ticker="EXM",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="10",
+            unit="USD",
+            scale=None,
+            source_ref="secondary",
+            evidence_ref="ev-secondary",
+            citation_ref="cite-secondary",
+            metadata={
+                "source_uri": "https://stockanalysis.com/stocks/exm/financials/",
+                "source_title": "Example Co Financials - StockAnalysis",
+                "context": "Revenue 10",
+            },
+        )
+    ]
+    final = FinalAnswer(
+        answer="Example Co FY2024 revenue was $10.",
+        citation_refs=["cite-secondary"],
+        used_evidence=["ev-secondary"],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-binding",
+        run_id="run-judge-binding",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(
+        answer=final.answer,
+        facts=facts,
+        question=question,
+        target_binding=binding,
+    )
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    verifier = json.loads(prompt)["judge_packet"]["host_verifier_diagnostics"]
+
+    assert verifier["status"] == "failed"
+    assert "primary_source_numeric_binding_failed" in [item["code"] for item in verifier["issues"]]
+    assert verifier["target_document_binding"]["required_line_item"] == "revenue"
+    assert verifier["target_document_binding"]["doc_period"] == "2024"
+    binding_state = verifier["primary_source_numeric_binding"]
+    assert binding_state["status"] == "no_binding_match"
+    assert binding_state["selected_fact_ids"] == []
+    assert binding_state["rejected_count"] == 1
+    assert binding_state["rejected_candidates"][0]["fact_id"] == "secondary-revenue"
+    assert binding_state["rejected_candidates"][0]["source_uri"] == "https://stockanalysis.com/stocks/exm/financials/"
+    assert binding_state["binding"]["doc_link"] == "https://www.sec.gov/Archives/example/example-2024-10k.htm"
+
+
+def test_finance_numeric_judge_prompt_preserves_capital_intensity_roa_trace_context() -> None:
+    question = "Is 3M a capital-intensive business based on FY2022 data?"
+    answer_text = "3M does not appear capital-intensive: CapEx/revenue was 5.1%."
+    facts = [
+        _year_fact("net income", "4250000000", 2022, fact_id="finfact-net-income"),
+        _year_fact("total assets", "34164000000", 2022, fact_id="finfact-assets"),
+    ]
+    trace = FormulaTrace(
+        formula_id="formula-slot-roa",
+        formula_name="capital_intensity_return_on_assets",
+        expression="net_income / assets",
+        input_fact_ids=["finfact-net-income", "finfact-assets"],
+        result_value="0.1244",
+        unit="percent",
+        diagnostics={
+            "source": "finance_slot_bind_model",
+            "formatted_value": "12.44%",
+            "method": "roa",
+            "output_attribute": "return_on_assets",
+        },
+    )
+    final = FinalAnswer(
+        answer=answer_text,
+        citation_refs=[],
+        used_evidence=[],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-roa",
+        run_id="run-judge-roa",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(
+        answer=answer_text,
+        facts=facts,
+        formula_traces=[trace],
+        question=question,
+    )
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[trace],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    packet = json.loads(prompt)["judge_packet"]
+
+    assert packet["formula_trace_synthesis_policy"]["task_family"] == "capital_intensity_assessment"
+    assert "return_on_assets" in packet["formula_trace_synthesis_policy"]["available_lenses"]
+    assert "roa_preservation_instruction" in packet["formula_trace_synthesis_policy"]
+    assert "generic industry thresholds" in packet["formula_trace_synthesis_policy"]["unsupported_comparison_number_policy"]
+    assert packet["formula_traces"][0]["formatted_value"] == "12.44%"
+    assert packet["formula_traces"][0]["diagnostics"]["output_attribute"] == "return_on_assets"
+    support = packet["formula_trace_support"][0]
+    assert support["formula_id"] == "formula-slot-roa"
+    assert support["support_status"] == "linked_to_fact_ledger"
+    assert support["citation_refs"] == ["cite-finfact-net-income", "cite-finfact-assets"]
+    assert [item["fact_id"] for item in support["input_facts"]] == ["finfact-net-income", "finfact-assets"]
+
+
+def test_finance_numeric_judge_prompt_exposes_model_trace_context_for_assumption_judgment() -> None:
+    question = (
+        "Using a discounted cash flow analysis for CRM, forecast 5 years, cash flow growth 4%, "
+        "discount rate 9%, and terminal growth 2%."
+    )
+    trace = FormulaTrace(
+        formula_id="formula-dcf-crm",
+        formula_name="dcf",
+        expression="discounted projected free cash flow plus terminal value",
+        input_fact_ids=["finfact-ocf", "finfact-capex"],
+        result_value="123000000000",
+        unit="USD",
+        diagnostics={
+            "source": "finance_slot_bind_model",
+            "formatted_value": "$123.0 billion",
+            "modeling_workflow": "discounted_cash_flow",
+            "assumption_source": "question_or_host_modeling_policy",
+            "assumptions": {
+                "growth_rate": "0.04",
+                "discount_rate": "0.09",
+                "terminal_growth_rate": "0.02",
+                "forecast_years": 5,
+            },
+            "defaulted_assumptions": ["terminal_growth_rate"],
+            "model_outputs": {
+                "enterprise_value": "123000000000",
+                "equity_value": "114000000000",
+                "projection": [
+                    {"year": 1, "free_cash_flow": "9900000000"},
+                    {"year": 2, "free_cash_flow": "10296000000"},
+                    {"year": 3, "free_cash_flow": "10707840000"},
+                    {"year": 4, "free_cash_flow": "11136153600"},
+                ],
+            },
+        },
+    )
+    final = FinalAnswer(
+        answer="CRM DCF enterprise value is $123.0 billion.",
+        citation_refs=[],
+        used_evidence=[],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-dcf",
+        run_id="run-judge-dcf",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(
+        answer=final.answer,
+        facts=[],
+        formula_traces=[trace],
+        question=question,
+    )
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=[],
+        formula_traces=[trace],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    payload = json.loads(prompt)
+    packet = payload["judge_packet"]
+    compact_trace = packet["formula_traces"][0]
+    support = packet["formula_trace_support"][0]
+
+    assert packet["formula_trace_synthesis_policy"]["task_family"] == "finance_modeling_or_derived_metric"
+    assert "model_context" in compact_trace
+    assert compact_trace["model_context"]["assumptions"]["growth_rate"] == "0.04"
+    assert compact_trace["model_context"]["defaulted_assumptions"] == ["terminal_growth_rate"]
+    assert compact_trace["model_context"]["model_outputs"]["enterprise_value"] == "123000000000"
+    assert compact_trace["model_context"]["model_outputs"]["projection_summary"]["row_count"] == 4
+    assert support["support_status"] == "trace_only"
+    assert support["model_context"]["model_outputs"]["equity_value"] == "114000000000"
+    assert "model_context" in payload["contract"]
+
+
+def test_finance_numeric_judge_prompt_exposes_debt_to_equity_line_item_semantics() -> None:
+    question = "What was JPMorgan Chase's debt-to-equity ratio as of year-end 2024?"
+    facts = [
+        _year_fact(
+            "liabilities",
+            "3658056000000",
+            2024,
+            fact_id="jpm-liabilities",
+            metadata={"label": "Total liabilities", "concept": "Liabilities"},
+        ),
+        _year_fact(
+            "shareholders equity",
+            "344758000000",
+            2024,
+            fact_id="jpm-equity",
+            metadata={"label": "Total stockholders' equity", "concept": "StockholdersEquity"},
+        ),
+    ]
+    plan = plan_finance_formula(question=question, facts=facts)
+    assert plan.status == "ready"
+    assert plan.payload is not None
+    trace = compute_formula(**plan.payload)
+    final = FinalAnswer(
+        answer="JPMorgan Chase's year-end 2024 debt-to-equity ratio was 10.61x.",
+        citation_refs=[],
+        used_evidence=[],
+        limitations=[],
+        confidence=0.7,
+        task_id="task-judge-debt-equity",
+        run_id="run-judge-debt-equity",
+        trace_refs=[],
+    )
+    verification = verify_finance_answer(
+        answer=final.answer,
+        facts=facts,
+        formula_traces=[trace],
+        question=question,
+    )
+
+    prompt = _finance_numeric_judge_prompt(
+        question=question,
+        answer=final,
+        verification=verification,
+        report=_retrieval_report(evidence=[], citations=[]),
+        facts=facts,
+        formula_traces=[trace],
+        evidence=[],
+        citations=[],
+        attempt="initial",
+    )
+    diagnostics = json.loads(prompt)["judge_packet"]["formula_traces"][0]["diagnostics"]
+
+    assert diagnostics["formula_definition"] == "selected balance-sheet numerator divided by shareholders' equity"
+    assert diagnostics["numerator_slot"] == "total_liabilities"
+    assert diagnostics["denominator_slot"] == "shareholders_equity"
+    assert diagnostics["bound_line_items"]["numerator"]["label"] == "Total liabilities"
+    assert diagnostics["bound_line_items"]["denominator"]["label"] == "Total stockholders' equity"
+    assert "do not silently present it as debt-only" in diagnostics["answer_wording_policy"]
+
+
+def test_finance_slot_bind_prompt_exposes_raw_fields_not_host_period_labels() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="fact-q",
+            entity="Retailer",
+            ticker="RTL",
+            period="quarterly",
+            fiscal_year=2024,
+            metric="inventory",
+            value="230",
+            unit="USD",
+            scale="actual",
+            source_ref="source-q",
+            evidence_ref="evidence-q",
+            citation_ref="cite-q",
+            metadata={
+                "form": "10-Q",
+                "fp": "Q2",
+                "start": "2024-04-29",
+                "end": "2024-07-28",
+                "frame": "CY2024Q2I",
+                "duration_days": 90,
+                "concept": "InventoryNet",
+                "context": "Condensed source row: inventory values appear in the quarterly balance sheet.",
+                "line_item": "inventories",
+                "raw": "Inventories, net 230",
+                "raw_metric": "Inventories, net",
+                "row_marker": "Inventories, net",
+                "source": "html_table_fact",
+                "statement": "balance_sheet",
+                "target_document_binding_accepted": True,
+                "target_document_binding_reasons": ["target_document_match", "target_period_match"],
+                "target_document_binding_score": 130,
+                "finance_metric_intent": {"score": 99},
+                "finance_question_period_scope": "annual",
+            },
+        ),
+        FinanceFact(
+            fact_id="fact-a",
+            entity="Retailer",
+            ticker="RTL",
+            period="annual",
+            fiscal_year=2024,
+            metric="inventory",
+            value="500",
+            unit="USD",
+            scale="actual",
+            source_ref="source-a",
+            evidence_ref="evidence-a",
+            citation_ref="cite-a",
+            metadata={"form": "10-K", "fp": "FY", "duration_days": 365},
+        ),
+    ]
+    prompt = _finance_slot_bind_prompt(
+        question="Calculate FY2024 DIO.",
+        facts=facts,
+        compiled_program={
+            "program_id": "program-1",
+            "task_spec": {"task_type": "compare_compute", "objective": "Calculate DIO"},
+            "evidence_specs": [
+                {
+                    "slot_name": "inventory_begin",
+                    "line_item": "inventories",
+                    "statement": "balance_sheet",
+                    "target_period": "FY2023 ending balance",
+                }
+            ],
+            "transform_specs": [
+                {
+                    "name": "dio",
+                    "expression": "(inventory_begin + inventory_end) / 2 / cogs * fiscal_days",
+                    "required_slots": ["inventory_begin", "inventory_end", "cogs"],
+                    "output_unit": "days",
+                }
+            ],
+            "slot_frame": {"required_slots": [{"name": "inventory_begin"}, {"name": "inventory_end"}]},
+        },
+    )
+    payload = json.loads(prompt)
+    raw_fact = payload["slot_bind_packet"]["raw_facts"][0]
+
+    assert prompt.index('"contract"') < prompt.index('"slot_bind_packet"')
+    assert "metric, period, and scale labels as noisy hints" in payload["contract"]
+    assert "finance_metric_intent_hints" in payload["contract"]
+    assert "identity formula_request" in payload["contract"]
+    assert "cash-flow outflows shown in parentheses" in payload["contract"]
+    assert "Do not confuse cash-flow purchases" in payload["contract"]
+    assert "requested financial statement" in payload["contract"]
+    assert "directly states the requested metric and amount" in payload["contract"]
+    assert "segment, regional, product-line, proxy" in payload["contract"]
+    assert "page number, table-of-contents number" in payload["contract"]
+    assert "target_document_binding_accepted=true" in payload["contract"]
+    assert "later-filed restatement" in payload["contract"]
+    assert "For revenue/net sales slots" in payload["contract"]
+    assert "competing_fact_clusters" in payload["contract"]
+    assert prompt.index('"raw_facts"') < prompt.index('"question"')
+    assert prompt.index('"raw_facts"') < prompt.index('"compiled_program"')
+    assert [item["fact_id"] for item in payload["slot_bind_packet"]["raw_facts"]] == ["fact-q", "fact-a"]
+    clusters = payload["slot_bind_packet"]["competing_fact_clusters"]
+    assert clusters
+    cluster = clusters[0]
+    assert cluster["metric_family_hint"] == "inventory"
+    assert cluster["host_role"] == "attention_grouping_only_no_semantic_preference"
+    assert cluster["candidate_ordering"] == "source_order_from_raw_facts"
+    assert [item["fact_id"] for item in cluster["candidates"]] == ["fact-q", "fact-a"]
+    assert cluster["candidates"][0]["raw_fields"]["form"] == "10-Q"
+    assert cluster["candidates"][1]["raw_fields"]["form"] == "10-K"
+    metric_hints = payload["slot_bind_packet"]["finance_metric_intent_hints"]
+    assert payload["slot_bind_packet"]["finance_metric_intent_hint_policy"]["semantic_decision_owner"] == "model"
+    assert payload["slot_bind_packet"]["finance_metric_intent_hint_policy"]["host_role"] == "weak_attention_hint_carrier_only"
+    assert payload["slot_bind_packet"]["finance_metric_intent_hint_policy"]["candidate_ordering"] == "source_order_from_raw_facts"
+    assert metric_hints[0]["fact_id"] == "fact-q"
+    assert metric_hints[0]["intent"]["score"] == 99
+    assert raw_fact["raw_fields"]["form"] == "10-Q"
+    assert raw_fact["raw_fields"]["fp"] == "Q2"
+    assert raw_fact["raw_fields"]["duration_days"] == 90
+    assert "quarterly balance sheet" in raw_fact["raw_fields"]["context"]
+    assert raw_fact["raw_fields"]["raw"] == "Inventories, net 230"
+    assert raw_fact["raw_fields"]["raw_metric"] == "Inventories, net"
+    assert raw_fact["raw_fields"]["row_marker"] == "Inventories, net"
+    assert raw_fact["raw_fields"]["source"] == "html_table_fact"
+    assert raw_fact["raw_fields"]["statement"] == "balance_sheet"
+    assert raw_fact["raw_fields"]["target_document_binding_accepted"] is True
+    assert raw_fact["raw_fields"]["target_document_binding_score"] == 130
+    requirements = payload["slot_bind_packet"]["slot_requirements"]
+    begin_requirement = next(item for item in requirements if item["slot_name"] == "inventory_begin")
+    assert begin_requirement["evidence_specs"][0]["line_item"] == "inventories"
+    assert begin_requirement["transform_consumers"][0]["name"] == "dio"
+    assert "period_scope" not in json.dumps(raw_fact, ensure_ascii=False)
+    assert "finance_metric_intent" not in json.dumps(raw_fact, ensure_ascii=False)
+    assert "finance_question_period_scope" not in json.dumps(raw_fact, ensure_ascii=False)
+
+
+def test_finance_fact_ledger_carries_span_metric_intent_as_diagnostic_metadata() -> None:
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-sales-other",
+            text=(
+                "entityName=Chevron Corp ticker=CVX fy=2024 period=annual "
+                "metric=sales and other operating revenues concept=SalesAndOtherOperatingRevenue "
+                "value=193414000000 unit=USD"
+            ),
+            title="Chevron 2024 SEC companyfacts",
+        )
+    ]
+    evidence[0].diagnostics.update(
+        {
+            "span_metadata": {
+                "target_line_item": "total revenues",
+                "target_slot": "revenue",
+                "finance_metric_intent": {
+                    "active": True,
+                    "metric_family": "revenue",
+                    "score": 13.5,
+                    "matched_preferred": ["metric=sales and other operating revenues"],
+                    "matched_demoted": [],
+                },
+            }
+        }
+    )
+    citations = [_finance_citation(evidence[0], citation_id="cite-sales-other")]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+
+    assert facts
+    fact = facts[0]
+    assert fact.metadata["target_line_item"] == "total revenues"
+    assert fact.metadata["target_slot"] == "revenue"
+    assert fact.metadata["finance_metric_intent"]["metric_family"] == "revenue"
+    assert fact.metadata["finance_metric_intent"]["matched_preferred"] == ["metric=sales and other operating revenues"]
+
+
+def test_model_compiled_program_authorizes_numeric_preflight_for_direct_filing_lookup() -> None:
+    program = {
+        "source": "task_compile_model",
+        "task_spec": {
+            "domain": "finance",
+            "task_type": "filing_metric_lookup",
+            "objective": "Look up a filing line item.",
+        },
+        "evidence_specs": [
+            {
+                "slot_name": "capital_expenditures",
+                "line_item": "capital expenditures",
+                "statement": "cash_flow_statement",
+            }
+        ],
+        "transform_specs": [],
+        "slot_frame": {"required_slots": [{"name": "capital_expenditures"}]},
+        "diagnostics": {
+            "source": "task_compile_model",
+            "tool_chain_plan": {
+                "recommended_steps": [{"tool": "retrieval.run"}],
+                "decision_owner": "model",
+            },
+        },
+    }
+
+    assert _model_compiled_program_authorizes_numeric_preflight(program) is True
+
+
+def test_model_compiled_program_does_not_authorize_empty_direct_program() -> None:
+    program = {
+        "source": "task_compile_model",
+        "task_spec": {"domain": "finance", "task_type": "general_research"},
+        "evidence_specs": [],
+        "transform_specs": [],
+        "slot_frame": {"required_slots": []},
+        "diagnostics": {"source": "task_compile_model"},
+    }
+
+    assert _model_compiled_program_authorizes_numeric_preflight(program) is False
+
+
+def test_finance_slot_bind_prompt_keeps_late_large_ledger_candidates_visible() -> None:
+    facts: list[FinanceFact] = []
+    special_index = 210
+    for index in range(320):
+        metric = "capital expenditures" if index == special_index else "revenue"
+        facts.append(
+            FinanceFact(
+                fact_id=f"fact-{index}",
+                entity="3M",
+                ticker="MMM",
+                period="2018",
+                fiscal_year=2018,
+                metric=metric,
+                value="-1577" if index == special_index else str(index),
+                unit="USD",
+                scale="actual",
+                source_ref=f"source-{index}",
+                evidence_ref=f"evidence-{index}",
+                citation_ref=f"cite-{index}",
+                metadata={
+                    "context": "Statement of cash flows row: Purchases of property, plant and equipment 1,577"
+                    if index == special_index
+                    else "Other filing table row",
+                    "raw": "Purchases of property, plant and equipment (1,577)"
+                    if index == special_index
+                    else f"Revenue {index}",
+                    "target_document_binding_accepted": index == special_index,
+                    "source_uri": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+                },
+            )
+        )
+
+    prompt = _finance_slot_bind_prompt(
+        question="What is the FY2018 capital expenditure amount for 3M?",
+        facts=facts,
+        compiled_program={
+            "program_id": "program-capex",
+            "task_spec": {"task_type": "filing_metric_lookup", "objective": "Find FY2018 capital expenditures"},
+            "evidence_specs": [{"slot_name": "capital_expenditures", "line_item": "capital expenditures"}],
+            "slot_frame": {"required_slots": [{"name": "capital_expenditures"}]},
+        },
+    )
+    payload = json.loads(prompt)
+    raw_facts = payload["slot_bind_packet"]["raw_facts"]
+
+    assert payload["slot_bind_packet"]["raw_fact_count"] == 320
+    assert any(item["fact_id"] == f"fact-{special_index}" for item in raw_facts)
+    late = next(item for item in raw_facts if item["fact_id"] == f"fact-{special_index}")
+    assert late["metric"] == "capital expenditures"
+    assert late["value"] == "-1577"
+    assert "Purchases of property" in late["raw_fields"]["context"]
+    assert late["raw_fields"]["target_document_binding_accepted"] is True
+
+
+def test_finance_slot_bind_plans_use_model_selected_fact_ids_only() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="fact-inv-begin",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2023 end",
+            fiscal_year=2024,
+            metric="inventory",
+            value="200",
+            unit="USD",
+            scale="actual",
+            source_ref="source-1",
+            evidence_ref="evidence-1",
+            citation_ref="cite-1",
+            metadata={"form": "10-K", "fp": "FY", "end": "2024-01-28"},
+        ),
+        FinanceFact(
+            fact_id="fact-inv-end",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2024 end",
+            fiscal_year=2025,
+            metric="inventory",
+            value="240",
+            unit="USD",
+            scale="actual",
+            source_ref="source-2",
+            evidence_ref="evidence-2",
+            citation_ref="cite-2",
+            metadata={"form": "10-K", "fp": "FY", "end": "2025-02-02"},
+        ),
+        FinanceFact(
+            fact_id="fact-cogs",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2024",
+            fiscal_year=2025,
+            metric="cost of revenue",
+            value="1000",
+            unit="USD",
+            scale="actual",
+            source_ref="source-3",
+            evidence_ref="evidence-3",
+            citation_ref="cite-3",
+            metadata={"form": "10-K", "fp": "FY", "start": "2024-01-29", "end": "2025-02-02"},
+        ),
+    ]
+    parsed = {
+        "decision": "ready",
+        "slot_bindings": [
+            {"slot_name": "inventory_begin", "variable_name": "inventory_begin", "fact_id": "fact-inv-begin"},
+            {"slot_name": "inventory_end", "variable_name": "inventory_end", "fact_id": "fact-inv-end"},
+            {"slot_name": "cogs", "variable_name": "cogs", "fact_id": "fact-cogs"},
+        ],
+        "formula_requests": [
+            {
+                "formula_name": "dio:RTL",
+                "expression": "(inventory_begin + inventory_end) / 2 / cogs * fiscal_days",
+                "variables": {
+                    "inventory_begin": {"fact_id": "fact-inv-begin"},
+                    "inventory_end": {"fact_id": "fact-inv-end"},
+                    "cogs": {"fact_id": "fact-cogs"},
+                    "fiscal_days": 365,
+                },
+                "unit": "days",
+            }
+        ],
+        "reason_summary": "Model selected the fiscal-year inventory and COGS facts.",
+    }
+
+    plans, rejected = _finance_slot_bind_plans_from_model(parsed, facts=facts, ledger_ref="ledger-1")
+
+    assert rejected == []
+    assert len(plans) == 1
+    assert plans[0].payload is not None
+    assert plans[0].payload["variables"] == {
+        "inventory_begin": "200",
+        "inventory_end": "240",
+        "cogs": "1000",
+        "fiscal_days": 365,
+    }
+    assert plans[0].payload["input_fact_ids"] == ["fact-inv-begin", "fact-inv-end", "fact-cogs"]
+
+
+def test_finance_slot_bind_plans_preserve_model_period_and_line_item_basis() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="fact-fy-revenue",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2024",
+            fiscal_year=2024,
+            metric="revenue",
+            value="1200",
+            unit="USD",
+            scale="actual",
+            source_ref="source-1",
+            evidence_ref="evidence-1",
+            citation_ref="cite-1",
+            metadata={"form": "10-K", "fp": "FY", "start": "2024-02-01", "end": "2025-01-31"},
+        )
+    ]
+    parsed = {
+        "decision": "ready",
+        "slot_bindings": [
+            {"slot_name": "revenue", "variable_name": "revenue", "fact_id": "fact-fy-revenue"},
+        ],
+        "formula_requests": [
+            {
+                "formula_name": "revenue",
+                "expression": "revenue",
+                "variables": {"revenue": {"fact_id": "fact-fy-revenue"}},
+                "unit": "USD",
+            }
+        ],
+        "period_basis": [
+            {
+                "slot_name": "revenue",
+                "fact_id": "fact-fy-revenue",
+                "selected_period": "FY2024",
+                "raw_fields_used": ["form", "fp", "start", "end"],
+                "reason": "10-K FY duration matches requested fiscal year.",
+            }
+        ],
+        "line_item_basis": [
+            {
+                "slot_name": "revenue",
+                "fact_id": "fact-fy-revenue",
+                "selected_line_item": "Revenue",
+                "raw_fields_used": ["concept", "label"],
+                "reason": "Revenue concept directly matches requested line item.",
+            }
+        ],
+        "reason_summary": "Model selected the FY revenue line using SEC period and line-item fields.",
+    }
+
+    plans, rejected = _finance_slot_bind_plans_from_model(parsed, facts=facts, ledger_ref="ledger-1")
+
+    assert rejected == []
+    assert len(plans) == 1
+    assert plans[0].payload is not None
+    diagnostics = plans[0].payload["diagnostics"]
+    assert diagnostics["model_period_basis"][0]["selected_period"] == "FY2024"
+    assert diagnostics["model_line_item_basis"][0]["selected_line_item"] == "Revenue"
+    assert plans[0].diagnostics["model_period_basis"] == diagnostics["model_period_basis"]
+
+
+def test_finance_slot_bind_plans_accept_model_selected_imperfect_metric_identity_formula() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="fact-capex-row",
+            entity="3M",
+            ticker="MMM",
+            period="FY2018",
+            fiscal_year=2018,
+            metric="property plant and equipment net",
+            value="1577",
+            unit="USD",
+            scale="actual",
+            source_ref="source-1",
+            evidence_ref="evidence-1",
+            citation_ref="cite-1",
+            metadata={
+                "context": "Statement of cash flows row: Purchases of property, plant and equipment 1,577",
+                "raw": "Purchases of property, plant and equipment (1,577)",
+            },
+        )
+    ]
+    parsed = {
+        "decision": "ready",
+        "slot_bindings": [
+            {
+                "slot_name": "capital_expenditures",
+                "variable_name": "capex_millions",
+                "fact_id": "fact-capex-row",
+                "reason": "Raw cash-flow row matches capex despite noisy metric label.",
+            }
+        ],
+        "formula_requests": [
+            {
+                "formula_name": "capital_expenditures_millions",
+                "expression": "capex_millions",
+                "variables": {"capex_millions": "capital_expenditures"},
+                "unit": "USD millions",
+            }
+        ],
+        "reason_summary": "Model used raw row/context and requested identity formula trace.",
+    }
+
+    plans, rejected = _finance_slot_bind_plans_from_model(parsed, facts=facts, ledger_ref="ledger-1")
+
+    assert rejected == []
+    assert len(plans) == 1
+    assert plans[0].payload is not None
+    assert plans[0].payload["expression"] == "capex_millions"
+    assert plans[0].payload["variables"] == {"capex_millions": "1577"}
+    assert plans[0].payload["input_fact_ids"] == ["fact-capex-row"]
+
+
+def test_finance_slot_bind_plans_accept_formula_refs_for_chained_calculator() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="fact-inv-begin",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2023 end",
+            fiscal_year=2024,
+            metric="inventory",
+            value="200",
+            unit="USD",
+            scale="actual",
+            source_ref="source-1",
+            evidence_ref="evidence-1",
+            citation_ref="cite-1",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="fact-inv-end",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2024 end",
+            fiscal_year=2025,
+            metric="inventory",
+            value="240",
+            unit="USD",
+            scale="actual",
+            source_ref="source-2",
+            evidence_ref="evidence-2",
+            citation_ref="cite-2",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="fact-cogs",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2024",
+            fiscal_year=2025,
+            metric="cost of revenue",
+            value="1000",
+            unit="USD",
+            scale="actual",
+            source_ref="source-3",
+            evidence_ref="evidence-3",
+            citation_ref="cite-3",
+            metadata={},
+        ),
+    ]
+    parsed = {
+        "decision": "ready",
+        "slot_bindings": [
+            {"slot_name": "inventory_begin", "variable_name": "inventory_begin", "fact_id": "fact-inv-begin"},
+            {"slot_name": "inventory_end", "variable_name": "inventory_end", "fact_id": "fact-inv-end"},
+            {"slot_name": "cogs", "variable_name": "cogs", "fact_id": "fact-cogs"},
+        ],
+        "formula_requests": [
+            {
+                "formula_name": "average_inventory",
+                "expression": "(inventory_begin + inventory_end) / 2",
+                "variables": {
+                    "inventory_begin": {"fact_id": "fact-inv-begin"},
+                    "inventory_end": {"fact_id": "fact-inv-end"},
+                },
+                "unit": "USD",
+            },
+            {
+                "formula_name": "dio",
+                "expression": "average_inventory / cogs * fiscal_days",
+                "variables": {
+                    "average_inventory": {"formula_ref": "average_inventory"},
+                    "cogs": {"fact_id": "fact-cogs"},
+                    "fiscal_days": 365,
+                },
+                "unit": "days",
+            },
+        ],
+        "reason_summary": "Model requested chained calculator formulas.",
+    }
+
+    plans, rejected = _finance_slot_bind_plans_from_model(parsed, facts=facts, ledger_ref="ledger-1")
+
+    assert rejected == []
+    assert len(plans) == 2
+    assert plans[1].payload is not None
+    assert plans[1].payload["variables"]["average_inventory"] == {"__formula_ref__": "average_inventory"}
+    assert plans[1].payload["input_fact_ids"] == ["fact-cogs"]
+
+
+def test_model_finance_slot_bind_repairs_malformed_json_without_host_semantic_binding() -> None:
+    journal = JournalStore.in_memory()
+    repaired_response = {
+        "decision": "ready",
+        "slot_bindings": [
+            {"slot_name": "inventory_begin", "variable_name": "inventory_begin", "fact_id": "fact-inv-begin"},
+            {"slot_name": "inventory_end", "variable_name": "inventory_end", "fact_id": "fact-inv-end"},
+            {"slot_name": "cogs", "variable_name": "cogs", "fact_id": "fact-cogs"},
+        ],
+        "formula_requests": [
+            {
+                "formula_name": "dio",
+                "expression": "(inventory_begin + inventory_end) / 2 / cogs * fiscal_days",
+                "variables": {
+                    "inventory_begin": {"fact_id": "fact-inv-begin"},
+                    "inventory_end": {"fact_id": "fact-inv-end"},
+                    "cogs": {"fact_id": "fact-cogs"},
+                    "fiscal_days": 365,
+                },
+                "unit": "days",
+            }
+        ],
+        "missing_slots": [],
+        "reason_summary": "Model repaired its JSON and kept fact-id bindings.",
+    }
+    provider = MalformedThenTaskJsonProvider("finance.slot_bind", repaired_response)
+    fabric = ProcessorFabric(
+        providers={"fake_repair": provider},
+        router=ProcessorRouter(default_provider="fake_repair", default_model="fake-repair"),
+        journal=journal,
+    )
+    runtime = AgentRuntime(journal=journal, processor_fabric=fabric)
+    facts = [
+        FinanceFact(
+            fact_id="fact-inv-begin",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2023 end",
+            fiscal_year=2024,
+            metric="inventory",
+            value="200",
+            unit="USD",
+            scale="actual",
+            source_ref="source-1",
+            evidence_ref="evidence-1",
+            citation_ref="cite-1",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="fact-inv-end",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2024 end",
+            fiscal_year=2025,
+            metric="inventory",
+            value="240",
+            unit="USD",
+            scale="actual",
+            source_ref="source-2",
+            evidence_ref="evidence-2",
+            citation_ref="cite-2",
+            metadata={},
+        ),
+        FinanceFact(
+            fact_id="fact-cogs",
+            entity="Retailer",
+            ticker="RTL",
+            period="FY2024",
+            fiscal_year=2025,
+            metric="cost of revenue",
+            value="1000",
+            unit="USD",
+            scale="actual",
+            source_ref="source-3",
+            evidence_ref="evidence-3",
+            citation_ref="cite-3",
+            metadata={},
+        ),
+    ]
+    compiled_program = {
+        "program_id": "program-1",
+        "source": "task_compile_model",
+        "task_spec": {"task_type": "compute", "objective": "Calculate FY2024 DIO."},
+        "evidence_specs": [],
+        "transform_specs": [
+            {
+                "name": "dio",
+                "required_slots": ["inventory_begin", "inventory_end", "cogs", "fiscal_days"],
+                "expression": "(inventory_begin + inventory_end) / 2 / cogs * fiscal_days",
+            }
+        ],
+        "slot_frame": {"required_slots": [{"name": "inventory_begin"}, {"name": "inventory_end"}, {"name": "cogs"}]},
+    }
+
+    plans = runtime._model_finance_slot_bind_plans(  # noqa: SLF001
+        "task-slot-repair",
+        "run-slot-repair",
+        recipe=task_recipe("retrieval_answer"),
+        facts=facts,
+        compiled_program=compiled_program,
+        ledger_ref="ledger-1",
+    )
+
+    assert len(plans) == 1
+    assert plans[0].payload is not None
+    assert plans[0].payload["variables"] == {
+        "inventory_begin": "200",
+        "inventory_end": "240",
+        "cogs": "1000",
+        "fiscal_days": 365,
+    }
+    assert len(provider.prompts) == 2
+    repair_prompt = json.loads(provider.prompts[-1])
+    assert list(repair_prompt)[:3] == ["contract", "output_schema", "previous_failure"]
+    assert provider.prompts[-1].index('"contract"') < provider.prompts[-1].index('"previous_failure"')
+    assert provider.prompts[-1].index('"output_schema"') < provider.prompts[-1].index('"previous_failure"')
+    assert provider.prompts[-1].index('"previous_failure"') < provider.prompts[-1].index('"slot_bind_packet"')
+    assert "Previous output was rejected" in repair_prompt["contract"]
+    assert repair_prompt["previous_failure"]["raw_output_preview"]
+    structured_feedback = repair_prompt["previous_failure"]["structured_feedback"]
+    assert structured_feedback["schema"] == "holo.kernel_v3.finance_slot_bind_repair_feedback.v1"
+    assert structured_feedback["category"] == "malformed_json"
+    assert structured_feedback["required_fields"] == ["decision", "slot_bindings", "formula_requests", "reason_summary"]
+    assert "Return exactly one JSON object" in structured_feedback["repair_checklist"][0]
+    slot_bind_record = journal.records(task_id="task-slot-repair", kind="finance_slot_bind")[-1]
+    assert slot_bind_record.data["repair_attempted"] is True
+    assert slot_bind_record.data["repair_feedback"]["category"] == "malformed_json"
+    assert slot_bind_record.data["accepted_formula_plan_count"] == 1
 
 
 def test_finance_preflight_without_structured_facts_journals_source_grounded_trace() -> None:
@@ -6762,6 +12385,60 @@ def test_finance_capability_preflight_does_not_auto_compute_formula() -> None:
     assert not journal.records(task_id="task-llm-owned-preflight", kind="observation")
 
 
+def test_host_semantic_fallbacks_are_disabled_by_default_and_in_finance_capability() -> None:
+    legacy_recipe = task_recipe("retrieval_answer", metadata={"host_semantic_fallbacks": {"enabled": True}})
+    default_recipe = task_recipe("retrieval_answer", metadata={})
+    strict_recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "host_semantic_fallbacks": {"enabled": True},
+        },
+    )
+
+    assert _host_semantic_fallbacks_enabled(default_recipe) is False
+    assert _host_semantic_fallbacks_enabled(legacy_recipe) is True
+    assert _host_semantic_fallbacks_enabled(strict_recipe) is False
+
+
+def test_non_strict_finance_preflight_skips_host_formula_without_explicit_legacy_flag() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(journal, answer="fallback")
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-net-margin",
+            title="TestCo 2024 10-K",
+            uri="https://www.sec.gov/Archives/testco-2024.htm",
+            text=(
+                "entityName=TestCo metric=revenue label=Revenue unit=USD fy=2024 form=10-K value=200 "
+                "entityName=TestCo metric=net income label=Net income unit=USD fy=2024 form=10-K value=50"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-net-margin")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "goal": "Calculate TestCo FY2024 net margin.",
+        },
+    )
+
+    runtime._run_finance_numeric_preflight(  # noqa: SLF001
+        "task-host-formula-disabled",
+        "run-1",
+        recipe=recipe,
+        evidence=evidence,
+        citations=citations,
+    )
+
+    preflights = journal.records(task_id="task-host-formula-disabled", kind="finance_numeric_preflight")
+    assert preflights[-1].data["status"] == "skipped"
+    assert preflights[-1].data["reason"] == "host_semantic_formula_preflight_disabled"
+    assert not journal.records(task_id="task-host-formula-disabled", kind="finance_formula_plan")
+    assert not journal.records(task_id="task-host-formula-disabled", kind="observation")
+
+
 def test_source_grounded_finance_fallback_uses_cited_evidence_when_synthesizer_adds_unsupported_number() -> None:
     journal = JournalStore.in_memory()
     runtime = _runtime_with_synthesizer(
@@ -6791,6 +12468,7 @@ def test_source_grounded_finance_fallback_uses_cited_evidence_when_synthesizer_a
             "goal": "What drove operating margin change as of FY2022 for 3M?",
             "workflow_type": "source_grounded_research",
             "require_numeric_verifier": True,
+            "host_semantic_fallbacks": {"enabled": True},
         },
     )
 
@@ -6848,7 +12526,10 @@ def test_retrieval_finalization_repairs_unsupported_finance_numbers_with_calcula
     citations = [_finance_citation(evidence[0], citation_id="cite-1")]
     recipe = task_recipe(
         "retrieval_answer",
-        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))},
+        metadata={
+            "execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "host_semantic_fallbacks": {"enabled": True},
+        },
     )
 
     final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
@@ -6923,7 +12604,10 @@ def test_retrieval_finalization_fallback_preserves_dcf_model_outputs_and_assumpt
     )
     recipe = task_recipe(
         "retrieval_answer",
-        metadata={"execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast"))},
+        metadata={
+            "execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+            "host_semantic_fallbacks": {"enabled": True},
+        },
     )
 
     final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
@@ -7180,6 +12864,38 @@ def _runtime_with_synthesizer(
         journal=journal,
     )
     return AgentRuntime(journal=journal, processor_fabric=fabric)
+
+
+class MalformedThenTaskJsonProvider:
+    model = "fake-repair"
+
+    def __init__(self, task_type: str, repaired_response: dict) -> None:
+        self.name = "fake_repair"
+        self.task_type = task_type
+        self.repaired_response = dict(repaired_response)
+        self.prompts: list[str] = []
+        self.calls = 0
+
+    def run(self, request: ProcessorRequest) -> ProcessorResult:
+        assert request.processor == self.task_type
+        self.prompts.append(request.prompt)
+        self.calls += 1
+        if self.calls == 1:
+            text = '{"decision":"ready","slot_bindings":['
+        else:
+            text = json.dumps(self.repaired_response, ensure_ascii=False, sort_keys=True)
+        return ProcessorResult(
+            result_id=f"result-{request.request_id}",
+            request_id=request.request_id,
+            status="ok",
+            output={"text": text, "provider": self.name, "model": self.model},
+            usage={
+                "prompt_tokens": len(request.prompt),
+                "completion_tokens": len(text),
+                "total_tokens": len(request.prompt) + len(text),
+            },
+            error=None,
+        )
 
 
 def _sec_revenue_evidence(*, value: str) -> tuple[list[EvidenceItem], list[CitationItem]]:

@@ -147,6 +147,36 @@ def test_sec_companyconcept_sources_are_kept_together_for_formula_inputs():
     }
 
 
+def test_sec_edgar_provider_adds_capital_intensity_companyconcept_sources():
+    provider = SecEdgarSearchProvider()
+    goal = SearchGoal(
+        goal_id="goal-sec-companyconcept-capital-intensity",
+        query="Is 3M a capital-intensive business based on FY2022 data?",
+        max_sources=16,
+        metadata={
+            "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
+            "ticker": "MMM",
+            "sec_cik": "66740",
+        },
+    )
+
+    sources = provider.search(goal.query, goal=goal, plan=_plan())
+    concept_names = {
+        source.metadata.get("sec_concept")
+        for source in sources
+        if source.metadata.get("source_kind") == "sec_companyconcept_json"
+    }
+
+    assert {
+        "Revenues",
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        "NetCashProvidedByUsedInOperatingActivities",
+        "PropertyPlantAndEquipmentNet",
+        "Assets",
+        "NetIncomeLoss",
+    }.issubset(concept_names)
+
+
 def test_sec_edgar_provider_uses_root_goal_for_issuer_candidates():
     provider = SecEdgarSearchProvider()
     goal = SearchGoal(

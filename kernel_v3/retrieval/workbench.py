@@ -9,6 +9,7 @@ from kernel_v3.processors.contracts import RETRIEVAL_WORKBENCH_SCHEMA
 from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, ExtractedSpan, FetchedDocument, SearchGoal, SearchSource
 from kernel_v3.retrieval.extract import readable_document_text_with_diagnostics
+from kernel_v3.retrieval.url_utils import unwrap_url_candidates, url_equivalent_or_unwrapped
 
 
 RETRIEVAL_WORKBENCH_TASK = "retrieval.workbench"
@@ -32,11 +33,34 @@ WORKBENCH_SPAN_LIMIT = 8
 WORKBENCH_ACCEPTED_EVIDENCE_LIMIT = 6
 WORKBENCH_REJECTED_EVIDENCE_LIMIT = 6
 WORKBENCH_FETCH_SUMMARY_LIMIT = 6
-WORKBENCH_CITATION_LIMIT = 32
+WORKBENCH_CITATION_LIMIT = 8
 WORKBENCH_TARGET_CANDIDATE_LIMIT = 8
 WORKBENCH_RETRY_DOCUMENT_LIMIT = 4
 WORKBENCH_RETRY_REJECTED_LIMIT = 8
 WORKBENCH_TABLE_SNIPPET_LIMIT = 2
+
+WORKBENCH_PROMPT_CONTRACT = """Return one JSON object matching retrieval.workbench.
+The model owns semantic evidence judgment: decide whether the packet supports
+the task, which evidence IDs are relevant, which slots are filled or missing,
+and the next retrieval/source/document moves when more evidence is needed.
+Allowed decisions: sufficient, continue, fail_with_limitations.
+Do not invent evidence IDs, source IDs, citation IDs, facts, numeric values,
+formulas, or URLs. Reference only IDs present in packet.
+Use compiled_task_hint as the host-compiled work program: evidence_specs are
+slots to fill; transform_specs are computations that wait for supported input
+slots; tool_chain_plan is the assembly surface for retrieval, document targeting,
+calculator preparation, or verified synthesis. The hint is not evidence.
+Host rejection reasons are filters, not final semantic truth. If rejected_evidence
+or target_document_candidates contain useful target-document excerpts, rescue
+their existing evidence_id values and explain which slots they fill.
+Finance workbench behavior: prefer primary filings, SEC structured data,
+company IR, earnings releases, transaction disclosures, market-data providers,
+government or central-bank sources according to the task. Preserve exact metric
+phrases and statement context; do not substitute nearby line items unless the
+limitation is explicit. If a numeric task has supported inputs, mark slots filled
+so the planner can use calculator.compute; if inputs are missing, propose precise
+next_queries, next_source_families, or next_document_targets.
+The host validates provenance, authority, policy, budgets, and numeric support."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -789,33 +813,41 @@ def _source_role_alias(value: str) -> str:
 
 
 def _workbench_prompt(packet: JsonObject) -> str:
-    return (
-        "You are Holo Kernel v3 retrieval.workbench. Judge evidence relevance and next acquisition moves semantically. "
-        "Do not invent evidence, source IDs, citation IDs, facts, numeric values, formulas, or URLs. "
-        "You may only reference IDs present in the packet. Host will validate provenance, authority, policy, and numeric support. "
-        "Use compiled_task_hint when present as the host-compiled work program: evidence_specs describe slots to fill, "
-        "source roles and target periods; transform_specs describe computations that should not be attempted until their "
-        "input slots are supported. If compiled_task_hint.tool_chain_plan is present, use it as the model assembly surface "
-        "for deciding whether the next move should be retrieval, document targeting, calculator preparation, or verified synthesis. "
-        "The hint is not evidence and does not by itself fill any slot. "
-        "Host rejection reasons are not final semantic judgments: if rejected_evidence or target_document_candidates contain useful "
-        "target-document excerpts, rescue those existing evidence IDs and explain which slots they fill. "
-        "Return exactly one JSON object with the requested schema. Decide whether evidence is sufficient for the task, "
-        "which slots are filled or missing, which source roles matter, and what the next queries/source families/document targets should be.\n\n"
-        f"Packet:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
-    )
+    payload = {
+        "contract": WORKBENCH_PROMPT_CONTRACT,
+        "schema": {
+            "decision": "sufficient|continue|fail_with_limitations",
+            "reason_summary": "short semantic evidence judgment",
+            "accepted_evidence_ids": "list of packet evidence ids",
+            "rescued_evidence_ids": "list of rejected/target candidate evidence ids worth using",
+            "rejected_evidence_ids": "list of packet evidence ids not relevant enough",
+            "source_roles": "list of {source_id, role, confidence, reason}",
+            "slot_assessments": "list of {slot, status, supporting_evidence_ids, reason}",
+            "covered_slots": "list of filled slots",
+            "missing_slots": "list of missing or partial slots",
+            "assumptions_needed": "list of assumptions needed before final answer",
+            "next_queries": "list of concrete search queries if decision=continue",
+            "next_source_families": "list of source families to try next",
+            "next_document_targets": "list of direct URLs/document targets to fetch next",
+            "limitations": "list of evidence limits",
+        },
+        "packet": packet,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _workbench_retry_prompt(packet: JsonObject, *, error: str) -> str:
-    return (
-        "Your previous retrieval.workbench output was invalid JSON. Return only one valid JSON object matching the schema. "
-        "Use semantic judgment over the provided evidence candidates. Do not invent IDs, sources, citations, values, or formulas. "
-        "If compiled_task_hint is present, use it to decide missing slots and next acquisition moves; do not treat it as evidence. "
-        "If target_document_candidates include useful target filing excerpts, use their existing evidence_id values in "
-        "accepted_evidence_ids or rescued_evidence_ids. "
-        f"Previous parser error: {error}\n\n"
-        f"Compact packet:\n{json.dumps(packet, ensure_ascii=False, sort_keys=True)}"
-    )
+    payload = {
+        "contract": (
+            "Previous retrieval.workbench output was invalid JSON. Return one valid JSON object matching retrieval.workbench. "
+            "Use semantic judgment over packet evidence. Do not invent IDs, sources, citations, values, formulas, or URLs. "
+            "Use compiled_task_hint for slots and next moves, but never as evidence. "
+            "Use target_document_candidates by existing evidence_id values when they are semantically useful."
+        ),
+        "previous_parser_error": error,
+        "packet": packet,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _workbench_retry_packet(packet: JsonObject) -> JsonObject:
@@ -1030,8 +1062,8 @@ def _citation_summary(citation: CitationItem) -> JsonObject:
         "citation_id": citation.citation_id,
         "evidence_id": citation.evidence_id,
         "uri": citation.uri,
-        "title": _truncate(citation.title, 180),
-        "quote": _truncate(citation.quote, 360),
+        "title": _truncate(citation.title, 120),
+        "quote": _truncate(citation.quote, 160),
     }
 
 
@@ -1070,7 +1102,10 @@ def _target_document_contract(metadata: JsonObject) -> JsonObject:
     doc_link = _string_value(binding.get("doc_link"))
     if doc_link:
         urls.append(doc_link)
-    urls = _ordered_unique([item for item in urls if item])
+    expanded_urls: list[str] = []
+    for item in urls:
+        expanded_urls.extend([item, *unwrap_url_candidates(item)])
+    urls = _ordered_unique([item for item in expanded_urls if item])
     accessions = _ordered_unique([accession for accession in (_accession_number(url) for url in urls) if accession])
     return {
         "required_for_final_citation": bool(metadata.get("benchmark_doc_retrieval") is True or doc_link or urls),
@@ -1170,7 +1205,7 @@ def _target_document_uri_match(uri: str, target_contract: JsonObject) -> bool:
     if "data.sec.gov/api/xbrl/companyfacts/" in value.lower() or "data.sec.gov/submissions/" in value.lower():
         return False
     for target in _string_list(target_contract.get("target_urls")):
-        if _same_url_or_prefix(value, target) or _same_url_or_prefix(target, value):
+        if url_equivalent_or_unwrapped(value, target) or _same_url_or_prefix(value, target) or _same_url_or_prefix(target, value):
             return True
     accession = _accession_number(value)
     return bool(accession and accession in set(_string_list(target_contract.get("target_accessions"))))

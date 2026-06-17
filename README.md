@@ -84,15 +84,100 @@ evidence, demo status, known gaps, and near-term roadmap, see
 `docs/KERNEL_V3_PROJECT_STATUS_2026-06-14_ZH.md`. For a compact Chinese talk
 track and Q&A notes prepared for the recorded Windows browser demo, see
 `docs/KERNEL_V3_DEMO_TALK_NOTES_2026-06-14_ZH.md`.
+For the current 2026-06-17 finance problem-solving scoreboard and the live
+rerun blocker, see
+`docs/KERNEL_V3_FINANCE_RESULTS_SNAPSHOT_2026-06-17.md`. It separates
+evidence-backed results, such as FinAgent full40 `38/40` live and `39/40`
+rescored, from FinanceBench held-out results that still require a fresh
+`test100` run after a billable live provider is available. The 2026-06-17
+minimal DeepSeek provider check saw the Windows `DEEPSEEK_API_KEY`, but the API
+still returned `HTTP_402_INSUFFICIENT_BALANCE`, so no live finance benchmark
+score can be reported from that run.
+The 2026-06-16 framework review is consolidated in
+`docs/KERNEL_V3_FRAMEWORK_LESSONS_FINAL_2026-06-16_ZH.md`; use it as the primary
+report and talk reference for what Holo should absorb from LangChain,
+LangGraph, Semantic Kernel / Microsoft Agent Framework, Hermes Function
+Calling, HERMES Math Agent, and provider cache guidance. It ties those lessons
+back to Kernel v3's development history, current architecture, finance pack,
+AgentGraph roadmap, benchmark discipline, and the forbidden anti-patterns under
+the LLM-owned semantic decision invariant. For a shorter talk-ready version, use
+`docs/KERNEL_V3_FRAMEWORK_REFERENCE_BRIEF_2026-06-16_ZH.md`; the source-backed
+landing memo and implementation dossier remain in
+`docs/KERNEL_V3_FRAMEWORK_REFERENCE_LANDING_2026-06-16_ZH.md` and
+`docs/KERNEL_V3_FRAMEWORK_REFERENCE_IMPLEMENTATION_DOSSIER_2026-06-16_ZH.md`.
+For the latest decision-oriented report draft, use
+`docs/KERNEL_V3_FRAMEWORK_REFERENCE_DECISION_2026-06-16_ZH.md`; it reviews the
+external framework references and Kernel v3 development record, then converts
+the lessons into concrete Kernel v3.1 architecture decisions, forbidden
+anti-patterns, and the next execution checklist.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in
 `docs/KERNEL_V3_GENERAL_CAPABILITY_LINE1_2026-06-14_ZH.md`. Kernel v3 now has
 a native general gauntlet entry at `python -m kernel_v3.cli bench general`.
+The 2026-06-15 finance slot-binding/cache pass is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-15_FINANCE_SLOT_BIND_CACHE.md`; it moves strict
+finance preflight closer to the intended LLM-owned task.compile -> slot_bind ->
+calculator trace loop, fixes a live `finance.slot_bind` schema failure, adds
+model-planned chained calculator execution, and records the remaining HD/LOW DIO
+numeric mismatch and synthesis-packet size bottleneck.
+The multi-question finance ability snapshot is tracked in
+`docs/KERNEL_V3_FINANCE_ABILITY_METRICS_2026-06-15.md`; it separates true live
+accuracy evidence, workflow/substrate health checks, no-gold public sets, and
+single-item debugging runs.
 The 2026-06-15 prompt-economy follow-up keeps full journal trace state while
 using a lighter provider prompt for direct/semantic/system turns; the low-cost
 DeepSeek live smoke passed 2/2 with total tokens reduced from 60,616 to 47,412
 and cache hit ratio improved from 26.9195% to 59.4381%.
+The 2026-06-16 finance processor/cache progress is tracked in
+`docs/KERNEL_V3_PROGRESS_2026-06-16_PROCESSOR_USAGE_CACHE_METRICS.md`; recent
+sections cover model-owned slot-binding basis, competing fact clusters carried
+through synthesis and numeric judge, synthesizer unknown-reference repair, and
+unit-mismatch repair guidance for `finance.verify_numeric`. The latest section
+also carries verifier repair context into compact finance synthesis repair, so
+the repair LLM sees unit/source-binding diagnostics instead of only a short
+repair instruction, and exposes retrieval metric-intent diagnostics as weak
+model-visible hints for finance slot binding, synthesis, and numeric judge
+without polluting raw facts.
+The FinanceBench snapshots for 2026-06-16 and 2026-06-17 also record generic
+formula scaffolds for DPO, multi-year average capex/revenue, effective-tax-rate
+change, positive working capital, interest coverage, and unadjusted EBITDA
+families, with the latest follow-up adding asset turnover, average COGS/revenue,
+liquidation value per share, debt-change, and component-percent-of-total
+programs, plus cash-equivalents change, PP&E change, store-count change, and
+operating/investing/financing cash-flow activity comparison. The latest margin
+series pass adds operating/gross margin profile change and gross-margin
+consistency range scaffolds, and the newest table-rank pass adds a generic
+category-metric ranking scaffold for segment, region, product category,
+short-term investment type, liability-line, and derivative notional questions.
+The host prepares evidence slots and calculator-visible `max`/`min` transforms;
+the LLM still maps the extreme value to the cited category and explains the
+answer. The newest follow-up also routes "biggest drop"/decline-by-region
+questions through that ranking scaffold instead of treating them as plain
+geography disclosure, and upgrades VaR prior-year comparison questions to a
+`market_risk_var_change` period-change scaffold with prior/current VaR
+evidence slots. It also adds `percent_of_sales_change` for questions that ask
+whether a metric as a percent of sales/net sales increased or decreased across
+periods. The same line now includes a generic `metric_lookup`
+identity transform for direct filing line-item extraction such as capex, net
+PP&E, AR/AP, inventories, COGS, net income, adjusted EBITDA, operating cash
+flow, dividends, restructuring costs, assets/current assets/current
+liabilities, VaR, credit facilities, transaction proceeds/gains, expected
+benefit payments, separation/spin-off expected payments, and sales-change
+disclosures such as "real change in sales" excluding FX. The latest disclosure
+pass adds a generic `disclosure_lookup` scaffold for
+registered securities, dividend history, 8-K summaries, acquisitions,
+industries, products/services, customers/geographies, legal proceedings,
+governance/proxy/vote items, guidance, separations/discontinued operations,
+nonrecurring events, revenue/inventory/expense drivers, restructuring
+liabilities, and remaining market-risk disclosures. In question-only
+static coverage, recognized FinanceBench formula plans and EvidenceSpec rows
+now reach `150/150`; this is code-regression evidence for the next live run,
+not a benchmark accuracy score. A fresh live attempt on 2026-06-17 again found
+only `DEEPSEEK_API_KEY` in Windows environment variables, successfully injected
+it into the WSL live model process, and reached DeepSeek, but the provider
+returned HTTP `402` insufficient balance, so no new live FinanceBench accuracy
+score is reported.
 
 For a presentation-oriented Chinese system review of Kernel v3, including the
 architecture, finance capability surface, benchmark/task coverage, demo plan,
@@ -839,6 +924,13 @@ holo-v3 retrieve "sample topic"
 holo-v3 memory inspect --memory-log kernel_v3/.holo-v3-memory.jsonl
 holo-v3 resident status
 ```
+
+Finance capability progress must be measured with live model runs. Permanent
+rule from 2026-06-17: fake/offline commands are allowed only for
+code-regression, schema, compile, and safety guards. They must never be reported
+as FinanceBench, FAB/FinAgent, FinQA, or finance problem-solving accuracy.
+Any score or ability claim needs a real provider/live retrieval run, with
+gold/reference material used only for post-run scoring.
 
 Interactive `holo-v3 chat` uses a human-readable terminal view when attached to
 a TTY: colored status headers, compact task/run refs, and the current
@@ -1876,14 +1968,15 @@ substrate `0.8`, numeric `1.0`, calculator-used rate `0.4`,
 formula-trace-present rate `0.4`, claim-ledger and slot-frame present rates
 `1.0`, transform-plan present rate `1.0`, verifier-gate pass rate `0.5`,
 synthesis-gate pass rate `0.5`, citation-present rate `0.6`, and average
-answer numeric support `0.7953`. The remaining failures are now concentrated in
-harder modeling/valuation tasks that still need transform planning and formula
-templates: CRM DCF, EPAM LBO, TGT/WMT fixed-charge coverage, LULU/VSCO
-EV/EBITDA, CNC MLR rebate, and PFE/Seagen purchase-price allocation. In these
-cases Holo usually acquires claims and slot frames, but either does not yet
-produce a calculator trace or the SynthesisGate blocks unsupported numeric
-claims. That is the desired reliability posture: unsupported finance numbers
-should be stopped, not polished into a confident answer.
+answer numeric support `0.7953`. At that checkpoint, the remaining failures were
+concentrated in harder modeling/valuation tasks such as CRM DCF, EPAM LBO,
+TGT/WMT fixed-charge coverage, LULU/VSCO EV/EBITDA, CNC MLR rebate, and
+PFE/Seagen purchase-price allocation. Subsequent passes have promoted
+EV/EBITDA, purchase-price allocation, fixed-charge coverage, and MLR rebate into
+planner coverage; fresh live benchmark reruns are still required before treating
+those historical failures as closed in the benchmark score. That is the desired
+reliability posture: unsupported finance numbers should be stopped, not polished
+into a confident answer.
 
 2026-06-11 modeling-lite substrate update: DCF and LBO now have deterministic
 `TransformPlan` support in the finance formula planner. DCF can bind free cash
@@ -2014,14 +2107,14 @@ numeric-claim policy explicitly: material finance numbers must come from
 calculator traces, finance/claim ledger facts, or explicitly labeled
 assumptions; unsupported numbers must be omitted or moved into limitations
 before the host verifier checks them again.
-The main failure mode is still `required_trace_missing` on harder
-modeling/coverage tasks: CRM DCF, EPAM LBO, TGT/WMT fixed-charge coverage,
-LULU/VSCO EV/EBITDA, CNC MLR, and purchase-price-allocation cases often gather
-some evidence but do not yet compile a host-side formula or run numeric
-verification. The next work is to
-expand `FinanceFormulaPlanner`, ledger extraction, and optional LLM-assisted
-fact/noise review for those task families while keeping the deterministic
-numeric gate intact.
+The main failure mode is still `required_trace_missing` on harder modeling and
+assumption-policy tasks, especially cases such as CRM DCF and EPAM LBO. The
+coverage families for fixed charges, EV/EBITDA, purchase-price allocation, and
+MLR rebate now have host-side FormulaTrace coverage, but still need fresh live
+reruns to prove end-to-end benchmark closure. The next work is to expand
+`FinanceFormulaPlanner`, ledger extraction, and optional LLM-assisted fact/noise
+review for remaining task families while keeping the deterministic numeric gate
+intact.
 
 EV/EBITDA has since been promoted into the formula planner. The host can now
 recognize EV/EBITDA intent, compute it from direct EBITDA or from complete
@@ -2061,8 +2154,10 @@ The task graph is journal-derived and links model requests/results, actions,
 retrieval queries, sources, fetches, artifacts, documents, evidence, citations,
 feedback, and final answers or failure reports. The benchmark graph summarizes
 many result rows by status, category, score reason, failure mode, citation
-coverage, token use, retrieval runs, fetches, repetition, and answer length. Both
-views store previews, refs, hashes, and diagnostics rather than raw fetched
+coverage, FormulaTrace fact/citation/evidence provenance, processor task/error
+clusters, cache hit ratio, token use, retrieval runs, fetches, repetition, and
+answer length. Both views store previews, refs, hashes, and diagnostics rather
+than raw fetched
 bodies. The benchmark report renders the same result file into Markdown, HTML,
 or JSON for project reports and review meetings.
 `workflow-view` is the presentation/debugging view for a single run. It scans the
@@ -2202,6 +2297,47 @@ extracted spans, the next model planner packet can propose a normal
 SEC source expansion is intentionally scoped to SEC/EDGAR/10-K/10-Q style
 queries, so generic "annual report" language for ASX/HKEX/SGX issuers does not
 silently route to EDGAR.
+
+Recent finance modeling hardening also carries FormulaTrace model context all
+the way to final synthesis and numeric judgment. DCF/LBO-style traces now expose
+compact `assumptions`, `defaulted_assumptions`, `model_outputs`, and projection
+summaries to the LLM judge and synthesizer, while the host policy states that
+assumptions are not filing facts and unsupported model drivers or comparison
+thresholds must not be invented. This improves general modeling-task repair
+without adding answer tables or host-side semantic selection.
+Debt-to-equity traces now also carry selected numerator/denominator line-item
+semantics, so a ratio computed with total liabilities can be stated as such
+instead of being silently rewritten as debt-only.
+Margin planning also accepts more statement-level revenue denominator variants
+already preserved by the fact ledger, including `sales and other operating
+revenues`, `operating revenues`, `net revenue`, and related SEC revenue
+concepts, while keeping deferred/contract-liability/segment pollution blocked.
+Incorrect-premise finance questions now get a weak `question_numeric_premise`
+hint path: question-embedded currency/scale/percent figures are compared against
+supported FinanceFact and FormulaTrace values and exposed to synthesis and
+`finance.numeric_judge`, so the LLM can state a corrected actual value when the
+evidence contradicts the premise. The host only carries the hint; it does not
+decide the semantic answer.
+Purchase-price-allocation questions now have a dedicated formula planner path
+for business-combination and acquisition-accounting tasks. The planner binds
+purchase consideration, goodwill, and identifiable intangible assets into
+FormulaTrace payloads, can focus on goodwill-only or intangible-only subclaims,
+prefers acquisition-table facts over balance-sheet totals when both are present,
+and rejects per-share purchase prices as total consideration so merger press
+release evidence does not pollute the calculation.
+Fixed-charge coverage questions now have a dedicated planner and retrieval path
+as well. The ledger canonicalizes filing line items such as earnings available
+for fixed charges and total fixed charges, the planner computes the coverage
+multiple from direct disclosures or a pretax-income-plus-fixed-charges basis,
+and missing-fact retrieval seeds SEC companyfacts / Exhibit 12 terms instead of
+falling back to a generic search.
+MLR rebate questions now have a regulatory-ratio planner path. The ledger
+canonicalizes medical loss ratio, MLR standard, premium denominator, claims/QI
+numerator, and rebate line items; the planner computes actual MLR from reported
+ratio or complete numerator/denominator facts, then computes rebate as the
+positive shortfall versus the required standard times adjusted premium revenue.
+It does not default the standard unless the question or evidence states the
+standard or a clear individual/small-group/large-group market segment.
 
 ## Validation
 

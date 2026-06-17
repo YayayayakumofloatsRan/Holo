@@ -21,6 +21,11 @@ SUPPORTED_FINANCE_METRICS = {
     "operating revenues",
     "segment revenue",
     "segment revenue from external customers",
+    "segment income",
+    "segment net income",
+    "segment operating income",
+    "ebitdar",
+    "ebitdar contribution",
     "family of apps revenue",
     "reality labs revenue",
     "cloud and AI infrastructure investment",
@@ -30,6 +35,11 @@ SUPPORTED_FINANCE_METRICS = {
     "cash and cash equivalents",
     "short-term investments",
     "short term investments",
+    "marketable securities",
+    "debt securities",
+    "notional value",
+    "notional amount",
+    "derivative instruments",
     "debt",
     "long term debt",
     "long-term debt",
@@ -63,12 +73,31 @@ SUPPORTED_FINANCE_METRICS = {
     "operating income",
     "income from continuing operations",
     "pretax income",
+    "earnings available for fixed charges",
+    "fixed charges",
+    "medical loss ratio",
+    "mlr standard",
+    "mlr numerator",
+    "mlr denominator",
+    "premium revenue",
+    "adjusted premium revenue",
+    "medical claims",
+    "quality improvement expenses",
+    "mlr rebate",
     "diluted earnings per share",
     "basic earnings per share",
     "eps",
     "operating cash flow",
     "cash flow from operations",
     "net cash provided by operating activities",
+    "investing cash flow",
+    "cash flow from investing activities",
+    "net cash provided by investing activities",
+    "net cash used in investing activities",
+    "financing cash flow",
+    "cash flow from financing activities",
+    "net cash provided by financing activities",
+    "net cash used in financing activities",
     "free cash flow",
     "capital expenditures",
     "property plant and equipment net",
@@ -77,6 +106,20 @@ SUPPORTED_FINANCE_METRICS = {
     "ppne",
     "assets",
     "liabilities",
+    "current liabilities",
+    "current assets",
+    "accounts receivable",
+    "accounts payable",
+    "dividends paid",
+    "cash dividends paid",
+    "restructuring costs",
+    "restructuring expenses",
+    "gain on separation",
+    "cash proceeds",
+    "value at risk",
+    "credit facility",
+    "revolving credit agreement",
+    "expected benefit payments",
     "shareholders equity",
     "stockholders equity",
     "market cap",
@@ -98,6 +141,8 @@ SUPPORTED_FINANCE_METRICS = {
     "add-back",
     "deduction",
     "one-time cost",
+    "store count",
+    "stores",
 }
 
 KEY_PATTERN = re.compile(
@@ -114,6 +159,11 @@ HTML_SENTENCE_FACT_PATTERN = re.compile(
     r"metric=(?P<metric>.*?)\s+fy=(?P=fy)\s+value=(?P<value>\([^)]+\)|[^\s]+)\s+scale=(?P<scale>[A-Za-z]+)",
     re.IGNORECASE,
 )
+HTML_TABLE_COLUMN_CELL_PATTERN = re.compile(
+    r"\bcolumn_(?P<index>\d+)=(?P<value>.*?)(?=\s*column_\d+=|\s*html_table_\d+_row_\d+:|$)",
+    re.IGNORECASE,
+)
+HTML_TABLE_ROW_BOUNDARY_PATTERN = re.compile(r"\s+html_table_\d+_row_\d+:", re.IGNORECASE)
 AMOUNT_PATTERN = re.compile(
     r"(?P<prefix>[$€£¥])?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
     r"(?P<unit>%|bps|basis\s+points|basis\s+point|percentage\s+points|percentage\s+point|"
@@ -151,10 +201,34 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "operating cash flow",
             "cash flow from operations",
             "net cash provided by operating activities",
+            "net cash used in operating activities",
             "cash provided by operating activities",
         ),
     ),
+    (
+        "investing cash flow",
+        (
+            "investing cash flow",
+            "cash flow from investing activities",
+            "net cash provided by investing activities",
+            "net cash used in investing activities",
+            "net cash provided by used in investing activities",
+        ),
+    ),
+    (
+        "financing cash flow",
+        (
+            "financing cash flow",
+            "cash flow from financing activities",
+            "net cash provided by financing activities",
+            "net cash used in financing activities",
+            "net cash provided by used in financing activities",
+        ),
+    ),
     ("free cash flow", ("free cash flow",)),
+    ("marketable securities", ("marketable securities", "short-term investments", "short term investments")),
+    ("debt securities", ("debt securities", "available-for-sale debt securities", "available for sale debt securities")),
+    ("notional value", ("notional value", "notional amount", "notional")),
     (
         "capital expenditures",
         (
@@ -169,8 +243,11 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "property plant and equipment net",
         (
             "property, plant and equipment, net",
+            "property, plant and equipment - net",
+            "property, plant and equipment net",
             "property plant and equipment net",
             "property and equipment, net",
+            "property and equipment - net",
             "property and equipment net",
             "net property, plant and equipment",
             "net property plant and equipment",
@@ -181,20 +258,101 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "ppne",
         ),
     ),
+    ("assets", ("total assets", "assets")),
+    ("current assets", ("total current assets", "current assets", "assets current")),
+    ("accounts receivable", ("accounts receivable", "net accounts receivable", "receivables")),
+    ("accounts payable", ("accounts payable", "trade accounts payable", "payables")),
     ("income from continuing operations", ("income from continuing operations", "income from continuing ops")),
     ("net income", ("net income", "net loss", "net earnings")),
+    ("segment net income", ("segment net income", "business segment net income")),
+    ("segment income", ("segment income", "business segment income", "segment profit")),
+    ("ebitdar contribution", ("ebitdar contribution", "ebitdar")),
     ("operating income", ("operating income", "operating loss")),
     ("gross profit", ("gross profit",)),
     ("research and development expense", ("research and development expense", "research and development", "r&d expense", "rd expense")),
+    ("dividends paid", ("dividends paid", "cash dividends paid", "dividends to shareholders")),
+    ("restructuring costs", ("restructuring costs", "restructuring expenses", "restructuring charges")),
+    ("gain on separation", ("gain on separation", "gain from separation", "gain related to separation")),
+    ("cash proceeds", ("cash proceeds", "proceeds from separation", "proceeds")),
+    ("value at risk", ("value at risk", "var")),
+    ("credit facility", ("credit facility", "revolving credit agreement", "revolving credit facility")),
+    ("expected benefit payments", ("expected benefit payments", "pension payments", "postretirement payments")),
     ("addback", ("other expense",)),
     ("deduction", ("other income",)),
     ("deduction", ("general corporate expenses", "corporate expenses")),
     ("margin", ("operating margin", "gross margin", "margin")),
     ("interest expense", ("interest expense",)),
     ("tax", ("income taxes", "income tax", "provision for", "benefit from income taxes")),
+    (
+        "earnings available for fixed charges",
+        (
+            "earnings available for fixed charges",
+            "earnings before fixed charges",
+        ),
+    ),
+    ("fixed charges", ("total fixed charges", "fixed charges")),
+    ("medical loss ratio", ("medical loss ratio", "mlr")),
+    (
+        "mlr standard",
+        (
+            "minimum medical loss ratio",
+            "medical loss ratio standard",
+            "minimum mlr",
+            "mlr standard",
+            "required mlr",
+        ),
+    ),
+    (
+        "mlr numerator",
+        (
+            "mlr numerator",
+            "claims and quality improvement expenses",
+            "claims and quality improvement activities",
+            "clinical services and quality improvement",
+        ),
+    ),
+    (
+        "mlr denominator",
+        (
+            "mlr denominator",
+            "adjusted premium revenue",
+            "premium revenue after taxes",
+        ),
+    ),
+    (
+        "adjusted premium revenue",
+        (
+            "adjusted premium revenue",
+            "premium revenue after taxes",
+            "rebate basis",
+        ),
+    ),
+    ("premium revenue", ("premium revenue", "earned premium", "premiums earned", "earned premiums")),
+    (
+        "medical claims",
+        (
+            "medical claims",
+            "incurred claims",
+            "clinical services",
+            "medical costs",
+            "medical expenses",
+            "health care costs",
+        ),
+    ),
+    (
+        "quality improvement expenses",
+        (
+            "quality improvement expenses",
+            "quality improvement activities",
+            "health care quality improvement",
+            "quality improving activities",
+        ),
+    ),
+    ("mlr rebate", ("mlr rebate", "medical loss ratio rebate", "rebate amount")),
     ("depreciation and amortization", ("depreciation and amortization", "d&a", "amortization")),
     ("deduction", ("divestiture-related license income", "license income", "gain on sale", "gains")),
     ("cash and cash equivalents", ("cash and cash equivalents", "cash equivalents", "cash and equivalents", "total cash")),
+    ("store count", ("number of stores", "store count", "stores")),
     ("debt", ("total debt", "debt", "borrowings", "notes payable")),
     (
         "shareholders equity",
@@ -210,6 +368,7 @@ NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "total equity",
         ),
     ),
+    ("current liabilities", ("total current liabilities", "current liabilities", "liabilities current")),
     ("liabilities", ("total liabilities", "liabilities")),
     ("goodwill", ("goodwill",)),
     ("intangible assets", ("intangible assets", "developed technology", "customer relationships")),
@@ -449,6 +608,7 @@ def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: Citatio
                     "source_uri": item.uri,
                     "source_title": item.title,
                     "supported_metric": metric in SUPPORTED_FINANCE_METRICS,
+                    **_evidence_fact_diagnostics(item),
                     "per_share": _context_indicates_per_share(
                         context,
                         amount_offset=match.start() - start,
@@ -462,11 +622,32 @@ def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: Citatio
 
 def _evidence_has_target_line_item(item: EvidenceItem) -> bool:
     diagnostics = item.diagnostics if isinstance(item.diagnostics, dict) else {}
+    span_metadata = diagnostics.get("span_metadata") if isinstance(diagnostics.get("span_metadata"), dict) else {}
     return bool(
         diagnostics.get("target_slot")
         or diagnostics.get("target_line_item")
+        or span_metadata.get("target_slot")
+        or span_metadata.get("target_line_item")
         or isinstance(diagnostics.get("target_document_binding"), dict)
+        or isinstance(span_metadata.get("target_document_binding"), dict)
     )
+
+
+def _evidence_fact_diagnostics(item: EvidenceItem) -> JsonObject:
+    diagnostics = item.diagnostics if isinstance(item.diagnostics, dict) else {}
+    span_metadata = diagnostics.get("span_metadata") if isinstance(diagnostics.get("span_metadata"), dict) else {}
+    result: JsonObject = {}
+    for key in (
+        "finance_metric_intent",
+        "target_line_item",
+        "target_slot",
+        "target_period",
+        "target_statement",
+    ):
+        value = span_metadata.get(key) if key in span_metadata else diagnostics.get(key)
+        if value not in (None, "", [], {}):
+            result[key] = value
+    return result
 
 
 def _natural_table_row_extraction_enabled(*, item: EvidenceItem, text: str) -> bool:
@@ -548,6 +729,7 @@ def _natural_table_row_facts_from_text(
                                 "source_uri": item.uri,
                                 "source_title": item.title,
                                 "supported_metric": True,
+                                **_evidence_fact_diagnostics(item),
                                 "per_share": False,
                             },
                         )
@@ -575,6 +757,9 @@ def _table_header_years(text: str) -> list[int]:
 
 
 def _table_row_amounts(after_marker: str, *, max_count: int) -> list[tuple[str, str, str, str, str]]:
+    html_column_amounts = _table_row_amounts_from_html_columns(after_marker, max_count=max_count)
+    if html_column_amounts:
+        return html_column_amounts
     amounts: list[tuple[str, str, str, str, str]] = []
     first_amount = True
     for match in AMOUNT_PATTERN.finditer(str(after_marker or "")):
@@ -602,9 +787,45 @@ def _table_row_amounts(after_marker: str, *, max_count: int) -> list[tuple[str, 
     return amounts
 
 
+def _table_row_amounts_from_html_columns(after_marker: str, *, max_count: int) -> list[tuple[str, str, str, str, str]]:
+    text = str(after_marker or "")
+    if "column_" not in text:
+        return []
+    row_segment = HTML_TABLE_ROW_BOUNDARY_PATTERN.split(text, maxsplit=1)[0]
+    amounts: list[tuple[str, str, str, str, str]] = []
+    for cell in HTML_TABLE_COLUMN_CELL_PATTERN.finditer(row_segment):
+        raw_cell = " ".join(str(cell.group("value") or "").split())
+        if raw_cell in {"", "$", "€", "£", "¥", "-", "—", "--"}:
+            continue
+        match = AMOUNT_PATTERN.search(raw_cell)
+        if match is None:
+            continue
+        raw_number = match.group("number") or ""
+        raw_unit = match.group("unit") or ""
+        prefix = match.group("prefix") or ""
+        if not raw_number:
+            continue
+        if _looks_like_standalone_year(raw_number, raw_unit, prefix):
+            continue
+        if raw_unit.lower() in {"m", "b"} and match.end() < len(raw_cell) and raw_cell[match.end()].isalpha():
+            raw_unit = ""
+        signed_number = f"-{raw_number}" if _is_parenthesized_amount(raw_cell, match.start(), match.end()) else raw_number
+        display_raw = f"({match.group(0).strip()})" if signed_number.startswith("-") else match.group(0).strip()
+        amounts.append((raw_number, raw_unit, prefix, display_raw, signed_number))
+        if len(amounts) >= max_count:
+            break
+    return amounts
+
+
 def _metric_segments(text: str) -> tuple[str, list[str]]:
     if "facts=" in text:
         before, after = text.split("facts=", 1)
+        segments = [segment.strip() for segment in after.split(" ; ") if segment.strip()]
+        return before, segments
+    metric_match = re.search(r"\bmetric=", text, re.IGNORECASE)
+    if metric_match is not None and " ; " in text[metric_match.start() :]:
+        before = text[: metric_match.start()]
+        after = text[metric_match.start() :]
         segments = [segment.strip() for segment in after.split(" ; ") if segment.strip()]
         return before, segments
     return text, [text]
@@ -652,15 +873,19 @@ def _fact_from_values(
         "label": values.get("label"),
         "cik": values.get("cik"),
         "taxonomy": values.get("taxonomy"),
+        "period": values.get("period"),
         "form": values.get("form"),
+        "fp": values.get("fp"),
         "filed": values.get("filed"),
         "end": values.get("end"),
         "start": values.get("start"),
+        "duration_days": _period_duration_days(values.get("start"), values.get("end")),
         "frame": values.get("frame"),
         "accn": values.get("accn"),
         "supported_metric": metric in SUPPORTED_FINANCE_METRICS,
         "source_uri": item.uri,
         "source_title": item.title,
+        **_evidence_fact_diagnostics(item),
     }
     metadata = {key: item for key, item in metadata.items() if item not in (None, "")}
     return FinanceFact(
@@ -691,6 +916,21 @@ def _scaled_value_from_scale(value: Decimal, scale: str) -> Decimal:
     if text in {"trillion", "trillions", "in trillions"}:
         return value * Decimal(1_000_000_000_000)
     return value
+
+
+def _period_duration_days(start: str | None, end: str | None) -> int | None:
+    start_days = _date_days(start)
+    end_days = _date_days(end)
+    if start_days is None or end_days is None:
+        return None
+    return max(0, end_days - start_days)
+
+
+def _date_days(value: str | None) -> int | None:
+    match = re.match(r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})$", str(value or ""))
+    if not match:
+        return None
+    return int(match.group("year")) * 372 + int(match.group("month")) * 31 + int(match.group("day"))
 
 
 def _decimal_amount_from_structured_value(value: str) -> Decimal | None:
@@ -732,6 +972,17 @@ def _canonical_metric(value: str) -> str:
         "segment reporting information revenue from external customers": "segment revenue from external customers",
         "revenuesfromexternalcustomers": "segment revenue from external customers",
         "revenues from external customers": "segment revenue from external customers",
+        "segmentincome": "segment income",
+        "segment income": "segment income",
+        "segmentprofit": "segment income",
+        "segment profit": "segment income",
+        "segmentnetincome": "segment net income",
+        "segment net income": "segment net income",
+        "segmentoperatingincome": "segment operating income",
+        "segment operating income": "segment operating income",
+        "ebitdar": "ebitdar",
+        "ebitdarcontribution": "ebitdar contribution",
+        "ebitdar contribution": "ebitdar contribution",
         "familyofappsrevenue": "family of apps revenue",
         "family of apps revenue": "family of apps revenue",
         "realitylabsrevenue": "reality labs revenue",
@@ -745,6 +996,14 @@ def _canonical_metric(value: str) -> str:
         "revenue from contract with customer excluding assessed tax": "revenue",
         "sales revenue net": "net sales",
         "net sales": "net sales",
+        "notionalvalue": "notional value",
+        "notional value": "notional value",
+        "notionalamount": "notional value",
+        "notional amount": "notional value",
+        "debtsecurities": "debt securities",
+        "debt securities": "debt securities",
+        "marketablesecurities": "marketable securities",
+        "marketable securities": "marketable securities",
         "profit loss": "net income",
         "netincomeloss": "net income",
         "net income loss": "net income",
@@ -759,16 +1018,72 @@ def _canonical_metric(value: str) -> str:
         "inventory net": "inventory",
         "inventory": "inventory",
         "merchandise inventories": "inventory",
+        "accountsreceivable": "accounts receivable",
+        "accounts receivable": "accounts receivable",
+        "netaccountsreceivable": "accounts receivable",
+        "net accounts receivable": "accounts receivable",
+        "accountsreceivablenetcurrent": "accounts receivable",
+        "accounts receivable net current": "accounts receivable",
+        "accounts payable": "accounts payable",
+        "accountspayable": "accounts payable",
+        "trade accounts payable": "accounts payable",
+        "total current assets": "current assets",
+        "totalcurrentassets": "current assets",
+        "current assets": "current assets",
+        "assetscurrent": "current assets",
         "costofrevenue": "cost of revenue",
         "cost of goods sold": "cogs",
         "netcashprovidedbyusedinoperatingactivities": "operating cash flow",
         "net cash provided by used in operating activities": "operating cash flow",
         "net cash provided by operating activities": "operating cash flow",
         "netcashprovidedbyoperatingactivities": "operating cash flow",
+        "net cash used in operating activities": "operating cash flow",
+        "netcashusedinoperatingactivities": "operating cash flow",
         "net cash provided by operating activities continuing operations": "operating cash flow",
         "net cash provided by used in operating activities continuing operations": "operating cash flow",
+        "cash flow from investing activities": "investing cash flow",
+        "cashflowfrominvestingactivities": "investing cash flow",
+        "net cash provided by investing activities": "investing cash flow",
+        "netcashprovidedbyinvestingactivities": "investing cash flow",
+        "net cash used in investing activities": "investing cash flow",
+        "netcashusedininvestingactivities": "investing cash flow",
+        "net cash provided by used in investing activities": "investing cash flow",
+        "netcashprovidedbyusedininvestingactivities": "investing cash flow",
+        "cash flow from financing activities": "financing cash flow",
+        "cashflowfromfinancingactivities": "financing cash flow",
+        "net cash provided by financing activities": "financing cash flow",
+        "netcashprovidedbyfinancingactivities": "financing cash flow",
+        "net cash used in financing activities": "financing cash flow",
+        "netcashusedinfinancingactivities": "financing cash flow",
+        "net cash provided by used in financing activities": "financing cash flow",
+        "netcashprovidedbyusedinfinancingactivities": "financing cash flow",
+        "paymentsofdividends": "dividends paid",
+        "payments of dividends": "dividends paid",
+        "dividendspaid": "dividends paid",
+        "dividends paid": "dividends paid",
+        "cash dividends paid": "dividends paid",
+        "cashdividendspaid": "dividends paid",
         "grossprofit": "gross profit",
         "gross profit": "gross profit",
+        "restructuringcosts": "restructuring costs",
+        "restructuring costs": "restructuring costs",
+        "restructuringexpenses": "restructuring costs",
+        "restructuring expenses": "restructuring costs",
+        "restructuringcharges": "restructuring costs",
+        "restructuring charges": "restructuring costs",
+        "gainonseparation": "gain on separation",
+        "gain on separation": "gain on separation",
+        "cashproceeds": "cash proceeds",
+        "cash proceeds": "cash proceeds",
+        "valueatrisk": "value at risk",
+        "value at risk": "value at risk",
+        "var": "value at risk",
+        "creditfacility": "credit facility",
+        "credit facility": "credit facility",
+        "revolvingcreditagreement": "revolving credit agreement",
+        "revolving credit agreement": "revolving credit agreement",
+        "expectedbenefitpayments": "expected benefit payments",
+        "expected benefit payments": "expected benefit payments",
         "provisionforbenefitfromincometaxes": "tax",
         "provision for benefit from income taxes": "tax",
         "benefitfromincometaxes": "tax",
@@ -777,6 +1092,75 @@ def _canonical_metric(value: str) -> str:
         "income taxes": "tax",
         "interestexpense": "interest expense",
         "interest expense": "interest expense",
+        "earningsavailableforfixedcharges": "earnings available for fixed charges",
+        "earnings available for fixed charges": "earnings available for fixed charges",
+        "earningsbeforefixedcharges": "earnings available for fixed charges",
+        "earnings before fixed charges": "earnings available for fixed charges",
+        "incomebeforefixedcharges": "earnings available for fixed charges",
+        "income before fixed charges": "earnings available for fixed charges",
+        "fixedcharges": "fixed charges",
+        "fixed charges": "fixed charges",
+        "totalfixedcharges": "fixed charges",
+        "total fixed charges": "fixed charges",
+        "medicallossratio": "medical loss ratio",
+        "medical loss ratio": "medical loss ratio",
+        "mlr": "medical loss ratio",
+        "minimummlr": "mlr standard",
+        "minimum mlr": "mlr standard",
+        "requiredmlr": "mlr standard",
+        "required mlr": "mlr standard",
+        "mlrstandard": "mlr standard",
+        "mlr standard": "mlr standard",
+        "minimum medical loss ratio": "mlr standard",
+        "minimummedicallossratio": "mlr standard",
+        "medical loss ratio standard": "mlr standard",
+        "medicallossratiostandard": "mlr standard",
+        "mlrnumerator": "mlr numerator",
+        "mlr numerator": "mlr numerator",
+        "claimsandqualityimprovementexpenses": "mlr numerator",
+        "claims and quality improvement expenses": "mlr numerator",
+        "claimsandqualityimprovementactivities": "mlr numerator",
+        "claims and quality improvement activities": "mlr numerator",
+        "clinicalservicesandqualityimprovement": "mlr numerator",
+        "clinical services and quality improvement": "mlr numerator",
+        "mlrdenominator": "mlr denominator",
+        "mlr denominator": "mlr denominator",
+        "adjustedpremiumrevenue": "adjusted premium revenue",
+        "adjusted premium revenue": "adjusted premium revenue",
+        "premiumrevenueaftertaxes": "adjusted premium revenue",
+        "premium revenue after taxes": "adjusted premium revenue",
+        "rebatebasis": "adjusted premium revenue",
+        "rebate basis": "adjusted premium revenue",
+        "premiumrevenue": "premium revenue",
+        "premium revenue": "premium revenue",
+        "earnedpremium": "premium revenue",
+        "earned premium": "premium revenue",
+        "earnedpremiums": "premium revenue",
+        "earned premiums": "premium revenue",
+        "premiumsearned": "premium revenue",
+        "premiums earned": "premium revenue",
+        "medicalclaims": "medical claims",
+        "medical claims": "medical claims",
+        "incurredclaims": "medical claims",
+        "incurred claims": "medical claims",
+        "medicalcosts": "medical claims",
+        "medical costs": "medical claims",
+        "medicalexpenses": "medical claims",
+        "medical expenses": "medical claims",
+        "healthcarecosts": "medical claims",
+        "health care costs": "medical claims",
+        "qualityimprovementexpenses": "quality improvement expenses",
+        "quality improvement expenses": "quality improvement expenses",
+        "qualityimprovementactivities": "quality improvement expenses",
+        "quality improvement activities": "quality improvement expenses",
+        "healthcarequalityimprovement": "quality improvement expenses",
+        "health care quality improvement": "quality improvement expenses",
+        "mlrrebate": "mlr rebate",
+        "mlr rebate": "mlr rebate",
+        "medicallossratiorebate": "mlr rebate",
+        "medical loss ratio rebate": "mlr rebate",
+        "rebateamount": "mlr rebate",
+        "rebate amount": "mlr rebate",
         "otherexpenseincome": "other expense",
         "other expense income": "other expense",
         "operatingincomeloss": "operating income",
@@ -804,15 +1188,32 @@ def _canonical_metric(value: str) -> str:
         "payments to acquire property plant and equipment": "capital expenditures",
         "paymentstoacquirepropertyplantandequipment": "capital expenditures",
         "payments to acquire property and equipment": "capital expenditures",
+        "purchases of property plant and equipment": "capital expenditures",
+        "purchasesofpropertyplantandequipment": "capital expenditures",
+        "purchases of property, plant and equipment": "capital expenditures",
+        "purchases of property plant and equipment pp e": "capital expenditures",
+        "purchasesofpropertyplantandequipmentppe": "capital expenditures",
         "capital expenditures": "capital expenditures",
         "propertyplantandequipmentnet": "property plant and equipment net",
+        "property plant and equipment  net": "property plant and equipment net",
         "property plant and equipment net": "property plant and equipment net",
+        "property, plant and equipment, net": "property plant and equipment net",
+        "property, plant and equipment net": "property plant and equipment net",
         "property and equipment net": "property plant and equipment net",
+        "property and equipment  net": "property plant and equipment net",
         "net property plant and equipment": "property plant and equipment net",
         "net property and equipment": "property plant and equipment net",
         "net ppe": "property plant and equipment net",
         "net ppne": "property plant and equipment net",
         "ppne": "property plant and equipment net",
+        "number of stores": "store count",
+        "numberofstores": "store count",
+        "store count": "store count",
+        "storecount": "store count",
+        "stores": "store count",
+        "assets": "assets",
+        "totalassets": "assets",
+        "total assets": "assets",
         "stockholdersequity": "shareholders equity",
         "stockholders equity": "shareholders equity",
         "stockholders' equity": "shareholders equity",
@@ -824,6 +1225,10 @@ def _canonical_metric(value: str) -> str:
         "total shareholders equity": "shareholders equity",
         "total shareholders' equity": "shareholders equity",
         "total equity": "shareholders equity",
+        "liabilitiescurrent": "current liabilities",
+        "liabilities current": "current liabilities",
+        "current liabilities": "current liabilities",
+        "total current liabilities": "current liabilities",
         "liabilities": "liabilities",
         "total liabilities": "liabilities",
         "free cash flow": "free cash flow",

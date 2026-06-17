@@ -13,6 +13,7 @@ from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from
 from kernel_v3.chat.contracts import ChatRuntimeResult
 from kernel_v3.contracts import Contract, JsonObject
 from kernel_v3.journal import JournalStore
+from kernel_v3.processors.usage import aggregate_processor_usage_by_task_type, summarize_processor_usage
 
 
 GENERAL_CAPABILITY_GAUNTLET_SCHEMA = "holo.kernel_v3.general_capability_gauntlet.v1"
@@ -323,17 +324,38 @@ def summarize_general_capability_results(results: list[GeneralCapabilityResult],
     cache_hit = sum(_int(item.get("prompt_cache_hit_tokens")) for item in usage)
     cache_miss = sum(_int(item.get("prompt_cache_miss_tokens")) for item in usage)
     cache_total = cache_hit + cache_miss
+    processor_task_type_counts: Counter[str] = Counter()
+    processor_status_counts: Counter[str] = Counter()
+    processor_error_counts: Counter[str] = Counter()
+    for item in usage:
+        by_task_type = item.get("processor_usage_by_task_type")
+        if not isinstance(by_task_type, dict):
+            by_task_type = {}
+        for task_type, payload in by_task_type.items():
+            if isinstance(payload, dict):
+                processor_task_type_counts[str(task_type)] += _int(payload.get("call_count"))
+        _merge_counts(processor_status_counts, item.get("processor_status_counts"))
+        _merge_counts(processor_error_counts, item.get("processor_error_counts"))
+    failed_check_counts = _failed_check_counts(results)
     return {
         "case_count": total,
         "passed_count": passed,
         "failed_count": total - passed,
         "pass_rate": round(passed / total, 6) if total else 0.0,
         "category_counts": dict(Counter(result.category for result in results)),
+        "failed_category_counts": dict(Counter(result.category for result in results if result.status == "failed")),
+        "failure_check_counts": dict(failed_check_counts),
         "average_score": round(sum(result.score for result in results) / total, 6) if total else 0.0,
         "tool_coverage": sorted({tool for result in results for tool in result.observed_tools}),
         "mode_counts": dict(Counter(result.selected_mode for result in results)),
         "domain_coverage": sorted({domain for result in results for domain in result.observed_domains}),
         "total_tokens": sum(_int(item.get("total_tokens")) for item in usage),
+        "processor_call_count": sum(_int(item.get("processor_call_count")) for item in usage),
+        "processor_duration_ms": sum(_int(item.get("processor_duration_ms")) for item in usage),
+        "processor_task_type_counts": dict(processor_task_type_counts),
+        "processor_cache_by_task_type": aggregate_processor_usage_by_task_type(usage),
+        "processor_status_counts": dict(processor_status_counts),
+        "processor_error_counts": dict(processor_error_counts),
         "prompt_cache_hit_tokens": cache_hit,
         "prompt_cache_miss_tokens": cache_miss,
         "prompt_cache_hit_ratio": round(cache_hit / cache_total, 6) if cache_total else None,
@@ -474,17 +496,21 @@ def _observed_domains(plan: JsonObject, answer_profile: JsonObject) -> list[str]
 def _live_usage(journal: JournalStore | None, *, task_id: str | None) -> JsonObject:
     if journal is None or not task_id:
         return {}
-    usage: JsonObject = {}
-    for record in journal.records(task_id=task_id, kind="processor_result"):
-        item = record.data.get("usage")
-        if not isinstance(item, dict):
-            continue
-        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
-            usage[key] = _int(usage.get(key)) + _int(item.get(key))
-    cache_hit = _int(usage.get("prompt_cache_hit_tokens"))
-    cache_miss = _int(usage.get("prompt_cache_miss_tokens"))
-    if cache_hit or cache_miss:
-        usage["prompt_cache_hit_ratio"] = round(cache_hit / (cache_hit + cache_miss), 6)
+    processor_usage = summarize_processor_usage([record.data for record in journal.records(task_id=task_id, kind="processor_result")])
+    usage: JsonObject = {
+        "prompt_tokens": processor_usage.get("prompt_tokens", 0),
+        "completion_tokens": processor_usage.get("completion_tokens", 0),
+        "total_tokens": processor_usage.get("total_tokens", 0),
+        "prompt_cache_hit_tokens": processor_usage.get("prompt_cache_hit_tokens", 0),
+        "prompt_cache_miss_tokens": processor_usage.get("prompt_cache_miss_tokens", 0),
+        "processor_call_count": processor_usage.get("call_count", 0),
+        "processor_duration_ms": processor_usage.get("duration_ms", 0),
+        "processor_usage_by_task_type": processor_usage.get("by_task_type", {}),
+        "processor_status_counts": processor_usage.get("status_counts", {}),
+        "processor_error_counts": processor_usage.get("error_counts", {}),
+    }
+    if processor_usage.get("prompt_cache_hit_ratio") is not None:
+        usage["prompt_cache_hit_ratio"] = processor_usage["prompt_cache_hit_ratio"]
     return usage
 
 
@@ -497,6 +523,24 @@ def _score_checks(checks: JsonObject) -> float:
 
 def _json_object(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _failed_check_counts(results: list[GeneralCapabilityResult]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for result in results:
+        if result.status != "failed":
+            continue
+        for check, passed in result.checks.items():
+            if isinstance(passed, bool) and not passed:
+                counts[str(check)] += 1
+    return counts
+
+
+def _merge_counts(target: Counter[str], value: object) -> None:
+    if not isinstance(value, dict):
+        return
+    for key, count in value.items():
+        target[str(key)] += _int(count)
 
 
 def _int(value: object) -> int:

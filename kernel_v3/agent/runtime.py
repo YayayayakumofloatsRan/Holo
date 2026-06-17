@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -35,6 +36,7 @@ from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback,
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
+    FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     FinanceFact,
     FinanceFormulaPlan,
     FormulaTrace,
@@ -45,6 +47,7 @@ from kernel_v3.finance import (
     compute_formula,
     finance_facts_to_claims,
     finance_formula_plan_to_transform_plan,
+    finance_numeric_repair_guidance,
     finance_slot_frame,
     finance_verification_to_gate_result,
     plan_finance_formula,
@@ -63,6 +66,7 @@ from kernel_v3.planner import Planner
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors import (
     FINANCE_NUMERIC_JUDGE_SCHEMA,
+    FINANCE_SLOT_BIND_SCHEMA,
     FakeJsonProvider,
     ModelEvaluator,
     ModelPlanner,
@@ -95,8 +99,9 @@ from kernel_v3.retrieval import (
     supervise_retrieval_payload,
 )
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
-from kernel_v3.retrieval.finance_metrics import finance_metric_intent_diagnostics
 from kernel_v3.retrieval.source_directory_rank import rank_source_directory_entries
+from kernel_v3.retrieval.url_utils import expanded_url_targets
+from kernel_v3.runtime_graph import is_terminal_record
 from kernel_v3.session import TaskState
 from kernel_v3.substrate import Claim, EvidencePolicy, SlotFill, SlotFrame, SlotSpec, TransformPlan
 from kernel_v3.tools import ToolManifest, ToolRegistry
@@ -648,7 +653,7 @@ class AgentRuntime:
                 journal=self.journal,
                 artifact_store=self.artifact_store,
             )
-            if CALCULATOR_TOOL_NAME in recipe.allowed_tools:
+            if CALCULATOR_TOOL_NAME in recipe.allowed_tools or FINANCE_VERIFY_NUMERIC_TOOL_NAME in recipe.allowed_tools:
                 register_finance_tools(registry)
             return self._with_memory_tools(registry)
         if recipe.mode in {"workspace_answer", "workspace_write"}:
@@ -1001,16 +1006,57 @@ class AgentRuntime:
             recipe,
             host_situation=self._host_situation(task_id, run_id, recipe=recipe),
         )
+        strict_llm_judgment = _llm_semantic_judgment_required(recipe)
+        synth_report = report
+        synth_evidence = evidence
+        synth_citations = citations
+        if _use_compact_finance_synthesis_first(
+            recipe=recipe,
+            synthesizer_mode=synthesizer_mode,
+            strict_llm_judgment=strict_llm_judgment,
+            evidence=evidence,
+            citations=citations,
+            formula_traces=_calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id),
+        ):
+            synth_report, synth_evidence, synth_citations = _compact_finance_synthesis_rescue_packet(
+                self.journal,
+                task_id=task_id,
+                run_id=run_id,
+                recipe=recipe,
+                report=report,
+                evidence=evidence,
+                citations=citations,
+                synthesis_error="pre_synthesis_compaction",
+            )
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="finance_synthesis_compaction",
+                data=redact_journal_data(
+                    {
+                        "schema": "holo.kernel_v3.finance_synthesis_compaction.v1",
+                        "reason": "strict_finance_compact_first",
+                        "semantic_decision_owner": "model",
+                        "host_role": "context_compaction_only",
+                        "original_evidence_count": len(evidence),
+                        "compact_evidence_count": len(synth_evidence),
+                        "original_citation_count": len(citations),
+                        "compact_citation_count": len(synth_citations),
+                        "formula_trace_count": len(_calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)),
+                    }
+                ),
+                state_delta={"finance_synthesis_compaction": "compact_first"},
+            )
         synthesized = self._synthesize(
             task_id,
             run_id,
-            report=report,
-            evidence=evidence,
-            citations=citations,
+            report=synth_report,
+            evidence=synth_evidence,
+            citations=synth_citations,
             synthesizer_mode=synthesizer_mode,
             recipe=recipe,
         )
-        strict_llm_judgment = _llm_semantic_judgment_required(recipe)
         if synthesized.status != "ok" or synthesized.answer is None:
             if strict_llm_judgment:
                 rescued_final = self._attempt_compact_llm_finance_synthesis_rescue(
@@ -2189,6 +2235,8 @@ class AgentRuntime:
             citations=citations,
             synthesis_error=f"finance_numeric_judge_repair:{attempt}",
         )
+        allowed_citation_refs = [item.citation_id for item in repair_citations if item.citation_id][:32]
+        allowed_evidence_ids = [item.evidence_id for item in repair_evidence if item.evidence_id][:32]
         repaired = self._synthesize(
             answer.task_id,
             answer.run_id,
@@ -2204,6 +2252,29 @@ class AgentRuntime:
                 "and cited facts already answer the requested metric."
             ),
         )
+        repair_retry_error = None
+        if repaired.status != "ok" or repaired.answer is None:
+            repair_retry_error = repaired.error or "synthesis_failed"
+            repaired = self._synthesize(
+                answer.task_id,
+                answer.run_id,
+                report=repair_report,
+                evidence=repair_evidence,
+                citations=repair_citations,
+                synthesizer_mode=synthesizer_mode,
+                recipe=recipe,
+                retry_instruction=(
+                    f"{repair_instruction}\n\n"
+                    f"Previous repair output failed host validation: {repair_retry_error}. "
+                    "Return a valid synthesizer.answer JSON object only; do not output a failure report. "
+                    "The finance.numeric_judge has already decided that provided supported values/formula traces are enough to answer. "
+                    "Use only the supported values named in the judge repair instruction and FormulaTrace values in this packet. "
+                    "Remove unsupported thresholds, multiples, or comparison numbers unless the packet explicitly supports them. "
+                    f"Allowed citation_refs: {allowed_citation_refs}. "
+                    f"Allowed used_evidence ids: {allowed_evidence_ids}. "
+                    "Choose citation_refs and used_evidence only from those allowed lists."
+                ),
+            )
         if repaired.status != "ok" or repaired.answer is None:
             self.journal.append(
                 task_id=answer.task_id,
@@ -2216,6 +2287,7 @@ class AgentRuntime:
                         "status": "failed",
                         "attempt": attempt,
                         "reason": repaired.error or "synthesis_failed",
+                        "first_repair_error": repair_retry_error,
                         "judge": judge,
                     }
                 ),
@@ -2234,6 +2306,61 @@ class AgentRuntime:
             evidence=repair_evidence,
             citations=repair_citations,
         )
+        if repaired_verification.status == "failed":
+            repaired_missing = _finance_numeric_missing_evidence(repaired_verification)
+            repaired = self._synthesize(
+                answer.task_id,
+                answer.run_id,
+                report=repair_report,
+                evidence=repair_evidence,
+                citations=repair_citations,
+                synthesizer_mode=synthesizer_mode,
+                recipe=recipe,
+                retry_instruction=(
+                    f"{repair_instruction}\n\n"
+                    "The previous repaired answer still failed host numeric provenance verification. "
+                    f"Verification failures to fix: {repaired_missing}. "
+                    "Generate a shorter corrected synthesizer.answer JSON object. "
+                    "The semantic judge already decided the provided supported values and FormulaTrace values are enough. "
+                    f"Candidate supported values from the judge: {_string_list(judge.get('candidate_supported_values'))}. "
+                    "Do not include unsupported thresholds, ranges, comparison cutoffs, peer/industry benchmarks, multiples, or extra percentages. "
+                    "For a qualitative finance classification, use words such as moderate/low/not capital-intensive instead of numeric thresholds. "
+                    f"Allowed citation_refs: {allowed_citation_refs}. "
+                    f"Allowed used_evidence ids: {allowed_evidence_ids}. "
+                    "Choose citation_refs and used_evidence only from those allowed lists."
+                ),
+            )
+            if repaired.status == "ok" and repaired.answer is not None:
+                repaired_final = _agent_final_from_processor(
+                    repaired,
+                    task_id=answer.task_id,
+                    run_id=answer.run_id,
+                    trace_refs=_trace_refs(self.journal, answer.task_id),
+                )
+                repaired_verification = self._append_finance_numeric_verification(
+                    repaired_final,
+                    recipe=recipe,
+                    evidence=repair_evidence,
+                    citations=repair_citations,
+                )
+            else:
+                self.journal.append(
+                    task_id=answer.task_id,
+                    run_id=answer.run_id,
+                    step_id=None,
+                    kind="finance_numeric_judge_repair",
+                    data=redact_journal_data(
+                        {
+                            "schema": "holo.kernel_v3.finance_numeric_judge_repair.v1",
+                            "status": "verification_retry_failed",
+                            "attempt": attempt,
+                            "reason": repaired.error or "synthesis_failed",
+                            "previous_verification_missing": repaired_missing,
+                            "judge": judge,
+                        }
+                    ),
+                    state_delta={"finance_numeric_judge_repair": "verification_retry_failed"},
+                )
         self._append_synthesis_gate_result(
             repaired_final,
             recipe=recipe,
@@ -2328,6 +2455,113 @@ class AgentRuntime:
         )
         return parsed
 
+    def _model_finance_slot_bind_plans(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe,
+        facts: list[FinanceFact],
+        compiled_program: JsonObject,
+        ledger_ref: str,
+    ) -> list[FinanceFormulaPlan]:
+        if self.processor_fabric is None:
+            return []
+        question = _root_goal_from_recipe(recipe)
+        parameters = {
+            "adapter": "FinanceSlotBinder",
+            "processor_budget": _processor_budget_metadata(recipe),
+            "semantic_decision_owner": "model",
+            "host_role": "validate_fact_ids_and_execute_calculator_only",
+            "max_tokens": _finance_slot_bind_max_tokens(facts=facts, compiled_program=compiled_program),
+        }
+        outcome = self.processor_fabric.run_json(
+            task_type="finance.slot_bind",
+            task_id=task_id,
+            run_id=run_id,
+            context_id=f"ctx-{task_id}-{run_id}-finance-slot-bind",
+            prompt=_finance_slot_bind_prompt(
+                question=question,
+                facts=facts,
+                compiled_program=compiled_program,
+            ),
+            schema=FINANCE_SLOT_BIND_SCHEMA,
+            timeout_seconds=120,
+            parameters=parameters,
+        )
+        parsed = outcome.parsed if isinstance(outcome.parsed, dict) else None
+        repair_attempted = False
+        repair_outcome_status = None
+        repair_outcome_error = None
+        repair_feedback: JsonObject | None = None
+        if parsed is None and outcome.raw_text:
+            repair_attempted = True
+            repair_feedback = _finance_slot_bind_repair_feedback(outcome.result.error or "finance_slot_bind_json_invalid")
+            repair_parameters = {
+                **parameters,
+                "adapter": "FinanceSlotBinderJsonRepair",
+                "max_tokens": max(int(parameters.get("max_tokens") or 0), 6144),
+            }
+            repair_outcome = self.processor_fabric.run_json(
+                task_type="finance.slot_bind",
+                task_id=task_id,
+                run_id=run_id,
+                context_id=f"ctx-{task_id}-{run_id}-finance-slot-bind-repair",
+                prompt=_finance_slot_bind_repair_prompt(
+                    question=question,
+                    facts=facts,
+                    compiled_program=compiled_program,
+                    previous_error=outcome.result.error or "finance_slot_bind_json_invalid",
+                    previous_raw_output=outcome.raw_text,
+                    repair_feedback=repair_feedback,
+                ),
+                schema=FINANCE_SLOT_BIND_SCHEMA,
+                timeout_seconds=120,
+                parameters=repair_parameters,
+            )
+            repair_outcome_status = repair_outcome.result.status
+            repair_outcome_error = repair_outcome.result.error
+            if isinstance(repair_outcome.parsed, dict):
+                outcome = repair_outcome
+                parsed = repair_outcome.parsed
+        plans, rejected = _finance_slot_bind_plans_from_model(
+            parsed,
+            facts=facts,
+            ledger_ref=ledger_ref,
+        )
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="finance_slot_bind",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.finance_slot_bind.v1",
+                    "status": "ready" if plans else "failed",
+                    "processor_status": outcome.result.status,
+                    "processor_error": outcome.result.error,
+                    "repair_attempted": repair_attempted,
+                    "repair_processor_status": repair_outcome_status,
+                    "repair_processor_error": repair_outcome_error,
+                    "repair_feedback": repair_feedback or {},
+                    "decision": parsed.get("decision") if parsed else None,
+                    "reason_summary": parsed.get("reason_summary") if parsed else None,
+                    "slot_bindings": parsed.get("slot_bindings") if parsed else [],
+                    "period_basis": _finance_slot_bind_semantic_basis(parsed, key="period_basis") if parsed else [],
+                    "line_item_basis": _finance_slot_bind_semantic_basis(parsed, key="line_item_basis") if parsed else [],
+                    "formula_request_count": len(parsed.get("formula_requests", [])) if parsed else 0,
+                    "accepted_formula_plan_count": len(plans),
+                    "missing_slots": parsed.get("missing_slots") if parsed else [],
+                    "next_action": parsed.get("next_action") if parsed else {},
+                    "rejected_formula_requests": rejected,
+                    "compiled_program_ref": compiled_program.get("record_id"),
+                    "ledger_ref": ledger_ref,
+                }
+            ),
+            state_delta={"finance_slot_bind": "ready" if plans else "failed"},
+        )
+        return plans
+
     def _run_finance_numeric_preflight(
         self,
         task_id: str,
@@ -2356,34 +2590,90 @@ class AgentRuntime:
                 citations=citations,
                 purpose="finance_preflight_no_structured_facts",
             )
-        if _llm_semantic_judgment_required(recipe):
-            self.journal.append(
-                task_id=task_id,
-                run_id=run_id,
-                step_id=None,
-                kind="finance_numeric_preflight",
-                data=redact_journal_data(
-                    {
-                        "schema": "holo.kernel_v3.finance_numeric_preflight.v1",
-                        "status": "skipped",
-                        "reason": "llm_semantic_judgment_required",
-                        "semantic_decision_owner": "model",
-                        "host_role": "fact_ledger_provenance_validation_only",
-                        "ledger_ref": ledger_record.record_id,
-                        "fact_count": len(facts),
-                    }
-                ),
-                feedback_ref=ledger_record.record_id,
-                state_delta={"finance_numeric_preflight": "skipped_llm_owned"},
-            )
-            return
         existing = _calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)
-        plans = _finance_formula_preflight_plans(
-            question=_root_goal_from_recipe(recipe),
-            facts=facts,
-            existing_traces=existing,
-            evidence=evidence,
-        )
+        if _llm_semantic_judgment_required(recipe):
+            compiled_program = _latest_model_compiled_program_for_preflight(self.journal, task_id=task_id, run_id=run_id)
+            if _model_compiled_program_authorizes_numeric_preflight(compiled_program):
+                self.journal.append(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=None,
+                    kind="finance_numeric_preflight",
+                    data=redact_journal_data(
+                        {
+                            "schema": "holo.kernel_v3.finance_numeric_preflight.v1",
+                            "status": "model_authorized",
+                            "reason": "task_compile_model_provided_numeric_transform_contract",
+                            "semantic_decision_owner": "model",
+                            "host_role": "calculator_execution_and_provenance_validation",
+                            "ledger_ref": ledger_record.record_id,
+                            "compiled_program_ref": compiled_program.get("record_id"),
+                            "fact_count": len(facts),
+                            "transform_spec_count": len(compiled_program.get("transform_specs", [])),
+                        }
+                    ),
+                    feedback_ref=ledger_record.record_id,
+                    state_delta={"finance_numeric_preflight": "model_authorized"},
+                )
+                plans = self._model_finance_slot_bind_plans(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    facts=facts,
+                    compiled_program=compiled_program,
+                    ledger_ref=ledger_record.record_id,
+                )
+                if not plans:
+                    return
+            else:
+                self.journal.append(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=None,
+                    kind="finance_numeric_preflight",
+                    data=redact_journal_data(
+                        {
+                            "schema": "holo.kernel_v3.finance_numeric_preflight.v1",
+                            "status": "skipped",
+                            "reason": "llm_semantic_judgment_required",
+                            "semantic_decision_owner": "model",
+                            "host_role": "fact_ledger_provenance_validation_only",
+                            "ledger_ref": ledger_record.record_id,
+                            "fact_count": len(facts),
+                        }
+                    ),
+                    feedback_ref=ledger_record.record_id,
+                    state_delta={"finance_numeric_preflight": "skipped_llm_owned"},
+                )
+                return
+        else:
+            if not _finance_formula_preflight_scaffold_enabled(recipe):
+                self.journal.append(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=None,
+                    kind="finance_numeric_preflight",
+                    data=redact_journal_data(
+                        {
+                            "schema": "holo.kernel_v3.finance_numeric_preflight.v1",
+                            "status": "skipped",
+                            "reason": "host_semantic_formula_preflight_disabled",
+                            "semantic_decision_owner": "model",
+                            "host_role": "fact_ledger_and_verifier_only",
+                            "ledger_ref": ledger_record.record_id,
+                            "fact_count": len(facts),
+                        }
+                    ),
+                    feedback_ref=ledger_record.record_id,
+                    state_delta={"finance_numeric_preflight": "skipped_host_semantic_disabled"},
+                )
+                return
+            plans = _finance_formula_preflight_plans(
+                question=_root_goal_from_recipe(recipe),
+                facts=facts,
+                existing_traces=existing,
+                evidence=evidence,
+            )
         if not plans:
             return
         computed_traces = list(existing)
@@ -2427,13 +2717,20 @@ class AgentRuntime:
             if plan.status != "ready" or not isinstance(plan.payload, dict):
                 continue
             planned_input_fact_ids = _string_list(plan.payload.get("input_fact_ids"))
+            variables, referenced_fact_ids, unresolved_refs = _resolve_formula_variable_refs(
+                plan.payload.get("variables") if isinstance(plan.payload.get("variables"), dict) else {},
+                computed_traces,
+            )
+            planned_input_fact_ids = _ordered_unique([*planned_input_fact_ids, *referenced_fact_ids])
             if _formula_trace_covers_inputs(existing, planned_input_fact_ids):
                 continue
             action_id = f"act-finance-preflight-calculator-{index}"
             try:
+                if unresolved_refs:
+                    raise ValueError("unresolved_formula_refs:" + ",".join(unresolved_refs[:8]))
                 trace = compute_formula(
                     expression=str(plan.payload.get("expression") or ""),
-                    variables=plan.payload.get("variables") if isinstance(plan.payload.get("variables"), dict) else {},
+                    variables=variables,
                     unit=str(plan.payload.get("unit")) if isinstance(plan.payload.get("unit"), str) else None,
                     formula_name=str(plan.payload.get("formula_name") or plan.formula_name or "finance_formula"),
                     input_fact_ids=planned_input_fact_ids,
@@ -2485,12 +2782,13 @@ class AgentRuntime:
                 feedback_ref=plan_record.record_id,
                 state_delta={"observation_status": observation.status},
             )
-        self._append_finance_derived_formula_traces(
-            task_id,
-            run_id,
-            source_traces=computed_traces,
-            source_ledger_ref=ledger_record.record_id,
-        )
+        if _host_semantic_fallbacks_enabled(recipe):
+            self._append_finance_derived_formula_traces(
+                task_id,
+                run_id,
+                source_traces=computed_traces,
+                source_ledger_ref=ledger_record.record_id,
+            )
 
     def _append_finance_derived_formula_traces(
         self,
@@ -3509,6 +3807,16 @@ class _AgentContextCompiler:
                     if include_retrieval_context
                     else {}
                 ),
+                "toolchain_state": _toolchain_state_for_prompt(
+                    journal,
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                ),
+                "finance_working_state": _finance_working_state_for_prompt(
+                    journal,
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                ),
                 "mission_context": mission_context,
                 "thread_working_context": _thread_working_context_metadata(self.recipe),
                 "thread_rag_context": thread_rag_context,
@@ -3530,6 +3838,624 @@ class _AgentContextCompiler:
             state=state,
             token_budget=int(pack.budget["token_budget"]),
         )
+
+
+def _toolchain_state_for_prompt(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    records = [record for record in journal.records(task_id=task_id) if record.run_id == run_id]
+    actions = [record for record in records if record.kind == "action"]
+    observations = [record for record in records if record.kind == "observation"]
+    terminal_index = next((index for index, record in enumerate(records) if is_terminal_record(record)), None)
+    post_final_records = records[terminal_index + 1 :] if terminal_index is not None else []
+
+    tool_actions: list[JsonObject] = []
+    action_fingerprints: list[str] = []
+    for record in actions:
+        data = record.data if isinstance(record.data, dict) else {}
+        if str(data.get("kind") or "").casefold() != "tool":
+            continue
+        tool = str(data.get("name") or data.get("tool_name") or "").strip()
+        if not tool:
+            continue
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        fingerprint = _short_hash(tool, json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str))
+        action_fingerprints.append(fingerprint)
+        tool_actions.append(
+            {
+                "tool": tool,
+                "action_id": _bounded_text(data.get("action_id"), limit=96),
+                "payload_fingerprint": fingerprint,
+                "payload_summary": _compact_tool_payload_summary(tool, payload),
+                "side_effect_class": _bounded_text(data.get("side_effect_class"), limit=48),
+            }
+        )
+
+    tool_observations: list[JsonObject] = []
+    tool_source_counts: Counter[str] = Counter()
+    failed_tools: list[JsonObject] = []
+    for record in observations:
+        data = record.data if isinstance(record.data, dict) else {}
+        source = str(data.get("source") or "").strip()
+        if not source.startswith("tool:"):
+            continue
+        status = str(data.get("status") or "unknown")
+        tool_source_counts[source] += 1
+        content = data.get("content") if isinstance(data.get("content"), dict) else {}
+        item = {
+            "source": source,
+            "status": status,
+            "observation_id": _bounded_text(data.get("observation_id"), limit=96),
+            "action_id": _bounded_text(data.get("action_id"), limit=96),
+            "content_keys": sorted(str(key) for key in content.keys())[:16],
+        }
+        diagnostics = _compact_tool_observation_diagnostics(content)
+        if diagnostics:
+            item["observation_diagnostics"] = diagnostics
+        if status != "ok":
+            item["error"] = _bounded_text(
+                content.get("error") or content.get("reason") or data.get("reason") or status,
+                limit=160,
+            )
+            failed_tools.append(dict(item))
+        tool_observations.append(item)
+
+    repeated_action_fingerprints = _repeated_values(action_fingerprints)
+    repeated_tools = _repeated_values([str(item.get("tool") or "") for item in tool_actions])
+    repeated_action_groups = _repeated_tool_action_groups(tool_actions, tool_observations)
+    source_counts = dict(tool_source_counts)
+    attention: list[str] = []
+    if failed_tools:
+        attention.append("inspect failed tool observations before repeating similar tool calls")
+    if any(item.get("observation_diagnostics") for item in tool_observations):
+        attention.append("inspect tool observation diagnostics before repeating, repairing, or finalizing")
+    if repeated_action_fingerprints:
+        attention.append("avoid repeating the same tool payload unless new evidence or user input changes the state")
+    if post_final_records:
+        attention.append("current turn already has a terminal record; treat post-final records as diagnostics, not active loop state")
+    if not tool_actions and not tool_observations and not post_final_records:
+        return {}
+    return {
+        "schema": "holo.kernel_v3.toolchain_state.v1",
+        "action_count": len(tool_actions),
+        "observation_count": len(tool_observations),
+        "tool_source_counts": source_counts,
+        "failed_tool_count": len(failed_tools),
+        "failed_tools": failed_tools[-6:],
+        "recent_tool_actions": tool_actions[-8:],
+        "recent_tool_observations": tool_observations[-8:],
+        "repeated_tool_names": repeated_tools[:8],
+        "repeated_action_fingerprints": repeated_action_fingerprints[:8],
+        "repeated_action_groups": repeated_action_groups[:8],
+        "toolchain_presence": {
+            "retrieval": bool(source_counts.get("tool:retrieval.run")),
+            "calculator": bool(source_counts.get(f"tool:{CALCULATOR_TOOL_NAME}")),
+            "finance_verify_numeric": bool(source_counts.get(f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}")),
+        },
+        "terminal_seen": terminal_index is not None,
+        "post_final_record_count": len(post_final_records),
+        "post_final_record_kind_counts": dict(Counter(str(record.kind) for record in post_final_records)),
+        "model_attention": attention,
+        "host_boundary": "observational compact state only; model still chooses the next action and host still validates tools",
+    }
+
+
+def _compact_tool_observation_diagnostics(content: JsonObject) -> JsonObject:
+    if not isinstance(content, dict):
+        return {}
+    result: JsonObject = {}
+    for key in ("verifier_status", "issue_count", "matched_value_count", "missing_value_count"):
+        if key in content:
+            result[key] = content.get(key)
+    guidance = content.get("repair_guidance") if isinstance(content.get("repair_guidance"), dict) else {}
+    guidance_source = guidance if guidance else content
+    schema = guidance_source.get("schema") if isinstance(guidance_source, dict) else None
+    if schema:
+        result["guidance_schema"] = _bounded_text(schema, limit=96)
+    issue_codes = _string_list(guidance_source.get("issue_codes") if isinstance(guidance_source, dict) else [])[:8]
+    if issue_codes:
+        result["issue_codes"] = issue_codes
+    repair_options = _string_list(guidance_source.get("repair_options") if isinstance(guidance_source, dict) else [])[:4]
+    if repair_options:
+        result["repair_options"] = repair_options
+    missing_examples = _compact_tool_missing_value_examples(
+        guidance_source.get("missing_value_examples") if isinstance(guidance_source, dict) else []
+    )
+    if missing_examples:
+        result["missing_value_examples"] = missing_examples
+    unit_examples = _compact_tool_unit_mismatch_examples(
+        guidance_source.get("unit_mismatch_examples") if isinstance(guidance_source, dict) else []
+    )
+    if unit_examples:
+        result["unit_mismatch_examples"] = unit_examples
+    boundary = guidance_source.get("host_boundary") if isinstance(guidance_source, dict) else None
+    if boundary:
+        result["host_boundary"] = _bounded_text(boundary, limit=180)
+    if "error" in content or "reason" in content:
+        result["error"] = _bounded_text(content.get("error") or content.get("reason"), limit=160)
+    return result
+
+
+def _compact_tool_payload_summary(tool: str, payload: JsonObject) -> JsonObject:
+    if not isinstance(payload, dict):
+        return {}
+    result: JsonObject = {"payload_keys": sorted(str(key) for key in payload.keys())[:16]}
+    tool_name = str(tool or "")
+    if tool_name == "retrieval.run":
+        query = _bounded_text(payload.get("query") or payload.get("goal"), limit=180)
+        if query:
+            result["query_preview"] = query
+        queries = _string_list(payload.get("queries"))[:4]
+        if queries:
+            result["query_previews"] = [preview for query in queries if (preview := _bounded_text(query, limit=140))]
+        source_urls = _string_list(payload.get("source_urls"))
+        if source_urls:
+            result["source_url_count"] = len(source_urls)
+            result["source_url_previews"] = [_bounded_text(url, limit=120) for url in source_urls[:3]]
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        strategy = metadata.get("retrieval_strategy") if isinstance(metadata.get("retrieval_strategy"), dict) else {}
+        if strategy:
+            result["strategy_id"] = _bounded_text(strategy.get("strategy_id"), limit=96)
+            slots = strategy.get("evidence_slots") if isinstance(strategy.get("evidence_slots"), list) else []
+            if slots:
+                result["evidence_slot_count"] = len(slots)
+                result["evidence_slot_names"] = [
+                    name
+                    for slot in slots[:8]
+                    if (
+                        name := _bounded_text(
+                            (slot.get("slot") or slot.get("name")) if isinstance(slot, dict) else slot,
+                            limit=80,
+                        )
+                    )
+                ]
+    elif tool_name == CALCULATOR_TOOL_NAME:
+        result["formula_name"] = _bounded_text(payload.get("formula_name"), limit=96)
+        result["unit"] = _bounded_text(payload.get("unit"), limit=48)
+        expression = payload.get("expression")
+        if expression is not None:
+            result["expression_fingerprint"] = _short_hash("calculator_expression", expression)
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        if variables:
+            result["variable_names"] = sorted(str(key) for key in variables.keys())[:16]
+        input_fact_ids = _string_list(payload.get("input_fact_ids"))[:16]
+        if input_fact_ids:
+            result["input_fact_ids"] = input_fact_ids
+    elif tool_name == FINANCE_VERIFY_NUMERIC_TOOL_NAME:
+        result["question_preview"] = _bounded_text(payload.get("question"), limit=180)
+        for key, out_key in (
+            ("facts", "fact_count"),
+            ("formula_traces", "formula_trace_count"),
+            ("citations", "citation_count"),
+            ("evidence", "evidence_count"),
+        ):
+            value = payload.get(key)
+            if isinstance(value, list):
+                result[out_key] = len(value)
+    elif tool_name == "memory.recall":
+        result["query_preview"] = _bounded_text(payload.get("query"), limit=180)
+        result["scope_mode"] = _bounded_text(payload.get("scope_mode"), limit=48)
+        result["limit"] = payload.get("limit") if isinstance(payload.get("limit"), int) else None
+    else:
+        for key in ("query", "goal", "path", "uri", "url", "scope_mode", "unit", "formula_name"):
+            if key in payload:
+                result[f"{key}_preview"] = _bounded_text(payload.get(key), limit=160)
+    return {key: value for key, value in result.items() if value not in (None, "", [])}
+
+
+def _repeated_tool_action_groups(tool_actions: list[JsonObject], tool_observations: list[JsonObject]) -> list[JsonObject]:
+    actions_by_fingerprint: dict[str, list[JsonObject]] = {}
+    for action in tool_actions:
+        fingerprint = str(action.get("payload_fingerprint") or "")
+        if not fingerprint:
+            continue
+        actions_by_fingerprint.setdefault(fingerprint, []).append(action)
+    observations_by_action = {
+        str(observation.get("action_id") or ""): observation
+        for observation in tool_observations
+        if observation.get("action_id")
+    }
+    groups: list[JsonObject] = []
+    for fingerprint, actions in actions_by_fingerprint.items():
+        if len(actions) < 2:
+            continue
+        latest_action = actions[-1]
+        latest_observation: JsonObject = {}
+        for action in reversed(actions):
+            observation = observations_by_action.get(str(action.get("action_id") or ""))
+            if observation:
+                latest_observation = observation
+                break
+        group: JsonObject = {
+            "tool": latest_action.get("tool"),
+            "payload_fingerprint": fingerprint,
+            "attempt_count": len(actions),
+            "action_ids": [action.get("action_id") for action in actions[-4:] if action.get("action_id")],
+            "payload_summary": latest_action.get("payload_summary") or {},
+            "latest_observation_status": latest_observation.get("status"),
+        }
+        if latest_observation.get("observation_diagnostics"):
+            group["latest_observation_diagnostics"] = latest_observation.get("observation_diagnostics")
+        groups.append(group)
+    return groups
+
+
+def _compact_tool_missing_value_examples(values: object) -> list[JsonObject]:
+    items = values if isinstance(values, list) else []
+    result: list[JsonObject] = []
+    for item in items[:4]:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "raw": _bounded_text(item.get("raw"), limit=64),
+                "value": _bounded_text(item.get("value"), limit=48),
+                "unit": _bounded_text(item.get("unit"), limit=32),
+                "slot": _bounded_text(item.get("slot") or item.get("metric") or item.get("name"), limit=80),
+            }
+        )
+    return result
+
+
+def _compact_tool_unit_mismatch_examples(values: object) -> list[JsonObject]:
+    items = values if isinstance(values, list) else []
+    result: list[JsonObject] = []
+    for item in items[:4]:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "raw": _bounded_text(item.get("raw"), limit=64),
+                "value": _bounded_text(item.get("value"), limit=48),
+                "unit": _bounded_text(item.get("unit"), limit=32),
+                "support_units": _string_list(item.get("support_units"))[:6],
+                "support_kinds": _string_list(item.get("support_kinds"))[:6],
+                "support_refs": _string_list(item.get("support_refs"))[:6],
+            }
+        )
+    return [
+        {key: value for key, value in item.items() if value not in (None, "", [])}
+        for item in result
+    ]
+
+
+def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    records = [record for record in journal.records(task_id=task_id) if record.run_id == run_id]
+    ledger_records = [record for record in records if record.kind == "finance_fact_ledger"]
+    slot_records = [record for record in records if record.kind == "slot_frame"]
+    transform_records = [record for record in records if record.kind == "transform_plan"]
+    slot_bind_records = [record for record in records if record.kind == "finance_slot_bind"]
+    verification_payloads = _finance_verification_payloads_for_working_state(records)
+
+    latest_ledger = ledger_records[-1].data if ledger_records and isinstance(ledger_records[-1].data, dict) else {}
+    facts = _finance_facts_from_ledger(latest_ledger)
+    compact_facts = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
+
+    traces = _finance_formula_traces_for_synthesis(
+        _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    )
+    if not _has_finance_working_state_anchor(
+        ledger_records=ledger_records,
+        traces=traces,
+        verification_records=verification_payloads,
+        slot_records=slot_records,
+        transform_records=transform_records,
+        slot_bind_records=slot_bind_records,
+    ):
+        return {}
+    compact_traces = [_compact_formula_trace_for_judge(trace) for trace in traces[:12]]
+    trace_support = _finance_formula_trace_support_index(traces[:12], compact_facts)
+
+    latest_slot_frame = _compact_slot_frame_state(slot_records[-1].data if slot_records else {})
+    latest_transform_plan = _compact_transform_plan_state(transform_records[-1].data if transform_records else {})
+    latest_slot_bind = _compact_finance_slot_bind_state(slot_bind_records[-1].data if slot_bind_records else {})
+    latest_verification = _compact_finance_verification_state(
+        verification_payloads[-1] if verification_payloads else {}
+    )
+    missing_slots = _ordered_unique(
+        [
+            *_string_list(latest_slot_frame.get("missing_slots")),
+            *_string_list(latest_transform_plan.get("missing_slots")),
+            *_string_list(latest_verification.get("missing_slots")),
+        ]
+    )
+    attention: list[str] = []
+    if missing_slots:
+        attention.append("missing finance slots remain; decide whether retrieval, calculation, verification, or a limitation is the best next move")
+    if compact_facts and not compact_traces:
+        attention.append("finance facts are available but no calculator FormulaTrace is present yet")
+    if compact_traces and not latest_verification:
+        attention.append("FormulaTrace values are available; decide whether numeric verification is needed before final answer")
+    if latest_slot_bind.get("period_basis") or latest_slot_bind.get("line_item_basis"):
+        attention.append("model-owned slot binding basis is available; preserve or revise it explicitly if later evidence conflicts")
+    if latest_verification.get("status") == "failed":
+        attention.append("latest finance numeric verification failed; inspect issue codes before finalizing")
+    if latest_verification.get("status") == "passed":
+        attention.append("latest finance numeric verification passed; decide whether the answer can now be finalized")
+    return {
+        "schema": "holo.kernel_v3.finance_working_state.v1",
+        "ledger_count": len(ledger_records),
+        "fact_count": int(latest_ledger.get("fact_count") or len(facts) or 0),
+        "facts": compact_facts,
+        "slot_frame": latest_slot_frame,
+        "slot_bind": latest_slot_bind,
+        "transform_plan": latest_transform_plan,
+        "formula_trace_count": len(traces),
+        "formula_traces": compact_traces,
+        "formula_trace_support": trace_support,
+        "numeric_verification": latest_verification,
+        "presence": {
+            "finance_facts": bool(compact_facts),
+            "slot_frame": bool(latest_slot_frame),
+            "slot_bind": bool(latest_slot_bind),
+            "missing_slots": bool(missing_slots),
+            "formula_trace": bool(compact_traces),
+            "numeric_verification": bool(latest_verification),
+        },
+        "missing_slots": missing_slots[:16],
+        "model_attention": attention,
+        "host_boundary": (
+            "observational finance working state only; the model owns metric binding, period binding, "
+            "formula intent, next action, and final finance judgment"
+        ),
+    }
+
+
+def _finance_verification_payloads_for_working_state(records: list[object]) -> list[JsonObject]:
+    payloads: list[JsonObject] = []
+    for record in records:
+        kind = str(getattr(record, "kind", "") or "")
+        data = getattr(record, "data", None)
+        payload = data if isinstance(data, dict) else {}
+        if kind == "finance_numeric_verification":
+            payloads.append(dict(payload))
+            continue
+        if kind != "observation":
+            continue
+        source = str(payload.get("source") or "")
+        observation_kind = str(payload.get("kind") or "")
+        if source != f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}" and observation_kind != "finance_numeric_verification":
+            continue
+        content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+        verification = content.get("verification") if isinstance(content.get("verification"), dict) else {}
+        if not verification:
+            continue
+        item = dict(verification)
+        if not isinstance(item.get("status"), str) and isinstance(content.get("verifier_status"), str):
+            item["status"] = content["verifier_status"]
+        diagnostics = item.get("diagnostics") if isinstance(item.get("diagnostics"), dict) else {}
+        item["diagnostics"] = {
+            **diagnostics,
+            "source": f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}",
+            "tool_observation_status": payload.get("status"),
+            "tool_observation_id": payload.get("observation_id"),
+        }
+        payloads.append(item)
+    return payloads
+
+
+def _finance_facts_from_ledger(data: object) -> list[FinanceFact]:
+    payload = data if isinstance(data, dict) else {}
+    raw_facts = payload.get("facts") if isinstance(payload.get("facts"), list) else []
+    facts: list[FinanceFact] = []
+    for item in raw_facts:
+        if not isinstance(item, dict):
+            continue
+        try:
+            facts.append(FinanceFact.from_dict(item))
+        except Exception:
+            continue
+    return facts
+
+
+def _has_finance_working_state_anchor(
+    *,
+    ledger_records: list[object],
+    traces: list[FormulaTrace],
+    verification_records: list[object],
+    slot_records: list[object],
+    transform_records: list[object],
+    slot_bind_records: list[object],
+) -> bool:
+    if ledger_records or traces or verification_records or slot_bind_records:
+        return True
+    for record in [*slot_records[-2:], *transform_records[-2:]]:
+        data = getattr(record, "data", None)
+        payload = data if isinstance(data, dict) else {}
+        domain = str(payload.get("domain") or "").strip().casefold()
+        source = str(payload.get("source") or "").strip().casefold()
+        if domain == "finance" or source == "finance_fact_ledger":
+            return True
+    return False
+
+
+def _compact_finance_slot_bind_state(data: object) -> JsonObject:
+    payload = data if isinstance(data, dict) else {}
+    if not payload:
+        return {}
+    return {
+        "status": _bounded_text(payload.get("status"), limit=64),
+        "decision": _bounded_text(payload.get("decision"), limit=64),
+        "processor_status": _bounded_text(payload.get("processor_status"), limit=64),
+        "processor_error": _bounded_text(payload.get("processor_error"), limit=180),
+        "repair_attempted": payload.get("repair_attempted") if isinstance(payload.get("repair_attempted"), bool) else None,
+        "accepted_formula_plan_count": payload.get("accepted_formula_plan_count")
+        if isinstance(payload.get("accepted_formula_plan_count"), int)
+        else None,
+        "missing_slots": _string_list(payload.get("missing_slots"))[:16],
+        "next_action": _compact_model_dict(payload.get("next_action"), limit=8),
+        "period_basis": [_compact_model_dict(item, limit=12) for item in _dict_items(payload.get("period_basis"))[:12]],
+        "line_item_basis": [_compact_model_dict(item, limit=12) for item in _dict_items(payload.get("line_item_basis"))[:12]],
+        "reason_summary": _bounded_text(payload.get("reason_summary"), limit=240),
+    }
+
+
+def _latest_finance_slot_bind_state(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    records = [
+        record
+        for record in journal.records(task_id=task_id, kind="finance_slot_bind")
+        if record.run_id == run_id
+    ]
+    if not records:
+        return {}
+    return _compact_finance_slot_bind_state(records[-1].data)
+
+
+def _latest_finance_numeric_verification_payload(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    payloads = _finance_verification_payloads_for_working_state(journal.records(task_id=task_id, run_id=run_id))
+    if not payloads:
+        return {}
+    return dict(payloads[-1])
+
+
+def _compact_finance_numeric_repair_context_for_synthesis(data: object) -> JsonObject:
+    payload = data if isinstance(data, dict) else {}
+    if not payload:
+        return {}
+    guidance = finance_numeric_repair_guidance(payload)
+    diagnostics = _json_object(payload.get("diagnostics"))
+    target_binding = _compact_target_document_binding_for_judge(_json_object(diagnostics.get("target_document_binding")))
+    primary_binding = _compact_primary_source_binding_for_judge(_json_object(diagnostics.get("primary_source_numeric_binding")))
+    missing_values = payload.get("missing_values") if isinstance(payload.get("missing_values"), list) else []
+    unit_mismatches = payload.get("unit_mismatches") if isinstance(payload.get("unit_mismatches"), list) else []
+    matched_values = payload.get("matched_values") if isinstance(payload.get("matched_values"), list) else []
+    context: JsonObject = {
+        "schema": "holo.kernel_v3.finance_numeric_repair_context.v1",
+        "status": _bounded_text(payload.get("status"), limit=64),
+        "semantic_decision_owner": "model",
+        "host_role": "diagnostic_carrier_only",
+        "instruction": (
+            "Use these verifier diagnostics to repair unsupported numeric wording, units, source binding, or missing facts; "
+            "the model still decides the final finance semantics from the compact facts, FormulaTrace values, evidence, and citations."
+        ),
+        "issue_codes": _string_list(guidance.get("issue_codes"))[:12],
+        "matched_value_count": len(matched_values),
+        "missing_value_count": len(missing_values),
+        "unit_mismatch_count": len(unit_mismatches),
+        "missing_value_examples": [
+            dict(item)
+            for item in list(guidance.get("missing_value_examples") or [])
+            if isinstance(item, dict)
+        ][:8],
+        "unit_mismatch_examples": [
+            dict(item)
+            for item in list(guidance.get("unit_mismatch_examples") or [])
+            if isinstance(item, dict)
+        ][:8],
+        "repair_options": _string_list(guidance.get("repair_options"))[:8],
+        "host_boundary": _text_preview(guidance.get("host_boundary"), limit=240),
+        "target_document_binding": target_binding,
+        "primary_source_numeric_binding": primary_binding,
+    }
+    return {
+        key: value
+        for key, value in context.items()
+        if key
+        in {
+            "schema",
+            "semantic_decision_owner",
+            "host_role",
+            "instruction",
+            "matched_value_count",
+            "missing_value_count",
+            "unit_mismatch_count",
+        }
+        or value not in (None, "", [], {})
+    }
+
+
+def _compact_slot_frame_state(data: object) -> JsonObject:
+    payload = data if isinstance(data, dict) else {}
+    if not payload:
+        return {}
+    return {
+        "domain": _bounded_text(payload.get("domain"), limit=96),
+        "task_type": _bounded_text(payload.get("task_type"), limit=96),
+        "source": _bounded_text(payload.get("source"), limit=96),
+        "required_slot_count": len(payload.get("required_slots") if isinstance(payload.get("required_slots"), list) else []),
+        "filled_slot_count": len(payload.get("filled_slots") if isinstance(payload.get("filled_slots"), list) else []),
+        "missing_slots": _string_list(payload.get("missing_slots"))[:16],
+        "evidence_policy": _compact_finance_policy_state(payload.get("evidence_policy")),
+    }
+
+
+def _compact_transform_plan_state(data: object) -> JsonObject:
+    payload = data if isinstance(data, dict) else {}
+    if not payload:
+        return {}
+    return {
+        "domain": _bounded_text(payload.get("domain"), limit=96),
+        "operation": _bounded_text(payload.get("operation"), limit=96),
+        "status": _bounded_text(payload.get("status"), limit=64),
+        "method": _bounded_text(payload.get("method"), limit=96),
+        "input_claim_count": len(payload.get("input_claim_ids") if isinstance(payload.get("input_claim_ids"), list) else []),
+        "output_attribute": _bounded_text(payload.get("output_attribute"), limit=96),
+        "missing_slots": _string_list(payload.get("missing_slots"))[:16],
+    }
+
+
+def _compact_finance_policy_state(value: object) -> JsonObject:
+    payload = value if isinstance(value, dict) else {}
+    if not payload:
+        return {}
+    return {
+        "required_source_families": _string_list(payload.get("required_source_families"))[:8],
+        "forbidden_source_families": _string_list(payload.get("forbidden_source_families"))[:8],
+        "required_terms": _string_list(payload.get("required_terms"))[:8],
+        "authority": _bounded_text(payload.get("authority"), limit=96),
+        "freshness": _bounded_text(payload.get("freshness"), limit=96),
+    }
+
+
+def _compact_finance_verification_state(data: object) -> JsonObject:
+    payload = data if isinstance(data, dict) else {}
+    if not payload:
+        return {}
+    issues = payload.get("issues") if isinstance(payload.get("issues"), list) else []
+    missing_values = payload.get("missing_values") if isinstance(payload.get("missing_values"), list) else []
+    matched_values = payload.get("matched_values") if isinstance(payload.get("matched_values"), list) else []
+    guidance = finance_numeric_repair_guidance(payload)
+    issue_codes = _string_list(guidance.get("issue_codes"))[:12]
+    missing_value_examples = [
+        dict(item)
+        for item in guidance.get("missing_value_examples", [])
+        if isinstance(item, dict)
+    ][:8]
+    unit_mismatch_examples = [
+        dict(item)
+        for item in guidance.get("unit_mismatch_examples", [])
+        if isinstance(item, dict)
+    ][:8]
+    return {
+        "status": _bounded_text(payload.get("status"), limit=64),
+        "issue_codes": issue_codes,
+        "issue_count": len(issues),
+        "matched_value_count": len(matched_values),
+        "missing_value_count": len(missing_values),
+        "missing_value_examples": missing_value_examples,
+        "unit_mismatch_examples": unit_mismatch_examples,
+        "missing_slots": _ordered_unique(
+            [
+                str(item.get("slot") or item.get("metric") or item.get("name") or "").strip()
+                for item in missing_value_examples
+                if isinstance(item, dict)
+            ]
+        )[:16],
+        "repair_options": _string_list(guidance.get("repair_options"))[:8],
+        "verifier_gate_status": _json_object(payload.get("verifier_gate_result")).get("status"),
+    }
+
+
+def _repeated_values(values: list[str]) -> list[str]:
+    counts: Counter[str] = Counter(value for value in values if value)
+    return [value for value, count in counts.items() if count > 1]
+
+
+def _bounded_text(value: object, *, limit: int) -> str | None:
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    if not text:
+        return None
+    return text[:limit]
 
 
 class _RecipeBoundPlanner:
@@ -3554,8 +4480,10 @@ class _RecipeBoundPlanner:
         self._calls += 1
         self._journal_plan_if_needed(context)
         model_owns_semantics = _llm_semantic_judgment_required(self.recipe)
+        host_semantic_fallbacks = _host_semantic_fallbacks_enabled(self.recipe)
+        tool_scaffold = _finance_tool_scaffold_enabled(self.recipe)
         action = self.inner.propose(context, feedback)
-        if not model_owns_semantics:
+        if host_semantic_fallbacks or tool_scaffold:
             rescue = self._host_planner_failure_retrieval_action(context, action)
             if rescue is not None:
                 action = rescue
@@ -3564,14 +4492,12 @@ class _RecipeBoundPlanner:
                 action = rescue
         bound = _bind_model_action_to_recipe(action, goal=self.goal, recipe=self.recipe, context=context)
         if (
-            not model_owns_semantics
+            (host_semantic_fallbacks or tool_scaffold)
             and bound.name != "retrieval.run"
             and not (bound.kind == "tool" and bound.name in set(self.recipe.allowed_tools))
         ):
             bound = self._retrieval_workbench_followup_action(context, bound) or bound
-        if model_owns_semantics and _feedback_requests_retrieval_workbench_followup(feedback):
-            bound = self._retrieval_workbench_followup_action(context, bound) or bound
-        if not model_owns_semantics:
+        if host_semantic_fallbacks or tool_scaffold:
             bound = self._finance_formula_action(context, bound) or bound
         self._journal_plan_update(context, bound, feedback)
         return bound
@@ -3696,6 +4622,8 @@ class _RecipeBoundPlanner:
         )
 
     def _finance_formula_action(self, context: ContextBundle, action: CandidateAction) -> CandidateAction | None:
+        if not (_host_semantic_fallbacks_enabled(self.recipe) or _finance_tool_scaffold_enabled(self.recipe)):
+            return None
         if self.journal is None or CALCULATOR_TOOL_NAME not in self.recipe.allowed_tools:
             return None
         if action.name == CALCULATOR_TOOL_NAME:
@@ -4162,12 +5090,22 @@ def _finance_missing_fact_retrieval_needed(*, formula_name: str, missing: list[s
         return any(marker in text for marker in ("adjusted ebitda", "bridge", "addback", "add-back", "add back", "non-gaap"))
     if formula_name == "dio" and any(item in missing for item in ("inventory", "cogs_or_cost_of_sales", "cogs", "cost_of_sales")):
         return any(marker in text for marker in ("dio", "days inventory", "inventory", "cost of sales", "cost of revenue", "cogs"))
+    if formula_name == "yoy_growth" and missing:
+        return any(marker in text for marker in ("yoy", "year-over-year", "year over year", "growth rate", "change"))
     if formula_name == "dcf" and missing:
         return any(marker in text for marker in ("dcf", "discounted cash flow", "cash flow", "wacc", "terminal growth"))
     if formula_name == "lbo" and missing:
         return any(marker in text for marker in ("lbo", "leveraged buyout", "ebitda", "exit multiple", "leverage"))
     if formula_name == "capital_intensity" and missing:
         return any(marker in text for marker in ("capital-intensive", "capital intensive", "capital intensity", "capex", "property plant", "assets"))
+    if formula_name == "operating_cash_flow_ratio" and missing:
+        return any(marker in text for marker in ("operating cash flow ratio", "cash from operations", "current liabilities"))
+    if formula_name in _finance_statement_formula_names() and missing:
+        return True
+    if formula_name == "fixed_charge_coverage" and missing:
+        return any(marker in text for marker in ("fixed charge", "fixed-charge", "coverage", "earnings to fixed charges"))
+    if formula_name == "mlr_rebate" and missing:
+        return any(marker in text for marker in ("mlr", "medical loss ratio", "rebate", "premium", "claims"))
     return False
 
 
@@ -4207,6 +5145,11 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             f"{base_query} SEC companyfacts 10-K inventory cost of revenue cost of sales "
             "COGS days inventory outstanding"
         )
+    elif formula_name == "yoy_growth":
+        query = (
+            f"{base_query} SEC companyfacts 10-K year-over-year prior current period "
+            f"{_yoy_growth_metric_query_terms(base_query)}"
+        )
     elif formula_name == "dcf":
         query = (
             f"{base_query} 10-K operating cash flow free cash flow capital expenditures "
@@ -4219,8 +5162,28 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
         )
     elif formula_name == "capital_intensity":
         query = (
-            f"{base_query} SEC companyfacts capital expenditures revenue operating cash flow total assets "
-            "PropertyPlantAndEquipmentNet PP&E net"
+            f"{base_query} SEC companyfacts capital expenditures revenue net sales operating cash flow total assets "
+            "PropertyPlantAndEquipmentNet PP&E net net income ROA"
+        )
+    elif formula_name == "operating_cash_flow_ratio":
+        query = (
+            f"{base_query} SEC companyfacts 10-K operating cash flow cash from operations "
+            "total current liabilities balance sheet cash flow statement"
+        )
+    elif formula_name in _finance_statement_formula_names():
+        query = (
+            f"{base_query} SEC companyfacts 10-K annual filing "
+            f"{_finance_statement_formula_query_terms(formula_name)}"
+        )
+    elif formula_name == "fixed_charge_coverage":
+        query = (
+            f"{base_query} SEC companyfacts 10-K fixed charges earnings available for fixed charges "
+            "ratio of earnings to fixed charges Exhibit 12 pretax income"
+        )
+    elif formula_name == "mlr_rebate":
+        query = (
+            f"{base_query} medical loss ratio MLR rebate premium revenue incurred claims "
+            "quality improvement expenses MLR standard CMS filing"
         )
     elif formula_name == "fixed_asset_turnover":
         query = (
@@ -4243,12 +5206,30 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
     if formula_name in {"dcf", "lbo"}:
         max_queries = min(6, max(4, len(queries)))
         max_fetches = 18
-    if formula_name in {"capital_intensity", "fixed_asset_turnover"}:
+    if formula_name == "capital_intensity":
+        max_queries = min(6, max(4, len(queries)))
+        max_fetches = 20
+    if formula_name == "operating_cash_flow_ratio":
         max_queries = min(5, max(3, len(queries)))
         max_fetches = 16
+    if formula_name == "fixed_asset_turnover":
+        max_queries = min(5, max(3, len(queries)))
+        max_fetches = 16
+    if formula_name == "fixed_charge_coverage":
+        max_queries = min(5, max(3, len(queries)))
+        max_fetches = 16
+    if formula_name == "mlr_rebate":
+        max_queries = min(6, max(4, len(queries)))
+        max_fetches = 18
     if formula_name == "dio":
         max_queries = min(6, max(4, len(queries)))
         max_fetches = 18
+    if formula_name == "yoy_growth":
+        max_queries = min(5, max(3, len(queries)))
+        max_fetches = 16
+    if formula_name in _finance_statement_formula_names():
+        max_queries = min(5, max(3, len(queries)))
+        max_fetches = 16
     return {
         "query": query,
         "queries": queries[:max_queries],
@@ -4273,6 +5254,15 @@ def _finance_missing_fact_retrieval_payload(*, formula_name: str, missing: list[
             "required_evidence_terms": evidence_policy.required_terms if evidence_policy is not None else [],
             "research_profile": "finance_fundamentals",
             **({"target_inventory_and_cogs_structured_source_required": True} if formula_name == "dio" else {}),
+            **(
+                {"target_operating_cash_flow_ratio_structured_source_required": True}
+                if formula_name == "operating_cash_flow_ratio"
+                else {}
+            ),
+            **({"target_yoy_growth_structured_source_required": True} if formula_name == "yoy_growth" else {}),
+            **({"target_statement_formula_structured_source_required": True} if formula_name in _finance_statement_formula_names() else {}),
+            **({"target_fixed_charge_coverage_structured_source_required": True} if formula_name == "fixed_charge_coverage" else {}),
+            **({"target_mlr_rebate_regulatory_source_required": True} if formula_name == "mlr_rebate" else {}),
             **({"research_task_kind": "valuation"} if formula_name in {"ev_revenue", "ev_ebitda", "dcf", "lbo"} else {}),
             **({"target_tickers": tickers} if tickers else {}),
         },
@@ -4298,8 +5288,47 @@ def _finance_issuer_seed_urls(goal: str, *, formula_name: str) -> list[str]:
             "dio",
             "capital_intensity",
             "fixed_asset_turnover",
+            "fixed_charge_coverage",
+            "mlr_rebate",
+            "operating_cash_flow_ratio",
+            *_finance_statement_formula_names(),
         }:
             urls.append(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json")
+        if formula_name == "dio":
+            for concept in ("InventoryNet", "CostOfRevenue", "CostOfGoodsAndServicesSold"):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name == "yoy_growth":
+            for concept in _yoy_growth_companyconcepts(goal):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name == "capital_intensity":
+            for concept in (
+                "Revenues",
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "NetCashProvidedByUsedInOperatingActivities",
+                "PropertyPlantAndEquipmentNet",
+                "Assets",
+                "NetIncomeLoss",
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "SalesRevenueNet",
+            ):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name == "fixed_asset_turnover":
+            for concept in ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet", "PropertyPlantAndEquipmentNet"):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name == "operating_cash_flow_ratio":
+            for concept in ("NetCashProvidedByUsedInOperatingActivities", "LiabilitiesCurrent"):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name in _finance_statement_formula_names():
+            for concept in _finance_statement_formula_companyconcepts(formula_name):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
+        elif formula_name == "fixed_charge_coverage":
+            for concept in (
+                "EarningsAvailableForFixedCharges",
+                "FixedCharges",
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
+            ):
+                urls.append(f"https://data.sec.gov/api/xbrl/companyconcept/CIK{padded}/us-gaap/{concept}.json")
     return _ordered_unique(urls)[:12]
 
 
@@ -4471,12 +5500,40 @@ def _finance_missing_fact_queries(*, formula_name: str, goal: str, primary_query
             add(f"{ticker} LBO leverage exit multiple assumptions")
     elif formula_name == "capital_intensity" and tickers:
         for ticker in tickers:
-            add(f"{ticker} SEC companyfacts capital expenditures revenue operating cash flow total assets PropertyPlantAndEquipmentNet")
-            add(f"{ticker} 10-K balance sheet PP&E assets cash flow capital expenditures")
+            add(
+                f"{ticker} SEC companyfacts capital expenditures revenue net sales operating cash flow total assets "
+                "PropertyPlantAndEquipmentNet net income"
+            )
+            add(f"{ticker} 10-K balance sheet PP&E assets income statement net income cash flow capital expenditures")
+    elif formula_name == "fixed_charge_coverage" and tickers:
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges pretax income")
+            add(f"{ticker} 10-K Exhibit 12 ratio of earnings to fixed charges fixed charges")
+    elif formula_name == "mlr_rebate":
+        for ticker in tickers:
+            add(f"{ticker} medical loss ratio MLR rebate premium revenue incurred claims quality improvement expenses")
+            add(f"{ticker} annual report 10-K medical costs premium revenue medical loss ratio")
+        add(f"{goal} CMS medical loss ratio rebate MLR standard premium claims quality improvement")
     elif formula_name == "fixed_asset_turnover" and tickers:
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
             add(f"{ticker} 10-K statement of income balance sheet revenue PP&E net")
+    elif formula_name == "yoy_growth":
+        metric_terms = _yoy_growth_metric_query_terms(goal)
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts {metric_terms} prior current annual 10-K year-over-year")
+            add(f"{ticker} 10-K income statement {metric_terms} year-over-year change")
+    elif formula_name == "operating_cash_flow_ratio":
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts NetCashProvidedByUsedInOperatingActivities LiabilitiesCurrent 10-K")
+            add(f"{ticker} 10-K cash flow statement operating activities balance sheet total current liabilities")
+    elif formula_name in _finance_statement_formula_names():
+        terms = _finance_statement_formula_query_terms(formula_name)
+        concepts = " ".join(_finance_statement_formula_companyconcepts(formula_name))
+        for ticker in tickers:
+            add(f"{ticker} SEC companyfacts {concepts} 10-K")
+            add(f"{ticker} 10-K annual report {terms}")
+        add(f"{goal} SEC companyfacts {concepts} {terms}")
     elif formula_name == "dio":
         for ticker in tickers:
             add(f"{ticker} SEC companyfacts inventory cost of revenue cost of sales COGS 10-K")
@@ -4501,7 +5558,13 @@ def _finance_missing_fact_preferred_families(formula_name: str) -> list[str]:
         return ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"]
     if formula_name == "capital_intensity":
         return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
+    if formula_name == "fixed_charge_coverage":
+        return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
+    if formula_name == "mlr_rebate":
+        return ["regulatory_disclosure", "structured_regulatory_data", "regulatory_filing", "company_ir"]
     if formula_name == "fixed_asset_turnover":
+        return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
+    if formula_name == "operating_cash_flow_ratio":
         return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
     return ["structured_regulatory_data", "regulatory_filing", "company_ir"]
 
@@ -4524,12 +5587,22 @@ def _finance_missing_fact_secondary_query(*, formula_name: str, goal: str) -> st
         return f"{goal} annual report 10-K 10-Q non-GAAP adjusted EBITDA reconciliation add backs"
     if formula_name == "dio":
         return f"{goal} annual report 10-K inventory cost of sales cost of revenue COGS"
+    if formula_name == "yoy_growth":
+        return f"{goal} annual report 10-K income statement {_yoy_growth_metric_query_terms(goal)} prior current period"
     if formula_name == "dcf":
         return f"{goal} annual report 10-K operating cash flow free cash flow capital expenditures"
     if formula_name == "lbo":
         return f"{goal} annual report 10-K adjusted EBITDA operating cash flow free cash flow debt cash enterprise value"
     if formula_name == "capital_intensity":
-        return f"{goal} annual report 10-K PP&E total assets capital expenditures operating cash flow revenue"
+        return f"{goal} annual report 10-K PP&E total assets capital expenditures operating cash flow revenue net income"
+    if formula_name == "operating_cash_flow_ratio":
+        return f"{goal} annual report 10-K cash flow statement operating activities balance sheet total current liabilities"
+    if formula_name in _finance_statement_formula_names():
+        return f"{goal} annual report 10-K {_finance_statement_formula_query_terms(formula_name)}"
+    if formula_name == "fixed_charge_coverage":
+        return f"{goal} annual report 10-K Exhibit 12 fixed charges earnings available for fixed charges pretax income"
+    if formula_name == "mlr_rebate":
+        return f"{goal} medical loss ratio rebate premium revenue incurred claims quality improvement expenses MLR standard"
     if formula_name == "fixed_asset_turnover":
         return f"{goal} annual report 10-K revenue property plant equipment net fixed asset turnover"
     return f"{goal} SEC Archives 8-K 10-K consideration revenue"
@@ -4542,12 +5615,22 @@ def _finance_missing_fact_tertiary_query(*, formula_name: str, goal: str) -> str
         return f"{goal} investor relations annual report adjusted EBITDA non-GAAP reconciliation table"
     if formula_name == "dio":
         return f"{goal} SEC companyfacts InventoryNet CostOfRevenue CostOfGoodsAndServicesSold"
+    if formula_name == "yoy_growth":
+        return f"{goal} SEC companyfacts {' '.join(_yoy_growth_companyconcepts(goal))}"
     if formula_name == "dcf":
         return f"{goal} investor relations DCF assumptions WACC terminal growth cash flow"
     if formula_name == "lbo":
         return f"{goal} investor relations LBO assumptions leverage exit multiple EBITDA cash flow"
     if formula_name == "capital_intensity":
         return f"{goal} SEC companyfacts PropertyPlantAndEquipmentNet Assets PaymentsToAcquirePropertyPlantAndEquipment NetCashProvidedByUsedInOperatingActivities Revenues"
+    if formula_name == "operating_cash_flow_ratio":
+        return f"{goal} SEC companyfacts NetCashProvidedByUsedInOperatingActivities LiabilitiesCurrent current liabilities"
+    if formula_name in _finance_statement_formula_names():
+        return f"{goal} SEC companyfacts {' '.join(_finance_statement_formula_companyconcepts(formula_name))}"
+    if formula_name == "fixed_charge_coverage":
+        return f"{goal} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
+    if formula_name == "mlr_rebate":
+        return f"{goal} CMS medical loss ratio rebate filing MLR numerator denominator premium revenue claims"
     if formula_name == "fixed_asset_turnover":
         return f"{goal} SEC companyfacts Revenues PropertyPlantAndEquipmentNet 10-K balance sheet statement of income"
     return f"{goal} official filing transaction value revenue"
@@ -4863,7 +5946,7 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         return payload
     text = f"{root_goal} {payload.get('query') or ''}".lower()
     compact = text.replace(" ", "")
-    formula_name = (
+    formula_name = _finance_formula_name_from_retrieval_context(payload, recipe=recipe) or (
         "dcf"
         if ("discounted cash flow" in text or " dcf" in f" {text}")
         else "lbo"
@@ -4882,6 +5965,22 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         )
         else "dio"
         if ("days inventory outstanding" in text or "days inventory" in text or " dio" in f" {text}")
+        else "yoy_growth"
+        if ("yoy" in text or "year-over-year" in text or "year over year" in text or "growth rate" in text)
+        else "operating_cash_flow_ratio"
+        if (
+            "operating cash flow ratio" in text
+            or "cash flow ratio" in text
+            or (
+                any(marker in text for marker in ("cash from operations", "cash flow from operations", "operating cash flow"))
+                and "current liabilities" in text
+                and "ratio" in text
+            )
+        )
+        else "fixed_charge_coverage"
+        if ("fixed charge" in text or "fixed-charge" in text or "earnings to fixed charges" in text)
+        else "mlr_rebate"
+        if ("medical loss ratio" in text or " mlr" in f" {text}")
         else ""
     )
     if not formula_name:
@@ -4896,10 +5995,32 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         additions = "SEC companyfacts 10-K annual revenue transaction value enterprise value consideration acquisition target company"
     elif formula_name == "dio":
         additions = "SEC companyfacts 10-K annual inventory cost of revenue cost of sales COGS days inventory outstanding"
+    elif formula_name == "yoy_growth":
+        additions = f"SEC companyfacts 10-K annual prior current period {_yoy_growth_metric_query_terms(root_goal)} year-over-year"
+    elif formula_name == "operating_cash_flow_ratio":
+        additions = "SEC companyfacts 10-K operating cash flow cash from operations total current liabilities balance sheet cash flow statement"
+    elif formula_name == "capital_intensity":
+        additions = (
+            "SEC companyfacts companyconcept 10-K annual revenue net sales capital expenditures operating cash flow "
+            "total assets property plant equipment net PP&E net net income ROA capital intensity"
+        )
+    elif formula_name == "fixed_charge_coverage":
+        additions = (
+            "SEC companyfacts companyconcept 10-K Exhibit 12 fixed charges earnings available for fixed charges "
+            "ratio of earnings to fixed charges pretax income"
+        )
+    elif formula_name == "mlr_rebate":
+        additions = (
+            "medical loss ratio MLR rebate premium revenue incurred claims quality improvement expenses "
+            "MLR standard CMS regulatory filing"
+        )
+    elif formula_name == "fixed_asset_turnover":
+        additions = "SEC companyfacts companyconcept 10-K annual revenue net sales property plant equipment net PP&E fixed asset turnover"
     else:
         additions = "latest annual 10-K adjusted EBITDA reconciliation non-GAAP bridge net income add-backs deductions subtotal"
     augmented_query = _append_query_terms(query, additions)
-    updated["query"] = query if formula_name == "ev_revenue" else augmented_query
+    preserve_primary_query = _llm_semantic_judgment_required(recipe)
+    updated["query"] = query if formula_name == "ev_revenue" or preserve_primary_query else augmented_query
     queries = _string_list(updated.get("queries"))
     extra_queries: list[str] = []
     if formula_name == "ev_revenue":
@@ -4918,6 +6039,38 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
         for ticker in _finance_goal_tickers(root_goal):
             extra_queries.append(f"{ticker} SEC companyfacts inventory cost of revenue cost of sales COGS 10-K")
         extra_queries.append(f"{root_goal} SEC companyfacts inventory cost of revenue cost of sales")
+    elif formula_name == "yoy_growth":
+        metric_terms = _yoy_growth_metric_query_terms(root_goal)
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} SEC companyfacts {metric_terms} prior current annual 10-K year-over-year")
+            extra_queries.append(f"{ticker} 10-K income statement {metric_terms} year-over-year change")
+        extra_queries.append(f"{root_goal} SEC companyfacts {metric_terms} prior current year-over-year")
+    elif formula_name == "operating_cash_flow_ratio":
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} SEC companyfacts NetCashProvidedByUsedInOperatingActivities LiabilitiesCurrent")
+            extra_queries.append(f"{ticker} 10-K cash flow statement operating activities balance sheet current liabilities")
+        extra_queries.append(f"{root_goal} SEC companyfacts operating cash flow total current liabilities")
+    elif formula_name == "capital_intensity":
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(
+                f"{ticker} SEC companyfacts capital expenditures revenue net sales operating cash flow total assets "
+                "PropertyPlantAndEquipmentNet net income"
+            )
+            extra_queries.append(f"{ticker} SEC companyconcept capital intensity capex revenue PP&E assets net income")
+        extra_queries.append(f"{root_goal} SEC companyfacts capital intensity revenue capex OCF PP&E assets ROA")
+    elif formula_name == "fixed_charge_coverage":
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} SEC companyfacts EarningsAvailableForFixedCharges FixedCharges pretax income")
+            extra_queries.append(f"{ticker} 10-K Exhibit 12 ratio of earnings to fixed charges fixed charges")
+        extra_queries.append(f"{root_goal} SEC filing fixed charges earnings available for fixed charges")
+    elif formula_name == "mlr_rebate":
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} medical loss ratio MLR rebate premium revenue incurred claims quality improvement expenses")
+            extra_queries.append(f"{ticker} annual report 10-K medical costs premium revenue medical loss ratio")
+        extra_queries.append(f"{root_goal} CMS medical loss ratio rebate MLR standard premium claims quality improvement")
+    elif formula_name == "fixed_asset_turnover":
+        for ticker in _finance_goal_tickers(root_goal):
+            extra_queries.append(f"{ticker} SEC companyfacts revenue PropertyPlantAndEquipmentNet fixed asset turnover")
     if queries:
         base_queries = queries if formula_name == "ev_revenue" else [_append_query_terms(item, additions) for item in queries]
         updated["queries"] = _ordered_unique(
@@ -4952,12 +6105,212 @@ def _augment_finance_modeling_retrieval_payload(payload: JsonObject, *, root_goa
             metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:16]
         metadata.setdefault("source_authority_requirement", "primary")
         metadata.setdefault("target_inventory_and_cogs_structured_source_required", True)
+    if formula_name in {"capital_intensity", "fixed_asset_turnover", "fixed_charge_coverage", "mlr_rebate", "operating_cash_flow_ratio", "yoy_growth"}:
+        source_urls = _finance_issuer_seed_urls(root_goal, formula_name=formula_name)
+        if source_urls:
+            updated["source_urls"] = _ordered_unique([*_string_list(updated.get("source_urls")), *source_urls])[:24]
+            metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *source_urls])[:24]
+        metadata.setdefault("source_authority_requirement", "primary")
+        if formula_name == "yoy_growth":
+            metadata.setdefault("target_yoy_growth_structured_source_required", True)
+        if formula_name == "capital_intensity":
+            metadata.setdefault("target_capital_intensity_structured_source_required", True)
+        if formula_name == "fixed_asset_turnover":
+            metadata.setdefault("target_fixed_asset_turnover_structured_source_required", True)
+        if formula_name == "operating_cash_flow_ratio":
+            metadata.setdefault("target_operating_cash_flow_ratio_structured_source_required", True)
+        if formula_name == "fixed_charge_coverage":
+            metadata.setdefault("target_fixed_charge_coverage_structured_source_required", True)
+        if formula_name == "mlr_rebate":
+            metadata.setdefault("target_mlr_rebate_regulatory_source_required", True)
     metadata.setdefault("preferred_source_families", ["structured_regulatory_data", "regulatory_filing", "company_ir", "market_data_provider"])
     updated["metadata"] = metadata
     updated["max_sources"] = max(int(updated.get("max_sources") or 0), 24)
-    updated["max_fetches"] = max(int(updated.get("max_fetches") or 0), 18 if formula_name == "ev_revenue" else 12)
+    updated["max_fetches"] = max(
+        int(updated.get("max_fetches") or 0),
+        20
+        if formula_name == "capital_intensity"
+        else 18
+        if formula_name in {"ev_revenue", "fixed_asset_turnover", "fixed_charge_coverage", "mlr_rebate"}
+        else 16
+        if formula_name == "operating_cash_flow_ratio"
+        else 12,
+    )
     updated["max_spans_per_document"] = max(int(updated.get("max_spans_per_document") or 0), 8)
     return updated
+
+
+def _finance_formula_name_from_retrieval_context(payload: JsonObject, *, recipe: TaskRecipe) -> str:
+    metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+    candidates = [
+        metadata.get("compiled_task_hint"),
+        metadata.get("execution_program"),
+        recipe.metadata.get("execution_program") if isinstance(recipe.metadata, dict) else None,
+    ]
+    for candidate in candidates:
+        formula_name = _finance_formula_name_from_program_like(candidate)
+        if formula_name:
+            return formula_name
+    return ""
+
+
+def _finance_formula_name_from_program_like(value: object) -> str:
+    data = _json_object(value)
+    if not data:
+        return ""
+    task_spec = _json_object(data.get("task_spec"))
+    diagnostics = _json_object(data.get("diagnostics"))
+    task_diagnostics = _json_object(task_spec.get("diagnostics"))
+    for candidate in (
+        data.get("formula_name"),
+        task_diagnostics.get("formula_name"),
+        diagnostics.get("formula_name"),
+        diagnostics.get("formula"),
+    ):
+        formula_name = _canonical_finance_formula_name(_string_value(candidate))
+        if formula_name:
+            return formula_name
+    for spec in _dict_items(data.get("transform_specs")):
+        formula_name = _canonical_finance_formula_name(_string_value(spec.get("name")))
+        if formula_name:
+            return formula_name
+    for spec in _dict_items(data.get("evidence_specs")):
+        formula_name = _canonical_finance_formula_name(" ".join([_string_value(spec.get("slot_name")), _string_value(spec.get("line_item"))]))
+        if formula_name:
+            return formula_name
+    return ""
+
+
+def _canonical_finance_formula_name(value: str) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not text:
+        return ""
+    if text.startswith("capital_intensity") or text in {"capex_to_revenue", "capex_to_operating_cash_flow", "ppe_to_assets", "return_on_assets"}:
+        return "capital_intensity"
+    if text.startswith("fixed_asset_turnover"):
+        return "fixed_asset_turnover"
+    if text.startswith("operating_cash_flow_ratio") or (
+        "operating_cash_flow" in text and "current_liabilities" in text
+    ):
+        return "operating_cash_flow_ratio"
+    if text.startswith("fixed_charge_coverage") or "fixed_charge" in text or "earnings_to_fixed_charges" in text:
+        return "fixed_charge_coverage"
+    if text.startswith("mlr_rebate") or "medical_loss_ratio" in text or text == "mlr":
+        return "mlr_rebate"
+    if text.startswith("dio") or "days_inventory" in text:
+        return "dio"
+    if text.startswith("yoy_growth") or text in {"year_over_year_growth", "year_over_year_change"}:
+        return "yoy_growth"
+    if text in _finance_statement_formula_names():
+        return text
+    if text.startswith("quick_ratio"):
+        return "quick_ratio"
+    if text.startswith("working_capital_ratio"):
+        return "working_capital_ratio"
+    if text.startswith("net_working_capital"):
+        return "net_working_capital"
+    if text.startswith("return_on_assets") or text == "roa":
+        return "return_on_assets"
+    if text.startswith("free_cash_flow") or text == "fcf":
+        return "free_cash_flow"
+    if text.startswith("inventory_turnover"):
+        return "inventory_turnover"
+    if text.startswith("dividend_payout_ratio") or text == "payout_ratio":
+        return "dividend_payout_ratio"
+    if text.startswith("retention_ratio"):
+        return "retention_ratio"
+    if text.startswith("ev_revenue") or "enterprise_value_to_revenue" in text:
+        return "ev_revenue"
+    if text.startswith("ev_ebitda") or "enterprise_value_to_ebitda" in text:
+        return "ev_ebitda"
+    if text.startswith("dcf") or "discounted_cash_flow" in text:
+        return "dcf"
+    if text.startswith("lbo") or "leveraged_buyout" in text:
+        return "lbo"
+    if text.startswith("bridge_subtotal"):
+        return "bridge_subtotal"
+    return ""
+
+
+def _finance_statement_formula_names() -> set[str]:
+    return {
+        "quick_ratio",
+        "working_capital_ratio",
+        "net_working_capital",
+        "return_on_assets",
+        "free_cash_flow",
+        "inventory_turnover",
+        "dividend_payout_ratio",
+        "retention_ratio",
+    }
+
+
+def _finance_statement_formula_query_terms(formula_name: str) -> str:
+    mapping = {
+        "quick_ratio": "cash and cash equivalents marketable securities accounts receivable total current liabilities balance sheet quick ratio",
+        "working_capital_ratio": "total current assets total current liabilities balance sheet working capital ratio",
+        "net_working_capital": "total current assets total current liabilities balance sheet net working capital",
+        "return_on_assets": "net income total assets average assets income statement balance sheet return on assets ROA",
+        "free_cash_flow": "net cash provided by operating activities capital expenditures free cash flow cash flow statement",
+        "inventory_turnover": "inventory cost of goods sold cost of revenue cost of sales average inventory inventory turnover",
+        "dividend_payout_ratio": "cash dividends paid net income dividend payout ratio cash flow statement income statement",
+        "retention_ratio": "cash dividends paid net income retention ratio payout ratio cash flow statement income statement",
+    }
+    return mapping.get(formula_name, "financial statement line items")
+
+
+def _finance_statement_formula_companyconcepts(formula_name: str) -> list[str]:
+    mapping = {
+        "quick_ratio": [
+            "CashAndCashEquivalentsAtCarryingValue",
+            "ShortTermInvestments",
+            "MarketableSecuritiesCurrent",
+            "AccountsReceivableNetCurrent",
+            "LiabilitiesCurrent",
+        ],
+        "working_capital_ratio": ["AssetsCurrent", "LiabilitiesCurrent"],
+        "net_working_capital": ["AssetsCurrent", "LiabilitiesCurrent"],
+        "return_on_assets": ["NetIncomeLoss", "Assets"],
+        "free_cash_flow": [
+            "NetCashProvidedByUsedInOperatingActivities",
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            "PaymentsToAcquireProductiveAssets",
+        ],
+        "inventory_turnover": ["InventoryNet", "CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold"],
+        "dividend_payout_ratio": ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "NetIncomeLoss"],
+        "retention_ratio": ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "NetIncomeLoss"],
+    }
+    return list(mapping.get(formula_name, []))
+
+
+def _yoy_growth_metric_query_terms(goal: str) -> str:
+    text = " ".join(str(goal or "").lower().replace("-", " ").split())
+    if "operating income" in text:
+        return "OperatingIncomeLoss operating income"
+    if "net income" in text or "net earnings" in text:
+        return "NetIncomeLoss net income"
+    if "ebitda" in text:
+        return "EBITDA adjusted EBITDA"
+    if "net sales" in text:
+        return "SalesRevenueNet net sales"
+    if "net revenues" in text or "net revenue" in text:
+        return "Revenues net revenues"
+    if "total revenues" in text or "total revenue" in text:
+        return "Revenues total revenues"
+    return "Revenues RevenueFromContractWithCustomerExcludingAssessedTax revenue"
+
+
+def _yoy_growth_companyconcepts(goal: str) -> list[str]:
+    text = " ".join(str(goal or "").lower().replace("-", " ").split())
+    if "operating income" in text:
+        return ["OperatingIncomeLoss"]
+    if "net income" in text or "net earnings" in text:
+        return ["NetIncomeLoss"]
+    if "net sales" in text:
+        return ["SalesRevenueNet", "RevenueFromContractWithCustomerExcludingAssessedTax"]
+    if "net revenues" in text or "net revenue" in text or "total revenues" in text or "total revenue" in text:
+        return ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"]
+    return ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"]
 
 
 def _append_query_terms(query: str, additions: str) -> str:
@@ -5147,6 +6500,7 @@ def task_recipe(
         allowed_tools = ["retrieval.run"]
         if _metadata_requires_finance_numeric_verifier(recipe_metadata):
             allowed_tools.append(CALCULATOR_TOOL_NAME)
+            allowed_tools.append(FINANCE_VERIFY_NUMERIC_TOOL_NAME)
         toolchain = _composable_toolchain_config(recipe_metadata)
         if _truthy(toolchain.get("workspace_read")):
             allowed_tools.extend(["workspace.list", "workspace.search", "file.read"])
@@ -5890,6 +7244,25 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                         "variables: named numeric inputs from cited facts",
                         "unit: optional percent/bps/USD/etc.",
                         "input_fact_ids: finance fact ids when available",
+                    ],
+                }
+            )
+        if FINANCE_VERIFY_NUMERIC_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": (
+                        "the model has drafted or repaired a finance answer and needs host verifier feedback on "
+                        "whether material numeric claims are supported by provided facts, formula traces, citations, and evidence"
+                    ),
+                    "payload_requirements": [
+                        "answer: finance answer text to verify",
+                        "facts: optional FinanceFact dicts",
+                        "formula_traces: optional FormulaTrace dicts",
+                        "citations/evidence: optional citation and evidence dicts",
+                        "question: optional original user question",
                     ],
                 }
             )
@@ -7521,6 +8894,59 @@ def _llm_semantic_judgment_required(recipe: TaskRecipe | None) -> bool:
     return str(profile.get("profile_id") or "") == "finance-capability"
 
 
+def _host_semantic_fallbacks_enabled(recipe: TaskRecipe | None) -> bool:
+    """Legacy escape hatch for host-authored semantic answers/formulas.
+
+    Kernel v3's normal contract is model-owned semantic judgment. The host may
+    execute tools, extract candidate facts, journal provenance, and verify
+    numeric support, but it should not choose answer facts/formulas or synthesize
+    finance answers unless an explicit legacy diagnostic flag enables it.
+    """
+
+    if recipe is None or _llm_semantic_judgment_required(recipe):
+        return False
+    containers = [_execution_metadata(recipe), recipe.metadata]
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        value = container.get("host_semantic_fallbacks")
+        if value is True:
+            return True
+        if isinstance(value, dict) and value.get("enabled") is True:
+            return True
+    return False
+
+
+def _finance_tool_scaffold_enabled(recipe: TaskRecipe | None) -> bool:
+    """Allow host-owned tool scaffolding without host-owned answer semantics."""
+
+    if recipe is None or recipe.mode != "retrieval_answer" or _llm_semantic_judgment_required(recipe):
+        return False
+    for container in (_execution_metadata(recipe), recipe.metadata):
+        if not isinstance(container, dict):
+            continue
+        llm_judgment = container.get("llm_judgment")
+        if not isinstance(llm_judgment, dict):
+            continue
+        if str(llm_judgment.get("host_semantic_fallback") or "") == "scaffold_only":
+            return True
+    return False
+
+
+def _finance_formula_preflight_scaffold_enabled(recipe: TaskRecipe | None) -> bool:
+    if _host_semantic_fallbacks_enabled(recipe):
+        return True
+    if recipe is None or recipe.mode != "retrieval_answer" or _llm_semantic_judgment_required(recipe):
+        return False
+    # Compatibility path for older internal callers that wrapped execution
+    # metadata instead of promoting the profile fields onto recipe.metadata.
+    if "llm_judgment" in recipe.metadata or "execution_profile" in recipe.metadata:
+        return False
+    execution_metadata = _execution_metadata(recipe)
+    llm_judgment = execution_metadata.get("llm_judgment") if isinstance(execution_metadata, dict) else None
+    return isinstance(llm_judgment, dict) and str(llm_judgment.get("host_semantic_fallback") or "") == "scaffold_only"
+
+
 def _finance_capability_has_executable_retrieval_context(recipe: TaskRecipe) -> bool:
     if not _llm_semantic_judgment_required(recipe):
         return False
@@ -7551,6 +8977,8 @@ def _finance_numeric_verifier_required(recipe: TaskRecipe) -> bool:
     if recipe.mode != "retrieval_answer":
         return False
     if CALCULATOR_TOOL_NAME in recipe.allowed_tools:
+        return True
+    if FINANCE_VERIFY_NUMERIC_TOOL_NAME in recipe.allowed_tools:
         return True
     return _metadata_requires_finance_numeric_verifier(recipe.metadata)
 
@@ -8480,11 +9908,15 @@ def _compact_simple_dict(value: object, *, limit: int) -> JsonObject:
         elif isinstance(item, (int, float, bool)) or item is None:
             result[str(key)] = item
         elif isinstance(item, list):
-            result[str(key)] = [
-                _text_preview(child, limit=160) if isinstance(child, str) else child
-                for child in item[:8]
-                if isinstance(child, (str, int, float, bool)) or child is None
-            ]
+            children: list[object] = []
+            for child in item[:8]:
+                if isinstance(child, str):
+                    children.append(_text_preview(child, limit=160))
+                elif isinstance(child, (int, float, bool)) or child is None:
+                    children.append(child)
+                elif isinstance(child, dict):
+                    children.append(_compact_model_dict(child, limit=8))
+            result[str(key)] = children
         elif isinstance(item, dict):
             result[str(key)] = _compact_simple_dict(item, limit=8)
     return result
@@ -9341,6 +10773,24 @@ def _enforce_benchmark_doc_retrieval_binding(
         hint = _compiled_task_hint_for_retrieval(question=hint_question, binding=binding, recipe=recipe)
         if hint:
             metadata["compiled_task_hint"] = hint
+            hint_formula_name = _finance_formula_name_from_program_like(hint)
+            if hint_formula_name in {"capital_intensity", "fixed_asset_turnover", "dio"}:
+                formula_source_urls = _finance_issuer_seed_urls(hint_question or goal, formula_name=hint_formula_name)
+                if formula_source_urls:
+                    metadata["source_urls"] = _ordered_unique([*_string_list(metadata.get("source_urls")), *formula_source_urls])[:24]
+                    metadata["preferred_source_urls"] = _ordered_unique(
+                        [*_string_list(metadata.get("preferred_source_urls")), *formula_source_urls]
+                    )[:12]
+                    updated["source_urls"] = metadata["source_urls"]
+                if hint_formula_name == "capital_intensity":
+                    metadata.setdefault("target_capital_intensity_structured_source_required", True)
+                    updated["max_fetches"] = max(int(updated.get("max_fetches") or 0), 20)
+                elif hint_formula_name == "dio":
+                    metadata.setdefault("target_inventory_and_cogs_structured_source_required", True)
+                    updated["max_fetches"] = max(int(updated.get("max_fetches") or 0), 18)
+                elif hint_formula_name == "fixed_asset_turnover":
+                    metadata.setdefault("target_fixed_asset_turnover_structured_source_required", True)
+                    updated["max_fetches"] = max(int(updated.get("max_fetches") or 0), 18)
     metadata["benchmark_binding_enforced"] = True
     metadata.setdefault("source_authority_requirement", "primary")
     metadata.setdefault("research_task_kind", "filing_document_qa")
@@ -9671,11 +11121,12 @@ def _normalize_for_benchmark_doc_query(value: object) -> str:
 
 
 def _benchmark_doc_retrieval_target(goal: str) -> JsonObject:
-    if "Benchmark target source follows." not in goal or "Source URL:" not in goal:
+    if not _benchmark_doc_retrieval_marker_present(goal):
         return {}
     result: JsonObject = {}
     labels = {
         "Source URL": "source_url",
+        "Document link": "source_url",
         "Company": "company",
         "Document": "doc_name",
         "Document type": "doc_type",
@@ -9698,27 +11149,37 @@ def _benchmark_doc_retrieval_target(goal: str) -> JsonObject:
 
 
 def _benchmark_doc_retrieval_question(goal: str) -> str | None:
-    if "Benchmark target source follows." not in goal:
+    if not _benchmark_doc_retrieval_marker_present(goal):
         return None
     paragraphs = [part.strip() for part in str(goal or "").split("\n\n") if part.strip()]
     if paragraphs:
         question = paragraphs[-1]
-        if not question.startswith("Benchmark target source follows."):
+        if not question.startswith(("Benchmark target source follows.", "FinanceBench target document metadata follows.")):
             return question
     inline = _benchmark_doc_retrieval_inline_question(goal)
     return inline or None
+
+
+def _benchmark_doc_retrieval_marker_present(goal: str) -> bool:
+    text = str(goal or "")
+    if "Benchmark target source follows." in text and "Source URL:" in text:
+        return True
+    return "FinanceBench target document metadata follows." in text and (
+        "Document link:" in text or "Source URL:" in text
+    )
 
 
 def _benchmark_doc_retrieval_inline_labels(goal: str) -> JsonObject:
     text = str(goal or "").replace("\n", " ")
     labels = {
         "Source URL": "source_url",
+        "Document link": "source_url",
         "Company": "company",
         "Document type": "doc_type",
         "Document period": "doc_period",
         "Document": "doc_name",
     }
-    label_pattern = "Source URL|Document type|Document period|Company|Document"
+    label_pattern = "Source URL|Document link|Document type|Document period|Company|Document"
     question_start = _benchmark_doc_retrieval_question_start_pattern()
     result: JsonObject = {}
     for match in re.finditer(
@@ -9743,6 +11204,9 @@ def _benchmark_doc_retrieval_inline_question(goal: str) -> str:
     if match:
         return " ".join(match.group(1).split())
     match = re.search(rf"(?:Document period\s*:\s*\S+)\s+((?:{question_start})\b.+)$", text, flags=re.IGNORECASE)
+    if match:
+        return " ".join(match.group(1).split())
+    match = re.search(rf"(?:Document link\s*:\s*\S+)\s+((?:{question_start})\b.+)$", text, flags=re.IGNORECASE)
     if match:
         return " ".join(match.group(1).split())
     return ""
@@ -10313,8 +11777,14 @@ def _benchmark_doc_source_urls(source_url: str) -> list[str]:
     url = _string_value(source_url)
     if not url:
         return []
-    derived = _sec_archive_urls_from_accession_url(url)
-    return _ordered_unique([*derived, url])
+    targets = [candidate for candidate, _ in expanded_url_targets(url, prefer_unwrapped=True)]
+    if not targets:
+        targets = [url]
+    expanded: list[str] = []
+    for target in targets:
+        expanded.extend(_sec_archive_urls_from_accession_url(target))
+        expanded.append(target)
+    return _ordered_unique(expanded)
 
 
 def _source_grounded_trace_required(recipe: TaskRecipe) -> bool:
@@ -10834,6 +12304,13 @@ def _int_or_none(value: object) -> int | None:
         return None
     if isinstance(value, int):
         return value
+    if isinstance(value, str):
+        match = re.search(r"\b(19|20)\d{2}\b", value)
+        if match:
+            return int(match.group(0))
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
     return None
 
 
@@ -12169,16 +13646,9 @@ def _workspace_search_text(content: JsonObject) -> str:
 
 
 def _shell_exec_observation_text(content: JsonObject) -> str:
-    argv = content.get("argv")
-    command = " ".join(str(item) for item in argv[:8]) if isinstance(argv, list) else ""
-    exit_code = content.get("exit_code")
     stdout = str(content.get("stdout") or "").strip()
     stderr = str(content.get("stderr") or "").strip()
     lines = ["Shell execution output:"]
-    if command:
-        lines.append(f"command: {command}")
-    if isinstance(exit_code, int):
-        lines.append(f"exit_code: {exit_code}")
     if stdout:
         lines.append("stdout:")
         lines.append(stdout)
@@ -12189,19 +13659,9 @@ def _shell_exec_observation_text(content: JsonObject) -> str:
 
 
 def _script_exec_observation_text(content: JsonObject) -> str:
-    script_path = str(content.get("script_path") or "")
-    argv = content.get("argv")
-    command = " ".join(str(item) for item in argv[:8]) if isinstance(argv, list) else ""
-    exit_code = content.get("exit_code")
     stdout = str(content.get("stdout") or "").strip()
     stderr = str(content.get("stderr") or "").strip()
     lines = ["Script execution output:"]
-    if script_path:
-        lines.append(f"script_path: {script_path}")
-    if command:
-        lines.append(f"command: {command}")
-    if isinstance(exit_code, int):
-        lines.append(f"exit_code: {exit_code}")
     facts = _toolchain_candidate_facts(content, source="tool:script.exec")
     if facts:
         lines.append("candidate_facts:")
@@ -12236,6 +13696,8 @@ def _finance_retrieval_fallback_final(
     synthesis_error: str,
     require_formula_trace: bool = False,
 ) -> FinalAnswer | None:
+    if not _host_semantic_fallbacks_enabled(recipe):
+        return None
     citation_ids = [item.citation_id for item in citations if item.citation_id]
     if not citation_ids:
         return None
@@ -12339,6 +13801,8 @@ def _finance_formula_trace_only_fallback_final(
     citations: list[CitationItem],
     synthesis_error: str,
 ) -> FinalAnswer | None:
+    if not _host_semantic_fallbacks_enabled(recipe):
+        return None
     citation_ids = [item.citation_id for item in citations if item.citation_id]
     traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
     if not citation_ids or not traces:
@@ -12931,16 +14395,46 @@ def _report_with_finance_formula_traces(
     traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
     if not traces:
         return report
+    synthesis_traces = _finance_formula_traces_for_synthesis(traces)
     diagnostics = dict(report.diagnostics)
-    diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in traces[:16]]
+    slot_bind_state = _latest_finance_slot_bind_state(journal, task_id=task_id, run_id=run_id)
+    if slot_bind_state:
+        diagnostics["finance_slot_bind_state"] = slot_bind_state
+        diagnostics["finance_slot_bind_basis_policy"] = {
+            "semantic_decision_owner": "model",
+            "host_role": "carry_forward_model_slot_binding_basis_only",
+            "instruction": (
+                "Use finance_slot_bind_state period_basis and line_item_basis as the model's prior binding rationale. "
+                "Preserve it when still supported by the compact facts and citations; revise it explicitly if later evidence conflicts."
+            ),
+        }
+    diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in synthesis_traces[:16]]
     diagnostics["finance_formula_trace_count"] = len(traces)
+    diagnostics["finance_formula_trace_ordering"] = (
+        "slot_bind_model calculator traces are listed before earlier exploratory calculator traces; "
+        "when traces conflict, prefer traces whose diagnostics.source is finance_slot_bind_model because their inputs were bound "
+        "from the current FinanceFact ledger by the LLM slot binder."
+    )
+    trace_policy = _finance_formula_trace_synthesis_policy(synthesis_traces)
+    if trace_policy:
+        diagnostics["finance_formula_trace_synthesis_policy"] = trace_policy
+    trace_support = _finance_formula_trace_support_index(
+        synthesis_traces,
+        diagnostics.get("finance_fact_ledger"),
+    )
+    if trace_support:
+        diagnostics["finance_formula_trace_support"] = trace_support
     diagnostics.setdefault(
         "finance_synthesis_directive",
         (
             "Use host calculator formula traces as the authoritative computed values. "
             "Do not recompute these finance formulas mentally; quote the trace values and cite the supporting evidence. "
+            "Use finance_formula_trace_support to connect each FormulaTrace result to its input facts, evidence refs, and citation refs. "
+            "If multiple formula traces conflict for the same analytic slot, prefer finance_slot_bind_model traces over earlier exploratory traces. "
             "Every material numeric claim in the finance answer must come from formula traces, the finance fact/claim ledger, "
-            "or an explicitly labeled assumption; unsupported numbers must be omitted or downgraded to limitations."
+            "or an explicitly labeled assumption; unsupported numbers must be omitted or downgraded to limitations. "
+            "Do not add generic industry thresholds, comparison cutoffs, multiples, benchmark percentages, or decorative numeric context "
+            "unless those numbers are present in the provided facts, evidence, citations, or FormulaTrace values."
         ),
     )
     diagnostics.setdefault(
@@ -12970,29 +14464,30 @@ def _report_with_finance_fact_context(
     diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:160]]
     diagnostics["finance_fact_ledger_count"] = len(facts)
     diagnostics["claim_ledger_present"] = bool(facts)
-    diagnostics["finance_metric_competing_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:12]]
+    diagnostics["finance_candidate_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
+    competing_clusters = _finance_competing_fact_clusters_for_model(facts[:FINANCE_SLOT_BIND_FACT_LIMIT])
+    if competing_clusters:
+        diagnostics["finance_competing_fact_clusters"] = competing_clusters
+        diagnostics["finance_competing_fact_cluster_policy"] = _finance_competing_fact_cluster_policy()
+    metric_intent_hints = _finance_metric_intent_hints_for_model(facts[:FINANCE_SLOT_BIND_FACT_LIMIT])
+    if metric_intent_hints:
+        diagnostics["finance_metric_intent_hints"] = metric_intent_hints
+        diagnostics["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
+    premise_hints = _finance_question_numeric_premise_hints(question=question, facts=facts[:64], formula_traces=[])
+    if premise_hints:
+        diagnostics["finance_question_numeric_premise_hints"] = premise_hints
+        diagnostics["finance_question_numeric_premise_hint_policy"] = _finance_question_numeric_premise_hint_policy()
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
-        "host_role": "rank and expose candidate facts, concepts, labels, provenance, metric-intent diagnostics, and verification only",
-        "candidate_ordering": (
-            "finance_fact_ledger is ordered as a semantic candidate list for model review: target binding first, "
-            "or, for fiscal-year/annual questions, annual 10-K/companyfacts period scope first; then metric intent score, "
-            "source authority, provenance completeness, and fiscal recency"
-        ),
+        "host_role": "expose raw candidate facts, concepts, labels, periods, provenance, and verification only",
+        "candidate_ordering": "source extraction order; no host semantic preference is encoded in the order",
         "instruction": (
             "When several source-backed facts share a broad metric such as revenue, compare the question's requested slot "
             "against each fact's metric, SEC concept, label, fiscal period, and source. Do not answer a consolidated metric "
-            "with a component revenue line. If a narrower supported concept better matches the company's reported revenue "
-            "caption than a generic total, explain the chosen basis. When candidates conflict for the same entity, period, "
-            "and broad metric, inspect them in ledger order and prefer the highest-ranked or highest finance_metric_intent.score "
-            "candidate unless the source label/concept proves a lower-ranked candidate is the requested line item. If you choose "
-            "among revenue-like candidates, distinguish operating/sales revenue captions from totals that explicitly include other income; "
-            "for a plain total-revenues request, headline the operating/sales revenue line when available rather than a broader subtotal that includes other income, unless the user explicitly asked for total revenues and other income; "
-            "for fiscal-year or annual questions, do not headline a 10-Q or three-month value when an annual 10-K/companyfacts "
-            "candidate for the same broad metric and year is present; "
-            "the requested revenue line should follow the company's statement caption rather than a broader other-income subtotal. If you choose "
-            "a lower-ranked competitor, state the reason using concept, label, statement, or source evidence. Do not put a "
-            "lower-ranked competitor in the answer headline while merely mentioning a better-ranked supported candidate later. "
+            "with a component revenue line unless the source text and the user request justify that mapping. "
+            "Use raw fields such as form, fp, period, start, end, concept, label, statement, source_title, and source_uri to make "
+            "your own period and line-item decision. If candidates conflict for the same entity, period, and broad metric, explain "
+            "which raw source fields made you choose one value. "
             "If no fact matches the requested slot, say so as a limitation or continue work instead of turning a nearby component "
             "into the answer."
         ),
@@ -13002,9 +14497,10 @@ def _report_with_finance_fact_context(
         (
             "The model owns final finance judgment. Use the provided finance_fact_ledger, FormulaTrace values, citations, "
             "and evidence to answer only the actual requested metric. Material finance numbers must be source-backed; "
-            "nearby component metrics are not substitutes for the requested consolidated line item. Treat finance_fact_ledger "
-            "ordering and finance_metric_intent diagnostics as the host's structured candidate map, then make the final "
-            "semantic choice yourself from the labels, concepts, periods, and citations."
+            "nearby component metrics are not substitutes for the requested consolidated line item. Make the final semantic "
+            "choice yourself from the raw labels, concepts, periods, forms, dates, and citations. "
+            "Do not add generic industry thresholds, comparison cutoffs, multiples, benchmark percentages, or decorative numeric context "
+            "unless those numbers are source-backed in the provided facts, evidence, citations, or FormulaTrace values."
         ),
     )
     diagnostics.setdefault(
@@ -13035,15 +14531,57 @@ def _compact_finance_synthesis_rescue_packet(
     facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
     facts = _rank_finance_facts_for_model(facts, question=question)
     traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    synthesis_traces = _finance_formula_traces_for_synthesis(traces)
+    trace_fact_ids = _ordered_unique(
+        fact_id
+        for trace in synthesis_traces
+        for fact_id in list(trace.input_fact_ids or [])
+        if str(fact_id or "").strip()
+    )
+    facts = _trace_facts_first(facts, trace_fact_ids=trace_fact_ids)
+    trace_evidence_ids = _ordered_unique(
+        fact.evidence_ref for fact in facts if fact.fact_id in set(trace_fact_ids) and fact.evidence_ref
+    )
     cited_evidence_ids = {item.evidence_id for item in citations if item.evidence_id}
-    ranked = [item for item in _source_grounded_ranked_evidence(evidence, recipe=recipe) if item.evidence_id in cited_evidence_ids]
+    ranked = [
+        item
+        for item in _source_grounded_ranked_evidence(evidence, recipe=recipe)
+        if item.evidence_id in cited_evidence_ids and item.evidence_id not in set(trace_evidence_ids)
+    ]
     if not ranked:
-        ranked = [item for item in evidence if item.evidence_id in cited_evidence_ids]
-    rescue_evidence = ranked[:8] if ranked else evidence[:8]
+        ranked = [item for item in evidence if item.evidence_id in cited_evidence_ids and item.evidence_id not in set(trace_evidence_ids)]
+    evidence_by_id = {item.evidence_id: item for item in evidence if item.evidence_id}
+    citation_by_id = {item.citation_id: item for item in citations if item.citation_id}
+    trace_evidence = [evidence_by_id[eid] for eid in trace_evidence_ids if eid in evidence_by_id]
+    fact_evidence_ids = _ordered_unique(fact.evidence_ref for fact in facts[:64] if fact.evidence_ref)
+    fact_citation_ids = _ordered_unique(fact.citation_ref for fact in facts[:64] if fact.citation_ref)
+    fact_evidence = [evidence_by_id[eid] for eid in fact_evidence_ids if eid in evidence_by_id]
+    fact_citations = [citation_by_id[cid] for cid in fact_citation_ids if cid in citation_by_id]
+    rescue_evidence = _ordered_evidence_unique([*trace_evidence[:12], *fact_evidence[:12], *(ranked[:8] if ranked else evidence[:8])])[:20]
     rescue_evidence_ids = {item.evidence_id for item in rescue_evidence}
-    rescue_citations = [item for item in citations if item.evidence_id in rescue_evidence_ids][:8]
+    rescue_citations = _ordered_citation_unique(
+        [
+            *fact_citations[:24],
+            *[item for item in citations if item.evidence_id in rescue_evidence_ids],
+            *citations[:16],
+        ]
+    )[:32]
+    citation_evidence = [
+        evidence_by_id[item.evidence_id]
+        for item in rescue_citations
+        if item.evidence_id and item.evidence_id in evidence_by_id
+    ]
+    rescue_evidence = _ordered_evidence_unique([*rescue_evidence, *citation_evidence])[:32]
+    rescue_evidence_ids = {item.evidence_id for item in rescue_evidence}
+    rescue_citations = _ordered_citation_unique(
+        [
+            *fact_citations[:24],
+            *[item for item in citations if item.evidence_id in rescue_evidence_ids],
+            *rescue_citations,
+        ]
+    )[:32]
     if not rescue_citations:
-        rescue_citations = citations[:8]
+        rescue_citations = citations[:16]
     original_diagnostics = report.diagnostics if isinstance(report.diagnostics, dict) else {}
     diagnostics: JsonObject = {
         key: original_diagnostics.get(key)
@@ -13053,6 +14591,12 @@ def _compact_finance_synthesis_rescue_packet(
             "retrieval_status",
             "terminal_reason",
             "source_authority_requirement",
+            "answer_profile",
+            "answer_requirements",
+            "research_mission",
+            "host_situation",
+            "interaction_preferences",
+            "response_language",
         )
         if original_diagnostics.get(key) is not None
     }
@@ -13063,37 +14607,83 @@ def _compact_finance_synthesis_rescue_packet(
         "host_role": "compact_context_builder_and_provenance_validator",
         "instruction": "write the best supported answer rather than a failure report when compact facts/traces/citations are enough",
     }
+    slot_bind_state = _latest_finance_slot_bind_state(journal, task_id=task_id, run_id=run_id)
+    if slot_bind_state:
+        diagnostics["finance_slot_bind_state"] = slot_bind_state
+        diagnostics["finance_slot_bind_basis_policy"] = {
+            "semantic_decision_owner": "model",
+            "host_role": "carry_forward_model_slot_binding_basis_only",
+            "instruction": (
+                "Use finance_slot_bind_state period_basis and line_item_basis as prior model rationale, not as host-authored truth. "
+                "If compact facts/citations conflict with it, explain the revised period or line-item basis."
+            ),
+        }
+    repair_context = _compact_finance_numeric_repair_context_for_synthesis(
+        _latest_finance_numeric_verification_payload(journal, task_id=task_id, run_id=run_id)
+    )
+    if repair_context:
+        diagnostics["finance_numeric_repair_context"] = repair_context
     diagnostics["finance_fact_ledger"] = [_finance_fact_judge_summary(fact) for fact in facts[:64]]
     diagnostics["finance_fact_ledger_count"] = len(facts)
-    diagnostics["finance_metric_competing_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:12]]
+    diagnostics["finance_candidate_facts"] = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
+    competing_clusters = _finance_competing_fact_clusters_for_model(facts[:64])
+    if competing_clusters:
+        diagnostics["finance_competing_fact_clusters"] = competing_clusters
+        diagnostics["finance_competing_fact_cluster_policy"] = _finance_competing_fact_cluster_policy()
+    metric_intent_hints = _finance_metric_intent_hints_for_model(facts[:64])
+    if metric_intent_hints:
+        diagnostics["finance_metric_intent_hints"] = metric_intent_hints
+        diagnostics["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
+    premise_hints = _finance_question_numeric_premise_hints(
+        question=question,
+        facts=facts[:64],
+        formula_traces=synthesis_traces[:12],
+    )
+    if premise_hints:
+        diagnostics["finance_question_numeric_premise_hints"] = premise_hints
+        diagnostics["finance_question_numeric_premise_hint_policy"] = _finance_question_numeric_premise_hint_policy()
     diagnostics["finance_metric_disambiguation"] = {
         "semantic_decision_owner": "model",
-        "host_role": "rank and expose compact candidate facts; the model chooses the answer",
-        "candidate_ordering": (
-            "compact finance_fact_ledger is ordered as a semantic candidate list by annual 10-K/companyfacts period scope "
-            "for fiscal-year questions, then target binding, metric intent score, source authority, provenance completeness, "
-            "and fiscal recency"
-        ),
+        "host_role": "expose compact raw candidate facts; the model chooses the answer",
+        "candidate_ordering": "source extraction order; no host semantic preference is encoded in the order",
         "instruction": (
-            "For competing values with the same entity, period, and broad metric, inspect candidates in ledger order. "
-            "Prefer the highest-ranked or highest finance_metric_intent.score supported candidate unless concept, label, "
-            "statement, or cited source text proves another candidate is the requested line item. If you override the ordering, "
-            "explain why in the answer. For revenue-like candidates, distinguish operating/sales revenue captions from totals "
-            "that explicitly include other income; for a plain total-revenues request, headline operating/sales revenue when available unless the user explicitly asked for total revenues and other income. For fiscal-year or annual questions, do not headline a 10-Q or three-month "
-            "value when an annual 10-K/companyfacts candidate for the same broad metric and year is present. Do not headline "
-            "a lower-ranked competitor and relegate the better-ranked candidate to a note."
+            "For competing values with the same entity, period, and broad metric, inspect raw concepts, labels, statement context, "
+            "form, fp, period dates, and cited source text. Decide the requested line item yourself and explain the raw-field basis "
+            "for the choice when ambiguity matters."
         ),
     }
     diagnostics["claim_ledger_present"] = bool(facts)
-    diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in traces[:24]]
+    diagnostics["finance_formula_traces"] = [trace.to_dict() for trace in synthesis_traces[:24]]
     diagnostics["finance_formula_trace_count"] = len(traces)
+    diagnostics["finance_formula_trace_ordering"] = (
+        "slot_bind_model calculator traces are listed before earlier exploratory calculator traces; "
+        "prefer finance_slot_bind_model traces when values conflict because they are bound to the current compact fact ledger."
+    )
+    trace_policy = _finance_formula_trace_synthesis_policy(synthesis_traces)
+    if trace_policy:
+        diagnostics["finance_formula_trace_synthesis_policy"] = trace_policy
+    trace_support = _finance_formula_trace_support_index(synthesis_traces, facts)
+    if trace_support:
+        diagnostics["finance_formula_trace_support"] = trace_support
     diagnostics.setdefault(
         "finance_synthesis_directive",
         (
             "The model is responsible for final semantic judgment. Use compact ClaimLedger and FormulaTrace values when they support the task. "
-            "Use compact finance_fact_ledger ordering as the structured candidate map for competing line items. "
-            "Do not write a failure report if a partial supported answer can be given. Label missing slots as limitations."
+            "Use compact finance_fact_ledger as raw candidate evidence for competing line items. "
+            "Use finance_formula_trace_support to connect FormulaTrace outputs to the exact input facts and citation/evidence refs. "
+            "If FormulaTrace values conflict, prefer traces from finance_slot_bind_model over earlier exploratory calculator calls. "
+            "Do not write a failure report if a partial supported answer can be given. Label missing slots as limitations. "
+            "Do not add generic industry thresholds, comparison cutoffs, multiples, benchmark percentages, or decorative numeric context "
+            "unless those numbers are present in the compact facts, evidence, citations, or FormulaTrace values."
         ),
+    )
+    diagnostics.setdefault(
+        "finance_numeric_claim_policy",
+        {
+            "allowed_numeric_sources": ["formula_trace", "finance_fact_ledger", "claim_ledger", "explicit_assumption_label"],
+            "unsupported_numeric_behavior": "omit_or_limit",
+            "material_claim_scope": "figures, percentages, multiples, margins, growth rates, periods, transaction values, and bridge components",
+        },
     )
     preview_parts = []
     if facts:
@@ -13110,6 +14700,129 @@ def _compact_finance_synthesis_rescue_packet(
         diagnostics=diagnostics,
     )
     return rescue_report, rescue_evidence, rescue_citations
+
+
+def _use_compact_finance_synthesis_first(
+    *,
+    recipe: TaskRecipe,
+    synthesizer_mode: str,
+    strict_llm_judgment: bool,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    formula_traces: list[FormulaTrace],
+) -> bool:
+    if synthesizer_mode != "model" or not strict_llm_judgment:
+        return False
+    if not _finance_numeric_verifier_required(recipe):
+        return False
+    if not evidence or not citations:
+        return False
+    if formula_traces:
+        return True
+    return len(evidence) > 32 or len(citations) > 32
+
+
+def _trace_facts_first(facts: list[FinanceFact], *, trace_fact_ids: list[str]) -> list[FinanceFact]:
+    if not trace_fact_ids:
+        return list(facts)
+    wanted = {fact_id for fact_id in trace_fact_ids if fact_id}
+    trace_facts = [fact for fact in facts if fact.fact_id in wanted]
+    other_facts = [fact for fact in facts if fact.fact_id not in wanted]
+    return [*trace_facts, *other_facts]
+
+
+def _finance_formula_trace_support_index(traces: list[FormulaTrace], facts_or_summaries: object) -> list[JsonObject]:
+    if not traces:
+        return []
+    fact_by_id: dict[str, JsonObject] = {}
+    if isinstance(facts_or_summaries, list):
+        for item in facts_or_summaries:
+            if isinstance(item, FinanceFact):
+                summary = _finance_fact_judge_summary(item)
+            elif isinstance(item, dict):
+                summary = dict(item)
+            else:
+                continue
+            fact_id = str(summary.get("fact_id") or "").strip()
+            if fact_id:
+                fact_by_id[fact_id] = summary
+    result: list[JsonObject] = []
+    for trace in traces[:24]:
+        diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+        linked_facts: list[JsonObject] = []
+        evidence_refs: list[str] = []
+        citation_refs: list[str] = []
+        for fact_id in list(trace.input_fact_ids or [])[:24]:
+            summary = fact_by_id.get(str(fact_id))
+            if not summary:
+                continue
+            evidence_ref = str(summary.get("evidence_ref") or "").strip()
+            citation_ref = str(summary.get("citation_ref") or "").strip()
+            if evidence_ref:
+                evidence_refs.append(evidence_ref)
+            if citation_ref:
+                citation_refs.append(citation_ref)
+            metadata = _json_object(summary.get("metadata"))
+            linked_facts.append(
+                {
+                    "fact_id": summary.get("fact_id"),
+                    "metric": summary.get("metric"),
+                    "value": summary.get("value"),
+                    "unit": summary.get("unit"),
+                    "fiscal_year": summary.get("fiscal_year"),
+                    "evidence_ref": summary.get("evidence_ref"),
+                    "citation_ref": summary.get("citation_ref"),
+                    "raw_fields": {
+                        key: metadata.get(key)
+                        for key in ("concept", "label", "form", "fp", "start", "end", "source_uri", "source_title", "statement")
+                        if metadata.get(key) is not None
+                    },
+                }
+            )
+        support = {
+            "formula_id": trace.formula_id,
+            "formula_name": trace.formula_name,
+            "result_value": trace.result_value,
+            "unit": trace.unit,
+            "formatted_value": diagnostics.get("formatted_value"),
+            "source": diagnostics.get("source"),
+            "method": diagnostics.get("method"),
+            "output_attribute": diagnostics.get("output_attribute"),
+            "input_fact_ids": list(trace.input_fact_ids or [])[:24],
+            "input_facts": linked_facts,
+            "evidence_refs": _ordered_unique(evidence_refs),
+            "citation_refs": _ordered_unique(citation_refs),
+            "support_status": "linked_to_fact_ledger" if linked_facts else "trace_only",
+        }
+        model_context = _compact_formula_trace_model_context(trace)
+        if model_context:
+            support["model_context"] = model_context
+        result.append(support)
+    return result
+
+
+def _ordered_evidence_unique(items: list[EvidenceItem]) -> list[EvidenceItem]:
+    result: list[EvidenceItem] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.evidence_id or item.source_id or item.uri
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _ordered_citation_unique(items: list[CitationItem]) -> list[CitationItem]:
+    result: list[CitationItem] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.citation_id or item.evidence_id or item.uri
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 def _can_synthesize_partial_retrieval(
@@ -13284,6 +14997,153 @@ def _calculator_formula_traces(journal: JournalStore, *, task_id: str, run_id: s
         seen.add(trace.formula_id)
         traces.append(trace)
     return traces
+
+
+def _finance_formula_traces_for_synthesis(traces: list[FormulaTrace]) -> list[FormulaTrace]:
+    if not traces:
+        return []
+
+    def priority(index_trace: tuple[int, FormulaTrace]) -> tuple[int, int, int]:
+        index, trace = index_trace
+        diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+        source = str(diagnostics.get("source") or "").strip().lower()
+        slot_bound = source == "finance_slot_bind_model"
+        ledger_bound = any(str(fact_id or "").startswith("finfact-") for fact_id in trace.input_fact_ids or [])
+        return (0 if slot_bound else 1, 0 if ledger_bound else 1, index)
+
+    return [trace for _index, trace in sorted(enumerate(traces), key=priority)]
+
+
+def _finance_formula_trace_synthesis_policy(traces: list[FormulaTrace]) -> JsonObject:
+    if not traces:
+        return {}
+    labels = [_finance_formula_trace_label(trace) for trace in traces]
+    is_capital_intensity = any(_finance_trace_label_is_capital_intensity(label) for label in labels)
+    model_contexts = [
+        context
+        for trace in traces[:12]
+        if (context := _compact_formula_trace_model_context(trace))
+    ]
+    if not is_capital_intensity:
+        if model_contexts:
+            return {
+                "semantic_decision_owner": "model",
+                "host_role": "surface calculator traces, model outputs, and explicit assumptions; do not choose the answer",
+                "task_family": "finance_modeling_or_derived_metric",
+                "model_trace_context": model_contexts[:8],
+                "assumption_labeling_instruction": (
+                    "If a FormulaTrace carries assumptions or defaulted_assumptions, label those values as modeling assumptions in the final answer. "
+                    "Assumptions are not filing facts."
+                ),
+                "supported_model_output_policy": (
+                    "Use model_outputs only when they are present in FormulaTrace diagnostics. Do not invent valuation outputs, bridge values, "
+                    "growth rates, discount rates, exit multiples, or other model drivers that are absent from the provided traces."
+                ),
+                "unsupported_comparison_number_policy": (
+                    "Do not introduce generic industry thresholds, comparison cutoffs, multiples, or benchmark percentages unless those "
+                    "numbers are explicitly present in provided facts, evidence, citations, or FormulaTrace values."
+                ),
+            }
+        return {}
+    lenses: list[str] = []
+    for label in labels:
+        if "capex" in label and ("revenue" in label or "sales" in label):
+            lenses.append("capex_to_revenue")
+        if "capex" in label and ("ocf" in label or "operating_cash" in label or "operating cash" in label):
+            lenses.append("capex_to_operating_cash_flow")
+        if (
+            ("ppe" in label or "property_plant" in label or "property plant" in label)
+            and "asset" in label
+        ):
+            lenses.append("ppe_to_assets")
+        if (
+            "roa" in label
+            or "return_on_assets" in label
+            or "return on assets" in label
+            or ("net_income" in label and "asset" in label)
+            or ("net income" in label and "asset" in label)
+        ):
+            lenses.append("return_on_assets")
+    trace_names = _ordered_unique(
+        str(trace.formula_name or "").strip()
+        for trace in traces
+        if str(trace.formula_name or "").strip()
+    )
+    trace_outputs: list[JsonObject] = []
+    for trace in traces[:24]:
+        diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+        trace_outputs.append(
+            {
+                "formula_name": str(trace.formula_name or "").strip(),
+                "result_value": str(trace.result_value or "").strip(),
+                "unit": str(trace.unit or "").strip(),
+                "formatted_value": diagnostics.get("formatted_value"),
+                "source": diagnostics.get("source"),
+                "output_attribute": diagnostics.get("output_attribute") or diagnostics.get("method"),
+            }
+        )
+    policy: JsonObject = {
+        "semantic_decision_owner": "model",
+        "host_role": "surface calculator traces and provenance; do not choose the answer",
+        "task_family": "capital_intensity_assessment",
+        "available_formula_trace_names": trace_names[:24],
+        "available_lenses": _ordered_unique(lenses)[:8],
+        "supported_trace_outputs": trace_outputs,
+        "unsupported_comparison_number_policy": (
+            "Do not introduce generic industry thresholds, comparison cutoffs, multiples, or benchmark percentages unless those "
+            "numbers are explicitly present in provided facts, evidence, citations, or FormulaTrace values."
+        ),
+        "preferred_answer_shape": (
+            "Give a direct qualitative conclusion, then a compact list of supported FormulaTrace lenses and values. "
+            "Use qualitative language for intensity classification when no source-backed threshold is provided."
+        ),
+        "instruction": (
+            "For an overall capital-intensive-business assessment, consider every supported FormulaTrace lens that the model "
+            "compiled and the calculator executed. Preserve supported capex/revenue, capex/operating-cash-flow, PP&E/assets, "
+            "and ROA/return-on-assets traces when they are present. If a present trace is not used in the final answer, state the "
+            "semantic reason; do not drop a supported ROA trace during repair merely because it is a profitability lens. "
+            "Avoid unsupported comparison numbers; the model should make the finance judgment from the supported lenses."
+        ),
+    }
+    if model_contexts:
+        policy["model_trace_context"] = model_contexts[:8]
+        policy["assumption_labeling_instruction"] = (
+            "If any supported capital-intensity trace contains explicit assumptions or defaulted_assumptions, label them as assumptions; "
+            "do not present them as filing facts."
+        )
+    if "return_on_assets" in policy["available_lenses"]:
+        policy["roa_preservation_instruction"] = (
+            "A supported ROA/return-on-assets FormulaTrace is available. Include it as a supporting capital-intensity lens "
+            "unless the question explicitly excludes profitability context."
+        )
+    return policy
+
+
+def _finance_formula_trace_label(trace: FormulaTrace) -> str:
+    diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+    parts = [
+        trace.formula_name,
+        trace.expression,
+        diagnostics.get("method"),
+        diagnostics.get("output_attribute"),
+        diagnostics.get("formula_name"),
+        diagnostics.get("formula_status"),
+    ]
+    return " ".join(str(part or "") for part in parts).strip().lower()
+
+
+def _finance_trace_label_is_capital_intensity(label: str) -> bool:
+    if not label:
+        return False
+    if "capital_intensity" in label or "capital intensity" in label:
+        return True
+    if "capex" in label and ("revenue" in label or "sales" in label or "ocf" in label or "operating_cash" in label):
+        return True
+    if ("ppe" in label or "property_plant" in label or "property plant" in label) and "asset" in label:
+        return True
+    if "return_on_assets" in label or "return on assets" in label or "roa" in label:
+        return True
+    return False
 
 
 def _finance_formula_preflight_plans(
@@ -14022,6 +15882,1237 @@ def _latest_finance_numeric_judge_data(journal: JournalStore, task_id: str, run_
     return {}
 
 
+def _latest_model_compiled_program_for_preflight(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+    for record in reversed(journal.records(task_id=task_id, kind="compiled_task_program")):
+        if record.run_id != run_id or not isinstance(record.data, dict):
+            continue
+        data = dict(record.data)
+        source = str(data.get("source") or _json_object(data.get("diagnostics")).get("source") or "")
+        if source != "task_compile_model":
+            continue
+        data["record_id"] = record.record_id
+        return data
+    return {}
+
+
+def _model_compiled_program_authorizes_numeric_preflight(program: JsonObject) -> bool:
+    if not program:
+        return False
+    source = str(program.get("source") or _json_object(program.get("diagnostics")).get("source") or "")
+    if source != "task_compile_model":
+        return False
+    transform_specs = [item for item in list(program.get("transform_specs") or []) if isinstance(item, dict)]
+    if transform_specs:
+        return True
+    diagnostics = _json_object(program.get("diagnostics"))
+    tool_chain = _json_object(diagnostics.get("tool_chain_plan") or program.get("tool_chain_plan"))
+    planned_steps = [
+        item
+        for item in list(tool_chain.get("recommended_steps") or []) + list(tool_chain.get("next_action_candidates") or [])
+        if isinstance(item, dict)
+    ]
+    if any(str(item.get("tool") or item.get("name") or "") == CALCULATOR_TOOL_NAME for item in planned_steps):
+        return True
+    evidence_specs = [item for item in list(program.get("evidence_specs") or []) if isinstance(item, dict)]
+    slot_frame = _json_object(program.get("slot_frame"))
+    required_slots = [
+        item
+        for item in list(slot_frame.get("required_slots") or [])
+        if isinstance(item, dict) and str(item.get("name") or item.get("slot_name") or "").strip()
+    ]
+    task_spec = _json_object(program.get("task_spec"))
+    if str(task_spec.get("domain") or "").strip().lower() == "finance" and evidence_specs and required_slots:
+        return True
+    return False
+
+
+FINANCE_SLOT_BIND_FACT_LIMIT = 384
+FINANCE_SLOT_BIND_CONTRACT = (
+    "You are finance.slot_bind for Holo Kernel v3. Return only one JSON object. "
+    "The model owns semantic fact-to-slot binding. The host provides raw finance facts and a model-compiled task program; "
+    "you decide which fact_id fills each required slot, which facts are unsuitable, and which calculator formulas should run. "
+    "Use only fact_ids present in raw_facts. Do not invent values, facts, citations, periods, or formulas. "
+    "Inspect raw SEC fields such as period, fiscal_year, form, fp, start, end, frame, accn, concept, label, and source_uri yourself. "
+    "Treat extracted metric, period, and scale labels as noisy hints, not authority: inspect raw_fields.raw/context/row_marker/label/concept/source metadata and bind an imperfectly labeled fact when those raw fields clearly answer the slot. "
+    "If slot_bind_packet.competing_fact_clusters is present, treat it as a host-built attention index only: candidate order is source order, not semantic ranking, and you must decide from raw fields yourself. "
+    "If slot_bind_packet.finance_metric_intent_hints is present, treat it as weak retrieval/extraction diagnostics only: it may help notice candidate line-item matches or demotions, but it is not a host-selected answer and never overrides raw_fields, citations, or your semantic judgment. "
+    "If raw_fields include target_document_binding hints, treat them as provenance hints only; still inspect raw/context before selecting a fact_id. "
+    "When the task names a specific target filing or source document, compare raw_fields.accn, filed, form, source_uri, target_document_binding_accepted, and target_document_binding_score. "
+    "For competing facts with the same company, fiscal year, metric, and period, a fact from the target filing accession or with target_document_binding_accepted=true is usually the better candidate than a later-filed restatement or spin-off-era filing; "
+    "if you choose a later-filed value instead, explicitly state why in reason_summary and period_basis. "
+    "When SEC period evidence matters, include compact period_basis entries naming slot_name, fact_id, selected_period, rejected_alternatives when useful, raw_fields_used, and reason. "
+    "When line-item evidence matters, include compact line_item_basis entries naming slot_name, fact_id, selected_line_item, raw_fields_used, and reason. "
+    "For revenue/net sales slots, do not bind a later-filed or restated revenue fact when target-filing revenue or net sales is available and better matches the requested document. "
+    "Do not confuse cash-flow purchases of property, plant and equipment with balance-sheet property, plant and equipment net: purchases/capex fills capital_expenditures, while PP&E net must come from a balance-sheet asset row or a SEC concept/label explicitly indicating net property, plant and equipment. "
+    "Respect the question's requested financial statement: if it asks to use the balance sheet, do not bind a cash-flow capital spending or purchases row as a balance-sheet asset balance. "
+    "When adjacent table fragments expose several nearby numbers under a broad heading, prefer a fact whose raw/context directly states the requested metric and amount over a neighboring number whose column position is ambiguous. "
+    "For assets, prefer a total assets row/concept over current assets or asset-component rows unless the task explicitly asks for those narrower slots. "
+    "For company-wide slots, do not bind segment, regional, product-line, proxy, percentage, date, note number, page number, table-of-contents number, or row/column identifier facts as total-company financial amounts. "
+    "If a candidate would require saying it is only a segment/proxy/partial value or not a dollar financial-statement amount, do not bind it; return needs_more_evidence instead. "
+    "For cash-flow outflows shown in parentheses, decide whether the user asks for signed cash flow or positive amount; for a positive amount, use a calculator expression such as 0 - capex_raw when the bound fact is negative. "
+    "When a ratio uses capital expenditures as spending intensity, bind the raw cash-flow outflow fact and make the calculator expression explicitly positive, for example 0 - capex_raw or abs(capex_raw). "
+    "If the facts are sufficient, return decision=ready with formula_requests. Include final formula_requests for every compiled transform_spec, not only intermediate subtotals. "
+    "If any required slot is still missing, return decision=needs_more_evidence, leave formula_requests empty for formulas depending on that slot, and put the next retrieval/tool action in next_action. "
+    "For a direct numeric lookup with no compiled transform_spec, still emit one identity formula_request for the final answer value so the host can execute and journal a FormulaTrace. "
+    "A formula variable may reference a prior formula by string formula_name or {\"formula_ref\":\"name\"}; otherwise bind variables to fact_ids or numeric literals. "
+    "For DIO, explicitly decide whether the task requires conventional 365 days or a raw fiscal-year duration, state that choice in reason_summary and period_basis, and make final DIO/difference formulas calculator-visible. "
+    "If not sufficient, return needs_more_evidence with missing_slots and next_action. "
+    "Host will only validate fact_id existence, numeric parseability, and calculator execution; host will not make the semantic period or line-item decision for you. "
+    "Keep JSON compact: slot_bindings<=64, formula_requests<=12, missing_slots<=24, every per-binding reason<=80 chars, reason_summary<=180 chars, no markdown, no prose outside JSON."
+)
+FINANCE_SLOT_BIND_REPAIR_CONTRACT = (
+    FINANCE_SLOT_BIND_CONTRACT
+    + " Previous output was rejected by host JSON/schema validation. Return a fresh valid JSON object only. "
+    "Preserve the same semantic decision when possible; if the previous output was truncated, reconstruct the binding from the same raw facts and compiled program."
+)
+FINANCE_SLOT_BIND_OUTPUT_SCHEMA: JsonObject = {
+    "decision": "ready|needs_more_evidence|not_applicable",
+    "slot_bindings": [
+        {
+            "slot_name": "required slot from model program",
+            "variable_name": "calculator variable name if used",
+            "fact_id": "fact id from raw_facts",
+            "reason": "short reason",
+        }
+    ],
+    "formula_requests": [
+        {
+            "formula_name": "name",
+            "expression": "calculator expression",
+            "variables": {"variable": {"fact_id": "fact id"} },
+            "variables_alt": {"variable": "slot_name from slot_bindings, number literal, or {\"formula_ref\":\"prior formula_name\"}"},
+            "unit": "unit|null",
+        }
+    ],
+    "missing_slots": ["slots that cannot be bound"],
+    "next_action": {"tool": "retrieval.run|respond", "reason": "why"},
+    "period_basis": [
+        {
+            "slot_name": "slot affected by fiscal/period judgment",
+            "fact_id": "selected fact id",
+            "selected_period": "FY2024|period description",
+            "raw_fields_used": ["form", "fp", "start", "end", "duration_days", "frame", "accn"],
+            "reason": "compact basis for this period choice",
+        }
+    ],
+    "line_item_basis": [
+        {
+            "slot_name": "slot affected by line-item judgment",
+            "fact_id": "selected fact id",
+            "selected_line_item": "line item/concept chosen",
+            "raw_fields_used": ["concept", "label", "statement", "context", "raw", "source_uri"],
+            "reason": "compact basis for this line-item choice",
+        }
+    ],
+    "reason_summary": "short rationale",
+    "confidence": 0.0,
+}
+
+
+def _finance_slot_bind_prompt(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    compiled_program: JsonObject,
+) -> str:
+    payload = {
+        "contract": FINANCE_SLOT_BIND_CONTRACT,
+        "output_schema": FINANCE_SLOT_BIND_OUTPUT_SCHEMA,
+        "slot_bind_packet": _finance_slot_bind_packet(
+            question=question,
+            facts=facts,
+            compiled_program=compiled_program,
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _finance_slot_bind_repair_prompt(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    compiled_program: JsonObject,
+    previous_error: str,
+    previous_raw_output: str | None,
+    repair_feedback: JsonObject | None = None,
+) -> str:
+    payload = {
+        "contract": FINANCE_SLOT_BIND_REPAIR_CONTRACT,
+        "output_schema": FINANCE_SLOT_BIND_OUTPUT_SCHEMA,
+        "previous_failure": {
+            "error": _text_preview(previous_error, limit=240),
+            "raw_output_preview": _text_preview(previous_raw_output or "", limit=12000),
+            "structured_feedback": repair_feedback or _finance_slot_bind_repair_feedback(previous_error),
+        },
+        "slot_bind_packet": _finance_slot_bind_packet(
+            question=question,
+            facts=facts,
+            compiled_program=compiled_program,
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _finance_slot_bind_repair_feedback(error: str) -> JsonObject:
+    code = str(error or "unknown").strip() or "unknown"
+    feedback: JsonObject = {
+        "schema": "holo.kernel_v3.finance_slot_bind_repair_feedback.v1",
+        "error_code": _text_preview(code, limit=240),
+        "required_fields": list(FINANCE_SLOT_BIND_SCHEMA.required.keys()),
+        "optional_fields": list(FINANCE_SLOT_BIND_SCHEMA.optional.keys()),
+        "allowed_decisions": ["ready", "needs_more_evidence", "not_applicable"],
+        "host_role": "schema_parse_validation_only",
+        "model_role": "reconstruct_semantic_slot_binding_and_formula_requests",
+    }
+    checklist = [
+        "Return exactly one JSON object with no markdown or prose outside JSON.",
+        "Include decision, slot_bindings, formula_requests, and reason_summary.",
+        "Use only fact_ids visible in slot_bind_packet.raw_facts.",
+        "Keep missing_slots as an array when evidence is insufficient.",
+        "Keep next_action as an object or omit it.",
+    ]
+    if code.startswith("missing_required_field:"):
+        field = code.split(":", 1)[1].strip()
+        feedback["category"] = "missing_required_field"
+        feedback["field"] = field
+        checklist.insert(1, f"Add required field `{field}` with the schema type shown in output_schema.")
+    elif code.startswith("invalid_field_type:"):
+        parts = code.split(":")
+        field = parts[1].strip() if len(parts) > 1 else ""
+        expected = parts[2].strip() if len(parts) > 2 else ""
+        feedback["category"] = "invalid_field_type"
+        if field:
+            feedback["field"] = field
+        if expected:
+            feedback["expected_type"] = expected
+        if field and expected:
+            checklist.insert(1, f"Rewrite `{field}` as type `{expected}`.")
+    elif "json_root_not_object" in code:
+        feedback["category"] = "json_root_not_object"
+        checklist.insert(1, "The root must be a JSON object, not an array, string, or scalar.")
+    elif "JSONDecodeError" in code or "json_invalid" in code or "Expecting" in code:
+        feedback["category"] = "malformed_json"
+        checklist.insert(1, "Fix JSON syntax: close arrays/objects, quote keys and strings, and remove trailing prose.")
+    else:
+        feedback["category"] = "schema_or_parse_error"
+    feedback["repair_checklist"] = checklist
+    return feedback
+
+
+def _finance_slot_bind_packet(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    compiled_program: JsonObject,
+) -> JsonObject:
+    visible_facts = facts[:FINANCE_SLOT_BIND_FACT_LIMIT]
+    packet: JsonObject = {
+        "schema": "holo.kernel_v3.finance_slot_bind_input.v1",
+        "raw_fact_count": len(facts),
+        "raw_facts": [
+            _raw_fact_summary_for_slot_bind(fact)
+            for fact in visible_facts
+        ],
+        "competing_fact_clusters": _finance_competing_fact_clusters_for_model(visible_facts),
+        "question": question,
+        "slot_requirements": _slot_requirements_for_slot_bind(compiled_program),
+        "compiled_program": _compact_compiled_program_for_slot_bind(compiled_program),
+        "available_tool": {
+            "name": CALCULATOR_TOOL_NAME,
+            "input_contract": {
+                "expression": "calculator expression over variables",
+                "variables": "map variable name to bound fact_id, slot name, prior formula_ref, or numeric literal",
+                "unit": "optional unit",
+            },
+        },
+    }
+    metric_intent_hints = _finance_metric_intent_hints_for_model(visible_facts)
+    if metric_intent_hints:
+        packet["finance_metric_intent_hints"] = metric_intent_hints
+        packet["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
+    return packet
+
+
+def _finance_competing_fact_cluster_policy() -> JsonObject:
+    return {
+        "semantic_decision_owner": "model",
+        "host_role": "attention_grouping_only_no_semantic_preference",
+        "candidate_ordering": "source_order_from_raw_facts",
+        "instruction": (
+            "Use finance_competing_fact_clusters only to notice raw facts that share entity, period, and broad metric hints. "
+            "The cluster does not select, rank, or validate a value; inspect each candidate's raw label, SEC concept, statement, "
+            "form, fiscal period fields, source URI, evidence ref, and citation ref before making the line-item or period judgment."
+        ),
+    }
+
+
+def _finance_metric_intent_hint_policy() -> JsonObject:
+    return {
+        "semantic_decision_owner": "model",
+        "host_role": "weak_attention_hint_carrier_only",
+        "candidate_ordering": "source_order_from_raw_facts",
+        "instruction": (
+            "Use finance_metric_intent_hints only as retrieval/extraction diagnostics for noticing likely line-item matches "
+            "or demoted candidates. They do not rank, select, validate, or replace facts. Make the final binding from raw "
+            "concepts, labels, statements, periods, source text, citations, FormulaTrace support, and the question wording."
+        ),
+    }
+
+
+def _finance_metric_intent_hints_for_model(facts: list[FinanceFact], *, limit: int = 48) -> list[JsonObject]:
+    result: list[JsonObject] = []
+    seen: set[tuple[object, ...]] = set()
+    for fact in facts:
+        metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+        intent = metadata.get("finance_metric_intent") if isinstance(metadata.get("finance_metric_intent"), dict) else {}
+        if not intent:
+            continue
+        hint = _finance_metric_intent_hint_for_fact(fact, intent)
+        if not hint:
+            continue
+        key = _finance_metric_intent_hint_key(hint)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(hint)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _finance_metric_intent_hint_key(hint: JsonObject) -> tuple[object, ...]:
+    intent = hint.get("intent") if isinstance(hint.get("intent"), dict) else {}
+    return (
+        hint.get("metric"),
+        hint.get("value"),
+        hint.get("unit"),
+        hint.get("fiscal_year"),
+        hint.get("raw_label"),
+        hint.get("target_line_item"),
+        intent.get("metric_family"),
+        intent.get("score"),
+        tuple(_string_list(intent.get("matched_preferred"))),
+        tuple(_string_list(intent.get("matched_demoted"))),
+    )
+
+
+def _finance_metric_intent_hint_for_fact(fact: FinanceFact, intent: JsonObject) -> JsonObject:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    score = intent.get("score")
+    has_score = isinstance(score, (int, float)) and not isinstance(score, bool)
+    matched_preferred = _string_list(intent.get("matched_preferred"))[:8]
+    matched_demoted = _string_list(intent.get("matched_demoted"))[:8]
+    metric_family = str(intent.get("metric_family") or "").strip()
+    if not has_score and not matched_preferred and not matched_demoted and not metric_family:
+        return {}
+    raw_label = ""
+    for key in ("label", "line_item", "concept", "raw_metric", "row_marker", "target_line_item"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            raw_label = value
+            break
+    hint: JsonObject = {
+        "fact_id": _text_preview(fact.fact_id, limit=120),
+        "metric": _text_preview(fact.metric, limit=160),
+        "value": _text_preview(fact.value, limit=120),
+        "unit": _text_preview(fact.unit, limit=80),
+        "fiscal_year": fact.fiscal_year,
+        "citation_ref": _text_preview(fact.citation_ref, limit=120),
+        "raw_label": _text_preview(raw_label, limit=180),
+        "target_line_item": _text_preview(metadata.get("target_line_item"), limit=120),
+        "intent": {
+            "active": intent.get("active") if isinstance(intent.get("active"), bool) else None,
+            "metric_family": _text_preview(metric_family, limit=80),
+            "score": score if has_score else None,
+            "matched_preferred": matched_preferred,
+            "matched_demoted": matched_demoted,
+        },
+    }
+    return {
+        key: value
+        for key, value in hint.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _finance_competing_fact_clusters_for_model(facts: list[FinanceFact]) -> list[JsonObject]:
+    return _finance_slot_bind_competing_fact_clusters(facts)
+
+
+def _finance_competing_fact_clusters_from_diagnostics_or_facts(
+    diagnostics: JsonObject,
+    facts: list[FinanceFact],
+) -> list[JsonObject]:
+    diagnostic_clusters = [
+        dict(item)
+        for item in list(diagnostics.get("finance_competing_fact_clusters") or [])
+        if isinstance(item, dict)
+    ][:16]
+    if diagnostic_clusters:
+        return diagnostic_clusters
+    return _finance_competing_fact_clusters_for_model(facts)
+
+
+def _finance_metric_intent_hints_from_diagnostics_or_facts(
+    diagnostics: JsonObject,
+    facts: list[FinanceFact],
+) -> list[JsonObject]:
+    diagnostic_hints = [
+        dict(item)
+        for item in list(diagnostics.get("finance_metric_intent_hints") or [])
+        if isinstance(item, dict)
+    ][:48]
+    if diagnostic_hints:
+        return diagnostic_hints
+    return _finance_metric_intent_hints_for_model(facts)
+
+
+_QUESTION_NUMERIC_PREMISE_PATTERN = re.compile(
+    r"(?P<prefix>[$€£¥])?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>%|bps|basis\s+points|usd\s+million|usd\s+millions|usd\s+billion|usd\s+billions|"
+    r"million|billion|trillion|thousand|mn|bn|m|b|x|亿|万)?",
+    re.IGNORECASE,
+)
+
+
+def _finance_question_numeric_premise_hint_policy() -> JsonObject:
+    return {
+        "semantic_decision_owner": "model",
+        "host_role": "weak_attention_hint_carrier_only",
+        "candidate_ordering": "question_order",
+        "instruction": (
+            "Use finance_question_numeric_premise_hints only to notice numeric claims embedded in the question that may be "
+            "supported, stale, wrong, or irrelevant. The hint compares question numbers with nearby supported fact/formula values; "
+            "it does not decide the answer. If evidence contradicts a premise, state the corrected actual value with citations."
+        ),
+    }
+
+
+def _finance_question_numeric_premise_hints_from_diagnostics_or_facts(
+    diagnostics: JsonObject,
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    formula_traces: list[FormulaTrace],
+) -> list[JsonObject]:
+    diagnostic_hints = [
+        dict(item)
+        for item in list(diagnostics.get("finance_question_numeric_premise_hints") or [])
+        if isinstance(item, dict)
+    ][:12]
+    if diagnostic_hints:
+        return diagnostic_hints
+    return _finance_question_numeric_premise_hints(question=question, facts=facts, formula_traces=formula_traces)
+
+
+def _finance_question_numeric_premise_hints(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    formula_traces: list[FormulaTrace],
+    limit: int = 12,
+) -> list[JsonObject]:
+    candidates = _finance_question_numeric_premise_candidates(question)
+    if not candidates:
+        return []
+    support_values = _finance_premise_support_values(facts=facts, formula_traces=formula_traces)
+    if not support_values:
+        return []
+    hints: list[JsonObject] = []
+    for candidate in candidates:
+        closest = _finance_closest_premise_support(candidate, support_values)
+        if not closest or closest.get("relation") == "exact_match":
+            continue
+        hints.append(
+            {
+                "question_number": candidate.get("raw"),
+                "raw": candidate.get("raw"),
+                "value": candidate.get("value"),
+                "unit": candidate.get("unit"),
+                "context": candidate.get("context"),
+                "relation_to_supported_values": closest.get("relation"),
+                "closest_supported_value": closest.get("support"),
+                "host_role": "advisory_question_numeric_attention_only",
+            }
+        )
+        if len(hints) >= limit:
+            break
+    return hints
+
+
+def _finance_question_numeric_premise_candidates(question: str) -> list[JsonObject]:
+    text = str(question or "")
+    result: list[JsonObject] = []
+    for match in _QUESTION_NUMERIC_PREMISE_PATTERN.finditer(text):
+        raw_number = str(match.group("number") or "")
+        raw_unit = str(match.group("unit") or "")
+        prefix = str(match.group("prefix") or "")
+        unit = _finance_premise_normalized_unit(raw_unit or prefix)
+        if _finance_premise_ambiguous_compact_unit(text, match, raw=raw_number, unit=raw_unit, prefix=prefix):
+            continue
+        value = _finance_premise_scaled_decimal(raw_number, raw_unit or prefix)
+        if value is None or _finance_premise_looks_like_year(value):
+            continue
+        if not _finance_premise_material_number(text, match.start("number"), match.end("number"), value=value, unit=unit, prefix=prefix):
+            continue
+        result.append(
+            {
+                "raw": match.group(0).strip(),
+                "value": _decimal_string_runtime(value),
+                "unit": unit,
+                "context": _text_preview(
+                    text[max(0, match.start("number") - 80) : min(len(text), match.end("number") + 80)],
+                    limit=180,
+                ),
+            }
+        )
+    return result[:24]
+
+
+def _finance_premise_support_values(
+    *,
+    facts: list[FinanceFact],
+    formula_traces: list[FormulaTrace],
+) -> list[JsonObject]:
+    values: list[JsonObject] = []
+    for fact in facts[:96]:
+        value = _decimal_or_none_runtime(fact.value)
+        if value is None:
+            continue
+        base = {
+            "kind": "finance_fact",
+            "ref": fact.fact_id,
+            "metric": fact.metric,
+            "unit": _finance_premise_normalized_unit(fact.unit or ""),
+            "fiscal_year": fact.fiscal_year,
+            "citation_ref": fact.citation_ref,
+        }
+        values.extend(_finance_premise_display_values(value, base))
+    for trace in formula_traces[:24]:
+        value = _decimal_or_none_runtime(trace.result_value)
+        if value is None:
+            continue
+        diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+        base = {
+            "kind": "formula_trace",
+            "ref": trace.formula_id,
+            "formula_name": trace.formula_name,
+            "unit": _finance_premise_normalized_unit(trace.unit or ""),
+            "formatted_value": diagnostics.get("formatted_value"),
+        }
+        values.extend(_finance_premise_display_values(value, base))
+    return values[:512]
+
+
+def _finance_premise_display_values(value: Decimal, base: JsonObject) -> list[JsonObject]:
+    values: list[JsonObject] = [{**base, "value": _decimal_string_runtime(value)}]
+    abs_value = abs(value)
+    for unit, divisor in (
+        ("thousand", Decimal(1_000)),
+        ("million", Decimal(1_000_000)),
+        ("billion", Decimal(1_000_000_000)),
+        ("trillion", Decimal(1_000_000_000_000)),
+        ("hundred_million", Decimal(100_000_000)),
+        ("ten_thousand", Decimal(10_000)),
+    ):
+        if abs_value >= divisor:
+            values.append({**base, "value": _decimal_string_runtime(value / divisor), "unit": unit})
+    if _finance_premise_normalized_unit(str(base.get("unit") or "")) == "percent" and Decimal("-1") < value < Decimal("1"):
+        values.append({**base, "value": _decimal_string_runtime(value * Decimal(100)), "unit": "percent"})
+    return values
+
+
+def _finance_closest_premise_support(candidate: JsonObject, support_values: list[JsonObject]) -> JsonObject:
+    candidate_value = _decimal_or_none_runtime(candidate.get("value"))
+    if candidate_value is None:
+        return {}
+    same_unit = [
+        value
+        for value in support_values
+        if not candidate.get("unit") or value.get("unit") == candidate.get("unit")
+    ]
+    candidates = same_unit or support_values
+    closest: JsonObject | None = None
+    closest_delta: Decimal | None = None
+    for support in candidates:
+        support_value = _decimal_or_none_runtime(support.get("value"))
+        if support_value is None:
+            continue
+        delta = abs(candidate_value - support_value)
+        if closest_delta is None or delta < closest_delta:
+            closest_delta = delta
+            closest = support
+    if closest is None or closest_delta is None:
+        return {}
+    support_value = _decimal_or_none_runtime(closest.get("value")) or Decimal(0)
+    exact_tolerance = max(abs(support_value) * Decimal("0.005"), Decimal("0.000001"))
+    near_tolerance = max(abs(support_value) * Decimal("0.05"), Decimal("0.000001"))
+    if closest_delta <= exact_tolerance:
+        relation = "exact_match"
+    elif closest_delta <= near_tolerance:
+        relation = "near_supported_value"
+    else:
+        relation = "different_from_supported_values"
+    return {
+        "relation": relation,
+        "support": {
+            key: value
+            for key, value in closest.items()
+            if key in {"kind", "ref", "metric", "formula_name", "value", "unit", "fiscal_year", "citation_ref", "formatted_value"}
+            and value not in (None, "", [], {})
+        },
+    }
+
+
+def _finance_premise_scaled_decimal(raw: str, unit: str) -> Decimal | None:
+    value = _decimal_or_none_runtime(str(raw).replace(",", ""))
+    if value is None:
+        return None
+    normalized = _finance_premise_normalized_unit(unit)
+    if normalized == "thousand":
+        return value * Decimal(1_000)
+    if normalized == "million":
+        return value * Decimal(1_000_000)
+    if normalized == "billion":
+        return value * Decimal(1_000_000_000)
+    if normalized == "trillion":
+        return value * Decimal(1_000_000_000_000)
+    if normalized == "hundred_million":
+        return value * Decimal(100_000_000)
+    if normalized == "ten_thousand":
+        return value * Decimal(10_000)
+    return value
+
+
+def _finance_premise_normalized_unit(unit: str) -> str:
+    text = " ".join(str(unit or "").strip().lower().replace("us$", "usd").split())
+    if "$" in text or text in {"usd"}:
+        return "usd"
+    if "usd" in text and "million" in text:
+        return "million"
+    if "usd" in text and "billion" in text:
+        return "billion"
+    if text in {"%", "percent", "percentage"}:
+        return "percent"
+    if text in {"bps", "bp", "basis point", "basis points"}:
+        return "bps"
+    if text in {"m", "mn", "million"}:
+        return "million"
+    if text in {"b", "bn", "billion"}:
+        return "billion"
+    if text == "trillion":
+        return "trillion"
+    if text == "thousand":
+        return "thousand"
+    if text == "亿":
+        return "hundred_million"
+    if text == "万":
+        return "ten_thousand"
+    if text in {"€", "eur"}:
+        return "eur"
+    if text in {"£", "gbp"}:
+        return "gbp"
+    if text in {"¥", "cny", "rmb"}:
+        return "cny"
+    return text
+
+
+def _finance_premise_looks_like_year(value: Decimal) -> bool:
+    return value == value.to_integral_value() and Decimal(1900) <= value <= Decimal(2099)
+
+
+def _finance_premise_ambiguous_compact_unit(
+    text: str,
+    match: re.Match[str],
+    *,
+    raw: str,
+    unit: str,
+    prefix: str,
+) -> bool:
+    normalized = _finance_premise_normalized_unit(unit)
+    if normalized not in {"million", "billion"} or str(unit or "").lower() not in {"m", "b"} or prefix:
+        return False
+    separator = text[match.end("number") : match.start("unit")] if match.start("unit") >= 0 else ""
+    return not separator and "." not in raw
+
+
+def _finance_premise_material_number(
+    text: str,
+    start: int,
+    end: int,
+    *,
+    value: Decimal,
+    unit: str,
+    prefix: str,
+) -> bool:
+    if unit or prefix:
+        return True
+    if abs(value) >= Decimal(1_000):
+        return True
+    window = text[max(0, start - 80) : min(len(text), end + 80)].lower()
+    return any(marker in window for marker in ("revenue", "income", "margin", "ratio", "multiple", "ebitda", "cash", "debt", "assets", "liabilities", "inventory", "capex", "profit"))
+
+
+def _finance_slot_bind_max_tokens(*, facts: list[FinanceFact], compiled_program: JsonObject) -> int:
+    transform_count = len(_dict_items(compiled_program.get("transform_specs")))
+    evidence_count = len(_dict_items(compiled_program.get("evidence_specs")))
+    fact_count = len(facts)
+    if fact_count > 96 or transform_count > 6 or evidence_count > 12:
+        return 8192
+    if fact_count > 32 or transform_count > 2 or evidence_count > 8:
+        return 6144
+    return 4096
+
+
+def _compact_compiled_program_for_slot_bind(program: JsonObject) -> JsonObject:
+    diagnostics = _json_object(program.get("diagnostics"))
+    return {
+        "program_id": program.get("program_id"),
+        "task_spec": _compact_model_dict(program.get("task_spec"), limit=12),
+        "evidence_specs": [_compact_model_dict(item, limit=12) for item in _dict_items(program.get("evidence_specs"))[:16]],
+        "transform_specs": [_compact_model_dict(item, limit=12) for item in _dict_items(program.get("transform_specs"))[:12]],
+        "slot_frame": _compact_model_dict(program.get("slot_frame"), limit=16),
+        "tool_chain_plan": _compact_model_dict(diagnostics.get("tool_chain_plan") or program.get("tool_chain_plan"), limit=16),
+    }
+
+
+def _slot_requirements_for_slot_bind(program: JsonObject) -> list[JsonObject]:
+    slot_frame = _json_object(program.get("slot_frame"))
+    evidence_specs = _dict_items(program.get("evidence_specs"))
+    transform_specs = _dict_items(program.get("transform_specs"))
+    slots: list[str] = []
+    slot_payloads: dict[str, JsonObject] = {}
+    for item in _dict_items(slot_frame.get("required_slots")):
+        slot_name = _slot_requirement_name(item)
+        if not slot_name:
+            continue
+        slots.append(slot_name)
+        slot_payloads.setdefault(slot_name, _compact_slot_frame_requirement(item))
+    for item in evidence_specs:
+        slot_name = _slot_requirement_name(item)
+        if slot_name:
+            slots.append(slot_name)
+    for item in transform_specs:
+        slots.extend(_transform_required_slot_names(item))
+
+    result: list[JsonObject] = []
+    for slot_name in _ordered_unique(slots)[:64]:
+        requirement: JsonObject = {
+            "slot_name": slot_name,
+            "slot_frame": slot_payloads.get(slot_name, {}),
+            "evidence_specs": [
+                _compact_slot_evidence_spec(item)
+                for item in evidence_specs
+                if _slot_requirement_name(item) == slot_name
+            ][:8],
+            "transform_consumers": [
+                _compact_slot_transform_spec(item)
+                for item in transform_specs
+                if slot_name in _transform_required_slot_names(item)
+            ][:8],
+        }
+        result.append({key: value for key, value in requirement.items() if value not in ({}, [])})
+    return result
+
+
+def _slot_requirement_name(item: JsonObject) -> str:
+    for key in ("slot_name", "name", "slot", "variable_name", "target_slot"):
+        value = _string_value(item.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _transform_required_slot_names(item: JsonObject) -> list[str]:
+    names: list[str] = []
+    for value in (
+        item.get("required_slots"),
+        item.get("variables"),
+        item.get("input_slots"),
+        item.get("slots"),
+    ):
+        if isinstance(value, list):
+            names.extend(_string_list(value))
+        elif isinstance(value, dict):
+            names.extend(str(key) for key in value if isinstance(key, str) and key.strip())
+    for key in ("slot_name", "target_slot", "output_slot"):
+        value = _string_value(item.get(key))
+        if value:
+            names.append(value)
+    return _ordered_unique([name for name in names if name])
+
+
+def _compact_slot_frame_requirement(item: JsonObject) -> JsonObject:
+    return {
+        key: _compact_model_value(value)
+        for key, value in item.items()
+        if key in {"name", "slot_name", "description", "role", "required", "unit", "period", "entity"}
+    }
+
+
+def _compact_slot_evidence_spec(item: JsonObject) -> JsonObject:
+    return {
+        key: _compact_model_value(value)
+        for key, value in item.items()
+        if key
+        in {
+            "slot_name",
+            "accepted_attributes",
+            "source_role",
+            "required_source_families",
+            "target_period",
+            "statement",
+            "line_item",
+            "metric",
+            "unit",
+            "required",
+            "entity",
+            "company",
+        }
+    }
+
+
+def _compact_slot_transform_spec(item: JsonObject) -> JsonObject:
+    return {
+        key: _compact_model_value(value)
+        for key, value in item.items()
+        if key
+        in {
+            "name",
+            "formula_name",
+            "expression",
+            "required_slots",
+            "variables",
+            "output_unit",
+            "unit",
+            "objective",
+        }
+    }
+
+
+def _compact_model_value(value: object) -> object:
+    if isinstance(value, str):
+        return _text_preview(value, limit=180)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [_compact_model_value(item) for item in value[:8] if isinstance(item, (str, int, float, bool)) or item is None]
+    if isinstance(value, dict):
+        return _compact_model_dict(value, limit=8)
+    return _text_preview(value, limit=180)
+
+
+def _raw_fact_summary_for_slot_bind(fact: FinanceFact) -> JsonObject:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    return {
+        "fact_id": _text_preview(fact.fact_id, limit=120),
+        "entity": _text_preview(fact.entity, limit=120),
+        "ticker": _text_preview(fact.ticker, limit=24),
+        "period": _text_preview(fact.period, limit=80),
+        "fiscal_year": fact.fiscal_year,
+        "metric": _text_preview(fact.metric, limit=160),
+        "value": _text_preview(fact.value, limit=120),
+        "unit": _text_preview(fact.unit, limit=80),
+        "scale": _text_preview(fact.scale, limit=80),
+        "evidence_ref": _text_preview(fact.evidence_ref, limit=120),
+        "citation_ref": _text_preview(fact.citation_ref, limit=120),
+        "raw_fields": {
+            key: _slot_bind_raw_field_value(key, value)
+            for key, value in metadata.items()
+            if key in {
+                "accn",
+                "concept",
+                "context",
+                "duration_days",
+                "end",
+                "filed",
+                "form",
+                "fp",
+                "frame",
+                "label",
+                "line_item",
+                "period",
+                "raw",
+                "raw_metric",
+                "row_marker",
+                "source",
+                "source_family",
+                "source_kind",
+                "source_title",
+                "source_uri",
+                "start",
+                "statement",
+                "target_line_item",
+                "target_statement",
+                "target_document_binding_accepted",
+                "target_document_binding_reasons",
+                "target_document_binding_score",
+                "taxonomy",
+            }
+        },
+    }
+
+
+def _finance_slot_bind_competing_fact_clusters(facts: list[FinanceFact]) -> list[JsonObject]:
+    groups: dict[tuple[str, str, str], list[FinanceFact]] = {}
+    for fact in facts:
+        entity_key = _slot_bind_fact_entity_key(fact)
+        period_key = _slot_bind_fact_period_key(fact)
+        metric_key = _slot_bind_fact_metric_key(fact)
+        if not entity_key or not period_key or not metric_key:
+            continue
+        groups.setdefault((entity_key, period_key, metric_key), []).append(fact)
+
+    clusters: list[JsonObject] = []
+    for (entity_key, period_key, metric_key), items in groups.items():
+        if len(items) < 2:
+            continue
+        distinct_values = _ordered_unique(str(item.value or "").strip() for item in items if str(item.value or "").strip())
+        distinct_raw_labels = _ordered_unique(
+            str(_slot_bind_fact_raw_label(item) or "").strip().casefold()
+            for item in items
+            if str(_slot_bind_fact_raw_label(item) or "").strip()
+        )
+        distinct_sources = _ordered_unique(
+            str((item.metadata if isinstance(item.metadata, dict) else {}).get("source_uri") or item.source_ref or "").strip()
+            for item in items
+            if str((item.metadata if isinstance(item.metadata, dict) else {}).get("source_uri") or item.source_ref or "").strip()
+        )
+        if len(distinct_values) < 2 and len(distinct_raw_labels) < 2 and len(distinct_sources) < 2:
+            continue
+        clusters.append(
+            {
+                "entity_key": entity_key,
+                "period_key": period_key,
+                "metric_family_hint": metric_key,
+                "candidate_count": len(items),
+                "distinct_value_count": len(distinct_values),
+                "host_role": "attention_grouping_only_no_semantic_preference",
+                "candidate_ordering": "source_order_from_raw_facts",
+                "candidates": [_slot_bind_competing_candidate(item) for item in items[:8]],
+            }
+        )
+    clusters.sort(key=lambda item: (int(item.get("candidate_count") or 0), int(item.get("distinct_value_count") or 0)), reverse=True)
+    return clusters[:16]
+
+
+def _slot_bind_competing_candidate(fact: FinanceFact) -> JsonObject:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    raw_fields = {
+        key: _slot_bind_raw_field_value(key, value)
+        for key, value in metadata.items()
+        if key
+        in {
+            "accn",
+            "concept",
+            "context",
+            "end",
+            "filed",
+            "form",
+            "fp",
+            "label",
+            "line_item",
+            "raw",
+            "source_uri",
+            "start",
+            "statement",
+            "target_document_binding_accepted",
+            "target_document_binding_reasons",
+            "target_document_binding_score",
+        }
+    }
+    return {
+        "fact_id": _text_preview(fact.fact_id, limit=120),
+        "metric": _text_preview(fact.metric, limit=160),
+        "value": _text_preview(fact.value, limit=120),
+        "unit": _text_preview(fact.unit, limit=80),
+        "period": _text_preview(fact.period, limit=80),
+        "fiscal_year": fact.fiscal_year,
+        "citation_ref": _text_preview(fact.citation_ref, limit=120),
+        "raw_fields": raw_fields,
+    }
+
+
+def _slot_bind_fact_entity_key(fact: FinanceFact) -> str:
+    ticker = str(fact.ticker or "").strip().casefold()
+    if ticker:
+        return ticker
+    return " ".join(str(fact.entity or "").strip().casefold().split())
+
+
+def _slot_bind_fact_period_key(fact: FinanceFact) -> str:
+    if fact.fiscal_year is not None:
+        return f"fy{fact.fiscal_year}"
+    return " ".join(str(fact.period or "").strip().casefold().split())
+
+
+def _slot_bind_fact_metric_key(fact: FinanceFact) -> str:
+    text = " ".join(
+        str(value or "")
+        for value in (
+            fact.metric,
+            _slot_bind_fact_raw_label(fact),
+        )
+    ).casefold()
+    normalized = re.sub(r"[^a-z0-9]+", " ", text)
+    if any(term in normalized for term in ("revenue", "revenues", "sales", "net sales")):
+        return "revenue_or_sales"
+    if any(term in normalized for term in ("cost of revenue", "cost of sales", "cogs")):
+        return "cost_of_sales"
+    if "inventory" in normalized or "inventories" in normalized:
+        return "inventory"
+    if "capital expenditure" in normalized or "capex" in normalized or "property plant and equipment" in normalized:
+        return "capital_expenditure_or_ppe"
+    if "asset" in normalized:
+        return "assets"
+    if "cash flow" in normalized or "operating activities" in normalized:
+        return "cash_flow"
+    if "income" in normalized or "earnings" in normalized or "profit" in normalized:
+        return "income_or_profit"
+    compact = " ".join(normalized.split())
+    return compact[:80]
+
+
+def _slot_bind_fact_raw_label(fact: FinanceFact) -> str:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    for key in ("label", "line_item", "concept", "raw_metric", "target_line_item"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return str(fact.metric or "").strip()
+
+
+def _finance_slot_bind_semantic_basis(parsed: JsonObject | None, *, key: str) -> list[JsonObject]:
+    if not isinstance(parsed, dict):
+        return []
+    result: list[JsonObject] = []
+    for item in _dict_items(parsed.get(key))[:24]:
+        compact = _compact_model_dict(item, limit=12)
+        if compact:
+            result.append(compact)
+    return result
+
+
+def _finance_slot_bind_plans_from_model(
+    parsed: JsonObject | None,
+    *,
+    facts: list[FinanceFact],
+    ledger_ref: str,
+) -> tuple[list[FinanceFormulaPlan], list[JsonObject]]:
+    if not isinstance(parsed, dict):
+        return [], [{"reason": "slot_bind_model_output_missing"}]
+    fact_by_id = {fact.fact_id: fact for fact in facts if fact.fact_id}
+    bindings = _slot_bindings_by_variable(parsed.get("slot_bindings"), fact_by_id=fact_by_id)
+    period_basis = _finance_slot_bind_semantic_basis(parsed, key="period_basis")
+    line_item_basis = _finance_slot_bind_semantic_basis(parsed, key="line_item_basis")
+    plans: list[FinanceFormulaPlan] = []
+    rejected: list[JsonObject] = []
+    for index, request in enumerate(_dict_items(parsed.get("formula_requests"))[:12], start=1):
+        expression = str(request.get("expression") or "").strip()
+        formula_name = str(request.get("formula_name") or request.get("name") or f"model_formula_{index}").strip()
+        if not expression:
+            rejected.append({"index": index, "reason": "missing_expression"})
+            continue
+        variables_raw = request.get("variables")
+        variables_data = variables_raw if isinstance(variables_raw, dict) else {}
+        variables: JsonObject = {}
+        input_fact_ids: list[str] = []
+        request_rejected = False
+        for variable_name, raw_value in variables_data.items():
+            value, fact_id, error = _slot_bind_variable_value(raw_value, fact_by_id=fact_by_id, bindings=bindings)
+            if error:
+                rejected.append({"index": index, "variable": str(variable_name), "reason": error})
+                request_rejected = True
+                break
+            variables[str(variable_name)] = value
+            if fact_id:
+                input_fact_ids.append(fact_id)
+        if request_rejected:
+            continue
+        for fact_id in _string_list(request.get("input_fact_ids")):
+            if fact_id in fact_by_id:
+                input_fact_ids.append(fact_id)
+        input_fact_ids = _ordered_unique(input_fact_ids)
+        plans.append(
+            FinanceFormulaPlan(
+                status="ready",
+                formula_name=formula_name or "model_bound_formula",
+                input_fact_ids=input_fact_ids,
+                missing_facts=[],
+                payload={
+                    "expression": expression,
+                    "formula_name": formula_name or "model_bound_formula",
+                    "variables": variables,
+                    "unit": request.get("unit") if isinstance(request.get("unit"), str) else None,
+                    "input_fact_ids": input_fact_ids,
+                    "diagnostics": {
+                        "source": "finance_slot_bind_model",
+                        "ledger_ref": ledger_ref,
+                        "model_reason_summary": parsed.get("reason_summary"),
+                        "model_period_basis": period_basis,
+                        "model_line_item_basis": line_item_basis,
+                    },
+                },
+                diagnostics={
+                    "source": "finance_slot_bind_model",
+                    "decision": parsed.get("decision"),
+                    "ledger_ref": ledger_ref,
+                    "model_period_basis": period_basis,
+                    "model_line_item_basis": line_item_basis,
+                },
+            )
+        )
+    return plans, rejected
+
+
+def _slot_bindings_by_variable(value: object, *, fact_by_id: dict[str, FinanceFact]) -> dict[str, FinanceFact]:
+    result: dict[str, FinanceFact] = {}
+    for item in _dict_items(value):
+        fact_id = str(item.get("fact_id") or "").strip()
+        fact = fact_by_id.get(fact_id)
+        if fact is None:
+            continue
+        for key in ("variable_name", "slot_name", "name"):
+            variable_name = str(item.get(key) or "").strip()
+            if variable_name:
+                result[variable_name] = fact
+    return result
+
+
+def _slot_bind_variable_value(
+    raw_value: object,
+    *,
+    fact_by_id: dict[str, FinanceFact],
+    bindings: dict[str, FinanceFact],
+) -> tuple[object, str | None, str | None]:
+    fact_id = None
+    literal = None
+    if isinstance(raw_value, dict):
+        fact_id = str(raw_value.get("fact_id") or "").strip() or None
+        formula_ref = (
+            str(
+                raw_value.get("formula_ref")
+                or raw_value.get("from_formula")
+                or raw_value.get("trace_ref")
+                or raw_value.get("formula_name")
+                or ""
+            ).strip()
+            or None
+        )
+        if formula_ref:
+            return _formula_ref_marker(formula_ref), None, None
+        literal = raw_value.get("value") if raw_value.get("value") is not None else raw_value.get("literal")
+    elif isinstance(raw_value, str):
+        text = raw_value.strip()
+        if text in fact_by_id:
+            fact_id = text
+        elif text in bindings:
+            fact = bindings[text]
+            return fact.value, fact.fact_id, None
+        else:
+            literal = text
+    else:
+        literal = raw_value
+    if fact_id:
+        fact = fact_by_id.get(fact_id)
+        if fact is None:
+            return None, None, "unknown_fact_id"
+        if _decimal_or_none_runtime(fact.value) is None:
+            return None, None, "bound_fact_value_not_numeric"
+        return fact.value, fact.fact_id, None
+    if _decimal_or_none_runtime(literal) is None:
+        text = str(literal or "").strip()
+        if text:
+            return _formula_ref_marker(text), None, None
+        return None, None, "literal_not_numeric"
+    return literal, None, None
+
+
+def _formula_ref_marker(name: str) -> JsonObject:
+    return {"__formula_ref__": str(name or "").strip()}
+
+
+def _resolve_formula_variable_refs(
+    variables: JsonObject,
+    traces: list[FormulaTrace],
+) -> tuple[JsonObject, list[str], list[str]]:
+    trace_by_name: dict[str, FormulaTrace] = {}
+    for trace in traces:
+        name = str(trace.formula_name or "").strip()
+        if name:
+            trace_by_name[name] = trace
+    resolved: JsonObject = {}
+    input_fact_ids: list[str] = []
+    unresolved: list[str] = []
+    for variable_name, value in variables.items():
+        if isinstance(value, dict) and "__formula_ref__" in value:
+            ref = str(value.get("__formula_ref__") or "").strip()
+            trace = trace_by_name.get(ref)
+            if trace is None:
+                unresolved.append(ref or str(variable_name))
+                continue
+            numeric_value = _decimal_or_none_runtime(trace.result_value)
+            if numeric_value is None:
+                unresolved.append(ref or str(variable_name))
+                continue
+            resolved[str(variable_name)] = trace.result_value
+            input_fact_ids.extend(trace.input_fact_ids)
+        else:
+            resolved[str(variable_name)] = value
+    return resolved, _ordered_unique(input_fact_ids), _ordered_unique(unresolved)
+
+
+def _dict_items(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _compact_model_dict(value: object, *, limit: int) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    result: JsonObject = {}
+    for index, (key, item) in enumerate(value.items()):
+        if index >= limit:
+            break
+        if isinstance(item, str):
+            result[str(key)] = _text_preview(item, limit=240)
+        elif isinstance(item, (int, float, bool)) or item is None:
+            result[str(key)] = item
+        elif isinstance(item, list):
+            result[str(key)] = [
+                _text_preview(child, limit=160) if isinstance(child, str) else child
+                for child in item[:8]
+                if isinstance(child, (str, int, float, bool)) or child is None
+            ]
+        elif isinstance(item, dict):
+            result[str(key)] = _compact_model_dict(item, limit=8)
+    return result
+
+
+def _slot_bind_raw_value(value: object) -> object:
+    if isinstance(value, str):
+        return _text_preview(value, limit=360)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return _text_preview(value, limit=360)
+
+
+def _slot_bind_raw_field_value(key: str, value: object) -> object:
+    if not isinstance(value, str):
+        return _slot_bind_raw_value(value)
+    normalized_key = str(key or "").strip().lower()
+    if normalized_key == "context":
+        return _text_preview(value, limit=220)
+    if normalized_key == "raw":
+        return _text_preview(value, limit=260)
+    if normalized_key in {"source_uri", "source_title"}:
+        return _text_preview(value, limit=180)
+    if normalized_key in {"target_document_binding_reasons"}:
+        return _text_preview(value, limit=160)
+    return _slot_bind_raw_value(value)
+
+
 def _finance_numeric_failure_missing_evidence(
     journal: JournalStore,
     task_id: str,
@@ -14056,6 +17147,42 @@ def _finance_answer_numeric_support_rate(verification) -> float | None:
     return min(1.0, max(0.0, len(matched) / float(answer_numeric_count)))
 
 
+FINANCE_NUMERIC_JUDGE_FACT_LIMIT = 48
+FINANCE_NUMERIC_JUDGE_EVIDENCE_LIMIT = 16
+FINANCE_NUMERIC_JUDGE_CITATION_LIMIT = 16
+FINANCE_NUMERIC_JUDGE_ANSWER_CHAR_LIMIT = 6000
+FINANCE_NUMERIC_JUDGE_CONTRACT = (
+    "You are finance.numeric_judge for Holo Kernel v3. Return only one JSON object. "
+    "You are the semantic verifier: decide whether the answer addresses the actual question, which numeric claims are core, which are incidental noise, and how synthesis should repair the answer. "
+    "The host verifier diagnostics are evidence about provenance/arithmetic support, not the semantic decision owner. "
+    "Use only the provided answer excerpt, facts, formula traces, evidence, citations, and host diagnostics. "
+    "If judge_packet.competing_fact_clusters is present, treat it as host-built attention grouping only: candidate order is source order, not semantic ranking, and you must inspect raw fields yourself. "
+    "If judge_packet.metric_intent_hints is present, treat it as weak retrieval/extraction diagnostics only: it may help notice line-item matches or demotions, but it is not host answer selection. "
+    "If judge_packet.question_numeric_premise_hints is present, treat it as an advisory index of numeric claims embedded in the question and nearby supported fact/trace values; decide yourself whether the premise is wrong, stale, irrelevant, or supported. "
+    "Use formula_trace_support to connect FormulaTrace outputs to their input facts, evidence refs, and citation refs when deciding whether a numeric claim is supported. "
+    "If FormulaTrace model_context is present, treat model_outputs as calculator-supported derived values and assumptions/defaulted_assumptions as explicit modeling assumptions that must be labeled in the final answer. "
+    "Do not invent facts, citations, formulas, values, source ids, or unsupported calculations. "
+    "If supported facts or formula traces are enough to answer, return repair_answer with a concrete repair_instruction instead of requiring more work. "
+    "If more work is required, name exact missing slots and the next tool action. "
+    "Remove unsupported non-core numbers rather than preserving them in prose. "
+    "Treat generic thresholds, comparison cutoffs, multiples, and benchmark percentages as unsupported unless provided in the packet. "
+    "Return compact JSON; reason_summary<=240 chars, core/non-core numeric claim lists should be concise."
+)
+FINANCE_NUMERIC_JUDGE_OUTPUT_SCHEMA: JsonObject = {
+    "decision": "passed_semantically|repair_answer|continue_work|fail_with_limitations",
+    "reason_summary": "short semantic rationale",
+    "answer_addresses_question": True,
+    "core_numeric_claims": ["numbers essential to scoring/reasoning"],
+    "non_core_numeric_claims": ["incidental numeric noise"],
+    "unsupported_core_values": ["core values not supported"],
+    "candidate_supported_values": ["supported values/traces to use"],
+    "missing_slots": ["slots if work must continue"],
+    "repair_instruction": "specific synthesis repair directive",
+    "requires_more_work": False,
+    "confidence": 0.0,
+}
+
+
 def _finance_numeric_judge_prompt(
     *,
     question: str,
@@ -14068,6 +17195,102 @@ def _finance_numeric_judge_prompt(
     citations: list[CitationItem],
     attempt: str,
 ) -> str:
+    synthesis_traces = _finance_formula_traces_for_synthesis(formula_traces)
+    trace_policy = _finance_formula_trace_synthesis_policy(synthesis_traces)
+    fact_summaries = [_finance_fact_judge_summary(fact) for fact in facts[:FINANCE_NUMERIC_JUDGE_FACT_LIMIT]]
+    trace_support = _finance_formula_trace_support_index(synthesis_traces, fact_summaries)
+    report_diagnostics = _json_object(report.diagnostics)
+    slot_bind_state = _json_object(report_diagnostics.get("finance_slot_bind_state"))
+    competing_clusters = _finance_competing_fact_clusters_from_diagnostics_or_facts(
+        report_diagnostics,
+        facts[:FINANCE_NUMERIC_JUDGE_FACT_LIMIT],
+    )
+    metric_intent_hints = _finance_metric_intent_hints_from_diagnostics_or_facts(
+        report_diagnostics,
+        facts[:FINANCE_NUMERIC_JUDGE_FACT_LIMIT],
+    )
+    question_numeric_premise_hints = _finance_question_numeric_premise_hints_from_diagnostics_or_facts(
+        report_diagnostics,
+        question=question,
+        facts=facts[:FINANCE_NUMERIC_JUDGE_FACT_LIMIT],
+        formula_traces=synthesis_traces[:12],
+    )
+    payload = {
+        "contract": FINANCE_NUMERIC_JUDGE_CONTRACT,
+        "output_schema": FINANCE_NUMERIC_JUDGE_OUTPUT_SCHEMA,
+        "judge_packet": {
+            "schema": "holo.kernel_v3.finance_numeric_judge_input.v1",
+            "attempt": attempt,
+            "question": question,
+            "answer": _compact_answer_for_numeric_judge(answer),
+            "host_verifier_diagnostics": _compact_numeric_verifier_for_judge(verification),
+            "retrieval_report": {
+                "status": report.status,
+                "preview": _text_preview(report.preview, limit=720),
+                "diagnostics": {
+                    "goal_query": _json_object(report.diagnostics).get("goal_query"),
+                    "task_goal": report_diagnostics.get("task_goal"),
+                    "finance_formula_trace_count": report_diagnostics.get("finance_formula_trace_count"),
+                },
+            },
+            "finance_slot_bind_state": slot_bind_state,
+            "finance_fact_count": len(facts),
+            "finance_facts": fact_summaries,
+            "competing_fact_clusters": competing_clusters,
+            "competing_fact_cluster_policy": (
+                _json_object(report_diagnostics.get("finance_competing_fact_cluster_policy"))
+                or (_finance_competing_fact_cluster_policy() if competing_clusters else {})
+            ),
+            "metric_intent_hints": metric_intent_hints,
+            "metric_intent_hint_policy": (
+                _json_object(report_diagnostics.get("finance_metric_intent_hint_policy"))
+                or (_finance_metric_intent_hint_policy() if metric_intent_hints else {})
+            ),
+            "question_numeric_premise_hints": question_numeric_premise_hints,
+            "question_numeric_premise_hint_policy": (
+                _json_object(report_diagnostics.get("finance_question_numeric_premise_hint_policy"))
+                or (_finance_question_numeric_premise_hint_policy() if question_numeric_premise_hints else {})
+            ),
+            "formula_trace_count": len(formula_traces),
+            "formula_trace_ordering": "finance_slot_bind_model traces are listed first when present; prefer them over earlier exploratory calculator traces on conflicts.",
+            "formula_trace_synthesis_policy": trace_policy,
+            "formula_trace_support": trace_support,
+            "formula_traces": [_compact_formula_trace_for_judge(trace) for trace in synthesis_traces[:24]],
+            "evidence_count": len(evidence),
+            "evidence": [_evidence_judge_summary(item) for item in evidence[:FINANCE_NUMERIC_JUDGE_EVIDENCE_LIMIT]],
+            "citation_count": len(citations),
+            "citations": [_citation_judge_summary(item) for item in citations[:FINANCE_NUMERIC_JUDGE_CITATION_LIMIT]],
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _legacy_finance_numeric_judge_prompt(
+    *,
+    question: str,
+    answer: FinalAnswer,
+    verification,
+    report: RetrievalReport,
+    facts: list[FinanceFact],
+    formula_traces: list[FormulaTrace],
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    attempt: str,
+) -> str:
+    synthesis_traces = _finance_formula_traces_for_synthesis(formula_traces)
+    trace_policy = _finance_formula_trace_synthesis_policy(synthesis_traces)
+    fact_summaries = [_finance_fact_judge_summary(fact) for fact in facts[:160]]
+    trace_support = _finance_formula_trace_support_index(synthesis_traces, fact_summaries)
+    report_diagnostics = _json_object(report.diagnostics)
+    slot_bind_state = _json_object(report_diagnostics.get("finance_slot_bind_state"))
+    competing_clusters = _finance_competing_fact_clusters_from_diagnostics_or_facts(report_diagnostics, facts[:160])
+    metric_intent_hints = _finance_metric_intent_hints_from_diagnostics_or_facts(report_diagnostics, facts[:160])
+    question_numeric_premise_hints = _finance_question_numeric_premise_hints_from_diagnostics_or_facts(
+        report_diagnostics,
+        question=question,
+        facts=facts[:160],
+        formula_traces=synthesis_traces[:12],
+    )
     packet = {
         "schema": "holo.kernel_v3.finance_numeric_judge_input.v1",
         "instruction": (
@@ -14076,13 +17299,13 @@ def _finance_numeric_judge_prompt(
             "which numeric claims are incidental formatting/noise, and how the answer should be repaired. "
             "The host deterministic verifier diagnostics are advisory, not the semantic decision owner. "
             "Do not invent evidence, facts, citations, formulas, or values. Use only provided facts, formula traces, evidence, and citations. "
-            "The finance_facts array is ordered as a semantic candidate list by target binding, metric intent score, source authority, "
-            "provenance completeness, and fiscal recency. For competing facts with the same entity, period, and broad metric, prefer "
-            "the highest-ranked or highest finance_metric_intent.score candidate unless concept, label, statement, or cited source "
-            "text proves a lower-ranked value is the requested line item. If the answer headlines a lower-ranked competitor while a "
-            "better-ranked supported candidate answers the question, return repair_answer and tell synthesis which candidate to use. "
-            "For fiscal-year or annual questions, treat annual 10-K/companyfacts values as the period match over 10-Q or three-month values "
-            "unless the question explicitly asks for a quarter or interim period. "
+            "The finance_facts array is raw candidate evidence in source extraction order, not a semantic ranking. "
+            "If competing_fact_clusters is present, treat it as an attention index built from raw facts only, not as host ranking or answer selection. "
+            "If metric_intent_hints is present, treat it as weak extraction diagnostics only, not as host ranking or answer selection. "
+            "If question_numeric_premise_hints is present, treat it as advisory attention over question-embedded numbers and supported values; decide whether the premise is wrong from the raw facts and evidence. "
+            "For competing facts with the same entity, period, and broad metric, inspect raw fields such as concept, label, statement, "
+            "form, fp, period dates, source URI, and cited source text, then make the period and line-item judgment yourself. "
+            "If the answer uses a value that the raw fields do not support for the requested slot, return repair_answer and name the supported value or missing slot. "
             "If the answer contains unsupported non-core numbers, instruct synthesis to remove them. "
             "If supported facts or formula traces are enough to answer, provide a concrete repair_instruction that uses only those supported values. "
             "If more work is required, name the exact missing slots and the next tool action needed. "
@@ -14101,6 +17324,14 @@ def _finance_numeric_judge_prompt(
             "issues": list(getattr(verification, "issues", []) or [])[:24],
             "matched_values": list(getattr(verification, "matched_values", []) or [])[:48],
             "missing_values": list(getattr(verification, "missing_values", []) or [])[:48],
+            "unit_mismatches": list(getattr(verification, "unit_mismatches", []) or [])[:16],
+            "repair_guidance": finance_numeric_repair_guidance(verification),
+            "target_document_binding": _compact_target_document_binding_for_judge(
+                _json_object(_json_object(getattr(verification, "diagnostics", {})).get("target_document_binding"))
+            ),
+            "primary_source_numeric_binding": _compact_primary_source_binding_for_judge(
+                _json_object(_json_object(getattr(verification, "diagnostics", {})).get("primary_source_numeric_binding"))
+            ),
             "diagnostics": getattr(verification, "diagnostics", {}) or {},
         },
         "retrieval_report": {
@@ -14108,12 +17339,31 @@ def _finance_numeric_judge_prompt(
             "preview": _text_preview(report.preview, limit=720),
             "diagnostics": {
                 "goal_query": _json_object(report.diagnostics).get("goal_query"),
-                "task_goal": _json_object(report.diagnostics).get("task_goal"),
-                "finance_formula_trace_count": _json_object(report.diagnostics).get("finance_formula_trace_count"),
+                "task_goal": report_diagnostics.get("task_goal"),
+                "finance_formula_trace_count": report_diagnostics.get("finance_formula_trace_count"),
             },
         },
-        "finance_facts": [_finance_fact_judge_summary(fact) for fact in facts[:160]],
-        "formula_traces": [trace.to_dict() for trace in formula_traces[:32]],
+        "finance_slot_bind_state": slot_bind_state,
+        "finance_facts": fact_summaries,
+        "competing_fact_clusters": competing_clusters,
+        "competing_fact_cluster_policy": (
+            _json_object(report_diagnostics.get("finance_competing_fact_cluster_policy"))
+            or (_finance_competing_fact_cluster_policy() if competing_clusters else {})
+        ),
+        "metric_intent_hints": metric_intent_hints,
+        "metric_intent_hint_policy": (
+            _json_object(report_diagnostics.get("finance_metric_intent_hint_policy"))
+            or (_finance_metric_intent_hint_policy() if metric_intent_hints else {})
+        ),
+        "question_numeric_premise_hints": question_numeric_premise_hints,
+        "question_numeric_premise_hint_policy": (
+            _json_object(report_diagnostics.get("finance_question_numeric_premise_hint_policy"))
+            or (_finance_question_numeric_premise_hint_policy() if question_numeric_premise_hints else {})
+        ),
+        "formula_trace_ordering": "finance_slot_bind_model traces are listed first when present; prefer them over earlier exploratory calculator traces on conflicts.",
+        "formula_trace_synthesis_policy": trace_policy,
+        "formula_trace_support": trace_support,
+        "formula_traces": [trace.to_dict() for trace in synthesis_traces[:32]],
         "evidence": [_evidence_judge_summary(item) for item in evidence[:48]],
         "citations": [_citation_judge_summary(item) for item in citations[:48]],
         "output_contract": {
@@ -14135,228 +17385,265 @@ def _finance_numeric_judge_prompt(
     )
 
 
-def _rank_finance_facts_for_model(facts: list[FinanceFact], *, question: str = "") -> list[FinanceFact]:
-    if not facts:
-        return facts
-    enriched = [_finance_fact_with_metric_intent(fact, question=question) for fact in facts]
-    return sorted(enriched, key=_finance_fact_model_sort_key)
+def _compact_answer_for_numeric_judge(answer: FinalAnswer) -> JsonObject:
+    text = str(answer.answer or "")
+    return {
+        "text": _text_preview(text, limit=FINANCE_NUMERIC_JUDGE_ANSWER_CHAR_LIMIT),
+        "text_chars": len(text),
+        "truncated": len(text) > FINANCE_NUMERIC_JUDGE_ANSWER_CHAR_LIMIT,
+        "citation_refs": list(answer.citation_refs)[:FINANCE_NUMERIC_JUDGE_CITATION_LIMIT],
+        "used_evidence": list(answer.used_evidence)[:FINANCE_NUMERIC_JUDGE_EVIDENCE_LIMIT],
+        "limitations": [_text_preview(item, limit=240) for item in list(answer.limitations)[:12]],
+    }
 
 
-def _finance_fact_with_metric_intent(fact: FinanceFact, *, question: str = "") -> FinanceFact:
-    if not question:
-        return fact
-    diagnostics = finance_metric_intent_diagnostics(_finance_fact_intent_text(fact), query=question)
-    period_scope = _finance_question_period_scope(question)
-    if not diagnostics.get("active"):
-        if not period_scope:
-            return fact
-        return replace(
-            fact,
-            metadata={
-                **dict(fact.metadata),
-                "finance_question_period_scope": period_scope,
-            },
-        )
-    return replace(
-        fact,
-        metadata={
-            **dict(fact.metadata),
-            "finance_metric_intent": diagnostics,
-            **({"finance_question_period_scope": period_scope} if period_scope else {}),
+def _compact_numeric_verifier_for_judge(verification) -> JsonObject:
+    diagnostics = getattr(verification, "diagnostics", {}) or {}
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    guidance = finance_numeric_repair_guidance(verification)
+    unit_mismatch_examples = [
+        dict(item)
+        for item in list(guidance.get("unit_mismatch_examples") or [])
+        if isinstance(item, dict)
+    ][:8]
+    target_binding = _compact_target_document_binding_for_judge(_json_object(diagnostics.get("target_document_binding")))
+    primary_binding = _compact_primary_source_binding_for_judge(_json_object(diagnostics.get("primary_source_numeric_binding")))
+    return {
+        "status": getattr(verification, "status", None),
+        "issues": [_compact_simple_dict(item, limit=12) for item in list(getattr(verification, "issues", []) or [])[:16] if isinstance(item, dict)],
+        "matched_values": [_compact_simple_dict(item, limit=12) for item in list(getattr(verification, "matched_values", []) or [])[:32] if isinstance(item, dict)],
+        "missing_values": [_compact_simple_dict(item, limit=12) for item in list(getattr(verification, "missing_values", []) or [])[:32] if isinstance(item, dict)],
+        "unit_mismatches": [
+            _compact_simple_dict(item, limit=12)
+            for item in list(getattr(verification, "unit_mismatches", []) or [])[:16]
+            if isinstance(item, dict)
+        ],
+        "unit_mismatch_examples": unit_mismatch_examples,
+        "repair_options": _string_list(guidance.get("repair_options"))[:8],
+        "host_boundary": _text_preview(guidance.get("host_boundary"), limit=240),
+        "target_document_binding": target_binding,
+        "primary_source_numeric_binding": primary_binding,
+        "diagnostics": {
+            key: diagnostics.get(key)
+            for key in (
+                "answer_numeric_count",
+                "cited_evidence_numeric_count",
+                "formula_trace_count",
+                "numeric_support_rate",
+                "answer_truncated_for_judge",
+            )
+            if diagnostics.get(key) is not None
         },
-    )
+    }
 
 
-def _finance_question_period_scope(question: str) -> str | None:
-    text = str(question or "").lower()
-    if re.search(r"\b(?:fiscal\s+year|full\s+year|annual|fy\s*20\d{2}|fy20\d{2})\b", text):
-        return "annual"
-    return None
+def _compact_target_document_binding_for_judge(value: JsonObject) -> JsonObject:
+    if not value:
+        return {}
+    result: JsonObject = {}
+    for key in (
+        "company",
+        "doc_period",
+        "doc_type",
+        "doc_link",
+        "source_url",
+        "required_statement",
+        "required_line_item",
+        "primary_source_required",
+    ):
+        item = value.get(key)
+        if item not in (None, "", [], {}):
+            result[key] = _text_preview(item, limit=220) if isinstance(item, str) else item
+    return result
 
 
-def _finance_fact_intent_text(fact: FinanceFact) -> str:
-    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
-    parts = [
-        f"metric={fact.metric}",
-        f"value={fact.value}",
-        f"unit={fact.unit or ''}",
-        f"period={fact.period or ''}",
-        f"fy={fact.fiscal_year or ''}",
-        f"concept={metadata.get('concept') or ''}",
-        f"label={metadata.get('label') or ''}",
-        f"line_item={metadata.get('line_item') or ''}",
-        f"statement={metadata.get('statement') or ''}",
-        f"form={metadata.get('form') or ''}",
-        f"source_title={metadata.get('source_title') or ''}",
+def _compact_primary_source_binding_for_judge(value: JsonObject) -> JsonObject:
+    if not value:
+        return {}
+    rejected = []
+    for item in list(value.get("rejected_candidates") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        rejected.append(
+            {
+                key: _text_preview(raw, limit=220) if isinstance(raw, str) else raw
+                for key, raw in item.items()
+                if key in {"fact_id", "metric", "value", "source_uri", "source_title", "score", "reasons"}
+                and raw not in (None, "", [], {})
+            }
+        )
+    result = {
+        "schema": _text_preview(value.get("schema"), limit=120),
+        "status": _text_preview(value.get("status"), limit=80),
+        "selected_fact_ids": _string_list(value.get("selected_fact_ids"))[:16],
+        "selected_count": value.get("selected_count") if isinstance(value.get("selected_count"), int) else None,
+        "rejected_count": value.get("rejected_count") if isinstance(value.get("rejected_count"), int) else None,
+        "binding": _compact_target_document_binding_for_judge(_json_object(value.get("binding"))),
+        "rejected_candidates": rejected,
+    }
+    return {
+        key: item
+        for key, item in result.items()
+        if key == "selected_fact_ids" or item not in (None, "", [], {})
+    }
+
+
+def _compact_formula_trace_model_context(trace: FormulaTrace) -> JsonObject:
+    diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+    context: JsonObject = {}
+    for key in ("modeling_workflow", "assumption_source"):
+        value = diagnostics.get(key)
+        if value not in (None, "", [], {}):
+            context[key] = _text_preview(value, limit=160) if isinstance(value, str) else value
+    assumptions = diagnostics.get("assumptions")
+    if isinstance(assumptions, dict) and assumptions:
+        compact_assumptions = _compact_formula_trace_context_value(assumptions, depth=0, key_hint="assumptions")
+        if compact_assumptions not in (None, "", [], {}):
+            context["assumptions"] = compact_assumptions
+    defaulted = _string_list(diagnostics.get("defaulted_assumptions"))
+    if defaulted:
+        context["defaulted_assumptions"] = defaulted[:16]
+    model_outputs = diagnostics.get("model_outputs")
+    if isinstance(model_outputs, dict) and model_outputs:
+        compact_outputs = _compact_formula_trace_model_outputs(model_outputs)
+        if compact_outputs:
+            context["model_outputs"] = compact_outputs
+    return context
+
+
+def _compact_formula_trace_model_outputs(model_outputs: JsonObject) -> JsonObject:
+    compact: JsonObject = {}
+    for key, value in list(model_outputs.items())[:32]:
+        key_text = str(key)
+        if key_text == "projection" and isinstance(value, list):
+            compact["projection_summary"] = _compact_formula_trace_projection(value)
+            continue
+        item = _compact_formula_trace_context_value(value, depth=0, key_hint=key_text)
+        if item not in (None, "", [], {}):
+            compact[key_text] = item
+    return compact
+
+
+def _compact_formula_trace_projection(rows: list[object]) -> JsonObject:
+    first_rows = [
+        _compact_formula_trace_context_value(row, depth=0, key_hint="projection_row")
+        for row in rows[:3]
     ]
-    return " ".join(part for part in parts if part and not part.endswith("="))
-
-
-def _finance_fact_model_sort_key(fact: FinanceFact) -> tuple[int, int, int, int, float, float, int, int, int, str]:
-    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
-    intent = metadata.get("finance_metric_intent")
-    intent_score = _numeric_sort_value(intent.get("score") if isinstance(intent, dict) else None)
-    binding_score = _numeric_sort_value(metadata.get("target_document_binding_score"))
-    accepted = 1 if metadata.get("target_document_binding_accepted") is True else 0
-    target_year_match = _finance_fact_target_year_match(fact)
-    annual_rank = _finance_fact_annual_rank(fact)
-    line_item_rank = _finance_fact_line_item_rank(fact)
-    source_rank = _finance_fact_source_rank(fact)
-    citation_present = 1 if fact.citation_ref else 0
-    year = int(fact.fiscal_year or 0)
-    if metadata.get("finance_question_period_scope") == "annual":
-        return (
-            -annual_rank,
-            -target_year_match,
-            -accepted,
-            -line_item_rank,
-            -intent_score,
-            -binding_score,
-            -source_rank,
-            -citation_present,
-            -year,
-            fact.fact_id,
-        )
-    return (
-        -accepted,
-        -target_year_match,
-        -annual_rank,
-        -line_item_rank,
-        -intent_score,
-        -binding_score,
-        -source_rank,
-        -citation_present,
-        -year,
-        fact.fact_id,
+    last_row = (
+        _compact_formula_trace_context_value(rows[-1], depth=0, key_hint="projection_row")
+        if len(rows) > 3
+        else None
     )
+    result: JsonObject = {"row_count": len(rows), "first_rows": [row for row in first_rows if row not in (None, "", [], {})]}
+    if last_row not in (None, "", [], {}):
+        result["last_row"] = last_row
+    return result
 
 
-def _finance_fact_target_year_match(fact: FinanceFact) -> int:
-    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
-    binding = metadata.get("target_document_binding")
-    if not isinstance(binding, dict):
-        return 0
-    target_year = _int_or_none(binding.get("doc_period"))
-    if target_year is None:
-        return 0
-    if fact.fiscal_year == target_year:
-        return 1
-    if str(target_year) in str(fact.period or ""):
-        return 1
-    return 0
+def _compact_formula_trace_context_value(value: object, *, depth: int, key_hint: str) -> object:
+    if depth >= 3:
+        return _text_preview(value, limit=160) if isinstance(value, str) else value
+    if isinstance(value, dict):
+        result: JsonObject = {}
+        for key, item in list(value.items())[:24]:
+            compact = _compact_formula_trace_context_value(item, depth=depth + 1, key_hint=str(key))
+            if compact not in (None, "", [], {}):
+                result[str(key)] = compact
+        return result
+    if isinstance(value, list):
+        return [
+            item
+            for item in (
+                _compact_formula_trace_context_value(raw, depth=depth + 1, key_hint=key_hint)
+                for raw in value[:8]
+            )
+            if item not in (None, "", [], {})
+        ]
+    if isinstance(value, str):
+        return _text_preview(value, limit=180)
+    if isinstance(value, Decimal):
+        return _decimal_string_runtime(value)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return _text_preview(value, limit=160)
 
 
-def _finance_fact_annual_rank(fact: FinanceFact) -> int:
-    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
-    form = str(metadata.get("form") or "").upper().replace(" ", "")
-    source_uri = str(metadata.get("source_uri") or "").lower()
-    source_title = str(metadata.get("source_title") or "").lower()
-    period = str(fact.period or "").upper()
-    if form in {"10-K", "20-F", "40-F"} or "10-k" in source_title or "annual report" in source_title:
-        return 3
-    if period.startswith("FY"):
-        return 2
-    if form == "10-Q" or "10-q" in source_title or "quarter" in source_title or "q" in period:
-        return 1
-    if "data.sec.gov/api/xbrl/companyfacts" in source_uri or "data.sec.gov/api/xbrl/companyconcept" in source_uri:
-        return 2
-    return 0
+def _compact_formula_trace_for_judge(trace: FormulaTrace) -> JsonObject:
+    data = trace.to_dict()
+    diagnostics = _json_object(data.get("diagnostics"))
+    result = {
+        "formula_id": data.get("formula_id"),
+        "formula_name": data.get("formula_name"),
+        "expression": _text_preview(data.get("expression"), limit=240),
+        "input_fact_ids": list(data.get("input_fact_ids") or [])[:24],
+        "result_value": data.get("result_value"),
+        "unit": data.get("unit"),
+        "formatted_value": diagnostics.get("formatted_value"),
+        "diagnostics": {
+            key: diagnostics.get(key)
+            for key in (
+                "source",
+                "formula_status",
+                "method",
+                "output_attribute",
+                "question_hash",
+                "target_fiscal_year",
+                "formula_definition",
+                "numerator_slot",
+                "denominator_slot",
+                "bound_line_items",
+                "answer_wording_policy",
+            )
+            if diagnostics.get(key) is not None
+        },
+    }
+    model_context = _compact_formula_trace_model_context(trace)
+    if model_context:
+        result["model_context"] = model_context
+    return result
 
 
-def _finance_fact_line_item_rank(fact: FinanceFact) -> int:
-    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
-    concept = str(metadata.get("concept") or "").lower().replace(" ", "")
-    label = str(metadata.get("label") or "").lower()
-    metric = str(fact.metric or "").lower()
-    combined = f"{concept} {label} {metric}"
-    if any(
-        marker in combined
-        for marker in (
-            "contractwithcustomerliability",
-            "contract liability",
-            "deferred revenue",
-            "remaining performance obligation",
-            "revenuerecognized",
-        )
-    ):
-        return -10
-    if "totalrevenuesandotherincome" in combined or ("revenue" in combined and "other income" in combined):
-        return 2
-    if concept == "salesandotheroperatingrevenue" or metric == "sales and other operating revenues":
-        return 14
-    if concept == "operatingrevenues" or metric == "operating revenues":
-        return 12
-    if concept in {
-        "revenues",
-        "revenuefromcontractwithcustomerexcludingassessedtax",
-        "revenuefromcontractwithcustomerincludingassessedtax",
-        "salesrevenuenet",
-        "salesandotheroperatingrevenue",
-        "operatingrevenues",
-        "revenuesnetofinterestexpense",
-    }:
-        return 10
-    if metric in {"revenue", "revenues", "net revenues", "net sales", "sales and other operating revenues"}:
-        return 4
-    return 0
-
-
-def _finance_fact_source_rank(fact: FinanceFact) -> int:
-    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
-    source_uri = str(metadata.get("source_uri") or "").lower()
-    source_family = str(metadata.get("source_family") or "").lower()
-    source_title = str(metadata.get("source_title") or "").lower()
-    if "10-k" in source_title or "10-k" in source_uri or "annual report" in source_title:
-        return 5
-    if "sec.gov/archives" in source_uri:
-        return 4
-    if (
-        "data.sec.gov/api/xbrl/companyfacts" in source_uri
-        or "data.sec.gov/api/xbrl/companyconcept" in source_uri
-        or "structured_regulatory_data" in source_family
-    ):
-        return 3
-    if "sec.gov" in source_uri:
-        return 2
-    return 1
-
-
-def _numeric_sort_value(value: object) -> float:
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0.0
+def _rank_finance_facts_for_model(facts: list[FinanceFact], *, question: str = "") -> list[FinanceFact]:
+    del question
+    # Keep source extraction order. Semantic period / line-item selection belongs
+    # to finance.slot_bind or finance.numeric_judge, not to host ranking rules.
+    return list(facts)
 
 
 def _finance_fact_judge_summary(fact: FinanceFact) -> JsonObject:
     return {
-        "fact_id": fact.fact_id,
-        "entity": fact.entity,
-        "ticker": fact.ticker,
-        "period": fact.period,
+        "fact_id": _text_preview(fact.fact_id, limit=120),
+        "entity": _text_preview(fact.entity, limit=120),
+        "ticker": _text_preview(fact.ticker, limit=24),
+        "period": _text_preview(fact.period, limit=80),
         "fiscal_year": fact.fiscal_year,
-        "metric": fact.metric,
-        "value": fact.value,
-        "unit": fact.unit,
-        "scale": fact.scale,
-        "source_ref": fact.source_ref,
-        "evidence_ref": fact.evidence_ref,
-        "citation_ref": fact.citation_ref,
+        "metric": _text_preview(fact.metric, limit=160),
+        "value": _text_preview(fact.value, limit=120),
+        "unit": _text_preview(fact.unit, limit=80),
+        "scale": _text_preview(fact.scale, limit=80),
+        "source_ref": _text_preview(fact.source_ref, limit=160),
+        "evidence_ref": _text_preview(fact.evidence_ref, limit=160),
+        "citation_ref": _text_preview(fact.citation_ref, limit=120),
         "metadata": {
-            key: value
+            key: _compact_judge_metadata_value(value)
             for key, value in fact.metadata.items()
             if key in {
                 "accn",
                 "concept",
+                "duration_days",
+                "end",
                 "filed",
-                "finance_metric_intent",
                 "form",
+                "fp",
                 "label",
                 "line_item",
                 "source_family",
                 "source_kind",
+                "raw_metric",
+                "source",
                 "source_title",
                 "source_uri",
+                "start",
                 "statement",
                 "target_document_binding_accepted",
                 "target_document_binding_reasons",
@@ -14371,14 +17658,14 @@ def _finance_fact_judge_summary(fact: FinanceFact) -> JsonObject:
 def _evidence_judge_summary(item: EvidenceItem) -> JsonObject:
     metadata = item.diagnostics if isinstance(item.diagnostics, dict) else {}
     return {
-        "evidence_id": item.evidence_id,
-        "source_id": item.source_id,
-        "title": item.title,
-        "uri": item.uri,
+        "evidence_id": _text_preview(item.evidence_id, limit=120),
+        "source_id": _text_preview(item.source_id, limit=120),
+        "title": _text_preview(item.title, limit=160),
+        "uri": _text_preview(item.uri, limit=240),
         "score": item.score,
-        "text": _text_preview(item.text, limit=900),
+        "text": _text_preview(item.text, limit=520),
         "metadata": {
-            key: value
+            key: _compact_judge_metadata_value(value)
             for key, value in metadata.items()
             if key in {"source_kind", "source_family", "form", "period", "fiscal_year", "target_document_match", "line_item"}
         },
@@ -14387,17 +17674,33 @@ def _evidence_judge_summary(item: EvidenceItem) -> JsonObject:
 
 def _citation_judge_summary(item: CitationItem) -> JsonObject:
     return {
-        "citation_id": item.citation_id,
-        "evidence_id": item.evidence_id,
-        "artifact_id": item.artifact_id,
-        "uri": item.uri,
-        "title": item.title,
+        "citation_id": _text_preview(item.citation_id, limit=120),
+        "evidence_id": _text_preview(item.evidence_id, limit=120),
+        "artifact_id": _text_preview(item.artifact_id, limit=120),
+        "uri": _text_preview(item.uri, limit=240),
+        "title": _text_preview(item.title, limit=160),
     }
+
+
+def _compact_judge_metadata_value(value: object) -> object:
+    if isinstance(value, str):
+        return _text_preview(value, limit=180)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return _compact_simple_dict(value, limit=12)
+    if isinstance(value, list):
+        return [
+            _text_preview(item, limit=120) if isinstance(item, str) else item
+            for item in value[:8]
+            if isinstance(item, (str, int, float, bool)) or item is None
+        ]
+    return _text_preview(value, limit=180)
 
 
 def _finance_numeric_judge_accepts_answer(judge: JsonObject) -> bool:
     decision = str(judge.get("decision") or "").strip().lower()
-    if decision not in {"passed_semantically", "pass", "passed", "accept", "repair_answer"}:
+    if decision not in {"passed_semantically", "pass", "passed", "accept"}:
         return False
     if judge.get("answer_addresses_question") is not True:
         return False
@@ -14429,6 +17732,8 @@ def _finance_numeric_judge_repair_instruction(judge: JsonObject, *, verification
         f"- Missing slots if further work is required: {missing_slots}\n"
         f"- Host deterministic verifier missing diagnostics: {deterministic_missing}\n"
         "Return a corrected synthesizer.answer JSON. Answer the actual task_goal directly when supported. "
+        "Include the candidate_supported_values that are material to the task; for capital-intensity assessments, preserve "
+        "supported FormulaTrace lenses such as capex/revenue, capex/operating-cash-flow, PP&E/assets, and ROA when present. "
         "Use only provided citation_refs, evidence ids, finance facts, and formula traces. "
         "Delete unsupported incidental numbers rather than keeping them in prose. "
         "Do not output a failure report unless no supported answer can be written from the provided facts/formula traces/evidence."

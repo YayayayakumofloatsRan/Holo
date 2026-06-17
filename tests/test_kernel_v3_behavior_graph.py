@@ -98,11 +98,38 @@ def test_benchmark_result_graph_summarizes_scores_and_failure_modes(tmp_path: Pa
     assert graph.diagnostics["pass_rate"] == 0.5
     assert graph.diagnostics["citation_present_rate"] == 0.5
     assert graph.diagnostics["failure_mode_counts"]["fetch_failed"] == 1
+    assert graph.diagnostics["average_formula_trace_support_count"] == 1.5
+    assert graph.diagnostics["formula_trace_fact_link_rate"] == 0.6667
+    assert graph.diagnostics["formula_trace_citation_link_rate"] == 0.3333
+    assert graph.diagnostics["formula_trace_evidence_link_rate"] == 0.6667
+    assert graph.diagnostics["formula_trace_input_fact_missing_count"] == 1
+    assert graph.diagnostics["processor_prompt_cache_hit_tokens"] == 100
+    assert graph.diagnostics["processor_prompt_cache_miss_tokens"] == 50
+    assert graph.diagnostics["processor_prompt_cache_hit_ratio"] == 0.666667
+    assert graph.diagnostics["processor_task_type_counts"] == {
+        "finance.slot_bind": 1,
+        "synthesizer.answer": 1,
+        "task.compile": 2,
+    }
+    assert graph.diagnostics["processor_provider_model_counts"] == {"deepseek/deepseek-chat": 4}
+    assert graph.diagnostics["processor_status_counts"] == {"failed": 1, "ok": 3}
+    assert graph.diagnostics["processor_error_counts"] == {"json_invalid": 1}
+    assert graph.diagnostics["failure_layer_counts"] == {"processor_failure": 1}
     node_types = graph.diagnostics["node_types"]
     assert node_types["benchmark"] == 1
     assert node_types["benchmark_item"] == 2
     assert node_types["benchmark_status"] == 2
     assert node_types["benchmark_metric"] >= 4
+    assert node_types["benchmark_processor_task_type"] == 3
+    assert node_types["benchmark_processor_error"] == 1
+    assert node_types["benchmark_failure_layer"] == 1
+    item_nodes = {node["metadata"]["item_id"]: node for node in graph.nodes if node.get("node_type") == "benchmark_item"}
+    assert item_nodes["Q2"]["metadata"]["formula_trace_fact_link_rate"] == 0.0
+    assert item_nodes["Q2"]["metadata"]["formula_trace_input_fact_missing_count"] == 1
+    assert item_nodes["Q2"]["metadata"]["processor_prompt_cache_hit_ratio"] == 0.2
+    assert item_nodes["Q2"]["metadata"]["failure_layer"] == "processor_failure"
+    assert "finance.slot_bind" in item_nodes["Q2"]["metadata"]["processor_task_types"]
+    assert "json_invalid" in item_nodes["Q2"]["metadata"]["processor_error_counts"]
     dumped = json.dumps(graph.to_dict(), ensure_ascii=False)
     assert "gold_answer" not in dumped
     assert "AAPL" in dumped
@@ -130,6 +157,11 @@ def test_benchmark_result_graph_cli_outputs_dot(tmp_path: Path, capsys) -> None:
     assert "digraph HoloBehaviorGraph" in out
     assert "Benchmark finance-smoke" in out
     assert "Status: failed" in out
+    assert "Trace fact link: 0.6667" in out
+    assert "Trace citation link: 0.3333" in out
+    assert "Processor cache: 0.666667" in out
+    assert "Processor: finance.slot_bind" in out
+    assert "Processor error: json_invalid" in out
 
 
 def test_benchmark_result_graph_cli_writes_json(tmp_path: Path, capsys) -> None:
@@ -309,6 +341,25 @@ def _write_benchmark_results(path: Path) -> None:
                 "fetch_attempt_count": 7,
                 "downloaded_bytes": 1000,
                 "query_repetition_rate": 0.1,
+                "processor_prompt_cache_hit_tokens": 90,
+                "processor_prompt_cache_miss_tokens": 10,
+                "processor_prompt_cache_hit_ratio": 0.9,
+                "processor_usage_by_task_type": {
+                    "task.compile": {"call_count": 1},
+                    "synthesizer.answer": {"call_count": 1},
+                },
+                "processor_usage_by_provider_model": {"deepseek/deepseek-chat": {"call_count": 2}},
+                "processor_status_counts": {"ok": 2},
+                "processor_error_counts": {},
+                "formula_trace_count": 2,
+                "formula_trace_support_count": 2,
+                "formula_trace_fact_linked_count": 2,
+                "formula_trace_citation_linked_count": 1,
+                "formula_trace_evidence_linked_count": 2,
+                "formula_trace_input_fact_missing_count": 0,
+                "formula_trace_fact_link_rate": 1.0,
+                "formula_trace_citation_link_rate": 0.5,
+                "formula_trace_evidence_link_rate": 1.0,
                 "final_answer_chars": 450,
             },
             "metadata": {"category": "fact_extraction", "source": "finance_agent_benchmark"},
@@ -332,6 +383,25 @@ def _write_benchmark_results(path: Path) -> None:
                 "fetch_attempt_count": 9,
                 "downloaded_bytes": 2000,
                 "query_repetition_rate": 0.4,
+                "processor_prompt_cache_hit_tokens": 10,
+                "processor_prompt_cache_miss_tokens": 40,
+                "processor_prompt_cache_hit_ratio": 0.2,
+                "processor_usage_by_task_type": {
+                    "task.compile": {"call_count": 1},
+                    "finance.slot_bind": {"call_count": 1},
+                },
+                "processor_usage_by_provider_model": {"deepseek/deepseek-chat": {"call_count": 2}},
+                "processor_status_counts": {"ok": 1, "failed": 1},
+                "processor_error_counts": {"json_invalid": 1},
+                "formula_trace_count": 1,
+                "formula_trace_support_count": 1,
+                "formula_trace_fact_linked_count": 0,
+                "formula_trace_citation_linked_count": 0,
+                "formula_trace_evidence_linked_count": 0,
+                "formula_trace_input_fact_missing_count": 1,
+                "formula_trace_fact_link_rate": 0.0,
+                "formula_trace_citation_link_rate": 0.0,
+                "formula_trace_evidence_link_rate": 0.0,
                 "final_answer_chars": 120,
                 "latest_failure_mode": "fetch_failed",
             },

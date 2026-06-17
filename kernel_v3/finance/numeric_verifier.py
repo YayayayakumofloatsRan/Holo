@@ -176,6 +176,134 @@ def verify_finance_answer(
     )
 
 
+def finance_numeric_repair_guidance(verification: NumericVerification | JsonObject) -> JsonObject:
+    payload = verification.to_dict() if isinstance(verification, NumericVerification) else verification
+    data = payload if isinstance(payload, dict) else {}
+    issues = data.get("issues") if isinstance(data.get("issues"), list) else []
+    missing_values = data.get("missing_values") if isinstance(data.get("missing_values"), list) else []
+    unit_mismatches = data.get("unit_mismatches") if isinstance(data.get("unit_mismatches"), list) else []
+    issue_codes = _ordered_unique_text(
+        [
+            str(item.get("code") or item.get("reason") or "").strip()
+            for item in issues
+            if isinstance(item, dict)
+        ]
+    )[:12]
+    missing_examples = _compact_missing_value_examples(missing_values)
+    unit_mismatch_examples = _compact_unit_mismatch_examples(unit_mismatches)
+    return {
+        "schema": "holo.kernel_v3.finance_numeric_repair_guidance.v1",
+        "status": _bounded_text(data.get("status"), limit=64),
+        "issue_codes": issue_codes,
+        "missing_value_examples": missing_examples,
+        "unit_mismatch_examples": unit_mismatch_examples,
+        "repair_options": _verification_repair_options(issue_codes, missing_values=missing_values),
+        "host_boundary": (
+            "diagnostic verifier guidance only; the model still owns semantic repair, "
+            "metric binding, formula intent, and final finance judgment"
+        ),
+    }
+
+
+def _compact_missing_value_examples(values: object) -> list[JsonObject]:
+    items = values if isinstance(values, list) else []
+    result: list[JsonObject] = []
+    for item in items[:8]:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "raw": _bounded_text(item.get("raw"), limit=80),
+                "value": _bounded_text(item.get("value"), limit=64),
+                "unit": _bounded_text(item.get("unit"), limit=32),
+                "slot": _bounded_text(item.get("slot") or item.get("metric") or item.get("name"), limit=96),
+            }
+        )
+    return result
+
+
+def _compact_unit_mismatch_examples(values: object) -> list[JsonObject]:
+    items = values if isinstance(values, list) else []
+    result: list[JsonObject] = []
+    for item in items[:8]:
+        if not isinstance(item, dict):
+            continue
+        candidate = item.get("value") if isinstance(item.get("value"), dict) else {}
+        result.append(
+            {
+                "raw": _bounded_text(candidate.get("raw"), limit=80),
+                "value": _bounded_text(candidate.get("value"), limit=64),
+                "unit": _bounded_text(candidate.get("unit"), limit=32),
+                "support_units": _ordered_unique_text(
+                    [
+                        str(unit or "").strip()
+                        for unit in list(item.get("support_units") or [])
+                        if str(unit or "").strip()
+                    ]
+                )[:8],
+                "support_kinds": _ordered_unique_text(
+                    [
+                        str(kind or "").strip()
+                        for kind in list(item.get("support_kinds") or [])
+                        if str(kind or "").strip()
+                    ]
+                )[:8],
+                "support_refs": _ordered_unique_text(
+                    [
+                        str(ref or "").strip()
+                        for ref in list(item.get("support_refs") or [])
+                        if str(ref or "").strip()
+                    ]
+                )[:8],
+            }
+        )
+    return [
+        {key: value for key, value in item.items() if value not in (None, "", [])}
+        for item in result
+    ]
+
+
+def _verification_repair_options(issue_codes: list[str], *, missing_values: object) -> list[str]:
+    codes = {str(code or "").strip() for code in issue_codes if str(code or "").strip()}
+    options: list[str] = []
+    if "unsupported_answer_number" in codes:
+        options.append(
+            "ask synthesis to remove or replace unsupported answer numbers using only supported facts, formula traces, evidence, and citations"
+        )
+    if "missing_formula_trace" in codes:
+        options.append("if the question requires a calculation, propose calculator.compute with model-selected fact ids and formula intent")
+    if "missing_fact_ledger" in codes or "ledger_extraction_gap" in codes:
+        options.append("retrieve or parse authoritative finance evidence to produce FinanceFact records before finalizing numeric claims")
+    if "primary_source_numeric_binding_failed" in codes:
+        options.append("inspect target document, period, source, and unit binding; retrieve the intended filing/source if existing facts bind to the wrong target")
+    if any(code.endswith("_unit_mismatch") or code == "unit_mismatch" for code in codes):
+        options.append("repair unit or scale wording and verify whether the value is percent, ratio, per-share, thousand, million, or billion")
+    if any(code.endswith("_period_mismatch") or code == "period_mismatch" for code in codes):
+        options.append("repair fiscal period binding before answering; do not mix FY, quarter, TTM, calendar year, and fiscal year values")
+    if not options and missing_values:
+        options.append("inspect missing numeric values and decide whether they are core claims, non-core noise, or require more evidence")
+    return options[:8]
+
+
+def _ordered_unique_text(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _bounded_text(value: object, *, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
 def _answer_numeric_candidates(answer: str) -> list[JsonObject]:
     result: list[JsonObject] = []
     text = answer or ""
@@ -529,6 +657,22 @@ def _formula_variable_unit(name: str, trace: FormulaTrace) -> str:
         "base",
     } or normalized.startswith(("addback_", "deduction_")):
         return "usd"
+    if any(
+        marker in normalized
+        for marker in (
+            "asset",
+            "capex",
+            "capital_expenditure",
+            "cash_flow",
+            "net_income",
+            "ocf",
+            "operating_cash",
+            "ppe",
+            "ppne",
+            "property_plant",
+        )
+    ):
+        return "usd"
     if "inventory" in normalized or normalized in {"cogs", "prior_value", "current_value"}:
         return "usd"
     if "rate" in normalized or "margin" in normalized:
@@ -578,14 +722,25 @@ def _display_support_values(value: Decimal, base: JsonObject) -> list[JsonObject
 def _extend_support_values(values: list[JsonObject], value: Decimal, base: JsonObject) -> None:
     values.extend(_display_support_values(value, base))
     if _normalize_unit(str(base.get("unit") or "")) == "percent":
+        percent_value = value * Decimal(100)
         values.append(
             {
                 **base,
-                "value": _decimal_string(value * Decimal(100)),
+                "value": _decimal_string(percent_value),
                 "unit": "percent",
                 "derived_display_value": True,
             }
         )
+        if percent_value < 0:
+            values.append(
+                {
+                    **base,
+                    "value": _decimal_string(abs(percent_value)),
+                    "unit": "percent",
+                    "derived_display_value": True,
+                    "absolute_display_value": True,
+                }
+            )
 
 
 def _match_candidate(candidate: JsonObject, support_values: list[JsonObject]) -> JsonObject | None:
@@ -625,6 +780,10 @@ def _unit_mismatches(candidates: list[JsonObject], support_values: list[JsonObje
                     "code": "unit_mismatch",
                     "value": candidate,
                     "support_units": sorted({str(item.get("unit") or "") for item in nearby}),
+                    "support_kinds": sorted({str(item.get("kind") or "") for item in nearby if str(item.get("kind") or "")}),
+                    "support_refs": _ordered_unique_text(
+                        [str(item.get("ref") or "").strip() for item in nearby if str(item.get("ref") or "").strip()]
+                    )[:8],
                 }
             )
     return issues

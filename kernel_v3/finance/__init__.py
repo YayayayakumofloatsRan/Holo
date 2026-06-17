@@ -1,8 +1,8 @@
-from kernel_v3.finance.calculator import CALCULATOR_TOOL_NAME, compute_formula, register_finance_tools
+from kernel_v3.finance.calculator import CALCULATOR_TOOL_NAME, FINANCE_VERIFY_NUMERIC_TOOL_NAME, compute_formula, register_finance_tools
 from kernel_v3.finance.contracts import FinanceFact, FormulaTrace, NumericVerification
 from kernel_v3.finance.fact_ledger import build_finance_fact_ledger
 from kernel_v3.finance.formula_planner import FinanceFormulaPlan, plan_finance_formula
-from kernel_v3.finance.numeric_verifier import verify_finance_answer
+from kernel_v3.finance.numeric_verifier import finance_numeric_repair_guidance, verify_finance_answer
 from kernel_v3.finance.substrate_adapter import (
     finance_evidence_policy_for_question,
     finance_facts_to_claims,
@@ -24,6 +24,7 @@ __all__ = [
     "FormulaTrace",
     "NumericVerification",
     "CALCULATOR_TOOL_NAME",
+    "FINANCE_VERIFY_NUMERIC_TOOL_NAME",
     "build_finance_fact_ledger",
     "compute_formula",
     "compile_finance_task_program",
@@ -33,6 +34,7 @@ __all__ = [
     "finance_formula_plan_to_transform_plan",
     "finance_slot_frame",
     "finance_verification_to_gate_result",
+    "finance_numeric_repair_guidance",
     "attach_target_binding_to_facts",
     "filter_facts_for_target_binding",
     "primary_source_numeric_binding_resolution",

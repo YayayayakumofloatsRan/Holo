@@ -5,11 +5,14 @@ import hashlib
 from decimal import Decimal, InvalidOperation, localcontext
 
 from kernel_v3.contracts import CandidateAction, JsonObject, Observation, ToolManifest
-from kernel_v3.finance.contracts import FormulaTrace
+from kernel_v3.finance.contracts import FinanceFact, FormulaTrace
+from kernel_v3.finance.numeric_verifier import finance_numeric_repair_guidance, verify_finance_answer
+from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem
 from kernel_v3.tools import ToolRegistry
 
 
 CALCULATOR_TOOL_NAME = "calculator.compute"
+FINANCE_VERIFY_NUMERIC_TOOL_NAME = "finance.verify_numeric"
 DEFAULT_PRECISION = 28
 MAX_EXPRESSION_CHARS = 1_000
 MAX_VARIABLES = 128
@@ -40,6 +43,32 @@ def register_finance_tools(registry: ToolRegistry) -> ToolRegistry:
                 "input_fact_ids": {"type": "list[str]", "required": False},
                 "diagnostics": {"type": "object", "required": False},
                 "precision": {"type": "int", "required": False, "min": 8, "max": 80},
+            },
+        ),
+    )
+    registry.register(
+        FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        _execute_finance_verify_numeric,
+        manifest=ToolManifest(
+            name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+            version="1",
+            resource_kind="finance",
+            operator_kind="verify_numeric",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description=(
+                "Verify whether a finance answer's numeric claims are supported by provided "
+                "FinanceFact records, FormulaTrace records, citations, and evidence."
+            ),
+            input_schema={
+                "answer": {"type": "str", "required": True, "min_length": 1},
+                "facts": {"type": "list[FinanceFact]", "required": False},
+                "formula_traces": {"type": "list[FormulaTrace]", "required": False},
+                "citations": {"type": "list[CitationItem]", "required": False},
+                "evidence": {"type": "list[EvidenceItem]", "required": False},
+                "question": {"type": "str", "required": False},
+                "target_binding": {"type": "object", "required": False},
             },
         ),
     )
@@ -141,6 +170,56 @@ def _execute_calculator(action: CandidateAction) -> Observation:
     )
 
 
+def _execute_finance_verify_numeric(action: CandidateAction) -> Observation:
+    try:
+        answer = str(action.payload.get("answer") or "").strip()
+        if not answer:
+            raise CalculatorError("missing_answer")
+        verification = verify_finance_answer(
+            answer=answer,
+            facts=_contract_list(action.payload.get("facts"), FinanceFact, "facts"),
+            formula_traces=_contract_list(action.payload.get("formula_traces"), FormulaTrace, "formula_traces"),
+            citations=_contract_list(action.payload.get("citations"), CitationItem, "citations"),
+            evidence=_contract_list(action.payload.get("evidence"), EvidenceItem, "evidence"),
+            question=str(action.payload.get("question") or ""),
+            target_binding=action.payload.get("target_binding") if isinstance(action.payload.get("target_binding"), dict) else None,
+        )
+    except Exception as exc:
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="finance_numeric_verification",
+            status="failed",
+            source=f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}",
+            content={"error": "finance_numeric_verifier_failed", "reason": str(exc), "error_type": type(exc).__name__},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+    guidance = finance_numeric_repair_guidance(verification)
+    return Observation(
+        observation_id=f"obs-{action.action_id}",
+        run_id="",
+        kind="finance_numeric_verification",
+        status="ok",
+        source=f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}",
+        content={
+            "verification": verification.to_dict(),
+            "verifier_status": verification.status,
+            "issue_count": len(verification.issues),
+            "matched_value_count": len(verification.matched_values),
+            "missing_value_count": len(verification.missing_values),
+            "repair_guidance": guidance,
+            "repair_options": guidance.get("repair_options", []),
+            "missing_value_examples": guidance.get("missing_value_examples", []),
+            "unit_mismatch_examples": guidance.get("unit_mismatch_examples", []),
+        },
+        observed_at_ms=0,
+        action_id=action.action_id,
+        tool_call_id=None,
+    )
+
+
 class _DecimalExpressionEvaluator(ast.NodeVisitor):
     def __init__(self, variables: dict[str, Decimal]) -> None:
         self.variables = variables
@@ -196,6 +275,8 @@ class _DecimalExpressionEvaluator(ast.NodeVisitor):
             digits = int(args[1]) if len(args) == 2 else 0
             quantum = Decimal(1).scaleb(-digits)
             return args[0].quantize(quantum)
+        if name == "abs" and len(args) == 1:
+            return abs(args[0])
         if name == "min" and args:
             return min(args)
         if name == "max" and args:
@@ -252,6 +333,22 @@ def _json_safe_value(value: object):
     if isinstance(value, dict):
         return {str(key): _json_safe_value(item) for key, item in value.items()}
     return str(value)
+
+
+def _contract_list(value: object, cls, field_name: str):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise CalculatorError(f"invalid_{field_name}")
+    result = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise CalculatorError(f"invalid_{field_name}_item:{index}")
+        try:
+            result.append(cls.from_dict(item))
+        except Exception as exc:
+            raise CalculatorError(f"invalid_{field_name}_item:{index}:{exc}") from exc
+    return result
 
 
 def _decimal_string(value: Decimal) -> str:

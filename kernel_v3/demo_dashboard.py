@@ -13,6 +13,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from kernel_v3.runtime_graph import (
+    is_terminal_record as _runtime_graph_is_terminal_record,
+    loop_topology_state as _runtime_graph_loop_topology_state,
+    records_until_terminal as _runtime_graph_records_until_terminal,
+    runtime_graph_delta_stream,
+)
+
 
 Json = dict[str, Any]
 
@@ -142,7 +149,15 @@ RELEVANT_EVENT_KINDS = {
     "claim_ledger",
     "slot_frame",
     "transform_plan",
+    "finance_fact_ledger",
+    "finance_numeric_preflight",
+    "finance_slot_bind",
+    "finance_formula_plan",
+    "calculator_result",
+    "finance_numeric_verification",
     "finance_numeric_judge",
+    "finance_numeric_judge_repair",
+    "finance_synthesis_compaction",
     "verifier_gate_result",
     "synthesis_gate_result",
     "action",
@@ -392,7 +407,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             "record": _public_flow_record(record),
                             "transcript": console_transcript(visible_turn, []),
                             "topology": loop_topology_state(visible_turn),
+                            "graph_deltas": runtime_graph_delta_stream(visible_turn)[-32:],
                             "search_branches": search_branch_state(visible_turn),
+                            "debug": finance_debug_state(visible_turn, None),
+                            "model_io": model_io_stream_state(visible_turn),
                             "stats": _console_trace_stats(visible_turn, thread_records=len(turn_records)),
                             "closed": closed,
                         }
@@ -722,7 +740,10 @@ def console_state(records: list[Json], thread_id: str, command_runs: list[Json])
         "job": active,
         "transcript": console_transcript(scoped, runs),
         "topology": loop_topology_state(visible_turn),
+        "graph_deltas": runtime_graph_delta_stream(visible_turn)[-32:],
         "search_branches": search_branch_state(visible_turn),
+        "debug": finance_debug_state(visible_turn, active),
+        "model_io": model_io_stream_state(visible_turn),
         "runtime_console": runtime_console_state(visible_turn, active),
         "latest_event": _public_flow_record(visible_turn[-1]) if visible_turn else {},
         "stats": _console_trace_stats(visible_turn, thread_records=len(scoped)),
@@ -740,8 +761,11 @@ def _console_trace_stats(records: list[Json], *, thread_records: int) -> Json:
         "evidence": sum(
             1
             for record in records
-            if record.get("kind") in {"retrieval_evidence", "claim_ledger", "slot_frame"}
+            if record.get("kind") in {"retrieval_evidence", "claim_ledger", "slot_frame", "finance_fact_ledger"}
         ),
+        "finance_ledgers": sum(1 for record in records if record.get("kind") == "finance_fact_ledger"),
+        "slot_binds": sum(1 for record in records if record.get("kind") == "finance_slot_bind"),
+        "formulas": sum(1 for record in records if record.get("kind") in {"finance_formula_plan", "calculator_result"}),
         "closed": _has_terminal_record(records),
     }
 
@@ -798,6 +822,34 @@ def _public_flow_record(record: Json) -> Json:
     elif kind in {"retrieval_fetch", "retrieval_fetch_attempt"}:
         source = data.get("source") if isinstance(data.get("source"), dict) else {}
         event.update({"uri": clip(data.get("uri") or source.get("uri"), 220)})
+    elif kind == "finance_fact_ledger":
+        event.update(
+            {
+                "fact_count": data.get("fact_count"),
+                "citation_count": data.get("citation_count"),
+                "body": _finance_fact_ledger_body(data),
+            }
+        )
+    elif kind == "finance_slot_bind":
+        event.update(
+            {
+                "decision": data.get("decision"),
+                "missing_slots": data.get("missing_slots") if isinstance(data.get("missing_slots"), list) else [],
+                "body": _runtime_json_body(
+                    data,
+                    keys=("decision", "reason_summary", "missing_slots", "formula_request_count", "accepted_formula_plan_count"),
+                ),
+            }
+        )
+    elif kind in {"finance_formula_plan", "calculator_result"}:
+        event.update({"body": _finance_formula_event_body(kind, data)})
+    elif kind in {"finance_numeric_verification", "finance_numeric_judge", "finance_numeric_judge_repair", "finance_synthesis_compaction"}:
+        event.update(
+            {
+                "decision": data.get("decision") or data.get("status"),
+                "body": _runtime_json_body(data, keys=("status", "decision", "reason_summary", "missing_slots", "issues", "repair_instruction")),
+            }
+        )
     return event
 
 
@@ -883,10 +935,26 @@ def _runtime_console_record(record: Json) -> Json:
         diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
         line = f"[retrieval:extract] spans={diagnostics.get('span_count', '-')}"
         body = clip(doc.get("title") or doc.get("uri") or "", 1200)
-    elif kind in {"retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame", "transform_plan"}:
+    elif kind in {"retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame", "transform_plan", "finance_fact_ledger"}:
         line = f"[evidence] {kind.replace('_', '.')}"
-        body = _runtime_json_body(data, keys=("claim", "slot", "value", "metric", "citation", "source", "formula", "reason"))
-    elif kind in {"finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}:
+        body = _runtime_json_body(data, keys=("fact_count", "claim_count", "slot", "value", "metric", "citation", "source", "formula", "reason"))
+    elif kind == "finance_numeric_preflight":
+        line = f"[finance:preflight] {data.get('status') or data.get('reason') or 'checked'}"
+        body = _runtime_json_body(data, keys=("reason", "fact_count", "transform_spec_count", "host_role", "semantic_decision_owner"))
+    elif kind == "finance_slot_bind":
+        line = f"[finance:slot-bind] {data.get('decision') or data.get('status') or 'binding'}"
+        body = _runtime_json_body(data, keys=("reason_summary", "missing_slots", "formula_request_count", "accepted_formula_plan_count", "next_action"))
+        level = "failed" if str(data.get("status") or "").lower() == "failed" else "ok"
+    elif kind == "finance_formula_plan":
+        line = f"[finance:formula-plan] {data.get('formula_name') or data.get('status') or 'formula'}"
+        body = _runtime_json_body(data, keys=("status", "formula_name", "missing_facts", "payload", "diagnostics"))
+    elif kind == "calculator_result":
+        content = data.get("content") if isinstance(data.get("content"), dict) else {}
+        trace = content.get("formula_trace") if isinstance(content.get("formula_trace"), dict) else {}
+        line = f"[calculator] {trace.get('formula_name') or data.get('status') or 'result'}"
+        body = _runtime_json_body(content, keys=("result_value", "unit", "formatted_value", "formula_trace", "error", "reason"))
+        level = "failed" if data.get("status") == "failed" or content.get("error") else "ok"
+    elif kind in {"finance_numeric_verification", "finance_numeric_judge", "finance_numeric_judge_repair", "finance_synthesis_compaction", "verifier_gate_result", "synthesis_gate_result"}:
         line = f"[verify] {kind.replace('_', '.')} :: {status or data.get('decision') or 'checked'}"
         body = _runtime_json_body(data, keys=("status", "decision", "reason", "issues", "numeric_status", "support_status"))
         level = "failed" if str(status).lower() in {"failed", "error", "blocked"} else "ok"
@@ -1035,10 +1103,7 @@ def _latest_turn_records(records: list[Json]) -> list[Json]:
 
 
 def _records_until_terminal(records: list[Json]) -> list[Json]:
-    for index, record in enumerate(records):
-        if _is_terminal_record(record):
-            return records[: index + 1]
-    return records
+    return list(_runtime_graph_records_until_terminal(records))
 
 
 def _has_terminal_record(records: list[Json]) -> bool:
@@ -1046,20 +1111,17 @@ def _has_terminal_record(records: list[Json]) -> bool:
 
 
 def _is_terminal_record(record: Json) -> bool:
-    kind = record.get("kind")
-    if kind in {"agent_final_answer", "agent_failure_report", "chat_agent_result"}:
-        return True
-    return False
+    return _runtime_graph_is_terminal_record(record)
 
 
 def _chat_result_answer_text(data: Json) -> str:
-    for key in ("answer", "text", "message"):
-        if data.get(key):
-            return str(data.get(key) or "")
     final = data.get("final_answer") if isinstance(data.get("final_answer"), dict) else {}
     for key in ("answer", "text", "result"):
         if final.get(key):
             return str(final.get(key) or "")
+    for key in ("answer", "text", "message"):
+        if data.get(key):
+            return str(data.get(key) or "")
     failure = data.get("failure_report") if isinstance(data.get("failure_report"), dict) else {}
     if failure:
         return str(failure.get("reason") or failure.get("stop_reason") or "The run ended with a failure report.")
@@ -1067,46 +1129,7 @@ def _chat_result_answer_text(data: Json) -> str:
 
 
 def loop_topology_state(records: list[Json]) -> list[Json]:
-    retrieval_tool_kinds = {
-        "retrieval_query_plan",
-        "retrieval_search_attempt",
-        "retrieval_workbench_decision",
-        "retrieval_fetch",
-        "retrieval_fetch_attempt",
-    }
-    groups = [
-        ("Intake", {"chat_turn", "chat_routing_decision", "semantic_intake", "compiled_task_program"}, "understand task"),
-        ("Plan", {"processor_request", "processor_result", "action", "toolchain_step_proposed"}, "LLM proposes next move"),
-        ("Policy", {"policy_decision"}, "host validates action"),
-        ("Tools", {"observation", *retrieval_tool_kinds}, "execute bounded tools"),
-        ("Search", {"retrieval_query_plan", "retrieval_search_attempt", "retrieval_workbench_decision"}, "branch over sources"),
-        ("Evidence", {"retrieval_extraction", "retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame"}, "build cited ledger"),
-        ("Verify", {"transform_plan", "finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}, "check numbers and support"),
-        ("Answer", {"termination_decision", "feedback", "agent_final_answer", "agent_failure_report", "chat_agent_result"}, "reply or explain gap"),
-    ]
-    latest_kind = str(records[-1].get("kind") or "") if records else ""
-    latest_label = _stage_for_kind(latest_kind)
-    terminal = _has_terminal_record(records)
-    has_failure = any(
-        record.get("kind") in {"agent_failure_report"}
-        or (record.get("kind") == "chat_agent_result" and isinstance(record.get("data"), dict) and record["data"].get("failure_report"))
-        for record in records
-    )
-    rows: list[Json] = []
-    for label, kinds, detail in groups:
-        count = sum(1 for record in records if record.get("kind") in kinds)
-        state = "idle"
-        if count:
-            state = "active" if label == latest_label and not terminal else "ok"
-        if terminal and label == "Answer" and count and not has_failure:
-            state = "closed"
-        if has_failure and label in {"Verify", "Answer"} and count:
-            state = "warn"
-        row = stage(label, state, count, detail)
-        row["last_at"] = max((int(record.get("recorded_at_ms") or 0) for record in records if record.get("kind") in kinds), default=0)
-        row["latest"] = bool(label == latest_label and count and not terminal)
-        rows.append(row)
-    return rows
+    return _runtime_graph_loop_topology_state(records)
 
 
 def loop_flow_state(records: list[Json], active_job: Json | None = None) -> list[Json]:
@@ -1152,13 +1175,23 @@ def _stage_for_kind(kind: str) -> str:
         return "Plan"
     if kind == "policy_decision":
         return "Policy"
-    if kind in {"observation", "retrieval_fetch", "retrieval_fetch_attempt"}:
+    if kind in {"observation", "calculator_result", "retrieval_fetch", "retrieval_fetch_attempt"}:
         return "Tools"
     if kind in {"retrieval_query_plan", "retrieval_search_attempt", "retrieval_workbench_decision"}:
         return "Search"
-    if kind in {"retrieval_extraction", "retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame"}:
+    if kind in {"retrieval_extraction", "retrieval_evidence", "retrieval_citation", "claim_ledger", "slot_frame", "finance_fact_ledger", "finance_slot_bind"}:
         return "Evidence"
-    if kind in {"transform_plan", "finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}:
+    if kind in {
+        "transform_plan",
+        "finance_formula_plan",
+        "finance_numeric_preflight",
+        "finance_numeric_verification",
+        "finance_numeric_judge",
+        "finance_numeric_judge_repair",
+        "finance_synthesis_compaction",
+        "verifier_gate_result",
+        "synthesis_gate_result",
+    }:
         return "Verify"
     if kind in {"termination_decision", "feedback", "agent_final_answer", "agent_failure_report", "chat_agent_result"}:
         return "Answer"
@@ -1178,7 +1211,17 @@ def _short_event_title(kind: str, data: Json, fallback: str) -> str:
         return "Evidence"
     if kind in {"claim_ledger", "slot_frame"}:
         return "Ledger"
-    if kind in {"finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}:
+    if kind == "finance_fact_ledger":
+        return "Finance facts"
+    if kind == "finance_slot_bind":
+        return "Slot binding"
+    if kind == "finance_formula_plan":
+        return "Formula plan"
+    if kind == "calculator_result":
+        return "Calculator"
+    if kind == "finance_numeric_preflight":
+        return "Preflight"
+    if kind in {"finance_numeric_verification", "finance_numeric_judge", "finance_numeric_judge_repair", "finance_synthesis_compaction", "verifier_gate_result", "synthesis_gate_result"}:
         return "Gate"
     if kind in {"chat_agent_result", "agent_final_answer"}:
         return "Answer"
@@ -1223,6 +1266,314 @@ def search_branch_state(records: list[Json]) -> list[Json]:
             }
         )
     return rows[-12:]
+
+
+def finance_debug_state(records: list[Json], active_job: Json | None = None) -> Json:
+    latest_ledger = _latest_data(records, "finance_fact_ledger")
+    latest_slot = _latest_data(records, "finance_slot_bind")
+    latest_verification = _latest_data(records, "finance_numeric_verification")
+    latest_judge = _latest_data(records, "finance_numeric_judge")
+    formulas = finance_formula_debug_rows(records)
+    fact_summary = finance_fact_debug_summary(latest_ledger)
+    usage = processor_usage_debug(records)
+    missing_slots = _string_list_demo(latest_slot.get("missing_slots"))
+    status = "idle"
+    if active_job and active_job.get("status") in {"queued", "running"}:
+        status = str(active_job.get("status") or "running")
+    if records:
+        status = "complete" if _has_terminal_record(records) else "running"
+    if latest_judge.get("requires_more_work") is True or missing_slots:
+        status = "needs_more_work"
+    if latest_verification.get("status") == "passed":
+        status = "verified"
+    headline = "Waiting for a Kernel v3 turn."
+    if records:
+        headline = _finance_debug_headline(latest_slot, latest_verification, latest_judge, formulas, fact_summary)
+    cards = [
+        {"label": "Status", "value": status, "detail": headline},
+        {"label": "Facts", "value": fact_summary.get("fact_count", 0), "detail": f"{fact_summary.get('citation_count', 0)} citations"},
+        {"label": "Slot binds", "value": len(_dict_items_demo(latest_slot.get("slot_bindings"))), "detail": f"{len(missing_slots)} missing"},
+        {"label": "Formula traces", "value": sum(1 for item in formulas if item.get("kind") == "calculator"), "detail": f"{len(formulas)} formula rows"},
+        {"label": "Model calls", "value": usage.get("calls", 0), "detail": usage.get("cache_label") or "cache n/a"},
+        {"label": "Tokens", "value": usage.get("tokens", 0), "detail": f"{usage.get('duration_ms', 0)} ms"},
+    ]
+    return {
+        "schema": "holo.kernel_v3.demo.finance_debug.v1",
+        "status": status,
+        "headline": headline,
+        "cards": cards,
+        "facts": fact_summary,
+        "slots": finance_slot_debug_rows(latest_slot),
+        "missing_slots": missing_slots,
+        "slot_reason": clip(latest_slot.get("reason_summary") or "", 500),
+        "formulas": formulas,
+        "gates": finance_gate_debug_rows(latest_verification, latest_judge, records),
+        "model": usage,
+        "timeline": finance_debug_timeline(records),
+    }
+
+
+def finance_fact_debug_summary(data: Json) -> Json:
+    facts = _dict_items_demo(data.get("facts"))
+    metric_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    sample: list[Json] = []
+    for fact in facts:
+        metric = str(fact.get("metric") or "unknown")
+        metric_counts[metric] = metric_counts.get(metric, 0) + 1
+        metadata = fact.get("metadata") if isinstance(fact.get("metadata"), dict) else {}
+        source = str(metadata.get("source") or metadata.get("source_family") or "fact")
+        source_counts[source] = source_counts.get(source, 0) + 1
+        if len(sample) < 10:
+            sample.append(
+                {
+                    "fact_id": clip(fact.get("fact_id"), 80),
+                    "metric": clip(metric, 90),
+                    "period": clip(fact.get("period") or fact.get("fiscal_year"), 40),
+                    "value": clip(fact.get("value"), 80),
+                    "unit": clip(fact.get("unit") or fact.get("scale"), 40),
+                    "citation_ref": clip(fact.get("citation_ref") or fact.get("source_ref"), 80),
+                }
+            )
+    top_metrics = sorted(metric_counts.items(), key=lambda item: item[1], reverse=True)[:8]
+    top_sources = sorted(source_counts.items(), key=lambda item: item[1], reverse=True)[:6]
+    return {
+        "fact_count": int(data.get("fact_count") or len(facts) or 0),
+        "evidence_count": int(data.get("evidence_count") or 0),
+        "citation_count": int(data.get("citation_count") or 0),
+        "top_metrics": [{"metric": key, "count": value} for key, value in top_metrics],
+        "top_sources": [{"source": key, "count": value} for key, value in top_sources],
+        "sample": sample,
+    }
+
+
+def finance_slot_debug_rows(data: Json) -> list[Json]:
+    rows: list[Json] = []
+    for item in _dict_items_demo(data.get("slot_bindings"))[:24]:
+        rows.append(
+            {
+                "slot": clip(item.get("slot_name") or item.get("name"), 80),
+                "variable": clip(item.get("variable_name") or item.get("variable"), 80),
+                "fact_id": clip(item.get("fact_id"), 96),
+                "reason": clip(item.get("reason"), 180),
+                "status": "bound" if item.get("fact_id") else "empty",
+            }
+        )
+    return rows
+
+
+def finance_formula_debug_rows(records: list[Json]) -> list[Json]:
+    rows: list[Json] = []
+    for record in records:
+        kind = record.get("kind")
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        if kind == "finance_formula_plan":
+            payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+            rows.append(
+                {
+                    "kind": "plan",
+                    "name": clip(data.get("formula_name") or payload.get("formula_name"), 90),
+                    "status": clip(data.get("status"), 40),
+                    "expression": clip(payload.get("expression"), 220),
+                    "result": "",
+                    "unit": clip(payload.get("unit"), 40),
+                    "inputs": _string_list_demo(payload.get("input_fact_ids"))[:10],
+                    "missing": _string_list_demo(data.get("missing_facts"))[:10],
+                }
+            )
+        elif kind == "calculator_result":
+            content = data.get("content") if isinstance(data.get("content"), dict) else {}
+            trace = content.get("formula_trace") if isinstance(content.get("formula_trace"), dict) else {}
+            if trace:
+                rows.append(
+                    {
+                        "kind": "calculator",
+                        "name": clip(trace.get("formula_name"), 90),
+                        "status": clip(data.get("status") or "ok", 40),
+                        "expression": clip(trace.get("expression"), 220),
+                        "result": clip(trace.get("result_value") or content.get("result_value"), 90),
+                        "unit": clip(trace.get("unit") or content.get("unit"), 40),
+                        "inputs": _string_list_demo(trace.get("input_fact_ids"))[:10],
+                        "missing": [],
+                    }
+                )
+            elif content:
+                rows.append(
+                    {
+                        "kind": "calculator",
+                        "name": "calculator_result",
+                        "status": clip(data.get("status") or content.get("error"), 40),
+                        "expression": "",
+                        "result": clip(content.get("result_value") or content.get("reason"), 90),
+                        "unit": clip(content.get("unit"), 40),
+                        "inputs": [],
+                        "missing": [],
+                    }
+                )
+    return rows[-24:]
+
+
+def finance_gate_debug_rows(latest_verification: Json, latest_judge: Json, records: list[Json]) -> list[Json]:
+    rows: list[Json] = []
+    if latest_verification:
+        rows.append(
+            {
+                "name": "numeric verifier",
+                "status": clip(latest_verification.get("status"), 40),
+                "detail": clip(
+                    f"matched={len(_dict_items_demo(latest_verification.get('matched_values')))} "
+                    f"missing={len(_dict_items_demo(latest_verification.get('missing_values')))} "
+                    f"issues={len(_dict_items_demo(latest_verification.get('issues')))}",
+                    180,
+                ),
+            }
+        )
+        gate = latest_verification.get("verifier_gate_result") if isinstance(latest_verification.get("verifier_gate_result"), dict) else {}
+        if gate:
+            rows.append({"name": "verifier gate", "status": clip(gate.get("status"), 40), "detail": clip(gate.get("reason") or gate.get("summary"), 180)})
+    if latest_judge:
+        rows.append(
+            {
+                "name": "LLM numeric judge",
+                "status": clip(latest_judge.get("decision") or latest_judge.get("status"), 40),
+                "detail": clip(latest_judge.get("reason_summary") or latest_judge.get("repair_instruction"), 220),
+            }
+        )
+    for kind in ("verifier_gate_result", "synthesis_gate_result", "finance_synthesis_compaction"):
+        data = _latest_data(records, kind)
+        if data:
+            rows.append(
+                {
+                    "name": kind.replace("_", " "),
+                    "status": clip(data.get("status") or data.get("decision"), 40),
+                    "detail": clip(data.get("reason") or data.get("reason_summary") or data.get("attempt"), 180),
+                }
+            )
+    return rows[-8:]
+
+
+def processor_usage_debug(records: list[Json]) -> Json:
+    calls = 0
+    tokens = 0
+    duration = 0
+    hit = 0
+    miss = 0
+    latest: Json = {}
+    for record in records:
+        if record.get("kind") != "processor_result":
+            continue
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        calls += 1
+        tokens += _safe_int(usage.get("total_tokens"))
+        duration += _safe_int(data.get("duration_ms"))
+        hit += _safe_int(usage.get("prompt_cache_hit_tokens"))
+        miss += _safe_int(usage.get("prompt_cache_miss_tokens"))
+        latest = data
+    denom = hit + miss
+    cache_ratio = round(hit / denom, 4) if denom else None
+    return {
+        "calls": calls,
+        "tokens": tokens,
+        "duration_ms": duration,
+        "cache_hit_tokens": hit,
+        "cache_miss_tokens": miss,
+        "cache_hit_ratio": cache_ratio,
+        "cache_label": f"cache {cache_ratio * 100:.1f}%" if cache_ratio is not None else "",
+        "latest_processor": latest.get("task_type") or latest.get("processor") or "",
+        "latest_status": latest.get("status") or "",
+    }
+
+
+def finance_debug_timeline(records: list[Json]) -> list[Json]:
+    interesting = {
+        "compiled_task_program",
+        "retrieval_search_attempt",
+        "retrieval_fetch_attempt",
+        "finance_fact_ledger",
+        "finance_numeric_preflight",
+        "finance_slot_bind",
+        "finance_formula_plan",
+        "calculator_result",
+        "finance_numeric_verification",
+        "finance_numeric_judge",
+        "agent_final_answer",
+        "agent_failure_report",
+        "chat_agent_result",
+    }
+    rows: list[Json] = []
+    for record in records:
+        kind = str(record.get("kind") or "")
+        if kind not in interesting:
+            continue
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        rows.append(
+            {
+                "kind": kind,
+                "title": _activity_title(kind, data),
+                "status": _activity_status(kind, data),
+                "detail": _activity_detail(kind, data),
+                "at": int(record.get("recorded_at_ms") or 0),
+            }
+        )
+    return rows[-20:]
+
+
+def _latest_data(records: list[Json], kind: str) -> Json:
+    for record in reversed(records):
+        if record.get("kind") != kind:
+            continue
+        data = record.get("data")
+        return dict(data) if isinstance(data, dict) else {}
+    return {}
+
+
+def _string_list_demo(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, (str, int, float, bool))]
+
+
+def _dict_items_demo(value: object) -> list[Json]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _finance_debug_headline(slot: Json, verification: Json, judge: Json, formulas: list[Json], facts: Json) -> str:
+    if verification.get("status") == "passed":
+        return "Numeric verification passed; answer is supported by current facts/formula traces."
+    missing = _string_list_demo(slot.get("missing_slots"))
+    if missing:
+        return "Missing slots: " + ", ".join(missing[:6])
+    if slot.get("decision"):
+        return f"Slot binding decision: {slot.get('decision')}."
+    if formulas:
+        return "Formula planning/calculation is visible; inspect formula rows for arithmetic support."
+    if int(facts.get("fact_count") or 0) > 0:
+        return "Finance fact ledger exists; waiting for slot binding or verification."
+    if judge.get("decision"):
+        return f"LLM numeric judge decision: {judge.get('decision')}."
+    return "No finance-specific ledger yet; observe retrieval and model packets."
+
+
+def _finance_fact_ledger_body(data: Json) -> str:
+    summary = finance_fact_debug_summary(data)
+    metrics = ", ".join(f"{item['metric']}:{item['count']}" for item in summary.get("top_metrics", [])[:5])
+    return clip(f"facts={summary.get('fact_count')} evidence={summary.get('evidence_count')} citations={summary.get('citation_count')} metrics={metrics}", 900)
+
+
+def _finance_formula_event_body(kind: str, data: Json) -> str:
+    if kind == "finance_formula_plan":
+        return _runtime_json_body(data, keys=("status", "formula_name", "missing_facts", "payload"))
+    content = data.get("content") if isinstance(data.get("content"), dict) else {}
+    trace = content.get("formula_trace") if isinstance(content.get("formula_trace"), dict) else {}
+    if trace:
+        return clip(
+            f"{trace.get('formula_name')}: {trace.get('expression')} = {trace.get('result_value')} {trace.get('unit') or ''}",
+            900,
+        )
+    return _runtime_json_body(content or data)
 
 
 def model_io_stream_state(records: list[Json]) -> list[Json]:
@@ -1450,7 +1801,23 @@ def _activity_title(kind: str, data: Json) -> str:
         return "LLM workbench judgment"
     if kind in {"claim_ledger", "slot_frame", "transform_plan"}:
         return kind.replace("_", " ").title()
+    if kind == "finance_fact_ledger":
+        return f"Finance facts: {data.get('fact_count') or 0}"
+    if kind == "finance_numeric_preflight":
+        return f"Finance preflight: {data.get('status') or 'checked'}"
+    if kind == "finance_slot_bind":
+        return f"Slot bind: {data.get('decision') or data.get('status') or 'model'}"
+    if kind == "finance_formula_plan":
+        return f"Formula plan: {data.get('formula_name') or data.get('status') or 'formula'}"
+    if kind == "calculator_result":
+        content = data.get("content") if isinstance(data.get("content"), dict) else {}
+        trace = content.get("formula_trace") if isinstance(content.get("formula_trace"), dict) else {}
+        return f"Calculator: {trace.get('formula_name') or data.get('status') or 'result'}"
+    if kind == "finance_numeric_verification":
+        return f"Numeric verification: {data.get('status') or 'checked'}"
     if kind in {"finance_numeric_judge", "verifier_gate_result", "synthesis_gate_result"}:
+        return kind.replace("_", " ").title()
+    if kind in {"finance_numeric_judge_repair", "finance_synthesis_compaction"}:
         return kind.replace("_", " ").title()
     if kind == "termination_decision":
         return f"Termination: {data.get('decision') or 'continue'}"
@@ -1475,6 +1842,21 @@ def _activity_detail(kind: str, data: Json) -> str:
     if kind == "retrieval_search_attempt":
         diagnostics = data.get("diagnostics") if isinstance(data.get("diagnostics"), dict) else {}
         return clip(data.get("query") or f"{diagnostics.get('journaled_source_count', 0)} sources considered", 180)
+    if kind == "finance_fact_ledger":
+        return _finance_fact_ledger_body(data)
+    if kind == "finance_slot_bind":
+        return clip(data.get("reason_summary") or ", ".join(_string_list_demo(data.get("missing_slots"))) or data.get("status"), 180)
+    if kind == "finance_formula_plan":
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        return clip(payload.get("expression") or data.get("status") or data.get("formula_name"), 180)
+    if kind == "calculator_result":
+        content = data.get("content") if isinstance(data.get("content"), dict) else {}
+        trace = content.get("formula_trace") if isinstance(content.get("formula_trace"), dict) else {}
+        return clip(trace.get("result_value") or content.get("formatted_value") or content.get("reason"), 180)
+    if kind == "finance_numeric_verification":
+        return clip(data.get("status") or data.get("diagnostics") or data.get("reason"), 180)
+    if kind in {"finance_numeric_preflight", "finance_numeric_judge", "finance_numeric_judge_repair", "finance_synthesis_compaction"}:
+        return clip(data.get("reason_summary") or data.get("reason") or data.get("status") or data.get("decision"), 180)
     if kind == "feedback":
         missing = data.get("missing_evidence")
         return clip(", ".join(str(item) for item in missing[:4]) if isinstance(missing, list) else data.get("stop_reason"), 180)
@@ -1492,6 +1874,11 @@ def _activity_status(kind: str, data: Json) -> str:
         return "allowed" if data.get("allowed") is True else str(data.get("status") or "")
     if kind == "chat_agent_result":
         return "failed" if data.get("failure_report") else "complete"
+    if kind == "calculator_result":
+        content = data.get("content") if isinstance(data.get("content"), dict) else {}
+        return "failed" if data.get("status") == "failed" or content.get("error") else str(data.get("status") or "ok")
+    if kind in {"finance_fact_ledger", "finance_numeric_preflight", "finance_slot_bind", "finance_formula_plan", "finance_numeric_verification", "finance_numeric_judge", "finance_numeric_judge_repair", "finance_synthesis_compaction"}:
+        return str(data.get("status") or data.get("decision") or "")
     return str(data.get("status") or data.get("decision") or "")
 
 
@@ -2754,7 +3141,7 @@ HTML = r"""<!doctype html>
     }
     .loop-panel {
       display: grid;
-      grid-template-rows: 28px 64px minmax(0, 1fr) 124px;
+      grid-template-rows: 28px 64px minmax(0, 1fr) 104px 220px;
       gap: 12px;
     }
     .loop-panel .panel-title {
@@ -2926,6 +3313,45 @@ HTML = r"""<!doctype html>
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+    .diagnostic-panel {
+      margin-top: 8px;
+      border: 1px solid #dfe7f1;
+      border-radius: 6px;
+      background: #fff;
+      padding: 8px;
+      display: grid;
+      gap: 7px;
+    }
+    .diagnostic-title {
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .diagnostic-line {
+      color: var(--slate);
+      font-size: 12px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    .diagnostic-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .diagnostic-chips span {
+      border: 1px solid #d9e2ee;
+      border-radius: 999px;
+      background: #f6f8fb;
+      color: var(--slate);
+      font-size: 10px;
+      line-height: 1.2;
+      padding: 3px 6px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .signal-card {
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -2952,6 +3378,97 @@ HTML = r"""<!doctype html>
       font-size: 10px;
       line-height: 1.2;
     }
+    .debug-inspector {
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      padding: 10px;
+      display: grid;
+      grid-template-rows: 18px 44px minmax(0, 1fr);
+      gap: 8px;
+      overflow: hidden;
+    }
+    .debug-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 18px;
+      text-transform: uppercase;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .debug-cards {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 6px;
+      min-height: 0;
+    }
+    .debug-card {
+      border: 1px solid #edf0f4;
+      border-radius: 6px;
+      padding: 6px 7px;
+      min-width: 0;
+      background: #fbfcfd;
+      overflow: hidden;
+    }
+    .debug-card strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .debug-card span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.12;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .debug-grid {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      overflow: hidden;
+    }
+    .debug-section {
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid #edf0f4;
+      border-radius: 6px;
+      padding: 7px;
+      background: #fff;
+    }
+    .debug-section-title {
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .debug-row {
+      border-top: 1px solid #edf0f4;
+      padding: 5px 0;
+      color: var(--slate);
+      font-size: 12px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    .debug-row:first-of-type { border-top: 0; }
+    .debug-row strong { color: var(--ink); font-size: 12px; }
+    .debug-muted { color: var(--muted); font-size: 11px; }
     .chat-panel { grid-template-rows: auto auto minmax(48px, .24fr) minmax(112px, .76fr) minmax(268px, auto); }
     .left { grid-template-rows: 98px minmax(0, 1fr); }
     .grid { grid-template-columns: minmax(500px, 44%) minmax(620px, 56%); }
@@ -2964,7 +3481,8 @@ HTML = r"""<!doctype html>
       .wide-pane { grid-column: auto; }
       .topology-shell, .thread-tools { grid-template-columns: 1fr; }
       .topology-shell { grid-template-rows: minmax(360px, auto) 112px; }
-      .loop-panel { grid-template-rows: auto 64px minmax(480px, auto) minmax(150px, auto); }
+      .loop-panel { grid-template-rows: auto 64px minmax(480px, auto) minmax(150px, auto) minmax(220px, auto); }
+      .debug-cards, .debug-grid { grid-template-columns: 1fr; }
       .stage:not(:last-child)::after { display: none; }
     }
   </style>
@@ -3017,6 +3535,20 @@ HTML = r"""<!doctype html>
         <div class="loop-branch-strip">
           <div class="column-title">Search branches</div>
           <div class="branch-list" id="searchBranches"></div>
+        </div>
+        <div class="debug-inspector" id="financeDebug">
+          <div class="debug-head"><span>Finance Debug Inspector</span><span id="debugStatus">idle</span></div>
+          <div class="debug-cards" id="debugCards"></div>
+          <div class="debug-grid">
+            <div class="debug-section">
+              <div class="debug-section-title">Slot binding</div>
+              <div id="debugSlots"></div>
+            </div>
+            <div class="debug-section">
+              <div class="debug-section-title">Formula / Gates</div>
+              <div id="debugFormulas"></div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -3080,6 +3612,75 @@ HTML = r"""<!doctype html>
       const parts = [record.stage, record.title || record.kind, record.status].filter(Boolean);
       return parts.length ? parts.join(" | ") : fallback;
     }
+    function updateGraphDeltas(rows) {
+      latestGraphDeltas = Array.isArray(rows) ? rows.slice(-32) : [];
+    }
+    function graphDiagnosticForStage(label) {
+      const canonical = canonicalTopologyLabel(label);
+      for (let i = latestGraphDeltas.length - 1; i >= 0; i -= 1) {
+        const delta = latestGraphDeltas[i] || {};
+        const stage = canonicalTopologyLabel(delta.stage || "");
+        const metaDiag = delta.metadata && delta.metadata.observation_diagnostics;
+        if (stage === canonical && metaDiag && Object.keys(metaDiag).length) return metaDiag;
+        const updates = Array.isArray(delta.node_updates) ? delta.node_updates : [];
+        for (let j = updates.length - 1; j >= 0; j -= 1) {
+          const node = updates[j] || {};
+          const nodeStage = canonicalTopologyLabel(node.label || node.node_id || "");
+          const nodeDiag = node.observation_diagnostics;
+          if (nodeStage === canonical && nodeDiag && Object.keys(nodeDiag).length) return nodeDiag;
+        }
+      }
+      return null;
+    }
+    function latestGraphDiagnostic() {
+      for (let i = latestGraphDeltas.length - 1; i >= 0; i -= 1) {
+        const delta = latestGraphDeltas[i] || {};
+        const diag = (delta.metadata && delta.metadata.observation_diagnostics) || null;
+        if (diag && Object.keys(diag).length) return { stage: delta.stage || "Tool", diagnostics: diag };
+        const updates = Array.isArray(delta.node_updates) ? delta.node_updates : [];
+        for (let j = updates.length - 1; j >= 0; j -= 1) {
+          const node = updates[j] || {};
+          if (node.observation_diagnostics && Object.keys(node.observation_diagnostics).length) {
+            return { stage: node.label || delta.stage || "Tool", diagnostics: node.observation_diagnostics };
+          }
+        }
+      }
+      return null;
+    }
+    function graphDiagnosticSignature(diag) {
+      if (!diag) return "";
+      return JSON.stringify({
+        status: diag.verifier_status || "",
+        issue_count: diag.issue_count || 0,
+        issue_codes: diag.issue_codes || [],
+        repair_options: diag.repair_options || [],
+        missing_value_examples: diag.missing_value_examples || [],
+        error: diag.error || ""
+      });
+    }
+    function renderObservationDiagnostics(diag, title = "Tool diagnostics") {
+      if (!diag || !Object.keys(diag).length) return "";
+      const chips = [];
+      if (diag.verifier_status) chips.push(`status:${diag.verifier_status}`);
+      if (diag.issue_count !== undefined) chips.push(`issues:${diag.issue_count}`);
+      if (diag.missing_value_count !== undefined) chips.push(`missing:${diag.missing_value_count}`);
+      const issueCodes = Array.isArray(diag.issue_codes) ? diag.issue_codes.slice(0, 6) : [];
+      const repairs = Array.isArray(diag.repair_options) ? diag.repair_options.slice(0, 3) : [];
+      const examples = Array.isArray(diag.missing_value_examples) ? diag.missing_value_examples.slice(0, 3) : [];
+      const chipHtml = chips.concat(issueCodes).map(item => `<span>${escapeHtml(item)}</span>`).join("");
+      const repairHtml = repairs.length ? `<div class="diagnostic-line"><strong>Repair:</strong> ${repairs.map(escapeHtml).join(" | ")}</div>` : "";
+      const examplesHtml = examples.length ? `<div class="diagnostic-line"><strong>Missing examples:</strong> ${examples.map(row => escapeHtml([row.slot, row.value || row.raw, row.unit].filter(Boolean).join(" "))).join(" | ")}</div>` : "";
+      const errorHtml = diag.error ? `<div class="diagnostic-line"><strong>Error:</strong> ${escapeHtml(diag.error)}</div>` : "";
+      const boundaryHtml = diag.host_boundary ? `<div class="diagnostic-line"><strong>Boundary:</strong> ${escapeHtml(diag.host_boundary)}</div>` : "";
+      return `<div class="diagnostic-panel">
+        <div class="diagnostic-title">${escapeHtml(title)}</div>
+        ${chipHtml ? `<div class="diagnostic-chips">${chipHtml}</div>` : ""}
+        ${repairHtml}
+        ${examplesHtml}
+        ${errorHtml}
+        ${boundaryHtml}
+      </div>`;
+    }
     const params = new URLSearchParams(window.location.search);
     const selected = {
       runPrefix: params.get("run_prefix") || "",
@@ -3093,6 +3694,7 @@ HTML = r"""<!doctype html>
     let manualInspector = false;
     let frozenTrace = null;
     let runtimeConsoleLines = [];
+    let latestGraphDeltas = [];
     let lastPipelineSignature = "";
     let lastBranchSignature = "";
     const pristineThreadIds = new Set();
@@ -3168,14 +3770,14 @@ HTML = r"""<!doctype html>
     function newThreadId() {
       return `demo-ui-${Date.now().toString(36)}`;
     }
-    function showInspector(title, meta, body, manual = false) {
+    function showInspector(title, meta, body, manual = false, extraHtml = "") {
       if (manual) manualInspector = true;
       const panel = document.getElementById("graphInspector");
       if (!panel) return;
       panel.innerHTML = `
         <div class="inspect-kicker">${escapeHtml(meta || "Inspector")}</div>
         <div class="inspect-title">${escapeHtml(title || "Runtime node")}</div>
-        <div class="inspect-body">${escapeHtml(body || "No additional detail.")}</div>`;
+        <div class="inspect-body">${escapeHtml(body || "No additional detail.")}${extraHtml || ""}</div>`;
     }
     function setTab(name) {
       document.querySelectorAll("button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
@@ -3200,7 +3802,9 @@ HTML = r"""<!doctype html>
 	      renderTranscript([]);
 	      renderPipeline([]);
 	      renderBranches([]);
+	      renderFinanceDebug({});
 	      runtimeConsoleLines = [];
+	      latestGraphDeltas = [];
 	      renderRuntimeConsole([]);
 	      text("latestItem", "local");
 	      text("publicTraceNotice", "screen cleared locally | journal preserved");
@@ -3240,7 +3844,9 @@ HTML = r"""<!doctype html>
       renderTranscript([]);
       renderPipeline([]);
       renderBranches([]);
+      renderFinanceDebug({});
       runtimeConsoleLines = [];
+      latestGraphDeltas = [];
       renderRuntimeConsole([]);
       text("consoleThread", `thread ${selected.consoleThread}`);
       text("consoleStatus", "ready");
@@ -3303,8 +3909,10 @@ HTML = r"""<!doctype html>
       const stats = payload.stats || {};
       const closed = Boolean(payload.closed || stats.closed);
       if (Array.isArray(payload.transcript) && payload.transcript.length) renderTranscript(payload.transcript);
+      updateGraphDeltas(payload.graph_deltas || []);
       renderPipeline(payload.topology || []);
       renderBranches(payload.search_branches || []);
+      renderFinanceDebug(payload.debug || {});
       if (closed && Array.isArray(payload.runtime_console)) {
         runtimeConsoleLines = payload.runtime_console;
         renderRuntimeConsole(runtimeConsoleLines);
@@ -3320,6 +3928,7 @@ HTML = r"""<!doctype html>
           threadId: selected.consoleThread,
           transcript: payload.transcript || [],
           topology: payload.topology || [],
+          graph_deltas: latestGraphDeltas.slice(),
           search_branches: payload.search_branches || [],
           runtime_console: runtimeConsoleLines.slice(),
           latest_event: payload.record || {},
@@ -3340,6 +3949,8 @@ HTML = r"""<!doctype html>
       ]);
       renderPipeline([{ label: "Intake", state: "active", value: 1, detail: "browser command submitted; waiting for WSL journal", latest: true, last_at: now }]);
       renderBranches([]);
+      renderFinanceDebug({ status: "running", headline: "Browser command accepted; waiting for WSL journal events.", cards: [] });
+      latestGraphDeltas = [];
       runtimeConsoleLines = [
         {
           at: now,
@@ -3461,12 +4072,16 @@ HTML = r"""<!doctype html>
         text("publicTraceNotice", "new thread idle | waiting for input");
         text("consoleStatus", "ready");
         cls("consoleDot", "dot ok");
+        updateGraphDeltas([]);
+        renderFinanceDebug({});
 	      } else if (!preserveLiveTrace) {
 	        text("latestItem", cleared ? "local" : eventCode(latestEvent));
 	        text("publicTraceNotice", cleared ? "screen cleared locally | journal preserved" : eventNotice(latestEvent, consoleState.notice || "runtime context"));
         renderTranscript(cleared ? [] : (consoleState.transcript || []));
+        updateGraphDeltas(cleared ? [] : (consoleState.graph_deltas || []));
         renderPipeline(cleared ? [] : (consoleState.topology || []));
         renderBranches(cleared ? [] : (consoleState.search_branches || []));
+        renderFinanceDebug(cleared ? {} : (consoleState.debug || {}));
         runtimeConsoleLines = cleared ? [] : (consoleState.runtime_console || []);
         renderRuntimeConsole(runtimeConsoleLines);
         if (!cleared && consoleState.stats && consoleState.stats.closed) {
@@ -3474,6 +4089,7 @@ HTML = r"""<!doctype html>
             threadId: selected.consoleThread,
             transcript: consoleState.transcript || [],
             topology: consoleState.topology || [],
+            graph_deltas: latestGraphDeltas.slice(),
             search_branches: consoleState.search_branches || [],
             runtime_console: runtimeConsoleLines.slice(),
             latest_event: latestEvent,
@@ -3492,8 +4108,10 @@ HTML = r"""<!doctype html>
         text("consoleStatus", "complete");
         cls("consoleDot", "dot ok");
         renderTranscript(frozenTrace.transcript || []);
+        updateGraphDeltas(frozenTrace.graph_deltas || []);
         renderPipeline(frozenTrace.topology || []);
         renderBranches(frozenTrace.search_branches || []);
+        renderFinanceDebug(consoleState.debug || {});
         runtimeConsoleLines = frozenTrace.runtime_console || [];
         renderRuntimeConsole(runtimeConsoleLines);
       }
@@ -3593,11 +4211,12 @@ HTML = r"""<!doctype html>
           state: row.state || "idle",
           value: Number(row.value || 0),
           detail: row.detail || idleDetail(label),
+          diagnostics: graphDiagnosticForStage(label),
           last_at: Number(row.last_at || 0),
           latest: Boolean(row.latest)
         };
       });
-      const signature = JSON.stringify(nodes.map(row => [row.label, row.state, row.value, row.detail, row.last_at, row.latest]));
+      const signature = JSON.stringify(nodes.map(row => [row.label, row.state, row.value, row.detail, row.last_at, row.latest, graphDiagnosticSignature(row.diagnostics)]));
       if (signature === lastPipelineSignature) {
         window.requestAnimationFrame(sizeTopologyFrame);
         return;
@@ -3622,7 +4241,7 @@ HTML = r"""<!doctype html>
         return `<button class="topology-node ${escapeHtml(row.state)}" style="left:${pos[0]}%;top:${pos[1]}%" data-label="${escapeHtml(row.label)}" title="${escapeHtml(row.detail)}">
           <div class="node-top"><div class="node-name">${escapeHtml(row.label)}</div><span class="state-dot ${escapeHtml(statusClass)}"></span></div>
           <div class="node-count">${fmtNum(row.value)}</div>
-          <div class="node-detail">${escapeHtml(row.detail)}</div>
+          <div class="node-detail">${escapeHtml(row.diagnostics ? "diagnostics available" : row.detail)}</div>
         </button>`;
       }).join("");
       panel.innerHTML = `
@@ -3635,11 +4254,25 @@ HTML = r"""<!doctype html>
       panel.querySelectorAll(".topology-node").forEach(button => {
         button.addEventListener("click", () => {
           const row = nodeMap.get(button.dataset.label) || {};
-          showInspector(row.label, `${row.state || "idle"} | ${fmtNum(row.value)} events`, row.detail || "", true);
+          showInspector(
+            row.label,
+            `${row.state || "idle"} | ${fmtNum(row.value)} events`,
+            row.detail || "",
+            true,
+            renderObservationDiagnostics(row.diagnostics)
+          );
         });
       });
       const activeNode = nodes.find(row => row.state === "active") || nodes.find(row => row.state === "warn") || nodes.find(row => row.value > 0) || nodes[0];
-      if (activeNode && !manualInspector) showInspector(activeNode.label, `${activeNode.state} | ${fmtNum(activeNode.value)} events`, activeNode.detail);
+      if (activeNode && !manualInspector) {
+        showInspector(
+          activeNode.label,
+          `${activeNode.state} | ${fmtNum(activeNode.value)} events`,
+          activeNode.detail,
+          false,
+          renderObservationDiagnostics(activeNode.diagnostics)
+        );
+      }
       window.requestAnimationFrame(sizeTopologyFrame);
     }
     function sizeTopologyFrame() {
@@ -3768,6 +4401,73 @@ HTML = r"""<!doctype html>
         const row = shown[index] || {};
         button.addEventListener("click", () => showInspector(`Search branch ${row.index || ""}`, `${row.status || "ok"} | ${fmtNum(row.sources)} sources`, `${row.query || ""}\n${(row.providers || []).join(", ")}`, true));
       });
+    }
+    function renderFinanceDebug(debug) {
+      debug = debug || {};
+      text("debugStatus", debug.status || "idle");
+      const cards = Array.isArray(debug.cards) ? debug.cards : defaultDebugCards(debug);
+      const cardPanel = document.getElementById("debugCards");
+      if (cardPanel) {
+        cardPanel.innerHTML = cards.slice(0, 6).map(card => `
+          <div class="debug-card" title="${escapeHtml(card.detail || "")}">
+            <strong>${escapeHtml(card.value ?? "-")}</strong>
+            <span>${escapeHtml(card.label || "")}</span>
+          </div>`).join("") || `<div class="debug-card"><strong>-</strong><span>Waiting</span></div>`;
+      }
+      const slotPanel = document.getElementById("debugSlots");
+      if (slotPanel) {
+        const missing = Array.isArray(debug.missing_slots) ? debug.missing_slots : [];
+        const slots = Array.isArray(debug.slots) ? debug.slots : [];
+        const facts = (debug.facts && Array.isArray(debug.facts.top_metrics)) ? debug.facts.top_metrics : [];
+        const missingHtml = missing.length ? `<div class="debug-row"><strong>Missing:</strong> ${escapeHtml(missing.slice(0, 10).join(", "))}</div>` : "";
+        const slotHtml = slots.slice(0, 8).map(row => `
+          <div class="debug-row">
+            <strong>${escapeHtml(row.slot || row.variable || "slot")}</strong>
+            <div class="debug-muted">${escapeHtml(row.fact_id || "no fact")} ${row.variable ? " | " + escapeHtml(row.variable) : ""}</div>
+            ${row.reason ? `<div>${escapeHtml(row.reason)}</div>` : ""}
+          </div>`).join("");
+        const metricHtml = facts.length ? `<div class="debug-row"><strong>Top facts:</strong> ${facts.slice(0, 5).map(row => `${escapeHtml(row.metric)}:${fmtNum(row.count)}`).join(" | ")}</div>` : "";
+        slotPanel.innerHTML = missingHtml + slotHtml + metricHtml || `<div class="debug-row">No finance slots or fact ledger yet.</div>`;
+      }
+      const formulaPanel = document.getElementById("debugFormulas");
+      if (formulaPanel) {
+        const formulas = Array.isArray(debug.formulas) ? debug.formulas : [];
+        const gates = Array.isArray(debug.gates) ? debug.gates : [];
+        const formulaHtml = formulas.slice(-6).map(row => `
+          <div class="debug-row">
+            <strong>${escapeHtml(row.name || row.kind || "formula")}</strong>
+            <div class="debug-muted">${escapeHtml(row.status || "")}${row.unit ? " | " + escapeHtml(row.unit) : ""}</div>
+            ${row.expression ? `<div>${escapeHtml(row.expression)}</div>` : ""}
+            ${row.result ? `<div><strong>= ${escapeHtml(row.result)}</strong></div>` : ""}
+          </div>`).join("");
+        const gateHtml = gates.slice(-4).map(row => `
+          <div class="debug-row">
+            <strong>${escapeHtml(row.name || "gate")}</strong>
+            <div class="debug-muted">${escapeHtml(row.status || "")}</div>
+            ${row.detail ? `<div>${escapeHtml(row.detail)}</div>` : ""}
+          </div>`).join("");
+        formulaPanel.innerHTML = formulaHtml + gateHtml || `<div class="debug-row">No formula trace or verification gate yet.</div>`;
+      }
+      if (!manualInspector && debug.headline) {
+        const latestDiag = latestGraphDiagnostic();
+        showInspector(
+          "Finance Debug",
+          debug.status || "inspector",
+          debug.headline,
+          false,
+          latestDiag ? renderObservationDiagnostics(latestDiag.diagnostics, `${latestDiag.stage || "Tool"} diagnostics`) : ""
+        );
+      }
+    }
+    function defaultDebugCards(debug) {
+      return [
+        { label: "Status", value: debug.status || "idle", detail: debug.headline || "" },
+        { label: "Facts", value: ((debug.facts || {}).fact_count) || 0, detail: "finance fact ledger" },
+        { label: "Slots", value: Array.isArray(debug.slots) ? debug.slots.length : 0, detail: "LLM slot bindings" },
+        { label: "Missing", value: Array.isArray(debug.missing_slots) ? debug.missing_slots.length : 0, detail: "missing slots" },
+        { label: "Formulas", value: Array.isArray(debug.formulas) ? debug.formulas.length : 0, detail: "plan + calculator rows" },
+        { label: "Cache", value: ((debug.model || {}).cache_label) || "-", detail: "processor prompt cache" }
+      ];
     }
     function renderIntel(rows) {
       document.getElementById("intel").innerHTML = rows.map(row => `
