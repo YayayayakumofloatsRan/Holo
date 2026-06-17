@@ -154,6 +154,7 @@ class StreamingToolExecutor:
         self._incremental_is_failed: Callable[[Any], bool] | None = None
         self._incremental_failure_cancels_siblings: Callable[[Any, Any], bool] | None = None
         self._incremental_cancel_one: Callable[[Any, str], Any] | None = None
+        self._incremental_abort_one: Callable[[Any, str], None] | None = None
         self._incremental_failure_seen = False
         self._discarded = False
 
@@ -167,6 +168,7 @@ class StreamingToolExecutor:
         is_failed: Callable[[Any], bool] | None = None,
         failure_cancels_siblings: Callable[[Any, Any], bool] | None = None,
         cancel_one: Callable[[Any, str], Any] | None = None,
+        abort_one: Callable[[Any, str], None] | None = None,
     ) -> list[Any]:
         self.begin_incremental(
             execute_one=execute_one,
@@ -175,6 +177,7 @@ class StreamingToolExecutor:
             is_failed=is_failed,
             failure_cancels_siblings=failure_cancels_siblings,
             cancel_one=cancel_one,
+            abort_one=abort_one,
         )
         try:
             for item in items:
@@ -192,6 +195,7 @@ class StreamingToolExecutor:
         is_failed: Callable[[Any], bool] | None = None,
         failure_cancels_siblings: Callable[[Any, Any], bool] | None = None,
         cancel_one: Callable[[Any, str], Any] | None = None,
+        abort_one: Callable[[Any, str], None] | None = None,
     ) -> None:
         self.close()
         self._discarded = False
@@ -202,6 +206,7 @@ class StreamingToolExecutor:
         self._incremental_is_failed = is_failed
         self._incremental_failure_cancels_siblings = failure_cancels_siblings
         self._incremental_cancel_one = cancel_one
+        self._incremental_abort_one = abort_one
         self._incremental_failure_seen = False
         self._incremental_pool = ThreadPoolExecutor(max_workers=self.max_concurrency)
 
@@ -260,6 +265,7 @@ class StreamingToolExecutor:
             if tracked.status == "queued":
                 tracked.status = "yielded"
             elif tracked.status == "running" and tracked.future is not None:
+                self._request_item_abort(tracked.item, "streaming_fallback")
                 tracked.future.cancel()
         self.close()
 
@@ -324,7 +330,24 @@ class StreamingToolExecutor:
             is_failed=self._incremental_is_failed,
             failure_cancels_siblings=self._incremental_failure_cancels_siblings,
         ):
-            self._incremental_failure_seen = True
+            if not self._incremental_failure_seen:
+                self._incremental_failure_seen = True
+                self._request_running_sibling_aborts(tracked, "sibling_tool_failed")
+
+    def _request_running_sibling_aborts(self, failed: _TrackedExecution, reason: str) -> None:
+        for tracked in self._incremental_items:
+            if tracked is failed or tracked.status != "running":
+                continue
+            self._request_item_abort(tracked.item, reason)
+
+    def _request_item_abort(self, item: Any, reason: str) -> None:
+        abort_one = getattr(self, "_incremental_abort_one", None)
+        if abort_one is None:
+            return
+        try:
+            abort_one(item, reason)
+        except Exception:
+            return
 
     def _emit(self, event_type: str, item: Any, *, outcome: Any | None = None) -> None:
         if self.emit_event is None:

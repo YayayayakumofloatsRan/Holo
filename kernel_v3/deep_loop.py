@@ -584,6 +584,7 @@ class DeepAgentLoopController(LoopControllerV3):
             is_failed=_execution_item_failed,
             failure_cancels_siblings=_tool_failure_cancels_siblings,
             cancel_one=lambda item, reason: self._cancelled_execution_item(task, step_id=step_id, prepared=item, reason=reason),
+            abort_one=lambda item, reason: self._request_prepared_tool_abort(task, step_id=step_id, prepared=item, reason=reason),
         )
         try:
             def record_execution_items(items: list[_ToolExecutionItem]) -> None:
@@ -987,6 +988,7 @@ class DeepAgentLoopController(LoopControllerV3):
             is_failed=_execution_item_failed,
             failure_cancels_siblings=_tool_failure_cancels_siblings,
             cancel_one=lambda item, reason: self._cancelled_execution_item(task, step_id=step_id, prepared=item, reason=reason),
+            abort_one=lambda item, reason: self._request_prepared_tool_abort(task, step_id=step_id, prepared=item, reason=reason),
         )
         for item in batch_items:
             execution_items.append(item)
@@ -1036,6 +1038,29 @@ class DeepAgentLoopController(LoopControllerV3):
                 return self._timeout_execution_item(task, step_id=step_id, prepared=prepared, reason="tool_timeout")
         finally:
             pool.shutdown(wait=not timed_out, cancel_futures=True)
+
+    def _request_prepared_tool_abort(
+        self,
+        task: TaskState,
+        *,
+        step_id: str,
+        prepared: _PreparedToolCall,
+        reason: str,
+    ) -> None:
+        prepared.control.abort_signal.request(reason)
+        self._append_tool_execution_event(
+            task,
+            step_id=step_id,
+            event=_prepared_tool_execution_event(
+                "abort_requested",
+                prepared,
+                detail={
+                    "reason": reason,
+                    "source": "streaming_tool_executor",
+                    "host_boundary": "running sibling tool received cooperative abort after a failure that cancels siblings",
+                },
+            ),
+        )
 
     def _prepare_tool_call(
         self,
@@ -2311,6 +2336,7 @@ def _assistant_turn_tool_surface(
                 "destructive": runtime.destructive,
                 "open_world": runtime.open_world,
                 "timeout_seconds": runtime.timeout_seconds,
+                "failure_cancels_siblings": runtime.failure_cancels_siblings,
                 "max_result_size_chars": runtime.max_result_size_chars,
                 "should_defer": runtime.should_defer,
                 "always_load": runtime.always_load,
@@ -2785,14 +2811,7 @@ def _tool_failure_cancels_siblings(item: _PreparedToolCall, outcome: _ToolExecut
     if not _execution_item_failed(outcome):
         return False
     spec = tool_runtime_spec_for_action(item.action, item.manifest)
-    side_effect = str(
-        getattr(item.manifest, "side_effect_class", item.action.side_effect_class) or item.action.side_effect_class
-    ).strip().lower()
-    if spec.destructive or side_effect in {"shell", "write", "destructive"}:
-        return True
-    if not spec.read_only and not spec.concurrency_safe:
-        return True
-    return False
+    return spec.failure_cancels_siblings
 
 
 def _with_tool_call_id(observation: Observation, tool_call_id: str) -> Observation:

@@ -445,6 +445,17 @@ non-empty JSON argument object has arrived. Finance final numeric preflight task
 compilation is bounded and non-retrying so provider stalls cannot hang an
 already-completed live run at ledger-writing time. These are loop-stability
 contracts, not benchmark score claims.
+The 2026-06-18 mature-loop continuation ports the inspected executor's sibling
+abort contract into Holo. `ToolRuntimeSpec` now includes
+`failure_cancels_siblings`; `StreamingToolExecutor` can call an `abort_one`
+hook for already-running sibling tools when a failure invalidates the batch; and
+`DeepAgentLoopController` connects that hook to each prepared tool's
+`ToolAbortSignal`, journaling `abort_requested` with reason
+`sibling_tool_failed`. This closes the Holo-level cooperative abort path for
+running sibling tools while keeping normal read/network failures independent.
+Targeted structural tests prove both the executor callback and the deep-loop
+`_host_context` signal path. This is agent-loop stability work, not benchmark
+score evidence.
 The next mature-loop checkpoint ports the same fallback/discard/rebuild idea to
 final synthesis. `Synthesizer` now checks `processor_budget.max_prompt_chars_per_call`
 before provider dispatch; if a retrieval/fact/citation packet is too large, it

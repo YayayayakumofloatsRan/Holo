@@ -23,6 +23,7 @@ class ToolRuntimeSpec:
     should_defer: bool
     always_load: bool
     progress_supported: bool
+    failure_cancels_siblings: bool
     timeout_seconds: int | None
     idempotent: bool
 
@@ -40,6 +41,7 @@ class ToolRuntimeSpec:
             "should_defer": self.should_defer,
             "always_load": self.always_load,
             "progress_supported": self.progress_supported,
+            "failure_cancels_siblings": self.failure_cancels_siblings,
             "timeout_seconds": self.timeout_seconds,
             "idempotent": self.idempotent,
         }
@@ -93,6 +95,10 @@ def tool_runtime_spec_for_action(
         should_defer=_bool(runtime.get("should_defer"), default=False),
         always_load=_bool(runtime.get("always_load"), default=False),
         progress_supported=_bool(runtime.get("progress_supported"), default=False),
+        failure_cancels_siblings=_bool(
+            runtime.get("failure_cancels_siblings"),
+            default=destructive or side_effect in {"shell", "write", "destructive"} or (not read_only and not concurrency_safe),
+        ),
         timeout_seconds=_positive_int_or_none(runtime.get("timeout_seconds")),
         idempotent=_bool(runtime.get("idempotent"), default=read_only and not open_world),
     )

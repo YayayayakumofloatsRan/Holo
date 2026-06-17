@@ -1914,6 +1914,131 @@ def test_streaming_tool_progress_is_journaled_from_host_context() -> None:
     assert progress_records[0].data["detail"]["stage"] == "fetch"
 
 
+def test_deep_loop_runtime_failure_requests_abort_for_running_sibling_tool() -> None:
+    slow_started = threading.Event()
+    abort_seen = threading.Event()
+
+    def abortable_read(action: CandidateAction) -> Observation:
+        slow_started.set()
+        while not tool_abort_requested(action.payload):
+            emit_tool_progress(action.payload, status="running", detail={"stage": "waiting"})
+            time.sleep(0.01)
+        abort_seen.set()
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="failed",
+            source=f"tool:{action.name}",
+            content={"aborted": True},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    def failing_coordinator(action: CandidateAction) -> Observation:
+        assert slow_started.wait(1)
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="failed",
+            source=f"tool:{action.name}",
+            content={"failed": True},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    registry = ToolRegistry()
+    registry.register(
+        "slow.read",
+        abortable_read,
+        manifest=ToolManifest(
+            name="slow.read",
+            version="1",
+            resource_kind="slow",
+            operator_kind="read",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Abortable slow read.",
+            input_schema={"query": {"type": "str", "required": True, "min_length": 1}},
+            runtime={"concurrency_safe": True, "read_only": True, "interrupt_behavior": "cancel", "timeout_seconds": 1},
+        ),
+    )
+    registry.register(
+        "coordinator.fail",
+        failing_coordinator,
+        manifest=ToolManifest(
+            name="coordinator.fail",
+            version="1",
+            resource_kind="coordinator",
+            operator_kind="read",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Coordinator read that invalidates sibling work on failure.",
+            input_schema={"query": {"type": "str", "required": True, "min_length": 1}},
+            runtime={"concurrency_safe": True, "read_only": True, "failure_cancels_siblings": True},
+        ),
+    )
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-abort-sibling",
+                message="run abortable sibling tools",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="tc-slow",
+                        name="slow.read",
+                        arguments={"query": "slow"},
+                        reason="long running evidence read",
+                    ),
+                    ToolCallRequest(
+                        tool_call_id="tc-fail",
+                        name="coordinator.fail",
+                        arguments={"query": "fail"},
+                        reason="coordinator failure should abort sibling",
+                    ),
+                ],
+            )
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=4,
+    )
+
+    result = loop.run("abort running sibling when coordinator fails")
+
+    assert result.status == "completed"
+    assert abort_seen.is_set()
+    abort_events = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="tool_execution_event")
+        if record.data["event_type"] == "abort_requested"
+    ]
+    assert [(record.data["tool_name"], record.data["detail"]["reason"]) for record in abort_events] == [
+        ("slow.read", "sibling_tool_failed")
+    ]
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    by_tool = {item["tool"]: item for item in batch.data["content"]["results"]}
+    assert by_tool["slow.read"]["status"] == "failed"
+    assert by_tool["coordinator.fail"]["status"] == "failed"
+
+
 def test_streaming_tool_timeout_requests_cooperative_abort() -> None:
     abort_seen = threading.Event()
     registry = ToolRegistry()

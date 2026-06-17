@@ -179,6 +179,7 @@ def test_tool_use_context_exposes_runtime_spec_to_executors() -> None:
     assert context["runtime_spec"]["concurrency_safe"] is True
     assert context["runtime_spec"]["interrupt_behavior"] == "cancel"
     assert context["runtime_spec"]["read_only"] is True
+    assert context["runtime_spec"]["failure_cancels_siblings"] is False
     assert context["progress_channel_id"] == "progress-1"
     assert context["abort_signal_id"] == "abort-1"
     assert context["timeout_seconds"] == 7
@@ -295,6 +296,42 @@ def test_streaming_tool_executor_failure_cancel_callback_can_keep_independent_re
 
     assert calls == ["read-fail", "after-read"]
     assert [outcome["status"] for outcome in outcomes] == ["failed", "ok"]
+
+
+def test_streaming_tool_executor_abort_callback_reaches_running_siblings() -> None:
+    executor = StreamingToolExecutor(max_concurrency=2)
+    slow_started = threading.Event()
+    abort_requested = threading.Event()
+    abort_calls: list[tuple[str, str]] = []
+
+    def execute_one(item: str) -> dict[str, object]:
+        if item == "slow":
+            slow_started.set()
+            while not abort_requested.wait(0.01):
+                pass
+            return {"status": "cancelled", "item": item}
+        assert slow_started.wait(1)
+        return {"status": "failed", "item": item}
+
+    def abort_one(item: str, reason: str) -> None:
+        abort_calls.append((item, reason))
+        if item == "slow":
+            abort_requested.set()
+
+    outcomes = executor.execute_batches(
+        ["slow", "fail"],
+        execute_one=execute_one,
+        is_concurrency_safe=lambda _item: True,
+        cancel_pending_on_failure=True,
+        is_failed=lambda outcome: outcome["status"] != "ok",
+        failure_cancels_siblings=lambda _item, _outcome: True,
+        cancel_one=lambda item, reason: {"status": "cancelled", "item": item, "reason": reason},
+        abort_one=abort_one,
+    )
+
+    assert abort_calls == [("slow", "sibling_tool_failed")]
+    assert {outcome["item"] for outcome in outcomes} == {"slow", "fail"}
+    assert {outcome["status"] for outcome in outcomes} == {"cancelled", "failed"}
 
 
 def test_tool_result_projection_preserves_shape_and_budget_state() -> None:

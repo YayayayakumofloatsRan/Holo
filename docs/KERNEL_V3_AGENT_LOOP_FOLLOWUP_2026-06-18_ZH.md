@@ -1149,3 +1149,50 @@ AgentRuntime / planner allowed surface 会把它暴露给模型。成熟 agent l
 说明：这是工具暴露链路修复，不是 live finance score。当前 UbuntuHolo 仍未暴露
 `DEEPSEEK_API_KEY` / `HOLO_V3_LIVE_MODEL`，因此本轮仍不能报告新的
 FinanceBench/FinQA 准确率。
+
+## 28. Running sibling abort checkpoint
+
+继续按“优先照搬成熟 agent loop”的方向，本轮补上外部 TypeScript
+`StreamingToolExecutor` 的 running sibling abort 语义。此前 Holo 只能把失败后尚未
+启动的 pending 工具标成 cancelled；已经运行中的并发兄弟工具只能靠自己的 timeout
+结束。这会在 live 金融检索、文档解析和脚本工具里放大资源占用风险。
+
+本轮补齐：
+
+- `ToolRuntimeSpec` 新增 `failure_cancels_siblings`。普通 read/network 失败默认
+  不取消兄弟工具；write/shell/destructive 或非读非并发安全失败默认取消；协调类
+  工具可显式声明失败后取消兄弟工具。
+- `StreamingToolExecutor` 新增 `abort_one` 回调，在 `_outcome_cancels_siblings`
+  首次成立时向所有 running sibling 发送 cooperative abort，同时保留 pending
+  sibling 的 `cancel_one` 行为。
+- `DeepAgentLoopController` 把 `abort_one` 接到每个 prepared tool 的
+  `ToolAbortSignal`，并写入 `abort_requested` tool execution event，reason 为
+  `sibling_tool_failed`。
+- 工具侧继续通过 `_host_context` 和 `tool_abort_requested(...)` 感知中止请求；
+  agent loop 合同已经闭合，后续剩余工作是把 shell/script/network/document 工具
+  具体接到进程组、HTTP request 或 worker process cancellation。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_tool_use.py::test_streaming_tool_executor_abort_callback_reaches_running_siblings \
+  tests/test_kernel_v3_deep_agent_loop.py::test_deep_loop_runtime_failure_requests_abort_for_running_sibling_tool -q
+.venv/bin/python -m py_compile kernel_v3/tool_use.py kernel_v3/deep_loop.py kernel_v3/tool_runtime.py
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_tool_use.py \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_provider_native_tools.py \
+  tests/test_kernel_v3_finance_open_components.py \
+  tests/test_kernel_v3_processor_usage.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+```
+
+结果：
+
+- `2 passed in 0.57s`
+- `py_compile` passed
+- `tool/deep/provider/finance-open/processor`: `94 passed in 6.26s`
+- `finance_benchmark` harness structural tests: `61 passed in 173.79s`
+
+说明：这是 agent-loop 稳定性和资源边界修复，不是 FinanceBench/FinQA accuracy。

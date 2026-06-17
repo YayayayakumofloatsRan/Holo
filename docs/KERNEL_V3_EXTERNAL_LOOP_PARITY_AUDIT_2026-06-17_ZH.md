@@ -21,7 +21,7 @@ Holo 当前审查范围：
 
 ## 一句话结论
 
-Holo 已经从旧的一步一工具循环，升级到“provider-visible native tools + eager streaming tool execution + tool.discovery + artifact.read + ToolUseContext + artifact 化长结果 + provider-message replacement view + durable tool-result artifacts”的深循环骨架。
+Holo 已经从旧的一步一工具循环，升级到“provider-visible native tools + eager streaming tool execution + tool.discovery + artifact.read / artifact.query + ToolUseContext + artifact 化长结果 + provider-message replacement view + durable tool-result artifacts + cooperative sibling abort”的深循环骨架。
 
 与外部成熟项目相比，Holo 已经超过约 95% 的 P0 架构阈值，但还没有完成 100% 的完整 streaming agent loop。当前 Holo 已经不再只是：
 
@@ -242,6 +242,7 @@ Holo 当前 `tool.discovery` 是有价值的，但只是对已注册 allowed man
 - `should_defer`
 - `always_load`
 - `progress_supported`
+- `failure_cancels_siblings`
 - `timeout_seconds`
 - `idempotent`
 
@@ -479,7 +480,7 @@ Holo 的工具执行事件在 `kernel_v3/tool_use.py`。这里的 `StreamingTool
 - `DeepAgentLoopController` 默认仍保留完整 JSON `assistant.turn` fallback；eager streaming path 需要 recipe metadata 显式打开 `agent_loop.provider_streaming=true` 或 `agent_loop.streaming=true`。
 - eager streaming execution 已经做到“tool_call delta 完整即启动工具并继续 drain provider stream”，协作式工具运行进度也能进入 journal；但还没有把工具运行中的 partial result 反向注入同一个 provider conversation。
 - `ToolResultReplacementState` 已能进入 batch observation、context pack、JSON provider prompt view、provider parameters / provider messages，并能用 `tool_result_full` artifact 保存完整工具结果；跨 resume/fork provider-cache 边界仍需完整 `ContentReplacementState` 等价审计。
-- `interrupt_behavior` 已进入 runtime spec，协作式 abort signal 已能下发；但 child abort controller、subprocess/network signal 传递和非协作线程强中断还没有闭合。
+- `interrupt_behavior` 与 `failure_cancels_siblings` 已进入 runtime spec，Holo executor/deep loop 层的 running sibling cooperative abort 已闭合；但具体 shell/subprocess/network 工具仍需把该信号映射到进程组、request cancellation 或 worker-process kill。
 - deferred tool loading 已进入 provider-native surface 的 `always_load` / `should_defer` 选择层；但还不是完整 token-budget 优化器，也没有按任务动态扩大 provider tool set。
 
 ### 2026-06-17 P0 续进：stream event 可进入 deep loop
@@ -671,6 +672,18 @@ live rerun 已完成：
 
 这是一个有效 live debug-row 结果，证明本轮 P0 evidence adapter 闭合了上一轮 `missing_retrieval_report` 失败。但它仍只是 debug50 第 1 行，不是 FinanceBench debug50 或 test100 成绩。成本仍偏高，下一步要做类型簇 debug，而不是把单题成功当总体能力。
 
+### 2026-06-18 P0 续进：running sibling cooperative abort
+
+本轮续进继续照搬外部成熟 `StreamingToolExecutor` 的关键语义：一个会使批次失效的工具失败时，host 不能只取消尚未启动的 pending 工具，也要让已经运行中的兄弟工具收到协作式 abort 信号。
+
+- `ToolRuntimeSpec` 新增 `failure_cancels_siblings`。默认保持保守：普通 read/network 失败不取消兄弟工具，write/shell/destructive 或非读非并发安全失败会取消；特定协调类工具可以显式声明失败后中止兄弟工具。
+- `StreamingToolExecutor.begin_incremental(...)` / `execute_batches(...)` 新增 `abort_one` 回调。当 `_outcome_cancels_siblings(...)` 首次成立时，executor 会向所有 running sibling 调用该回调，pending sibling 仍走原有 `cancel_one` 路径。
+- `DeepAgentLoopController` 把 `abort_one` 接到每个 `_PreparedToolCall` 的 `ToolAbortSignal`，并写入 `abort_requested` tool execution event，reason 为 `sibling_tool_failed`。
+- 工具侧仍通过既有 `_host_context` + `tool_abort_requested(...)` 读取信号；旧工具不需要改，长工具可以逐步接入。
+- 结构测试覆盖两层：executor 直接证明 running sibling 收到 abort callback；deep loop 证明模型同一 turn 发出两个并发工具调用时，runtime 声明的失败取消策略可以经 `_host_context` 传到工具内部。
+
+这把 Holo 层的 cooperative sibling abort 闭合了。剩余差距从“loop 不会发信号”收缩为“具体 shell/script/network/document 工具是否把信号映射到真实进程组、HTTP request 或 worker process”。这仍然是工程工作，但不再是 agent loop 合同缺失。
+
 ### 与外部项目 agent loop 的剩余差距估计
 
 这个估计只描述 agent loop 技术 parity，不是 FinanceBench / FinQA 分数。
@@ -680,7 +693,7 @@ live rerun 已完成：
 距离外部项目 100% 成熟度还差的部分主要集中在剩余工程闭环：
 
 - Tool result replacement 已覆盖 JSON provider prompt view、provider parameters、structured provider messages 和 durable artifact，但仍要做 resume/fork cache 稳定审计。
-- Tool runtime spec 已驱动 cooperative progress/abort/timeout，并覆盖 streaming / completed-turn batch 两条路径；仍要接到 child process/network cancellation，解决已运行子进程/请求的真实中断。
+- Tool runtime spec 已驱动 cooperative progress/abort/timeout，并覆盖 streaming / completed-turn batch 两条路径；running sibling cooperative abort 已在 executor/deep loop 层闭合，仍要接到具体 child process/network cancellation，解决已运行子进程/请求的真实中断。
 - deferred/always-load 已进入 provider-native surface，但还需要按任务、token budget、tool.discovery 结果动态调整 provider tool set。
 - Workbench state 仍要更明确地承载 SEC/EDGAR、table query、calculator、formula trace、artifact read、market/search 等临时组装能力。
 - 类型簇 live debug50 仍未用新 streaming path 完成，结构成熟度不能替代 finance benchmark 证据。
