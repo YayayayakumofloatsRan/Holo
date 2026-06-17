@@ -44,6 +44,10 @@ def finance_facts_to_claims(facts: list[FinanceFact]) -> list[Claim]:
                     "source_title": fact.metadata.get("source_title"),
                     "source_uri": fact.metadata.get("source_uri"),
                     "supported_metric": fact.metadata.get("supported_metric"),
+                    "segment_name": fact.metadata.get("segment_name"),
+                    "category_name": fact.metadata.get("category_name"),
+                    "value_is_percentage": fact.metadata.get("value_is_percentage"),
+                    "display_unit": fact.metadata.get("display_unit"),
                 },
             )
         )

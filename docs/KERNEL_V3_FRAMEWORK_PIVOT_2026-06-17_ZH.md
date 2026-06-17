@@ -70,6 +70,11 @@ Inner Finance Solver Loop
 
 LangGraph 负责可恢复的执行图；Holo 负责图状态的语义字段、工具边界、journal、评测隔离和 domain verifier。
 
+截至本记录后的 loop 审查，LangGraph 仍是已安装候选 runtime，不是 active
+execution loop。当前 active loop 仍是 Holo 自有 `LoopControllerV3 +
+WorkloopEvaluator + ToolRegistry + JournalStore`。同日逻辑审查见
+`docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`。
+
 ### 3.2 EdgarTools：SEC/EDGAR/XBRL 主入口
 
 EdgarTools 已提供 Python SEC EDGAR filing 访问、XBRL financial facts、10-K/10-Q/8-K 等 typed objects、company facts、标准财表、文本/section 抽取、DataFrame 输出、缓存和 MCP/AI 集成。Kernel v3 不应继续从零维护所有 SEC filing primitive。
@@ -267,6 +272,44 @@ debug row offset 3 重新跑通时，单题消耗约 `448,778` tokens，全局 j
 scan，会影响 UbuntuHolo 稳定性，也会降低迭代效率。
 
 因此 `bench finance-progress` 已升级为正式的轻量监控入口：
+
+## 9. 2026-06-17 完整工具面板检查点
+
+后续工具链迭代不再只列 EdgarTools / Docling / OpenBB / LangGraph 四个名字。
+`kernel_v3/finance/tool_catalog.py` 现在给出完整金融做题工具面：
+
+- agent loop orchestration
+- LLM provider gateway
+- structured output schema
+- search discovery
+- network fetch / crawl / browser
+- SEC/EDGAR/XBRL
+- document/table conversion
+- market/macro/fundamental data
+- calculator/math/stats
+- table/dataframe/SQL
+- workspace/code execution
+- evidence/provenance/verification
+- memory/cache/storage
+- process observability
+- benchmark/evaluation
+
+`finance.toolchain.describe` 现在返回 `tool_surface`、
+`one_shot_tool_protocol` 和 `install_summary`。LLM 可以先调用这个 read-only
+工具，然后自己 one-shot 地选择下一步具体工具；host 只做 schema、权限、
+资源、journal、redaction、citation、numeric 和 gold isolation 验证。
+
+轻量核心开源组件已经安装到主 venv：EdgarTools、LangGraph、LiteLLM、
+Trafilatura、Polars、DuckDB、SymPy、OpenTelemetry、Pandas、Pydantic 和
+Rich。Full Docling 在 Linux 上会拉 Torch/CUDA 依赖，OpenBB 也属于重型
+市场 connector，因此两者保留 wrapper 和目录状态，但放入隔离安装/worker
+边界，避免破坏 UbuntuHolo 稳定性。
+
+详细记录见：
+
+```text
+docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md
+```
 
 ```bash
 .venv/bin/python -m kernel_v3.cli bench finance-progress \

@@ -1449,7 +1449,10 @@ def _tool_capabilities(
         "sec.edgar.company_filings": ("sec.edgar.company_filings", "finance", "Use EdgarTools to discover SEC issuer filings under host network policy."),
         "sec.edgar.financials": ("sec.edgar.financials", "finance", "Use EdgarTools SEC/XBRL financial statement candidates for model-owned fact binding."),
         "document.docling.convert": ("document.docling.convert", "retrieval", "Use Docling to convert URL documents and tables into structured text candidates."),
+        "document.trafilatura.extract": ("document.trafilatura.extract", "retrieval", "Use Trafilatura to extract readable text candidates from URL or HTML documents."),
         "market.openbb.fetch": ("market.openbb.fetch", "finance", "Use allowlisted OpenBB routes for external market and fundamental data."),
+        "data.table.query": ("data.table.query", "data", "Use DuckDB/Pandas for read-only SQL over model-provided evidence tables."),
+        "math.sympy.compute": ("math.sympy.compute", "data", "Use SymPy for model-proposed symbolic or high-precision math."),
     }
     for tool_name, manifest in manifests.items():
         capability_id, family, description = mappings.get(

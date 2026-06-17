@@ -120,6 +120,14 @@ SUPPORTED_FINANCE_METRICS = {
     "credit facility",
     "revolving credit agreement",
     "expected benefit payments",
+    "organic sales",
+    "organic growth",
+    "organic revenue growth",
+    "divestitures",
+    "translation",
+    "total sales change",
+    "percent change",
+    "percent of sales",
     "shareholders equity",
     "stockholders equity",
     "market cap",
@@ -164,6 +172,10 @@ HTML_TABLE_COLUMN_CELL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 HTML_TABLE_ROW_BOUNDARY_PATTERN = re.compile(r"\s+html_table_\d+_row_\d+:", re.IGNORECASE)
+HTML_TABLE_SEGMENT_HEADING_PATTERN = re.compile(
+    r"(?P<segment>[A-Z][A-Za-z&/ -]{2,90}?)\s+Business\s*\([^)]*consolidated\s+sales",
+    re.IGNORECASE,
+)
 AMOUNT_PATTERN = re.compile(
     r"(?P<prefix>[$€£¥])?\s*(?P<number>-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
     r"(?P<unit>%|bps|basis\s+points|basis\s+point|percentage\s+points|percentage\s+point|"
@@ -423,17 +435,41 @@ def _html_table_facts_from_text(text: str, *, item: EvidenceItem, citation: Cita
         value = _clean_html_table_fact_value(match.group("value"))
         if value is None or not metric or not _is_decimal(value):
             continue
+        start = max(0, match.start() - 240)
+        end = min(len(text), match.end() + 240)
+        context = text[start:end]
+        pre_context = text[start:match.start()]
+        scale = match.group("scale")
+        unit = None
+        percentage_fact = _html_table_fact_is_percentage(raw_metric, context=context)
+        if percentage_fact:
+            scale = "actual"
+            unit = "percent"
         values = {
             "metric": raw_metric,
             "concept": f"html_table_fact_{match.group('table_index')}_{match.group('row_index')}",
             "fy": match.group("fy"),
             "period": f"FY{match.group('fy')}",
             "value": value,
-            "scale": match.group("scale"),
+            "scale": scale,
         }
+        if unit:
+            values["unit"] = unit
         fact = _fact_from_values(values, item=item, citation=citation, metric=metric, value=value)
-        start = max(0, match.start() - 240)
-        end = min(len(text), match.end() + 240)
+        segment_name = _html_table_segment_name(pre_context)
+        metadata_extra: JsonObject = {}
+        if percentage_fact:
+            metadata_extra.update(
+                {
+                    "value_is_percentage": True,
+                    "display_unit": "percent",
+                    "scale_overridden_from": match.group("scale"),
+                    "unit_inferred_from_table_context": True,
+                }
+            )
+        if segment_name:
+            metadata_extra["segment_name"] = segment_name
+            metadata_extra["category_name"] = segment_name
         facts.append(
             replace(
                 fact,
@@ -449,10 +485,11 @@ def _html_table_facts_from_text(text: str, *, item: EvidenceItem, citation: Cita
                     **fact.metadata,
                     "source": "html_table_fact",
                     "raw": match.group(0),
-                    "context": text[start:end],
+                    "context": context,
                     "html_table_index": match.group("table_index"),
                     "html_table_row_index": match.group("row_index"),
                     "raw_metric": raw_metric,
+                    **metadata_extra,
                 },
             )
         )
@@ -507,6 +544,51 @@ def _clean_html_table_fact_value(value: str) -> str | None:
     if text in {"", "-", "—", "--"}:
         return None
     return text
+
+
+def _html_table_fact_is_percentage(raw_metric: str, *, context: str) -> bool:
+    metric = " ".join(str(raw_metric or "").lower().split())
+    if any(marker in metric for marker in ("percent", "margin", "rate", "yield", "ratio")):
+        return True
+    if metric not in {
+        "organic sales",
+        "organic growth",
+        "organic revenue",
+        "organic revenue growth",
+        "divestitures",
+        "divestiture",
+        "acquisitions",
+        "acquisition",
+        "translation",
+        "currency translation",
+        "total sales change",
+        "sales change",
+    }:
+        return False
+    normalized_context = " ".join(str(context or "").lower().split())
+    return any(
+        marker in normalized_context
+        for marker in (
+            "percent change",
+            "percent of sales",
+            "organic sales",
+            "total sales change",
+            "components of change",
+            "consolidated sales",
+        )
+    )
+
+
+def _html_table_segment_name(context: str) -> str | None:
+    matches = list(HTML_TABLE_SEGMENT_HEADING_PATTERN.finditer(str(context or "")))
+    if not matches:
+        return None
+    raw = matches[-1].group("segment")
+    value = " ".join(raw.replace("T able of Contents", "").replace("Table of Contents", "").split())
+    value = re.sub(r"^.*\bscale\s*=\s*[A-Za-z]+\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^(?:millions|million|billions|billion|thousands|thousand|actual)\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^\d+\s+", "", value).strip(" :-")
+    return value or None
 
 
 def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: CitationItem | None) -> list[FinanceFact]:

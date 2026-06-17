@@ -996,7 +996,7 @@ def test_phase61_network_budget_does_not_preempt_tool_observation_when_budget_re
         execution_metadata={
             "retrieval": {
                 "allow_network": True,
-                "max_network_fetches": 1,
+                "max_network_fetches": 12,
                 "max_fetches": 3,
                 "network_fetch_count": 3,
             }
@@ -1009,6 +1009,8 @@ def test_phase61_network_budget_does_not_preempt_tool_observation_when_budget_re
     assert observations[0].data["status"] == "ok"
     assert observations[1].data["content"]["reason"] == "max_network_fetches"
     assert journal.records(task_id=result.task_id, kind="guard")[-1].data["network_fetches"] == 1
+    assert journal.records(task_id=result.task_id, kind="guard")[-1].data["requested_network_fetches"] == 12
+    assert journal.records(task_id=result.task_id, kind="guard")[-1].data["projected_network_fetches"] == 13
     decision = journal.records(task_id=result.task_id, kind="termination_decision")[-1].data
     assert decision["decision"] == "failure_report"
     assert journal.records(task_id=result.task_id, kind="progress_assessment")

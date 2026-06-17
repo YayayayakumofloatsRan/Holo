@@ -16,6 +16,7 @@ from kernel_v3.agent.runtime import (
     _apply_recipe_profile_defaults,
     _benchmark_doc_retrieval_primary_citation_satisfies_required_source,
     _compiled_task_hint_for_retrieval,
+    _compact_agent_runtime_directive_for_prompt,
     _enforce_benchmark_doc_retrieval_binding,
     _augment_finance_modeling_retrieval_payload,
     _finance_fallback_fact_lines,
@@ -55,9 +56,13 @@ from kernel_v3.bench import convert_public_finance_benchmark, load_finance_bench
 from kernel_v3.context import ArtifactStore
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
+    DATA_TABLE_QUERY_TOOL_NAME,
+    DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+    DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     FinanceFact,
     FormulaTrace,
+    MATH_SYMPY_COMPUTE_TOOL_NAME,
     attach_target_binding_to_facts,
     build_finance_fact_ledger,
     compile_finance_task_program,
@@ -1741,11 +1746,15 @@ def test_toolchain_state_for_prompt_summarizes_tools_without_controlling_next_ac
     assert state["repeated_action_groups"][0]["tool"] == "calculator.compute"
     assert state["repeated_action_groups"][0]["attempt_count"] == 2
     assert state["repeated_action_groups"][0]["latest_observation_status"] == "ok"
-    assert state["toolchain_presence"] == {
-        "retrieval": True,
-        "calculator": True,
-        "finance_verify_numeric": False,
-    }
+    assert state["toolchain_presence"]["retrieval"] is True
+    assert state["toolchain_presence"]["calculator"] is True
+    assert state["toolchain_presence"]["finance_verify_numeric"] is False
+    assert state["toolchain_presence"]["finance_toolchain_describe"] is False
+    assert state["toolchain_presence"]["sec_edgar"] is False
+    assert state["toolchain_presence"]["document_extraction"] is False
+    assert state["toolchain_presence"]["table_query"] is False
+    assert state["toolchain_presence"]["sympy"] is False
+    assert state["toolchain_presence"]["market_data"] is False
     assert state["terminal_seen"] is True
     assert state["post_final_record_count"] == 1
     assert state["post_final_record_kind_counts"] == {"memory_proposal": 1}
@@ -3505,6 +3514,88 @@ def test_html_table_fact_lines_preserve_parenthesized_capex_values() -> None:
     assert "value=(1,749)" in text
     assert capex.value == "-1749000000"
     assert capex.scale == "millions"
+
+
+def test_html_table_fact_lines_normalize_segment_growth_percentages() -> None:
+    evidence = _finance_evidence(
+        evidence_id="segment-organic-growth",
+        uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+        title="3M 2022 10-K",
+        text=(
+            "Health Care Business (24.6% of consolidated sales): scale=millions "
+            "html_table_fact_19_4_2022: metric=Organic sales fy=2022 value=3.2 scale=millions "
+            "html_table_fact_19_5_2022: metric=Divestitures fy=2022 value=(1.4) scale=millions "
+            "html_table_fact_19_9_2022: metric=Percent change fy=2022 value=(10.9) scale=millions "
+            "Consumer Business (15.5% of consolidated sales): scale=millions "
+            "html_table_fact_20_4_2022: metric=Organic sales fy=2022 value=(0.9) scale=millions "
+            "html_table_fact_20_5_2022: metric=Divestitures fy=2022 value=(0.4) scale=millions "
+            "html_table_fact_20_9_2022: metric=Percent change fy=2022 value=(14.4) scale=millions"
+        ),
+    )
+    facts = build_finance_fact_ledger(
+        evidence=[evidence],
+        citations=[_finance_citation(evidence, citation_id="cite-segment-organic-growth")],
+    )
+
+    organic_facts = [
+        fact for fact in facts if fact.metric == "organic sales" and fact.metadata.get("segment_name") in {"Health Care", "Consumer"}
+    ]
+    by_segment = {str(fact.metadata.get("segment_name")): fact for fact in organic_facts}
+
+    assert by_segment["Health Care"].value == "3.2"
+    assert by_segment["Health Care"].unit == "percent"
+    assert by_segment["Health Care"].scale == "actual"
+    assert by_segment["Health Care"].metadata["value_is_percentage"] is True
+    assert by_segment["Health Care"].metadata["supported_metric"] is True
+    assert by_segment["Consumer"].value == "-0.9"
+    assert by_segment["Consumer"].unit == "percent"
+    assert by_segment["Consumer"].scale == "actual"
+
+
+def test_primary_source_binding_selects_segment_organic_growth_from_sec_archive() -> None:
+    question = "If we exclude the impact of M&A, which segment has dragged down 3M's overall growth in 2022?"
+    evidence = _finance_evidence(
+        evidence_id="segment-organic-growth-binding",
+        uri="https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/0000066740-23-000014.txt",
+        title="3M 2022 10-K",
+        text=(
+            "Consumer Business (15.5% of consolidated sales): scale=millions "
+            "html_table_fact_20_4_2022: metric=Organic sales fy=2022 value=(0.9) scale=millions "
+            "html_table_fact_20_5_2022: metric=Divestitures fy=2022 value=(0.4) scale=millions "
+            "html_table_fact_20_9_2022: metric=Percent change fy=2022 value=(14.4) scale=millions"
+        ),
+    )
+    facts = build_finance_fact_ledger(
+        evidence=[evidence],
+        citations=[_finance_citation(evidence, citation_id="cite-segment-organic-growth-binding")],
+    )
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_link": "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/0000066740-23-000014.pdf",
+            "doc_period": "2022",
+            "doc_type": "10k",
+            "primary_source_required": True,
+        },
+        question=question,
+    )
+    bound = attach_target_binding_to_facts(facts, binding, question=question)
+    resolution = primary_source_numeric_binding_resolution(bound, binding, question=question)
+    selected = {fact.fact_id: fact for fact in bound if fact.fact_id in set(resolution["selected_fact_ids"])}
+
+    assert binding["required_line_item"] == "segment organic growth"
+    assert resolution["status"] == "selected"
+    assert any(fact.metric == "organic sales" and fact.value == "-0.9" for fact in selected.values())
+    assert all(fact.metadata["target_document_binding_accepted"] for fact in selected.values())
+
+    verification = verify_finance_answer(
+        answer="Excluding M&A, Consumer dragged growth because organic sales declined by -0.9%.",
+        facts=bound,
+        question=question,
+        target_binding=binding,
+    )
+
+    assert verification.status == "passed"
 
 
 def test_html_table_fact_lines_extract_balance_sheet_ppe_and_assets() -> None:
@@ -6014,7 +6105,34 @@ def test_finance_fast_planner_directive_shows_composable_toolchain() -> None:
     assert "workspace.search" in tool_names
     assert "file.read" in tool_names
     assert "shell.exec" in tool_names
+    assert DATA_TABLE_QUERY_TOOL_NAME in tool_names
+    assert MATH_SYMPY_COMPUTE_TOOL_NAME in tool_names
     assert "shell.exec" not in directive["forbidden"]
+
+
+def test_finance_capability_planner_directive_preserves_full_open_tool_surface() -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    metadata["retrieval"] = {
+        **metadata["retrieval"],
+        "allow_network": True,
+        "max_network_fetches": 3,
+    }
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=metadata,
+    )
+
+    compact = _compact_agent_runtime_directive_for_prompt(_planner_directive(recipe))
+    tool_names = [item["name"] for item in compact["tool_selection"]]
+
+    assert compact["tool_selection_count"] >= len(tool_names)
+    assert DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME in tool_names
+    assert DATA_TABLE_QUERY_TOOL_NAME in tool_names
+    assert MATH_SYMPY_COMPUTE_TOOL_NAME in tool_names
+    install_summary = compact["toolchain_install_summary"]
+    assert "installed_components" in install_summary
+    assert "missing_components" in install_summary
+    assert install_summary["host_rule"].startswith("Prefer installed components")
 
 
 def test_finance_fast_model_planner_can_select_verify_numeric_tool() -> None:
@@ -8338,6 +8456,97 @@ def test_finance_capability_evaluator_does_not_block_on_planned_action_count() -
 
     assert feedback.status == "final_answer_ready"
     assert "remaining_plan_actions" not in feedback.missing_evidence
+
+
+def test_finance_capability_evaluator_replans_on_recoverable_toolchain_failure() -> None:
+    profile = execution_profile("finance-capability")
+    profile_metadata = execution_profile_runtime_metadata(profile)
+    profile_metadata["retrieval"] = {
+        **profile_metadata["retrieval"],
+        "allow_network": True,
+        "max_network_fetches": 3,
+    }
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "Retrieve a filing table and compute a finance ratio.",
+            "execution_metadata": profile_metadata,
+        },
+    )
+    evaluator = _RecipeEvaluator(recipe, journal=JournalStore.in_memory())
+    context = ContextBundle(
+        context_id="ctx-toolchain-replan",
+        thread_key="thread-1",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-toolchain-replan", "run_id": "run-1"},
+        token_budget=4096,
+    )
+    observation = Observation(
+        observation_id="obs-toolchain-replan",
+        run_id="run-1",
+        kind="docling_conversion",
+        status="failed",
+        source=f"tool:{DOCUMENT_DOCLING_CONVERT_TOOL_NAME}",
+        content={
+            "error": "dependency_missing",
+            "host_boundary": "tool did not run; no benchmark answer was inferred by host fallback",
+        },
+        observed_at_ms=1,
+        action_id="act-docling",
+        tool_call_id="tool-docling",
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "continue"
+    assert feedback.stop_reason is None
+    assert "tool_failed_replan" in feedback.missing_evidence
+    assert f"failed_tool:{DOCUMENT_DOCLING_CONVERT_TOOL_NAME}" in feedback.missing_evidence
+    assert "tool_error:dependency_missing" in feedback.missing_evidence
+
+
+def test_finance_capability_evaluator_does_not_replan_policy_blocked_tool() -> None:
+    profile = execution_profile("finance-capability")
+    profile_metadata = execution_profile_runtime_metadata(profile)
+    profile_metadata["retrieval"] = {
+        **profile_metadata["retrieval"],
+        "allow_network": True,
+        "max_network_fetches": 3,
+    }
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "Retrieve a filing table and compute a finance ratio.",
+            "execution_metadata": profile_metadata,
+        },
+    )
+    evaluator = _RecipeEvaluator(recipe, journal=JournalStore.in_memory())
+    context = ContextBundle(
+        context_id="ctx-toolchain-policy-block",
+        thread_key="thread-1",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-toolchain-policy-block", "run_id": "run-1"},
+        token_budget=4096,
+    )
+    observation = Observation(
+        observation_id="obs-toolchain-policy-block",
+        run_id="run-1",
+        kind="policy_block",
+        status="blocked",
+        source=f"tool:{DOCUMENT_DOCLING_CONVERT_TOOL_NAME}",
+        content={"reason": "policy_denied"},
+        observed_at_ms=1,
+        action_id="act-docling",
+        tool_call_id="tool-docling",
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "blocked"
+    assert feedback.stop_reason == "blocked"
+    assert feedback.missing_evidence == ["policy_block"]
 
 
 def test_finance_fact_ledger_ignores_press_release_time_and_exhibit_identifiers() -> None:

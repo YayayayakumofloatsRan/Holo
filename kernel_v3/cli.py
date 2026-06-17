@@ -747,9 +747,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     finance_progress.add_argument(
         "--format",
-        choices=["text", "json"],
+        choices=["text", "rich", "json"],
         default="text",
-        help="Render a human workflow snapshot or raw JSON.",
+        help="Render a human workflow snapshot, Rich console dashboard, or raw JSON.",
     )
     finance_progress.add_argument("--limit-events", type=int, default=24)
     finance_progress.add_argument(
@@ -929,7 +929,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if payload.get("status") not in {"failed", "blocked", "error"} else 1
     if args.command == "bench" and getattr(args, "bench_command", None) == "finance-progress":
         payload = _finance_progress_command_from_path(args)
-        raw_output = _render_finance_progress(payload) if getattr(args, "format", "text") == "text" else None
+        raw_output = payload.pop("_stdout", None)
+        if raw_output is None:
+            progress_format = getattr(args, "format", "text")
+            if progress_format == "rich":
+                raw_output = _render_finance_progress_rich(payload)
+            elif progress_format == "text":
+                raw_output = _render_finance_progress(payload)
         if isinstance(raw_output, str):
             print(raw_output)
         else:
@@ -2386,7 +2392,10 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         }
     if command == "finance-progress":
         payload = _finance_progress_command(args, journal)
-        if getattr(args, "format", "text") == "text":
+        progress_format = getattr(args, "format", "text")
+        if progress_format == "rich":
+            return {**payload, "_stdout": _render_finance_progress_rich(payload)}
+        if progress_format == "text":
             return {**payload, "_stdout": _render_finance_progress(payload)}
         return payload
     if command != "finance":
@@ -3835,8 +3844,276 @@ def _render_finance_progress(payload: JsonObject) -> str:
         for key in ("processor", "status", "error", "decision", "uri", "prompt_chars", "duration_ms", "count"):
             if event.get(key) is not None:
                 details.append(f"{key}={event.get(key)}")
-        lines.append(f"  {event.get('record_id')} {event.get('kind')} " + " ".join(details))
+            lines.append(f"  {event.get('record_id')} {event.get('kind')} " + " ".join(details))
     return "\n".join(lines)
+
+
+def _render_finance_progress_rich(payload: JsonObject) -> str:
+    try:
+        from rich.console import Console, Group
+        from rich.panel import Panel
+        from rich.table import Table
+    except Exception as exc:
+        fallback = _render_finance_progress(payload)
+        return fallback + f"\nrich_renderer=unavailable error={type(exc).__name__}: {exc}"
+    width = _console_width(default=120)
+    console = Console(record=True, width=width, color_system=None)
+    if payload.get("status") != "ok":
+        console.print(Panel(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2), title="Finance Progress"))
+        return console.export_text(styles=False).rstrip()
+
+    summary = Table.grid(expand=True)
+    summary.add_column(ratio=1)
+    summary.add_column(ratio=1)
+    summary.add_row(f"task: {payload.get('task_id')}", f"run: {payload.get('run_id')}")
+    summary.add_row(
+        f"current: {payload.get('current_stage') or '-'}",
+        f"records: {payload.get('record_count')}",
+    )
+    thread_ids = payload.get("thread_ids")
+    if isinstance(thread_ids, list) and thread_ids:
+        summary.add_row("threads: " + ", ".join(str(item) for item in thread_ids[:4]), "renderer: Rich")
+    tail_scan = payload.get("tail_scan") if isinstance(payload.get("tail_scan"), dict) else {}
+    if tail_scan:
+        summary.add_row(
+            "journal: "
+            + f"{tail_scan.get('journal') or '-'} bytes={tail_scan.get('journal_bytes') or 0}",
+            f"tail={tail_scan.get('tail_bytes') or 0} truncated={tail_scan.get('tail_truncated')}",
+        )
+
+    blocks: list[object] = [Panel(summary, title="Finance Workflow Progress", border_style="cyan")]
+    run_status = payload.get("run_status") if isinstance(payload.get("run_status"), dict) else {}
+    if run_status:
+        blocks.append(_rich_run_status_panel(run_status))
+    blocks.append(_rich_stage_table(payload))
+    diagnostics = _rich_diagnostics_table(payload)
+    if diagnostics is not None:
+        blocks.append(diagnostics)
+    blocks.append(_rich_counters_table(payload))
+    recent = _rich_recent_events_table(payload)
+    if recent is not None:
+        blocks.append(recent)
+    console.print(Group(*blocks))
+    return console.export_text(styles=False).rstrip()
+
+
+def _rich_run_status_panel(run_status: JsonObject) -> object:
+    from rich.panel import Panel
+    from rich.table import Table
+
+    files = run_status.get("files") if isinstance(run_status.get("files"), dict) else {}
+    table = Table(title=f"run_root: {run_status.get('run_root') or '-'}", expand=True)
+    table.add_column("component", no_wrap=True)
+    table.add_column("status")
+    table.add_column("details")
+    if files:
+        results = files.get("results_jsonl") if isinstance(files.get("results_jsonl"), dict) else {}
+        summary = files.get("summary_json") if isinstance(files.get("summary_json"), dict) else {}
+        summary_data = summary.get("summary") if isinstance(summary.get("summary"), dict) else {}
+        http_cache = files.get("http_cache") if isinstance(files.get("http_cache"), dict) else {}
+        worker_state = files.get("worker_state_root") if isinstance(files.get("worker_state_root"), dict) else {}
+        table.add_row(
+            "results",
+            str(results.get("exists")),
+            f"lines={results.get('line_count') or 0} bytes={results.get('size_bytes') or 0}",
+        )
+        table.add_row(
+            "summary",
+            str(summary.get("exists")),
+            " ".join(
+                [
+                    f"passed={_progress_display(summary_data.get('passed_count'))}",
+                    f"failed={_progress_display(summary_data.get('failed_count'))}",
+                    f"pass_rate={_progress_display(summary_data.get('pass_rate'))}",
+                    f"avg_tokens={_progress_display(summary_data.get('average_total_tokens'))}",
+                ]
+            ),
+        )
+        table.add_row(
+            "http_cache",
+            str(http_cache.get("exists")),
+            f"files={http_cache.get('file_count') or 0} bytes={http_cache.get('total_bytes') or 0}",
+        )
+        table.add_row(
+            "workers",
+            str(worker_state.get("exists")),
+            f"files={worker_state.get('file_count') or 0} bytes={worker_state.get('total_bytes') or 0}",
+        )
+    processes = run_status.get("processes") if isinstance(run_status.get("processes"), list) else []
+    for process in processes[:6]:
+        if not isinstance(process, dict):
+            continue
+        table.add_row(
+            f"pid {process.get('pid')}",
+            str(process.get("state") or "-"),
+            f"rss_kb={process.get('rss_kb') or '-'} cmd={process.get('cmd') or '-'}",
+        )
+    if not files and not processes:
+        table.add_row("run_root", str(run_status.get("exists")), "no run files or matching bench process")
+    return Panel(table, title="Run Root / Process", border_style="blue")
+
+
+def _rich_stage_table(payload: JsonObject) -> object:
+    from rich.panel import Panel
+    from rich.table import Table
+
+    table = Table(expand=True)
+    table.add_column("state", no_wrap=True)
+    table.add_column("stage")
+    table.add_column("count", justify="right")
+    table.add_column("latest")
+    table.add_column("processor")
+    table.add_column("prompt", justify="right")
+    for stage in payload.get("stages", []):
+        if not isinstance(stage, dict):
+            continue
+        status = str(stage.get("status") or "pending")
+        marker = {"done": "ok", "current": "now", "pending": ".."}.get(status, status)
+        latest = stage.get("latest") if isinstance(stage.get("latest"), dict) else {}
+        latest_label = "-"
+        if latest:
+            latest_label = f"{latest.get('kind')}#{latest.get('record_id')}"
+            if latest.get("status"):
+                latest_label += f" {latest.get('status')}"
+        table.add_row(
+            marker,
+            str(stage.get("label") or "-"),
+            str(stage.get("count") or 0),
+            latest_label,
+            str(latest.get("processor") or "-") if latest else "-",
+            str(latest.get("prompt_chars") or "-") if latest else "-",
+        )
+    return Panel(table, title="Agent Loop Stages", border_style="green")
+
+
+def _rich_diagnostics_table(payload: JsonObject) -> object | None:
+    from rich.panel import Panel
+    from rich.table import Table
+
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    if not diagnostics:
+        return None
+    table = Table(expand=True)
+    table.add_column("area", no_wrap=True)
+    table.add_column("details")
+    reader = diagnostics.get("document_reader") if isinstance(diagnostics.get("document_reader"), dict) else {}
+    if reader:
+        latest_reader = reader.get("latest") if isinstance(reader.get("latest"), dict) else {}
+        table.add_row(
+            "reader",
+            " ".join(
+                [
+                    f"target_spans={reader.get('target_span_count') or 0}",
+                    f"parsers={_compact_progress_dict_counts(reader.get('parser_counts'))}",
+                    f"latest={latest_reader.get('parser_used') or '-'}",
+                    f"chars={latest_reader.get('chars_extracted') or '-'}",
+                    f"pages={latest_reader.get('pages_extracted') or '-'}",
+                ]
+            ),
+        )
+    slot_frame = diagnostics.get("slot_frame") if isinstance(diagnostics.get("slot_frame"), dict) else {}
+    if slot_frame:
+        table.add_row(
+            "slots",
+            f"task_type={slot_frame.get('task_type') or '-'} missing={_compact_progress_list(slot_frame.get('missing_slots'))}",
+        )
+    formula_plan = diagnostics.get("formula_plan") if isinstance(diagnostics.get("formula_plan"), dict) else {}
+    if formula_plan:
+        table.add_row(
+            "formula",
+            " ".join(
+                [
+                    f"status={formula_plan.get('status') or '-'}",
+                    f"name={formula_plan.get('formula_name') or '-'}",
+                    f"missing={_compact_progress_list(formula_plan.get('missing_facts'))}",
+                ]
+            ),
+        )
+    facts = diagnostics.get("fact_ledger") if isinstance(diagnostics.get("fact_ledger"), dict) else {}
+    if facts:
+        table.add_row(
+            "facts",
+            f"count={facts.get('fact_count') or 0} metrics={_compact_progress_counts(facts.get('top_metrics'))} sources={_compact_progress_counts(facts.get('top_sources'))}",
+        )
+    workbench = diagnostics.get("workbench") if isinstance(diagnostics.get("workbench"), dict) else {}
+    if workbench:
+        table.add_row(
+            "workbench",
+            " ".join(
+                [
+                    f"decision={workbench.get('decision') or '-'}",
+                    f"missing={_compact_progress_list(workbench.get('missing_slots'))}",
+                    f"next_queries={_compact_progress_list(workbench.get('next_queries'))}",
+                ]
+            ),
+        )
+    benchmark = diagnostics.get("benchmark") if isinstance(diagnostics.get("benchmark"), dict) else {}
+    if benchmark and (benchmark.get("status") or benchmark.get("reason")):
+        table.add_row("benchmark", f"status={benchmark.get('status') or '-'} reason={benchmark.get('reason') or '-'}")
+    return Panel(table, title="Diagnostics", border_style="magenta")
+
+
+def _rich_counters_table(payload: JsonObject) -> object:
+    from rich.panel import Panel
+    from rich.table import Table
+
+    counters = payload.get("counters") if isinstance(payload.get("counters"), dict) else {}
+    keys = (
+        "processor_calls",
+        "processor_errors",
+        "retrieval_reports",
+        "fetch_attempts",
+        "extractions",
+        "workbench_decisions",
+        "claim_ledgers",
+        "slot_frames",
+        "transform_plans",
+        "calculator_results",
+        "verifier_gates",
+        "synthesis_gates",
+        "toolchain_steps",
+    )
+    table = Table(expand=True)
+    table.add_column("metric")
+    table.add_column("value", justify="right")
+    table.add_column("metric")
+    table.add_column("value", justify="right")
+    rows = [(key, counters.get(key)) for key in keys]
+    for index in range(0, len(rows), 2):
+        left = rows[index]
+        right = rows[index + 1] if index + 1 < len(rows) else ("", "")
+        table.add_row(left[0], _progress_display(left[1], "0"), right[0], _progress_display(right[1], ""))
+    return Panel(table, title="Counters", border_style="yellow")
+
+
+def _rich_recent_events_table(payload: JsonObject) -> object | None:
+    from rich.panel import Panel
+    from rich.table import Table
+
+    events = payload.get("recent_events")
+    if not isinstance(events, list) or not events:
+        return None
+    table = Table(expand=True)
+    table.add_column("record")
+    table.add_column("kind")
+    table.add_column("details")
+    for event in events[:12]:
+        if not isinstance(event, dict):
+            continue
+        details = []
+        for key in ("processor", "status", "error", "decision", "uri", "prompt_chars", "duration_ms", "count"):
+            if event.get(key) is not None:
+                details.append(f"{key}={event.get(key)}")
+        table.add_row(str(event.get("record_id") or "-"), str(event.get("kind") or "-"), " ".join(details) or "-")
+    return Panel(table, title="Recent Events", border_style="white")
+
+
+def _console_width(*, default: int) -> int:
+    try:
+        value = int(os.environ.get("COLUMNS") or default)
+    except (TypeError, ValueError):
+        return default
+    return max(80, min(value, 160))
 
 
 def _compact_progress_list(value: object, *, limit: int = 4) -> str:

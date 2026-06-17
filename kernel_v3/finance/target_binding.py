@@ -334,6 +334,17 @@ def _metric_matches(fact: FinanceFact, *, binding: JsonObject, question: str) ->
         return metric in {"revenue", "revenues", "net sales", "net revenues"}
     if line_item == "net income":
         return metric == "net income"
+    if line_item in {"segment organic growth", "segment organic growth rates", "segment organic sales"}:
+        return metric in {
+            "organic sales",
+            "organic growth",
+            "organic revenue growth",
+            "divestitures",
+            "translation",
+            "total sales change",
+            "percent change",
+            "percent of sales",
+        } or any(marker in metric_text for marker in ("organic sales", "organic growth", "percent change", "percent of sales"))
     return bool(metric and metric in text.lower())
 
 
@@ -394,6 +405,20 @@ def _required_line_item(text: str) -> str | None:
         return "property plant and equipment net"
     if any(marker in normalized for marker in ("net income", "net earnings")):
         return "net income"
+    if "segment" in normalized and (
+        "organic" in normalized
+        or "exclude the impact of m&a" in normalized
+        or "excluding the impact of m&a" in normalized
+        or "excluding m&a" in normalized
+        or "exclude m&a" in normalized
+        or "exclude the impact of m and a" in normalized
+        or "excluding the impact of m and a" in normalized
+        or "excluding m and a" in normalized
+        or "exclude m and a" in normalized
+        or "excluding acquisitions" in normalized
+        or "exclude acquisitions" in normalized
+    ):
+        return "segment organic growth"
     if "sales and other operating revenues" in normalized:
         return "sales and other operating revenues"
     if "total revenues and other income" in normalized:

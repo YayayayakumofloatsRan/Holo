@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import math
 
-from kernel_v3.agent.runtime import task_recipe
+from kernel_v3.agent.runtime import AgentRuntime, task_recipe
 from kernel_v3.contracts import CandidateAction
 from kernel_v3.finance import (
+    DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+    DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES,
+    FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES,
     FINANCE_OPEN_COMPONENT_TOOL_NAMES,
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
+    finance_one_shot_tool_protocol,
+    finance_tool_surface_catalog,
     MARKET_OPENBB_FETCH_TOOL_NAME,
+    MATH_SYMPY_COMPUTE_TOOL_NAME,
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
     register_finance_tools,
@@ -31,11 +37,16 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
     for tool_name in FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES:
         assert manifests[tool_name].side_effect_class == "network"
         assert manifests[tool_name].permissions_required == ["network:fetch"]
+    for tool_name in FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES:
+        assert manifests[tool_name].side_effect_class == "read"
+        assert manifests[tool_name].permissions_required == []
 
 
 def test_finance_toolchain_describe_reports_component_install_status(monkeypatch) -> None:
+    installed = {"edgar", "trafilatura", "duckdb", "sympy"}
+
     def fake_find_spec(import_name: str):
-        return object() if import_name == "edgar" else None
+        return object() if import_name in installed else None
 
     monkeypatch.setattr(open_components.importlib.util, "find_spec", fake_find_spec)
     registry = register_finance_tools(ToolRegistry.with_builtin_respond())
@@ -63,8 +74,59 @@ def test_finance_toolchain_describe_reports_component_install_status(monkeypatch
     components = {item["component"]: item for item in observation.content["components"]}
     assert components["edgartools"]["installed"] is True
     assert components["docling"]["installed"] is False
+    assert components["trafilatura"]["installed"] is True
+    assert components["duckdb"]["installed"] is True
+    assert components["sympy"]["installed"] is True
     assert components["openbb"]["install_hint"] == "pip install openbb"
     assert observation.content["host_boundary"].startswith("Mature components supply")
+    assert observation.content["one_shot_tool_protocol"]["decision_owner"] == "model"
+    assert observation.content["tool_surface_schema"] == "holo.kernel_v3.finance_tool_surface.v1"
+    family_ids = {item["family_id"] for item in observation.content["tool_surface"]}
+    assert "calculator_math_stats" in family_ids
+    assert "search_discovery" in family_ids
+    assert "sec_edgar_xbrl" in family_ids
+    assert "document_table_conversion" in family_ids
+    assert "market_macro_fundamental_data" in family_ids
+    assert "process_observability_visualization" in family_ids
+
+
+def test_finance_tool_surface_catalog_covers_required_one_shot_tool_families() -> None:
+    catalog = finance_tool_surface_catalog()
+    family_ids = {item["family_id"] for item in catalog}
+
+    assert {
+        "agent_loop_orchestration",
+        "llm_provider_gateway",
+        "structured_output_schema",
+        "search_discovery",
+        "network_fetch_crawl_browser",
+        "sec_edgar_xbrl",
+        "document_table_conversion",
+        "market_macro_fundamental_data",
+        "calculator_math_stats",
+        "table_dataframe_query",
+        "workspace_code_execution",
+        "evidence_provenance_verification",
+        "memory_cache_storage",
+        "process_observability_visualization",
+        "benchmark_evaluation",
+    }.issubset(family_ids)
+    for family in catalog:
+        assert family["one_shot_contract"]["planner_action_kind"] == "tool"
+        assert family["one_shot_contract"]["model_decides"] is True
+        assert family["one_shot_contract"]["host_validates"] is True
+        assert family["holo_tools"]
+        assert family["mature_components"]
+
+
+def test_finance_one_shot_tool_protocol_keeps_model_as_decision_owner() -> None:
+    protocol = finance_one_shot_tool_protocol()
+
+    assert protocol["decision_owner"] == "model"
+    assert protocol["call_shape"]["kind"] == "tool"
+    assert "payload" in protocol["call_shape"]
+    assert "which tool or source family is most relevant" in protocol["model_must_decide"]
+    assert "gold/reference isolation" in protocol["host_must_enforce"]
 
 
 def test_docling_tool_reports_missing_dependency_without_host_fallback(monkeypatch) -> None:
@@ -135,6 +197,172 @@ def test_openbb_tool_blocks_unallowlisted_routes_before_component_import(monkeyp
     assert "equity.price.historical" in observation.content["allowed_routes"]
 
 
+def test_trafilatura_tool_extracts_provided_html_without_fetch() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-trafilatura-html",
+        kind="tool",
+        name=DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
+        description="extract html",
+        score=0.9,
+        payload={
+            "html": "<html><body><article><h1>Inventory disclosure</h1><p>Cost of sales was $10 million.</p></article></body></html>",
+            "max_chars": 2000,
+        },
+        reasons=["need readable text"],
+        side_effect_class="network",
+    )
+    decision = PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}).validate(
+        run_id="run-trafilatura-html",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "trafilatura_extract"
+    assert observation.content["component"] == "trafilatura"
+    assert observation.content["fetched"] is False
+    assert "Cost of sales" in observation.content["text"]
+
+
+def test_data_table_query_runs_readonly_duckdb_over_rows() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-table-query",
+        kind="tool",
+        name=DATA_TABLE_QUERY_TOOL_NAME,
+        description="query evidence table",
+        score=0.9,
+        payload={
+            "rows": [
+                {"company": "HD", "dio": 76.34},
+                {"company": "LOW", "dio": 112.20},
+            ],
+            "sql": "select company, dio from evidence order by dio asc",
+            "limit": 2,
+        },
+        reasons=["rank inventory efficiency"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-table-query",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "data_table_query"
+    assert observation.content["records"][0]["company"] == "HD"
+    assert observation.content["records"][0]["dio"] == 76.34
+
+
+def test_data_table_query_blocks_write_sql() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-table-query-block",
+        kind="tool",
+        name=DATA_TABLE_QUERY_TOOL_NAME,
+        description="bad sql",
+        score=0.9,
+        payload={"rows": [{"a": 1}], "sql": "drop table evidence"},
+        reasons=["boundary test"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-table-query-block",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "blocked"
+    assert observation.content["error"] == "unsafe_or_unsupported_sql"
+
+
+def test_data_table_query_blocks_duckdb_external_reads() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-table-query-external-read-block",
+        kind="tool",
+        name=DATA_TABLE_QUERY_TOOL_NAME,
+        description="bad sql external read",
+        score=0.9,
+        payload={"rows": [{"a": 1}], "sql": "select * from read_csv_auto('/etc/passwd')"},
+        reasons=["boundary test"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-table-query-external-read-block",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "blocked"
+    assert observation.content["error"] == "unsafe_or_unsupported_sql"
+
+
+def test_sympy_tool_evaluates_model_proposed_expression() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-sympy",
+        kind="tool",
+        name=MATH_SYMPY_COMPUTE_TOOL_NAME,
+        description="symbolic compute",
+        score=0.9,
+        payload={"expression": "(x + x) / y", "variables": {"x": 3, "y": 2}, "operation": "simplify"},
+        reasons=["need exact expression"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-sympy",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "sympy_compute"
+    assert observation.content["result"] == "3"
+
+
+def test_sympy_tool_blocks_unsafe_variable_substitution() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-sympy-unsafe",
+        kind="tool",
+        name=MATH_SYMPY_COMPUTE_TOOL_NAME,
+        description="unsafe symbolic compute",
+        score=0.9,
+        payload={"expression": "x + 1", "variables": {"x": "__import__('os').system('id')"}},
+        reasons=["boundary test"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-sympy-unsafe",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "blocked"
+    assert observation.content["error"] == "unsafe_or_empty_expression"
+
+
 def test_edgartools_environment_defaults_to_tmp_cache(monkeypatch, tmp_path) -> None:
     cache_root = tmp_path / "edgar-cache"
     monkeypatch.setenv("HOLO_EDGAR_CACHE_ROOT", str(cache_root))
@@ -192,10 +420,39 @@ def test_finance_retrieval_recipe_exposes_mature_component_tools_only_with_netwo
     )
 
     assert FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in offline_recipe.allowed_tools
+    for tool_name in FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES:
+        assert tool_name in offline_recipe.allowed_tools
     assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME not in offline_recipe.allowed_tools
     assert SEC_EDGAR_FINANCIALS_TOOL_NAME not in offline_recipe.allowed_tools
     assert DOCUMENT_DOCLING_CONVERT_TOOL_NAME not in offline_recipe.allowed_tools
+    assert DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME not in offline_recipe.allowed_tools
     assert MARKET_OPENBB_FETCH_TOOL_NAME not in offline_recipe.allowed_tools
     for tool_name in FINANCE_OPEN_COMPONENT_TOOL_NAMES:
         assert tool_name in live_recipe.allowed_tools
     assert "network:fetch" in live_recipe.metadata["allowed_permissions"]
+
+
+def test_finance_research_profile_exposes_tool_surface_without_numeric_verifier(tmp_path) -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "execution_metadata": {
+                "retrieval": {
+                    "allow_network": True,
+                    "max_network_fetches": 3,
+                    "metadata": {"research_profile": "finance_fundamentals"},
+                }
+            }
+        },
+    )
+
+    assert FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in recipe.allowed_tools
+    assert DATA_TABLE_QUERY_TOOL_NAME in recipe.allowed_tools
+    assert MATH_SYMPY_COMPUTE_TOOL_NAME in recipe.allowed_tools
+    assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME in recipe.allowed_tools
+    assert DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME in recipe.allowed_tools
+    runtime = AgentRuntime(workspace_root=tmp_path)
+    manifests = {manifest.name for manifest in runtime._registry(recipe, "Explain a finance disclosure.").manifests()}
+    assert FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in manifests
+    assert DATA_TABLE_QUERY_TOOL_NAME in manifests
+    assert MATH_SYMPY_COMPUTE_TOOL_NAME in manifests

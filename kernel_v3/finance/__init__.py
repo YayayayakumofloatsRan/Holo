@@ -9,11 +9,15 @@ from kernel_v3.finance.fact_ledger import build_finance_fact_ledger
 from kernel_v3.finance.formula_planner import FinanceFormulaPlan, plan_finance_formula
 from kernel_v3.finance.numeric_verifier import finance_numeric_repair_guidance, verify_finance_answer
 from kernel_v3.finance.open_components import (
+    DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+    DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES,
+    FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES,
     FINANCE_OPEN_COMPONENT_TOOL_NAMES,
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     MARKET_OPENBB_FETCH_TOOL_NAME,
+    MATH_SYMPY_COMPUTE_TOOL_NAME,
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
     register_finance_open_component_tools,
@@ -32,6 +36,12 @@ from kernel_v3.finance.target_binding import (
     primary_source_numeric_binding_resolution,
     target_document_binding_from_metadata,
 )
+from kernel_v3.finance.tool_catalog import (
+    FINANCE_TOOL_SURFACE_SCHEMA,
+    finance_one_shot_tool_protocol,
+    finance_tool_surface_catalog,
+    finance_toolchain_install_summary,
+)
 from kernel_v3.tools import ToolRegistry
 
 
@@ -46,12 +56,17 @@ __all__ = [
     "FormulaTrace",
     "NumericVerification",
     "CALCULATOR_TOOL_NAME",
+    "DATA_TABLE_QUERY_TOOL_NAME",
     "DOCUMENT_DOCLING_CONVERT_TOOL_NAME",
+    "DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME",
     "FINANCE_VERIFY_NUMERIC_TOOL_NAME",
     "FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES",
+    "FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES",
     "FINANCE_OPEN_COMPONENT_TOOL_NAMES",
     "FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME",
+    "FINANCE_TOOL_SURFACE_SCHEMA",
     "MARKET_OPENBB_FETCH_TOOL_NAME",
+    "MATH_SYMPY_COMPUTE_TOOL_NAME",
     "SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME",
     "SEC_EDGAR_FINANCIALS_TOOL_NAME",
     "build_finance_fact_ledger",
@@ -63,6 +78,9 @@ __all__ = [
     "finance_formula_plan_to_transform_plan",
     "finance_slot_frame",
     "finance_verification_to_gate_result",
+    "finance_one_shot_tool_protocol",
+    "finance_tool_surface_catalog",
+    "finance_toolchain_install_summary",
     "finance_numeric_repair_guidance",
     "attach_target_binding_to_facts",
     "filter_facts_for_target_binding",

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler
 from kernel_v3.context.budgeter import measure_units
-from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation
+from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation, ToolManifest
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.policy import PolicyGate
@@ -88,8 +88,14 @@ def test_context_bundle_state_carries_full_context_pack_sections_to_planner_and_
     assert planner_state["source_refs"] == ["ledger-1"]
     assert planner_state["redactions"] == []
     assert planner_state["budget"]["within_budget"] is True
-    assert evaluator_state["sections"] == planner_state["sections"]
-    assert evaluator_state["context_pack_hash"] == planner_state["context_pack_hash"]
+    assert [section["name"] for section in evaluator_state["sections"]] == section_names
+    evaluator_observations = next(
+        section["records"]
+        for section in evaluator_state["sections"]
+        if section["name"] == "recent_observations"
+    )
+    assert evaluator_observations[0]["content"]["text"] == "I can operate through the kernel."
+    assert evaluator_state["context_pack_hash"] != planner_state["context_pack_hash"]
 
 
 def test_policy_blocks_disabled_network_fetch_even_with_network_permission():
@@ -360,6 +366,74 @@ def test_loop_max_network_fetches_guard_stops_network_action_before_execution():
     assert registry.executed_actions == []
     assert observation.data["status"] == "blocked"
     assert observation.data["content"]["reason"] == "max_network_fetches"
+
+
+def test_loop_max_network_fetches_guard_blocks_projected_budget_overrun_before_execution():
+    action = CandidateAction(
+        action_id="act-network-overrun",
+        kind="tool",
+        name="network.expensive",
+        description="network action whose declared cost exceeds remaining budget",
+        score=1.0,
+        payload={"max_fetches": 2},
+        reasons=[],
+        side_effect_class="network",
+    )
+    registry = ToolRegistry()
+    registry.register(
+        "network.expensive",
+        lambda candidate: Observation(
+            observation_id=f"obs-{candidate.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source="tool:network.expensive",
+            content={"max_fetches": candidate.payload["max_fetches"]},
+            observed_at_ms=0,
+            action_id=candidate.action_id,
+            tool_call_id=None,
+        ),
+        manifest=ToolManifest(
+            name="network.expensive",
+            version="1",
+            resource_kind="network",
+            operator_kind="expensive",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="network.expensive",
+            input_schema={
+                "max_fetches": {"type": "int", "required": True, "min": 1, "max": 10},
+                "network_fetch_cost_field": "max_fetches",
+                "default_network_fetch_cost": 1,
+            },
+        ),
+    )
+    journal = JournalStore.in_memory()
+    loop = LoopControllerV3(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=FakePlanner([action]),
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=registry,
+        evaluator=FakeEvaluator(
+            [{"status": "continue", "stop_reason": None, "answer": None, "missing_evidence": ["network"]}]
+        ),
+        max_network_fetches=1,
+    )
+
+    result = loop.run("fetch too much")
+
+    observation = journal.records(task_id=result.task_id, kind="observation")[0]
+    guard = journal.records(task_id=result.task_id, kind="guard")[0]
+    assert result.status == "step_limit_exceeded"
+    assert result.stop_reason == "max_network_fetches"
+    assert registry.executed_actions == []
+    assert observation.data["status"] == "blocked"
+    assert observation.data["content"]["reason"] == "max_network_fetches"
+    assert guard.data["requested_network_fetches"] == 2
+    assert guard.data["projected_network_fetches"] == 2
+    assert guard.data["max_network_fetches"] == 1
 
 
 def test_loop_max_total_artifact_bytes_guard_stops_after_oversized_artifact_is_recorded():

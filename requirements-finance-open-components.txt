@@ -1,15 +1,36 @@
-# Optional mature finance components for Kernel v3.
+# Mature finance components for Kernel v3.
 #
 # These dependencies are not required for unit tests. They make the host-policy
-# bound open-component tools in kernel_v3/finance/open_components.py executable.
+# bound open-component tools and finance tool surface in kernel_v3/finance executable.
 #
-# First enabled component, smoke-tested on 2026-06-17:
+# Active components already observed in the local venv on 2026-06-17:
 # - sec.edgar.company_filings
 # - sec.edgar.financials
 edgartools==5.36.0
+pandas==3.0.3
+pydantic==2.13.4
+rich==15.0.0
 
-# Planned next components are intentionally not installed by default here until
-# their tool wrappers have matching live smoke evidence and resource bounds.
-# langgraph
-# docling
-# openbb
+# Core mature components selected for the finance tool surface.
+# These are exposed through host policy boundaries; the model decides when to use
+# them and Holo validates provenance, budget, citations, and gold isolation.
+langgraph==1.2.5
+litellm==1.89.1
+trafilatura==2.1.0
+polars==1.41.2
+duckdb==1.5.3
+sympy==1.14.0
+opentelemetry-api==1.42.1
+opentelemetry-sdk==1.42.1
+
+# Heavy/optional components are cataloged but not installed by this core file.
+# Install in an isolated env/container when document AI, browser/crawler, full
+# market connector, or external trace export is needed. The full docling package
+# currently pulls Torch/CUDA dependencies on Linux, so it must not be installed
+# directly into the main UbuntuHolo venv.
+# docling==2.102.2
+# openbb==4.7.2
+# playwright
+# crawl4ai
+# langfuse
+# arize-phoenix

@@ -36,8 +36,11 @@ from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback,
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
+    DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+    DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES,
+    FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES,
     FINANCE_OPEN_COMPONENT_TOOL_NAMES,
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
@@ -45,6 +48,7 @@ from kernel_v3.finance import (
     FinanceFormulaPlan,
     FormulaTrace,
     MARKET_OPENBB_FETCH_TOOL_NAME,
+    MATH_SYMPY_COMPUTE_TOOL_NAME,
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
     attach_target_binding_to_facts,
@@ -54,6 +58,7 @@ from kernel_v3.finance import (
     compute_formula,
     finance_facts_to_claims,
     finance_formula_plan_to_transform_plan,
+    finance_toolchain_install_summary,
     finance_numeric_repair_guidance,
     finance_slot_frame,
     finance_verification_to_gate_result,
@@ -660,7 +665,7 @@ class AgentRuntime:
                 journal=self.journal,
                 artifact_store=self.artifact_store,
             )
-            if CALCULATOR_TOOL_NAME in recipe.allowed_tools or FINANCE_VERIFY_NUMERIC_TOOL_NAME in recipe.allowed_tools:
+            if _finance_tools_needed(recipe):
                 register_finance_tools(registry)
             return self._with_memory_tools(registry)
         if recipe.mode in {"workspace_answer", "workspace_write"}:
@@ -3939,6 +3944,18 @@ def _toolchain_state_for_prompt(journal: JournalStore, *, task_id: str, run_id: 
             "retrieval": bool(source_counts.get("tool:retrieval.run")),
             "calculator": bool(source_counts.get(f"tool:{CALCULATOR_TOOL_NAME}")),
             "finance_verify_numeric": bool(source_counts.get(f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}")),
+            "finance_toolchain_describe": bool(source_counts.get(f"tool:{FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME}")),
+            "sec_edgar": bool(
+                source_counts.get(f"tool:{SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME}")
+                or source_counts.get(f"tool:{SEC_EDGAR_FINANCIALS_TOOL_NAME}")
+            ),
+            "document_extraction": bool(
+                source_counts.get(f"tool:{DOCUMENT_DOCLING_CONVERT_TOOL_NAME}")
+                or source_counts.get(f"tool:{DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME}")
+            ),
+            "table_query": bool(source_counts.get(f"tool:{DATA_TABLE_QUERY_TOOL_NAME}")),
+            "sympy": bool(source_counts.get(f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}")),
+            "market_data": bool(source_counts.get(f"tool:{MARKET_OPENBB_FETCH_TOOL_NAME}")),
         },
         "terminal_seen": terminal_index is not None,
         "post_final_record_count": len(post_final_records),
@@ -5727,6 +5744,56 @@ class _RecipePlanner:
         )
 
 
+_RECOVERABLE_TOOLCHAIN_ERRORS = {
+    "component_call_failed",
+    "dependency_missing",
+    "edgar_identity_missing",
+    "missing_source",
+    "missing_source_or_html",
+    "missing_table_data",
+    "route_not_allowlisted",
+    "tool_execution_failed",
+    "unsafe_or_empty_expression",
+    "unsafe_or_unsupported_sql",
+    "unsupported_output_format",
+    "unsupported_source",
+}
+
+
+def _tool_failure_can_replan(observation: Observation, recipe: TaskRecipe) -> bool:
+    if recipe.mode != "retrieval_answer":
+        return False
+    if observation.status not in {"blocked", "failed", "not_implemented"}:
+        return False
+    if observation.kind == "policy_block":
+        return False
+    source = str(observation.source or "")
+    if not source.startswith("tool:"):
+        return False
+    tool_name = source.removeprefix("tool:")
+    if tool_name not in FINANCE_OPEN_COMPONENT_TOOL_NAMES:
+        return False
+    if tool_name not in set(recipe.allowed_tools):
+        return False
+    if not _metadata_requests_finance_toolchain(recipe.metadata):
+        return False
+    content = observation.content if isinstance(observation.content, dict) else {}
+    reason = str(content.get("error") or content.get("reason") or observation.status)
+    return reason in _RECOVERABLE_TOOLCHAIN_ERRORS
+
+
+def _tool_failure_replan_missing_evidence(observation: Observation) -> list[str]:
+    content = observation.content if isinstance(observation.content, dict) else {}
+    tool_name = str(observation.source or "").removeprefix("tool:")
+    reason = str(content.get("error") or content.get("reason") or observation.status)
+    items = ["tool_failed_replan"]
+    if tool_name:
+        items.append(f"failed_tool:{tool_name}")
+    if reason:
+        items.append(f"tool_error:{reason}")
+    return items
+
+
 class _RecipeEvaluator:
     def __init__(
         self,
@@ -5756,6 +5823,15 @@ class _RecipeEvaluator:
             reason = content.get("reason")
             reason = reason if isinstance(reason, str) and reason else "loop_guard"
             return _feedback(run_id, self.calls, "step_limit_exceeded", reason, None, [reason])
+        if _tool_failure_can_replan(observation, self.recipe):
+            return _feedback(
+                run_id,
+                self.calls,
+                "continue",
+                None,
+                None,
+                _tool_failure_replan_missing_evidence(observation),
+            )
         if observation.status == "blocked":
             return _feedback(run_id, self.calls, "blocked", "blocked", None, ["policy_block"])
         if (
@@ -6510,10 +6586,13 @@ def task_recipe(
         if max_network_fetches > 0:
             recipe_metadata = _with_allowed_permission(recipe_metadata, "network:fetch")
         allowed_tools = ["retrieval.run"]
+        finance_toolchain = _metadata_requests_finance_toolchain(recipe_metadata)
         if _metadata_requires_finance_numeric_verifier(recipe_metadata):
             allowed_tools.append(CALCULATOR_TOOL_NAME)
             allowed_tools.append(FINANCE_VERIFY_NUMERIC_TOOL_NAME)
+        if finance_toolchain:
             allowed_tools.append(FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME)
+            allowed_tools.extend(FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES)
             if max_network_fetches > 0:
                 allowed_tools.extend(FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES)
         toolchain = _composable_toolchain_config(recipe_metadata)
@@ -7287,8 +7366,16 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "kind": "tool",
                     "name": FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
                     "side_effect_class": "read",
-                    "use_when": "the model needs to inspect which mature finance components are installed and callable before choosing a data path",
+                    "use_when": (
+                        "inspect the complete finance tool surface before choosing a data path: search, fetch, "
+                        "SEC/EDGAR, document/table conversion, market data, calculator, dataframe/SQL, memory, "
+                        "observability, and verifier tools"
+                    ),
                     "payload_requirements": [],
+                    "one_shot_followup": (
+                        "After this returns, choose the next tool yourself and emit one planner.propose JSON action "
+                        "with name, payload, reasons, and side_effect_class."
+                    ),
                 }
             )
         if SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME in recipe.allowed_tools:
@@ -7324,6 +7411,17 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "host_boundary": "uses Docling under network:fetch policy; local files must go through workspace tools",
                 }
             )
+        if DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
+                    "side_effect_class": "network",
+                    "use_when": "a webpage or filing HTML needs robust main-text extraction before evidence reduction or table/query work",
+                    "payload_requirements": ["source: optional http(s) URL", "html: optional already-fetched HTML", "include_tables: optional", "max_chars: optional"],
+                    "host_boundary": "uses Trafilatura under network:fetch policy; returns extracted text candidates only",
+                }
+            )
         if MARKET_OPENBB_FETCH_TOOL_NAME in recipe.allowed_tools:
             tool_selection.append(
                 {
@@ -7333,6 +7431,28 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "use_when": "market, price, or non-filing fundamental data is relevant and an allowlisted OpenBB route matches the question",
                     "payload_requirements": ["route: allowlisted OpenBB route", "kwargs: route arguments", "limit: optional"],
                     "host_boundary": "uses OpenBB under network:fetch policy; bounded route allowlist prevents arbitrary component calls",
+                }
+            )
+        if DATA_TABLE_QUERY_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": DATA_TABLE_QUERY_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": "evidence rows or extracted tables need model-selected SQL filtering, grouping, joining, ranking, or aggregation",
+                    "payload_requirements": ["sql: read-only SELECT/WITH query", "rows/tables/csv_text: evidence table data", "limit: optional"],
+                    "host_boundary": "uses DuckDB/Pandas; model owns query intent and host returns audited records",
+                }
+            )
+        if MATH_SYMPY_COMPUTE_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": MATH_SYMPY_COMPUTE_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": "the model needs symbolic simplification, exact algebra, factor/expand, or high-precision numeric evaluation beyond ordinary calculator.compute",
+                    "payload_requirements": ["expression: bounded math expression", "variables: optional substitutions", "operation: simplify/evaluate/expand/factor", "precision: optional"],
+                    "host_boundary": "uses SymPy; ordinary finance arithmetic should still use calculator.compute with evidence-backed inputs",
                 }
             )
         if "workspace.list" in recipe.allowed_tools:
@@ -7409,6 +7529,19 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "host_boundary": "requires shell:exec and workspace:write; host writes the script under .holo_toolchain, audits stdout/stderr, and artifacts outputs",
                 }
             )
+        toolchain_install_summary: JsonObject = {}
+        if FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in recipe.allowed_tools:
+            install_summary = finance_toolchain_install_summary()
+            toolchain_install_summary = {
+                "installed_components": _string_list(install_summary.get("installed_components")),
+                "missing_components": _string_list(install_summary.get("missing_components")),
+                "installed_count": install_summary.get("installed_count"),
+                "missing_count": install_summary.get("missing_count"),
+                "host_rule": (
+                    "Prefer installed components when semantically adequate; missing components are not fatal, "
+                    "because tool failures are observations for replanning through another source family."
+                ),
+            }
         forbidden = ["web_search", "page_open"]
         if "network.fetch" not in recipe.allowed_tools:
             forbidden.append("network.fetch")
@@ -7429,12 +7562,17 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                             "sec.edgar.company_filings": "Use EdgarTools-backed filing discovery when official SEC issuer filings are the right source family.",
                             "sec.edgar.financials": "Use EdgarTools-backed SEC/XBRL statement candidates when line-item and period binding need structured filing facts.",
                             "document.docling.convert": "Use Docling-backed conversion for URL documents whose table/text structure matters.",
+                            "document.trafilatura.extract": "Use Trafilatura-backed extraction for webpage/HTML main text when snippets are noisy or table-like text is embedded in pages.",
                             "market.openbb.fetch": "Use allowlisted OpenBB routes only when market/fundamental data outside filing text is semantically relevant.",
+                            "data.table.query": "Use DuckDB/Pandas over evidence rows when the task needs table filtering, grouping, joining, ranking, or aggregation.",
                             "calculator.compute": "Use only after observed evidence supplies numeric inputs; put expression, variables, unit, formula_name, and input_fact_ids when available.",
+                            "math.sympy.compute": "Use SymPy for symbolic or high-precision math beyond ordinary finance arithmetic.",
+                            "finance.toolchain.describe": "Use first when unsure which finance tool family applies; it returns the full tool surface and one-shot tool-call protocol.",
                             "respond": "Use only when evidence is sufficient for the root question or remaining gaps can be explicitly limited.",
                         },
                         "finance_workflow": [
                             "Identify the exact entity, security/issuer aliases, period, document/event, and asked output.",
+                            "If the right data path is unclear, call finance.toolchain.describe once, then emit the next concrete tool action yourself.",
                             "For finance capability or benchmark tasks with named entities, events, periods, or documents, assume the task is solvable; use retrieval to resolve tickers, CIKs, filings, exhibits, aliases, and source URLs instead of asking the user.",
                             "Choose source families semantically: official filings, issuer IR/releases/transcripts, exchange disclosures, market data, or reputable news as appropriate.",
                             "For SEC/filing tasks, target ticker/CIK, form type, accession/period, exhibit/proxy/8-K/10-Q/10-K/DEF 14A when relevant.",
@@ -7460,6 +7598,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                 "use_when": "no relevant retrieval evidence has been observed yet",
             },
             "tool_selection": tool_selection,
+            "toolchain_install_summary": toolchain_install_summary,
             "search_strategy_hint": {
                 "payload_path": "metadata.search_strategy",
                 "allowed_values": ["fallback", "aggregate", "corpus_only", "fresh_live", "structured", "crawl"],
@@ -9046,6 +9185,50 @@ def _metadata_requires_finance_numeric_verifier(metadata: JsonObject) -> bool:
     return bool(metadata.get("require_numeric_verifier") or execution.get("require_numeric_verifier"))
 
 
+def _metadata_requests_finance_toolchain(metadata: JsonObject) -> bool:
+    execution = metadata.get("execution_metadata")
+    execution = execution if isinstance(execution, dict) else {}
+    profile = execution.get("execution_profile")
+    if not isinstance(profile, dict):
+        profile = metadata.get("execution_profile")
+    profile = profile if isinstance(profile, dict) else {}
+    profile_id = str(profile.get("profile_id") or "")
+    if profile_id.startswith("finance-"):
+        return True
+    if _metadata_requires_finance_numeric_verifier(metadata):
+        return True
+    for container in (metadata, execution):
+        if not isinstance(container, dict):
+            continue
+        if container.get("finance_toolchain") is True:
+            return True
+        if isinstance(container.get("finance_toolchain"), dict) and container["finance_toolchain"].get("enabled") is True:
+            return True
+        if str(container.get("research_profile") or "") == FINANCE_FUNDAMENTALS_PROFILE_ID:
+            return True
+        retrieval = container.get("retrieval")
+        if isinstance(retrieval, dict):
+            if str(retrieval.get("research_profile") or "") == FINANCE_FUNDAMENTALS_PROFILE_ID:
+                return True
+            retrieval_metadata = retrieval.get("metadata")
+            if isinstance(retrieval_metadata, dict) and str(retrieval_metadata.get("research_profile") or "") == FINANCE_FUNDAMENTALS_PROFILE_ID:
+                return True
+    return False
+
+
+def _finance_tools_needed(recipe: TaskRecipe) -> bool:
+    allowed = set(recipe.allowed_tools)
+    return bool(
+        allowed.intersection(
+            {
+                CALCULATOR_TOOL_NAME,
+                FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+                *FINANCE_OPEN_COMPONENT_TOOL_NAMES,
+            }
+        )
+    )
+
+
 def _finance_numeric_verifier_required(recipe: TaskRecipe) -> bool:
     if recipe.mode != "retrieval_answer":
         return False
@@ -9462,9 +9645,11 @@ def _compact_agent_runtime_directive_for_prompt(value: object) -> JsonObject:
         "required_first_action": _compact_simple_dict(value.get("required_first_action"), limit=8),
         "tool_selection": [
             _compact_simple_dict(item, limit=10)
-            for item in list(value.get("tool_selection") or [])[:6]
+            for item in list(value.get("tool_selection") or [])[:24]
             if isinstance(item, dict)
         ],
+        "tool_selection_count": len(list(value.get("tool_selection") or [])),
+        "toolchain_install_summary": _compact_simple_dict(value.get("toolchain_install_summary"), limit=8),
         "allowed_non_tool_actions": [
             _compact_simple_dict(item, limit=8)
             for item in list(value.get("allowed_non_tool_actions") or [])[:4]
@@ -11780,9 +11965,10 @@ def _mark_explicit_retrieval_budget(payload: JsonObject) -> JsonObject:
 
 def _retrieval_network_fetch_budget(recipe_metadata: JsonObject) -> int:
     execution = recipe_metadata.get("execution_metadata")
-    if not isinstance(execution, dict):
-        return 0
-    retrieval = execution.get("retrieval")
+    execution = execution if isinstance(execution, dict) else recipe_metadata
+    retrieval = execution.get("retrieval") if isinstance(execution, dict) else None
+    if not isinstance(retrieval, dict):
+        retrieval = recipe_metadata.get("retrieval")
     if not isinstance(retrieval, dict):
         return 0
     if not bool(retrieval.get("allow_network") or retrieval.get("live_network_enabled")):
@@ -16816,6 +17002,11 @@ def _raw_fact_summary_for_slot_bind(fact: FinanceFact) -> JsonObject:
                 "raw",
                 "raw_metric",
                 "row_marker",
+                "segment_name",
+                "category_name",
+                "value_is_percentage",
+                "display_unit",
+                "unit_inferred_from_table_context",
                 "source",
                 "source_family",
                 "source_kind",
@@ -17718,6 +17909,10 @@ def _finance_fact_judge_summary(fact: FinanceFact) -> JsonObject:
                 "fp",
                 "label",
                 "line_item",
+                "segment_name",
+                "category_name",
+                "value_is_percentage",
+                "display_unit",
                 "source_family",
                 "source_kind",
                 "raw_metric",

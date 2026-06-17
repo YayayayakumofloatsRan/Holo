@@ -442,9 +442,10 @@ class LoopControllerV3:
             action.kind == "tool"
             and self._is_network_action(action, manifest=manifest)
             and self.max_network_fetches is not None
-            and network_fetches >= self.max_network_fetches
         ):
-            return "max_network_fetches"
+            requested_network_fetches = self._network_action_cost(action, manifest=manifest)
+            if network_fetches + requested_network_fetches > self.max_network_fetches:
+                return "max_network_fetches"
         return None
 
     def _resource_guard(self, *, total_artifact_bytes: int) -> tuple[str, dict[str, object]] | None:

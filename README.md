@@ -125,10 +125,21 @@ finance capability. The first implementation checkpoint adds
 `kernel_v3/finance/open_components.py`, registering `finance.toolchain.describe`,
 `sec.edgar.company_filings`, `sec.edgar.financials`, `document.docling.convert`,
 and `market.openbb.fetch` as host-policy-bound optional component tools.
-`requirements-finance-open-components.txt` currently pins `edgartools==5.36.0`;
-the SEC filing-discovery and structured-financials tools have passed live
-smoke checks against MMM 10-K data with strict JSON observation output. This is
-toolchain evidence, not a finance benchmark score.
+The 2026-06-17 follow-up tool-surface iteration is recorded in
+`docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md`. It adds
+`kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return
+the complete model-callable finance tool surface, one-shot tool protocol,
+current install summary, and mature open-source component mapping. The lightweight
+core now pins and installs EdgarTools, LangGraph, LiteLLM, Trafilatura, Polars,
+DuckDB, SymPy, OpenTelemetry, Pandas, Pydantic, and Rich. Docling/OpenBB/browser
+components remain cataloged but isolated from the main UbuntuHolo venv because
+full Docling currently pulls Torch/CUDA dependencies on Linux. This is toolchain
+evidence, not a finance benchmark score.
+The same-day loop logic audit is recorded in
+`docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`: Kernel v3 does not currently
+run its core loop through LangChain/LangGraph; LangGraph is installed and
+cataloged as a candidate state-graph runtime, while `LoopControllerV3` still
+owns planner -> policy -> tool -> observation -> evaluator -> termination.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in
@@ -1727,6 +1738,18 @@ packets preserve the same `tool_chain_plan` for semantic evidence judgment.
 The host does not treat the plan as evidence or a fixed script; it only
 verifies provenance, source authority, citations, numeric support, policy, and
 budgets after the model chooses the next move.
+
+2026-06-17 finance tool-surface audit: Kernel v3 now exposes a complete
+finance tool catalog through `finance.toolchain.describe` and keeps a compact
+install summary in the planner packet. The callable open-component wrappers now
+include Trafilatura extraction, DuckDB/Pandas read-only table SQL, and SymPy
+symbolic/high-precision math in addition to SEC EdgarTools, Docling, OpenBB,
+calculator, verifier, workspace, shell, and script tools. Finance profiles see
+this tool surface even when a numeric verifier was not the only requested
+capability. Recoverable component failures such as `dependency_missing`,
+`component_call_failed`, `route_not_allowlisted`, or unsupported document/table
+inputs re-enter the agent loop as replanning feedback; policy blocks and budget
+guards remain host-owned safety boundaries.
 
 The finance/retrieval fast lane is now a real composable workbench instead of a
 fixed retrieval package. `finance-fact-fast` runtime metadata enables

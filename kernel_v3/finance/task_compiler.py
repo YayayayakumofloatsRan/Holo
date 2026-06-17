@@ -1029,12 +1029,17 @@ def _compact_tool_chain_for_model(plan: JsonObject) -> JsonObject:
         "available_tools": [
             item
             for item in (
+                {"name": "finance.toolchain.describe", "use_for": "inspect complete finance tool surface, open-source component readiness, and one-shot tool-call protocol"},
                 {"name": "retrieval.run", "use_for": "evidence/source acquisition"},
                 {"name": "sec.edgar.company_filings", "use_for": "official SEC filing discovery through EdgarTools"},
                 {"name": "sec.edgar.financials", "use_for": "standardized SEC/XBRL statement candidates through EdgarTools"},
                 {"name": "document.docling.convert", "use_for": "URL document/table conversion through Docling"},
+                {"name": "document.trafilatura.extract", "use_for": "webpage/HTML main-text extraction through Trafilatura"},
                 {"name": "market.openbb.fetch", "use_for": "allowlisted market/fundamental data routes through OpenBB"},
+                {"name": "data.table.query", "use_for": "DuckDB/Pandas read-only SQL over model-provided evidence rows"},
                 {"name": "calculator.compute", "use_for": "deterministic arithmetic after inputs are supported"},
+                {"name": "math.sympy.compute", "use_for": "symbolic or high-precision math beyond ordinary calculator.compute"},
+                {"name": "pandas/polars/duckdb via script.exec", "use_for": "table normalization, joins, and SQL/dataframe analysis from extracted evidence"},
                 {"name": "workspace.search", "use_for": "local/cached document discovery"},
                 {"name": "file.read", "use_for": "known local artifact inspection"},
                 {"name": "script.exec", "use_for": "audited parser/calculation helper when exposed"},
@@ -2050,6 +2055,11 @@ def _tool_chain_plan(
         "missing_slots": missing_slots[:16],
         "available_tools": [
             {
+                "name": "finance.toolchain.describe",
+                "use_for": "inspect the full model-callable finance tool surface, current open-source component install status, and one-shot action contract before choosing a path",
+                "host_boundary": "read-only; does not retrieve evidence or infer a benchmark answer",
+            },
+            {
                 "name": "retrieval.run",
                 "use_for": "source acquisition, document reading, evidence slot filling",
             },
@@ -2069,9 +2079,19 @@ def _tool_chain_plan(
                 "host_boundary": "only http(s) sources are accepted; local files must go through workspace tools",
             },
             {
+                "name": "document.trafilatura.extract",
+                "use_for": "use Trafilatura for robust main-text extraction from webpage or filing HTML when retrieval snippets are noisy",
+                "host_boundary": "network:fetch policy applies for URLs; returns text candidates, not answers",
+            },
+            {
                 "name": "market.openbb.fetch",
                 "use_for": "use OpenBB for allowlisted price, market, macro, or non-filing fundamental data when relevant to the question",
                 "host_boundary": "route allowlist prevents arbitrary component calls",
+            },
+            {
+                "name": "data.table.query",
+                "use_for": "run DuckDB/Pandas read-only SELECT queries over evidence rows, CSV text, or extracted tables for filters, joins, rankings, and aggregation",
+                "host_boundary": "model chooses SQL; host blocks write/DDL statements and returns audited records",
             },
             {
                 "name": "workspace.list",
@@ -2096,6 +2116,11 @@ def _tool_chain_plan(
                 "host_boundary": "requires shell:exec and workspace:write; outputs are audited before grounding",
             },
             {
+                "name": "pandas/polars/duckdb via script.exec",
+                "use_for": "normalize tables, run joins, SQL-like filters, dataframe transformations, and trace analytics when a document/table payload is too large for prompt-only reasoning",
+                "host_boundary": "libraries provide computation primitives; model still chooses operation and interprets host-audited outputs",
+            },
+            {
                 "name": "shell.exec",
                 "use_for": "run host-permitted local analysis scripts or CLI tools for document/table parsing, JSONL inspection, scoring, and evidence transformation",
                 "host_boundary": "requires shell:exec permission and executable allowlist",
@@ -2103,6 +2128,11 @@ def _tool_chain_plan(
             {
                 "name": "calculator.compute",
                 "use_for": "deterministic transforms after input facts are supported",
+            },
+            {
+                "name": "math.sympy.compute",
+                "use_for": "symbolic simplification, factor/expand, or high-precision numeric evaluation beyond ordinary finance arithmetic",
+                "host_boundary": "does not bind evidence or choose final finance facts",
             },
             {
                 "name": "host.verifier_gate",

@@ -355,9 +355,24 @@ Standard tool interface:
   payload.metadata.retrieval_strategy with task_understanding, evidence_slots,
   query_plan, source_family_plan, fallback_moves, evidence_criteria,
   stop_when, and next_decision_basis when useful.
+- For finance.toolchain.describe, use an empty payload when the right finance
+  data path is unclear. Read its tool_surface, install_summary, and
+  one_shot_tool_protocol, then propose the next concrete tool action yourself.
+- For sec.edgar.company_filings / sec.edgar.financials, use identifier, form,
+  statement, and limit. These tools return SEC/EDGAR candidates; the model
+  still chooses line item, period, fact sufficiency, and formula intent.
+- For document.trafilatura.extract, use source for an http(s) URL or html for
+  already-fetched HTML. Use it when webpage or filing HTML text/table structure
+  is too noisy for snippet-only reasoning.
+- For data.table.query, use read-only SQL plus rows, tables, or csv_text. Use
+  it for table filtering, grouping, joins, rankings, and aggregations over
+  evidence rows; do not use write/DDL SQL.
 - For calculator.compute, use payload.expression, variables, unit,
   formula_name, input_fact_ids, and diagnostics. Use it when the current
   observations expose all required numeric inputs and the task needs arithmetic.
+- For math.sympy.compute, use expression, optional variables, operation, and
+  precision when the task needs symbolic simplification or high-precision math
+  beyond ordinary finance arithmetic.
 - The host validates schemas, permissions, budgets, evidence ids, citations,
   and execution results. The model owns semantic decomposition, source choice,
   slot coverage judgment, formula choice, next-tool choice, and final-answer
