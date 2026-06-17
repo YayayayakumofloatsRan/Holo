@@ -285,6 +285,19 @@ def _add_agent_loop_args(command_parser: argparse.ArgumentParser) -> None:
     command_parser.add_argument("--max-agent-steps", type=int, default=None)
     command_parser.add_argument("--max-agent-tool-calls", type=int, default=None)
     command_parser.add_argument("--max-agent-artifact-bytes", type=int, default=None)
+    command_parser.add_argument(
+        "--agent-loop-streaming",
+        dest="agent_loop_streaming",
+        action="store_true",
+        default=None,
+        help="Enable provider-streaming deep agent loop execution when the selected runtime backend supports it.",
+    )
+    command_parser.add_argument(
+        "--no-agent-loop-streaming",
+        dest="agent_loop_streaming",
+        action="store_false",
+        help="Disable provider-streaming deep agent loop execution for this run.",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1623,6 +1636,8 @@ def _runtime_execution_metadata(args) -> JsonObject | None:
         loop_budget["max_tool_calls"] = _positive_limit(getattr(args, "max_agent_tool_calls"), default=1)
     if getattr(args, "max_agent_artifact_bytes", None) is not None:
         loop_budget["max_total_artifact_bytes"] = _positive_limit(getattr(args, "max_agent_artifact_bytes"), default=1)
+    if getattr(args, "agent_loop_streaming", None) is not None:
+        loop_budget["provider_streaming"] = bool(getattr(args, "agent_loop_streaming"))
     if loop_budget:
         current_loop = metadata.get("agent_loop")
         current_loop = dict(current_loop) if isinstance(current_loop, dict) else {}

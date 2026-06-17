@@ -103,6 +103,17 @@ def test_benchmark_runtime_metadata_keeps_explicit_loop_overrides() -> None:
     assert metadata["agent_loop"]["source"] == "explicit_cli"
 
 
+def test_benchmark_runtime_metadata_exposes_provider_streaming_loop_override() -> None:
+    args = _benchmark_args(execution_profile="finance-capability", agent_loop_streaming=True)
+
+    metadata = cli._runtime_execution_metadata(args)
+
+    assert metadata is not None
+    assert metadata["agent_loop"]["runtime_backend"] == "deep_agent_loop"
+    assert metadata["agent_loop"]["provider_streaming"] is True
+    assert metadata["agent_loop"]["source"] == "explicit_cli"
+
+
 def test_finance_benchmark_online_metadata_auto_enables_live_retrieval_tools() -> None:
     args = _benchmark_args(
         execution_profile="finance-capability",
@@ -385,6 +396,7 @@ def _benchmark_args(**overrides):
         "max_agent_steps": None,
         "max_agent_tool_calls": None,
         "max_agent_artifact_bytes": None,
+        "agent_loop_streaming": None,
         "research_profile": FINANCE_FUNDAMENTALS_PROFILE_ID,
         "research_depth": cli.DEFAULT_RESEARCH_DEPTH,
         "live_retrieval": None,
