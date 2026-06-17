@@ -1,0 +1,372 @@
+# Kernel v3 External Agent Loop Parity Audit 2026-06-17
+
+状态：深度审查记录。本文只审查外部 TypeScript agent-loop 项目与 Holo Kernel v3 的结构差距，不声明 FinanceBench / FinQA / FAB 金融做题成绩。
+
+外部项目路径：
+
+`/mnt/d/COURSES/人工智能算法实践/code-main/code-main`
+
+Holo 当前审查范围：
+
+- `kernel_v3/deep_loop.py`
+- `kernel_v3/tool_use.py`
+- `kernel_v3/tools.py`
+- `kernel_v3/processors/providers.py`
+- `kernel_v3/agent/runtime.py`
+- `kernel_v3/finance/open_components.py`
+- `kernel_v3/finance/tool_catalog.py`
+- `tests/test_kernel_v3_deep_agent_loop.py`
+- `tests/test_kernel_v3_tool_use.py`
+- `tests/test_kernel_v3_finance_tool_readiness.py`
+
+## 一句话结论
+
+Holo 已经从旧的一步一工具循环，升级到“单回合多工具 + tool.discovery + artifact.read + ToolUseContext + artifact 化长结果”的深循环骨架。
+
+但与外部成熟项目相比，Holo 还没有完成真正的 streaming agent loop。当前 Holo 仍是：
+
+`完整 JSON assistant.turn -> 批量执行工具 -> observation 回流`
+
+外部项目的成熟路径是：
+
+`provider streaming delta -> tool_use 块一出现就入队执行 -> progress/result 立即回流 -> 缺失/取消/失败 tool_result 全部补齐 -> 下一轮继续`
+
+所以，Holo 现在的核心缺口不是再加某一道题的规则，而是把工具调用从“离线批处理”推进到“流式、可中断、预算稳定、可恢复”的工作台。
+
+## 外部项目做对的事情
+
+### 1. Query loop 是真正的流式工具循环
+
+外部项目核心在 `src/query.ts`：
+
+- 每次 query 进入模型 streaming。
+- streaming 中每收到 assistant message，就扫描其中的 `tool_use` block。
+- `tool_use` 一出现，马上交给 `StreamingToolExecutor.addTool(...)`。
+- 同时持续 drain `getCompletedResults()`，工具结果可以在模型流结束前后逐步返回。
+- 如果 provider fallback、异常、用户中断发生，会给已经出现但没完成的 tool_use 生成 synthetic tool_result，避免协议断裂。
+
+这不是简单的“多工具”。它保证了一个更强的不变量：
+
+每个模型发出的 tool_use，最终都必须有一个对应的 tool_result，无论成功、失败、取消、fallback、异常还是用户中断。
+
+### 2. StreamingToolExecutor 有真实调度语义
+
+外部项目 `src/services/tools/StreamingToolExecutor.ts` 体现了几个成熟点：
+
+- 并发安全工具可以并行。
+- 非并发安全工具独占执行。
+- 结果按必要顺序 yield。
+- progress message 可以立即 yield。
+- sibling error 可以取消尚未完成的 sibling。
+- 对可中断工具，有 child abort controller。
+- streaming fallback 会 discard 当前 attempt 的 pending / running results，避免 orphan tool_result 混入新 attempt。
+
+Holo 目前的 `kernel_v3/tool_use.py` 只实现了 completed assistant turn 下的 evented batch executor。它可以记录 queued / started / completed，但还不是 provider-streaming executor。
+
+### 3. Tool contract 很厚
+
+外部项目 `src/Tool.ts` 的工具接口不仅是 name/schema/permission。它包含：
+
+- `inputSchema`
+- `inputJSONSchema`
+- `outputSchema`
+- `isConcurrencySafe(input)`
+- `isReadOnly(input)`
+- `isDestructive(input)`
+- `isOpenWorld(input)`
+- `requiresUserInteraction()`
+- `interruptBehavior()`
+- `maxResultSizeChars`
+- `shouldDefer`
+- `alwaysLoad`
+- `validateInput`
+- `checkPermissions`
+- `mapToolResultToToolResultBlockParam`
+- `renderToolUseProgressMessage`
+- `contextModifier`
+
+这些字段决定了 agent loop 能不能泛化。Holo 当前 `ToolManifest` 只有 name/version/resource/operator/side_effect/permissions/enabled/description/input_schema，调度和预算能力仍然偏薄。
+
+### 4. 大工具结果预算是跨回合稳定的
+
+外部项目 `src/utils/toolResultStorage.ts` 有两层机制：
+
+- 单个工具结果过大时，写入 session tool-results 文件，模型只看 preview + file path。
+- 同一个 API user message 中多个 tool_result 的总量超预算时，按 `tool_use_id` 选择并持久替换大结果。
+
+更重要的是它维护 `ContentReplacementState`：
+
+- `seenIds` 记录哪些 tool_use_id 已经处理过。
+- `replacements` 记录被替换后的精确 preview 文本。
+- resume / compact / fork 后用相同 replacement，保持 prompt cache 前缀稳定。
+
+Holo 当前有 `ArtifactStore`、`content_projection`、`artifact.read`，并且金融开放组件已把长 SEC/document/table/market payload 写 blob。但 Holo 还没有跨回合的“替换决策状态”，也没有按同一 batch/message 的 aggregate result budget。
+
+### 5. Tool discovery 是 deferred tool loading
+
+外部项目的 Tool Search 不是简单查工具清单：
+
+- 工具可声明 `shouldDefer` / `alwaysLoad`。
+- 根据 deferred tool 描述 token 成本，自动决定是否启用 tool search。
+- 模型可用 ToolSearchTool 检索 deferred tools。
+- exact select、MCP server prefix、keyword scoring 都有处理。
+- 工具池排序关注 prompt cache stability，built-in tools 保持稳定前缀。
+
+Holo 当前 `tool.discovery` 是有价值的，但只是对已注册 allowed manifests 做 substring scoring。它还不是 token-aware deferred loading。
+
+## Holo 已完成的部分
+
+### 1. 单回合多工具骨架
+
+`kernel_v3/deep_loop.py` 已经支持 `assistant.turn`：
+
+- 一个 assistant turn 可包含多个 tool_calls。
+- 每个 tool call 有稳定 `tool_call_id`。
+- tool call 被转为 `CandidateAction` 后仍走 `PolicyGate` / `ToolRegistry`。
+- malformed tool call 会成为 `tool_call_parse_error` observation，进入下一轮 replanning。
+- 每个 batch 生成 `tool_batch_result` observation，保留 tool_call_id、status、artifact refs、content_projection。
+
+这是正确方向。
+
+### 2. 工具发现和 artifact 读取
+
+`kernel_v3/tool_use.py` 已经提供：
+
+- `tool.discovery`
+- `artifact.read`
+- `ToolUseContext`
+- `ToolExecutionEvent`
+- `ToolResultProjection`
+- `StreamingToolExecutor`
+
+这解决了“工具入口模型可见”和“长结果可延迟读取”的基础问题。
+
+### 3. 金融工具长结果 artifact 化
+
+`kernel_v3/finance/open_components.py` 当前已让 SEC/EDGAR、Docling、Trafilatura、OpenBB、DuckDB table query 在 runtime 提供 `ArtifactStore` 时写入完整 JSON blob。
+
+模型上下文只接收：
+
+- bounded observation
+- `artifact_id`
+- `artifact_uri`
+- `artifact_kind`
+- `full_payload_artifact_id`
+- `artifact_read_hint`
+
+这对 UbuntuHolo 稳定性和上下文预算是必要进步。
+
+### 4. FB/FQA 工具面 preflight
+
+`kernel_v3/finance/tool_readiness.py` 已经能检查 FB/FQA 相关工具是否：
+
+- allowed by recipe
+- registered
+- provider visible
+- planner prompt visible
+- policy allowed
+- component binding 可用
+
+这不是 benchmark 成绩，但能防止“模型根本看不到工具”的低级失败。
+
+## 还差什么
+
+### P0. Provider-native streaming tool-use
+
+当前 `kernel_v3/processors/providers.py` 的 `OpenAICompatibleProvider` 固定：
+
+```json
+"stream": false
+```
+
+并使用 JSON response_format。Holo 的 deep loop 只能等完整 `assistant.turn` JSON 返回后再执行工具。
+
+需要做：
+
+- 给 `ProcessorProvider` 增加 streaming event 接口。
+- 支持 provider SSE / chunked response。
+- 解析 assistant text delta、tool_call/tool_use delta、finish/fallback/error event。
+- 将 tool_use delta 直接喂给 Holo `StreamingToolExecutor`。
+- fallback 或 provider error 时，为所有已出现但未完成的 tool_call 生成 synthetic observation。
+- 保留 JSON `assistant.turn` 作为 fallback，不要一次性切断现有路径。
+
+这是 Holo 与成熟 agent loop 最大的差距。
+
+### P0. ToolManifest 升级为完整调度合同
+
+当前 `ToolManifest` 太薄，导致 executor 只能从 `side_effect_class` 和 input_schema 里的临时 `concurrency_safe` 推断。
+
+应扩展或增加 `ToolRuntimeSpec`：
+
+- `concurrency_safe`
+- `read_only`
+- `destructive`
+- `open_world`
+- `requires_user_interaction`
+- `interrupt_behavior`: `cancel | block`
+- `max_result_size_chars`
+- `result_persistence_policy`
+- `should_defer`
+- `always_load`
+- `progress_supported`
+- `timeout_seconds`
+- `idempotent`
+
+这不是形式主义。没有这些字段，agent loop 无法稳定决定并发、取消、prompt 暴露和结果预算。
+
+### P0. 跨回合工具结果预算状态
+
+Holo 当前 artifact 化解决了“单次长 payload 不塞上下文”，但还没解决：
+
+- 同一个 batch 中多个 tool results 总量超预算。
+- 已经给模型看过的结果，下一轮是否还能替换。
+- compact/resume 后 replacement 是否字节级稳定，是否保护 provider cache。
+
+需要实现类似 `ContentReplacementState` 的结构：
+
+- keyed by `tool_call_id` / `artifact_id`
+- `seen_ids`
+- `replacement_by_id`
+- `full_payload_ref`
+- `first_visible_projection_hash`
+- resume reconstruction
+- journal / thread 持久化
+
+这直接关系到长任务成本和上下文稳定性。
+
+### P1. Executor 支持 progress、running abort 和 async generator 工具
+
+Holo 当前工具执行是同步 `ToolRegistry.execute_with_artifacts()`，executor 用 `ThreadPoolExecutor` 包了一层。它还不能：
+
+- 工具内部产生 progress observation。
+- streaming yield progress 给 CLI / journal。
+- 对 running tool 进行真实 abort。
+- 区分 interruptBehavior=cancel/block。
+- 对 subprocess / network fetch 传入 abort signal。
+
+金融做题时，Docling、OpenBB、SEC、crawl、script 都可能是长工具。没有 progress 和 abort，用户看到的就是“系统卡住”，UbuntuHolo 稳定性也更难管。
+
+### P1. Tool discovery 需要从“搜索 manifest”升级成 deferred loading
+
+Holo 当前 `tool.discovery` 是必要的，但还不够成熟。
+
+需要：
+
+- 工具声明 `should_defer` / `always_load`。
+- 按 provider context window 和工具描述 token 成本自动决定初始暴露集合。
+- 支持 exact `select:<tool_name>`。
+- 支持 BM25 / keyword / family ranking。
+- 对 finance 工具按 task family 分组返回。
+- 保持 built-in / core finance tools 的稳定 prompt 前缀，保护 cache。
+
+否则工具越多，prompt 会越来越重；工具少，又会看不到能力。
+
+### P1. 工具结果对 context 的结构化修改能力
+
+外部工具支持 `contextModifier`。Holo 目前主要靠 journal + context compiler 重新投影。
+
+金融任务需要一种更明确的 workbench state：
+
+- 当前目标公司/期间
+- 已绑定 source documents
+- candidate facts
+- extracted tables
+- unresolved slots
+- formula requests
+- artifact refs
+- verifier failures
+
+现在 Holo 有 finance working state，但来源分散在 runtime 中很多 helper。下一步应把它抽成明确的 `FinanceWorkbenchState` 或通用 `TaskWorkbenchState`，由工具 observation 显式更新，而不是靠 planner prompt 猜 recent_observations。
+
+### P1. 原生 tool/function-calling 与 JSON fallback 双轨
+
+Holo 当前要求模型返回 JSON `assistant.turn`。这可控，但会牺牲 provider 原生 tool-call 的 schema 约束、streaming delta 和生态兼容。
+
+应保留两条路径：
+
+- provider 支持原生 tools：使用原生 tool/function-calling。
+- provider 不支持或出错：退回 JSON `assistant.turn`。
+
+金融做题依赖工具参数质量，原生 schema 能减少很多 malformed payload。
+
+### P2. 可视化和运行控制
+
+用户明确要求进程可视化。Holo 目前 journal 中有 tool_execution_event，但还需要：
+
+- CLI 实时显示当前 step / tool_call_id / tool / status / elapsed / artifact size。
+- 区分 queued / running / completed / cancelled / failed。
+- 长工具 progress event。
+- benchmark runner 的 item-level live progress 与 processor/tool breakdown。
+- 卡住时能看到是 provider、SEC、Docling、OpenBB、script 还是 verifier。
+
+这是迭代效率问题，不是 UI 装饰。
+
+### P2. Live debug50 类型化评测闭环
+
+当前结构测试不能说明金融能力。下一阶段必须回到 live debug50，但方式不能逐题修补。
+
+应按任务族跑：
+
+- direct line item / disclosure extraction
+- defined formula numeric calculation
+- computed business judgment
+- driver attribution / bridge adjustment
+- table ranking / comparison
+- market/macro context
+- FinQA table/program-like transforms
+
+每个失败归因到：
+
+- tool not visible
+- tool payload malformed
+- source acquisition failed
+- extraction/table conversion failed
+- slot binding failed
+- formula trace wrong
+- verifier blocked correctly
+- synthesis unsupported
+- context budget/dropout
+- provider/tool timeout
+
+只有这样才能判断系统性缺口，而不是继续逐题打补丁。
+
+## 对当前 Holo 的理论能力判断
+
+现在 Holo 理论上已经接近“可组装金融工作台”，但还不能说 loop 完美。
+
+已具备：
+
+- 多工具 turn。
+- 工具 discovery。
+- artifact 延迟读取。
+- 金融工具面。
+- slot_bind / calculator / numeric verifier。
+- 长 payload artifact 边界。
+- preflight 审计。
+
+未具备：
+
+- provider streaming tool-use。
+- running tool abort / progress。
+- 厚工具合同。
+- token-aware deferred tool loading。
+- 跨回合稳定 result replacement。
+- 类型化 live debug50 闭环结果。
+
+所以，最诚实的状态是：
+
+Holo 已经摆脱“一题一补丁”的最低级循环，但还没完成成熟 agent loop 的关键工程层。下一次迭代不应该再碰金融规则，而应先补 P0 三项：streaming provider tool-use、ToolRuntimeSpec、ContentReplacementState。
+
+## 建议实现顺序
+
+1. 定义 `ToolRuntimeSpec`，先不改所有工具实现，只让 manifest 可表达调度/预算字段。
+2. 将 `concurrency_safe` 从 input_schema 元数据移到 runtime spec，保留兼容读法。
+3. 为 `ToolRegistry` 增加 async/progress 执行协议，旧同步 executor 自动包装。
+4. 实现 `ContentReplacementState`，让 tool batch result projection 与 artifact replacement 跨回合稳定。
+5. 给 `ProcessorProvider` 增加 streaming event 协议，先 fake provider 测通。
+6. 给 OpenAI-compatible / DeepSeek provider 接 SSE streaming。
+7. 将 deep loop 从 completed-turn batch 模式升级为 streaming tool-use 模式，JSON assistant.turn 作为 fallback。
+8. CLI 显示 tool execution progress。
+9. 跑 live debug50，按任务族归因，不做 fake score。
+
+这条路线完成后，Holo 才能更接近外部成熟项目的通用 agent loop，同时保持 Kernel v3 的 host-owned 验证、journal、artifact、gold isolation 和 LLM-owned semantic judgment 不变量。

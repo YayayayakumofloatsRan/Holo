@@ -181,6 +181,13 @@ by reusable task families, and promotes a benchmark-agnostic finance agent loop
 contract into `finance.toolchain.describe`, the planner directive, and the
 provider compact packet. This is an interface/architecture milestone, not a
 benchmark score.
+The external-loop parity audit is recorded in
+`docs/KERNEL_V3_EXTERNAL_LOOP_PARITY_AUDIT_2026-06-17_ZH.md`. It compares the
+local TypeScript agent-loop project against Holo Kernel v3 and identifies the
+remaining hard gaps: provider-native streaming tool-use, a thicker tool runtime
+spec, stable cross-turn tool-result replacement, progress/abort-capable tool
+execution, deferred tool loading, and type-family live debug50 evaluation. This
+is a design audit, not a finance benchmark score.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in
