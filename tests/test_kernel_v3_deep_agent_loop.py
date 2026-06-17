@@ -151,6 +151,66 @@ def test_deep_agent_loop_executes_multi_tool_turn_and_journals_batch() -> None:
     assert {context["tool_call_id"] for context in contexts} == {"call-alpha", "call-beta"}
 
 
+def test_deep_agent_loop_records_host_tool_exception_as_tool_result() -> None:
+    registry = ToolRegistry()
+    registry.register("alpha.read", _read_tool("alpha"))
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-host-exception",
+                message="read alpha",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-alpha",
+                        name="alpha.read",
+                        arguments={"query": "A"},
+                        reason="need alpha evidence",
+                        side_effect_class="read",
+                    )
+                ],
+            )
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=4,
+        max_tool_calls=4,
+    )
+
+    def raise_host_exception(_task: object, _step_id: str, _prepared: object) -> object:
+        raise RuntimeError("host execution failed")
+
+    loop._execute_prepared_tool_with_timeout = raise_host_exception  # type: ignore[method-assign]
+
+    result = loop.run("read alpha and survive host exception")
+
+    assert result.status == "completed"
+    host_exceptions = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_host_exception"
+    ]
+    assert len(host_exceptions) == 1
+    assert host_exceptions[0].data["status"] == "failed"
+    assert host_exceptions[0].data["tool_call_id"] == "call-alpha"
+    assert host_exceptions[0].data["content"]["error_type"] == "RuntimeError"
+    assert "host execution failed" in host_exceptions[0].data["content"]["error_message"]
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    assert batch.data["status"] == "failed"
+    assert batch.data["content"]["results"][0]["kind"] == "tool_host_exception"
+    assert batch.data["content"]["results"][0]["policy"] == "tool_host_exception"
+
+
 def test_deep_agent_loop_stops_before_evaluator_when_batch_contains_host_guard() -> None:
     class EvaluatorMustNotRun:
         def __init__(self) -> None:
@@ -1504,6 +1564,54 @@ def test_streaming_loop_continues_provider_tool_result_rounds_until_final_text()
     assert "done after beta" in continuation["text_preview"]
 
 
+def test_streaming_provider_continuation_stops_when_round_hits_tool_budget_guard() -> None:
+    class EvaluatorMustNotRun:
+        def evaluate(self, context: ContextBundle, observation: Observation) -> Feedback:
+            raise AssertionError("streaming batch budget guard should stop before evaluator")
+
+    registry = ToolRegistry()
+    registry.register("alpha.read", _read_tool("alpha"))
+    registry.register("beta.read", _read_tool("beta"))
+    journal = JournalStore.in_memory()
+    provider = _ContinuationRequestsOverBudgetToolProvider()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read", "beta.read"},
+        tool_manifests=registry.manifests(),
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=EvaluatorMustNotRun(),
+        max_steps=3,
+        max_tool_calls=1,
+    )
+
+    result = loop.run("read alpha, then try beta over budget")
+
+    assert result.status == "step_limit_exceeded"
+    assert result.stop_reason == "max_tool_calls"
+    assert len(provider.requests) == 2
+    assert [action.name for action in registry.executed_actions] == ["alpha.read"]
+    updates = journal.records(task_id=result.task_id, kind="provider_conversation_update")
+    assert updates[-1].data["schema"] == "holo.kernel_v3.provider_tool_result_continuation_budget_guard.v1"
+    assert updates[-1].data["stop_reason"] == "max_tool_calls"
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    assert batch.data["status"] == "partial"
+    assert batch.data["content"]["results"][1]["kind"] == "host_guard"
+    assert batch.data["content"]["results"][1]["policy"] == "max_tool_calls"
+
+
 def test_streaming_continuation_loads_tool_discovered_native_schema() -> None:
     registry = ToolRegistry()
     registry.register(
@@ -2512,6 +2620,66 @@ class _MultiRoundToolResultContinuationProvider:
                 delta={"status": "ok", "text": '{"final_answer":"done after beta"}'},
             )
             return
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=1,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-alpha",
+                        "function": {
+                            "name": "alpha.read",
+                            "arguments": '{"query":"A"}',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=2,
+            delta={"status": "ok"},
+        )
+
+
+class _ContinuationRequestsOverBudgetToolProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def __init__(self) -> None:
+        self.requests: list[ProcessorRequest] = []
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        self.requests.append(request)
+        provider_messages = request.parameters.get("provider_messages")
+        if isinstance(provider_messages, list) and len(self.requests) == 2:
+            yield ProcessorStreamEvent(
+                event_type="tool_call_delta",
+                request_id=request.request_id,
+                sequence=1,
+                delta={
+                    "tool_calls": [
+                        {
+                            "id": "tc-beta-over-budget",
+                            "function": {
+                                "name": "beta.read",
+                                "arguments": '{"query":"B"}',
+                            },
+                        }
+                    ]
+                },
+            )
+            yield ProcessorStreamEvent(
+                event_type="stream_end",
+                request_id=request.request_id,
+                sequence=2,
+                delta={"status": "ok"},
+            )
+            return
+        if isinstance(provider_messages, list):
+            raise AssertionError("provider continuation should stop after max_tool_calls guard")
         yield ProcessorStreamEvent(
             event_type="tool_call_delta",
             request_id=request.request_id,

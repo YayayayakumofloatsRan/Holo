@@ -155,6 +155,7 @@ class StreamingToolExecutor:
         self._incremental_failure_cancels_siblings: Callable[[Any, Any], bool] | None = None
         self._incremental_cancel_one: Callable[[Any, str], Any] | None = None
         self._incremental_abort_one: Callable[[Any, str], None] | None = None
+        self._incremental_exception_one: Callable[[Any, Exception], Any] | None = None
         self._incremental_failure_seen = False
         self._discarded = False
 
@@ -169,6 +170,7 @@ class StreamingToolExecutor:
         failure_cancels_siblings: Callable[[Any, Any], bool] | None = None,
         cancel_one: Callable[[Any, str], Any] | None = None,
         abort_one: Callable[[Any, str], None] | None = None,
+        exception_one: Callable[[Any, Exception], Any] | None = None,
     ) -> list[Any]:
         self.begin_incremental(
             execute_one=execute_one,
@@ -178,6 +180,7 @@ class StreamingToolExecutor:
             failure_cancels_siblings=failure_cancels_siblings,
             cancel_one=cancel_one,
             abort_one=abort_one,
+            exception_one=exception_one,
         )
         try:
             for item in items:
@@ -196,6 +199,7 @@ class StreamingToolExecutor:
         failure_cancels_siblings: Callable[[Any, Any], bool] | None = None,
         cancel_one: Callable[[Any, str], Any] | None = None,
         abort_one: Callable[[Any, str], None] | None = None,
+        exception_one: Callable[[Any, Exception], Any] | None = None,
     ) -> None:
         self.close()
         self._discarded = False
@@ -207,6 +211,7 @@ class StreamingToolExecutor:
         self._incremental_failure_cancels_siblings = failure_cancels_siblings
         self._incremental_cancel_one = cancel_one
         self._incremental_abort_one = abort_one
+        self._incremental_exception_one = exception_one
         self._incremental_failure_seen = False
         self._incremental_pool = ThreadPoolExecutor(max_workers=self.max_concurrency)
 
@@ -276,7 +281,13 @@ class StreamingToolExecutor:
 
     def _execute_with_started_event(self, item: Any, execute_one: Callable[[Any], Any]) -> Any:
         self._emit("started", item)
-        return execute_one(item)
+        try:
+            return execute_one(item)
+        except Exception as exc:
+            exception_one = getattr(self, "_incremental_exception_one", None)
+            if exception_one is None:
+                raise
+            return exception_one(item, exc)
 
     def _process_incremental_queue(self) -> None:
         if self._discarded:

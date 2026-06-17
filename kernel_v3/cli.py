@@ -5036,6 +5036,18 @@ def _chat_live_model_block(args) -> JsonObject | None:
 def _ensure_live_model_api_key(env_name: str) -> JsonObject:
     if str(os.environ.get(env_name, "") or "").strip():
         return {"available": True, "source": "process_env", "diagnostics": {"api_key_env": env_name}}
+    local_secret = _read_local_secret_value(env_name)
+    if local_secret.get("value"):
+        os.environ[env_name] = str(local_secret["value"])
+        return {
+            "available": True,
+            "source": "local_secret_file",
+            "diagnostics": {
+                "api_key_env": env_name,
+                "local_secret_checked": True,
+                "local_secret_source": str(local_secret.get("source") or "key_file"),
+            },
+        }
     imported = _read_windows_env_value(env_name)
     if imported.get("value"):
         os.environ[env_name] = str(imported["value"])
@@ -5047,11 +5059,51 @@ def _ensure_live_model_api_key(env_name: str) -> JsonObject:
     diagnostics: JsonObject = {
         "api_key_env": env_name,
         "process_env_present": False,
+        "local_secret_checked": bool(local_secret.get("checked")),
         "windows_env_checked": bool(imported.get("checked")),
     }
+    if local_secret.get("source"):
+        diagnostics["local_secret_source"] = str(local_secret["source"])
+    if local_secret.get("error"):
+        diagnostics["local_secret_error"] = str(local_secret["error"])[:240]
     if imported.get("error"):
         diagnostics["windows_env_error"] = str(imported["error"])[:240]
     return {"available": False, "source": "missing", "diagnostics": diagnostics}
+
+
+def _read_local_secret_value(name: str) -> JsonObject:
+    candidates: list[tuple[str, Path]] = []
+    explicit = os.environ.get(f"{name}_FILE")
+    if explicit:
+        candidates.append((f"{name}_FILE", Path(explicit).expanduser()))
+    if name == "DEEPSEEK_API_KEY":
+        holo_explicit = os.environ.get("HOLO_DEEPSEEK_API_KEY_FILE")
+        if holo_explicit:
+            candidates.append(("HOLO_DEEPSEEK_API_KEY_FILE", Path(holo_explicit).expanduser()))
+        candidates.append(("default_deepseek_key_file", Path(".holo_runtime/secrets/deepseek.key")))
+    if not candidates:
+        return {"checked": False, "value": ""}
+    checked = False
+    last_source = ""
+    errors: list[str] = []
+    for source, path in candidates:
+        checked = True
+        last_source = source
+        try:
+            if not path.exists() or not path.is_file():
+                continue
+            value = path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            errors.append(f"{source}:{type(exc).__name__}")
+            continue
+        if value:
+            return {"checked": True, "value": value, "source": source}
+    result: JsonObject = {"checked": checked, "value": ""}
+    if last_source:
+        result["source"] = last_source
+    if errors:
+        result["error"] = ",".join(errors)
+    return result
 
 
 def _read_windows_env_value(name: str) -> JsonObject:
@@ -5185,6 +5237,8 @@ def _live_processor_fabric(
     generation_mode: str = "auto",
     latency_target: str = "balanced",
 ) -> ProcessorFabric:
+    if provider == "deepseek":
+        _ensure_live_model_api_key("DEEPSEEK_API_KEY")
     providers = {
         "deepseek": DeepSeekProvider(enabled=True, model=model, max_retries=2),
         "openai_compatible": OpenAICompatibleProvider(enabled=True, model=model or "local-model", max_retries=2),

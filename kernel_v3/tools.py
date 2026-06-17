@@ -299,7 +299,16 @@ class ToolRegistry:
             return _tool_result(
                 action,
                 "blocked",
-                {"reason": "invalid_tool_payload", "tool": tool_name, "error": schema_error},
+                {
+                    "reason": "invalid_tool_payload",
+                    "tool": tool_name,
+                    "error": schema_error,
+                    "schema_available_via": "tool.discovery",
+                    "recovery_hint": (
+                        f"Inspect this tool contract with tool.discovery query='select:{tool_name}', "
+                        "then retry using the returned input_schema."
+                    ),
+                },
                 kind="policy_block",
             )
         executable_action = replace(action, payload=canonical_payload)

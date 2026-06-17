@@ -922,6 +922,7 @@ def test_phase62_cli_chat_defaults_to_live_model(tmp_path: Path, capsys, monkeyp
 def test_phase62_live_gate_blocks_when_enabled_but_api_key_missing(monkeypatch):
     monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "_read_local_secret_value", lambda name: {"checked": True, "value": ""})
     monkeypatch.setattr(
         cli,
         "_read_windows_env_value",
@@ -937,9 +938,49 @@ def test_phase62_live_gate_blocks_when_enabled_but_api_key_missing(monkeypatch):
     assert "DEEPSEEK_API_KEY" not in os.environ
 
 
+def test_phase62_live_gate_imports_local_key_file_without_exposing_value(tmp_path: Path, monkeypatch):
+    key_file = tmp_path / "deepseek.key"
+    key_file.write_text("secret-from-local-file\n", encoding="utf-8")
+    windows_calls = []
+    monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    monkeypatch.setenv("DEEPSEEK_API_KEY_FILE", str(key_file))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_read_windows_env_value",
+        lambda name: windows_calls.append(name) or {"checked": True, "value": "secret-from-windows"},
+    )
+
+    block = cli._chat_live_model_block(argparse.Namespace(online=True))
+
+    assert block is None
+    assert os.environ["DEEPSEEK_API_KEY"] == "secret-from-local-file"
+    assert windows_calls == []
+
+
+def test_phase62_live_processor_fabric_imports_local_key_file(tmp_path: Path, monkeypatch):
+    key_file = tmp_path / "deepseek.key"
+    key_file.write_text("secret-for-fabric\n", encoding="utf-8")
+    windows_calls = []
+    monkeypatch.setenv("DEEPSEEK_API_KEY_FILE", str(key_file))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_read_windows_env_value",
+        lambda name: windows_calls.append(name) or {"checked": True, "value": "secret-from-windows"},
+    )
+
+    fabric = cli._live_processor_fabric("deepseek", JournalStore.in_memory(), profile="fast")
+
+    assert "deepseek" in fabric.providers
+    assert os.environ["DEEPSEEK_API_KEY"] == "secret-for-fabric"
+    assert windows_calls == []
+
+
 def test_phase62_live_gate_imports_windows_api_key_without_exposing_value(monkeypatch):
     monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "_read_local_secret_value", lambda name: {"checked": True, "value": ""})
     monkeypatch.setattr(
         cli,
         "_read_windows_env_value",
@@ -955,6 +996,7 @@ def test_phase62_live_gate_imports_windows_api_key_without_exposing_value(monkey
 def test_phase62_cli_chat_online_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "_read_local_secret_value", lambda name: {"checked": True, "value": ""})
     journal = tmp_path / "journal.jsonl"
     index = tmp_path / "journal.sqlite"
 

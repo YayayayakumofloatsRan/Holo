@@ -1126,6 +1126,7 @@ def test_finance_benchmark_live_blocks_before_writing_rows_when_api_key_missing(
     dataset.write_text(json.dumps({"id": "Q1", "question": "Revenue?"}) + "\n", encoding="utf-8")
     monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "_read_local_secret_value", lambda name: {"checked": True, "value": ""})
     monkeypatch.setattr(
         cli,
         "_read_windows_env_value",
@@ -1187,6 +1188,7 @@ def test_finance_benchmark_live_block_reports_requirements_slice_without_writing
     )
     monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "_read_local_secret_value", lambda name: {"checked": True, "value": ""})
     monkeypatch.setattr(
         cli,
         "_read_windows_env_value",

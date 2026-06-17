@@ -612,6 +612,12 @@ class DeepAgentLoopController(LoopControllerV3):
             failure_cancels_siblings=_tool_failure_cancels_siblings,
             cancel_one=lambda item, reason: self._cancelled_execution_item(task, step_id=step_id, prepared=item, reason=reason),
             abort_one=lambda item, reason: self._request_prepared_tool_abort(task, step_id=step_id, prepared=item, reason=reason),
+            exception_one=lambda item, exc: self._exception_execution_item(
+                task,
+                step_id=step_id,
+                prepared=item,
+                exc=exc,
+            ),
         )
         try:
             def record_execution_items(items: list[_ToolExecutionItem]) -> None:
@@ -805,7 +811,34 @@ class DeepAgentLoopController(LoopControllerV3):
                 round_label="initial",
                 initial=True,
             )
+            provider_continuation_guard_reason = self._execution_items_guard_stop_reason(round_items)
             while round_items and callable(stream.continue_events):
+                if provider_continuation_guard_reason is not None:
+                    provider_continuation_limited = True
+                    self.journal.append(
+                        task_id=task.task_id,
+                        run_id=task.run_id,
+                        step_id=step_id,
+                        kind="provider_conversation_update",
+                        data=redact_journal_data(
+                            {
+                                "schema": "holo.kernel_v3.provider_tool_result_continuation_budget_guard.v1",
+                                "turn_id": stream.turn_id,
+                                "stop_reason": provider_continuation_guard_reason,
+                                "tool_result_count": len(round_items),
+                                "host_boundary": (
+                                    "provider continuation stopped because a streamed tool result hit a host budget guard; "
+                                    "outer deep loop will finalize or fail from the journaled batch"
+                                ),
+                            }
+                        ),
+                        event_ref=self._last_ref(task.task_id, "event_ref"),
+                        state_delta={
+                            "provider_conversation_update": "budget_guard",
+                            "stop_reason": provider_continuation_guard_reason,
+                        },
+                    )
+                    break
                 if provider_continuation_rounds >= _MAX_PROVIDER_TOOL_RESULT_CONTINUATIONS:
                     provider_continuation_limited = True
                     self.journal.append(
@@ -865,6 +898,7 @@ class DeepAgentLoopController(LoopControllerV3):
                     round_label=f"continuation-{provider_continuation_rounds}",
                     initial=False,
                 )
+                provider_continuation_guard_reason = self._execution_items_guard_stop_reason(round_items)
         finally:
             executor.close()
 
@@ -1016,6 +1050,12 @@ class DeepAgentLoopController(LoopControllerV3):
             failure_cancels_siblings=_tool_failure_cancels_siblings,
             cancel_one=lambda item, reason: self._cancelled_execution_item(task, step_id=step_id, prepared=item, reason=reason),
             abort_one=lambda item, reason: self._request_prepared_tool_abort(task, step_id=step_id, prepared=item, reason=reason),
+            exception_one=lambda item, exc: self._exception_execution_item(
+                task,
+                step_id=step_id,
+                prepared=item,
+                exc=exc,
+            ),
         )
         for item in batch_items:
             execution_items.append(item)
@@ -1389,6 +1429,55 @@ class DeepAgentLoopController(LoopControllerV3):
             tool_result_artifact_ref=tool_result_artifact_ref,
         )
 
+    def _exception_execution_item(
+        self,
+        task: TaskState,
+        *,
+        step_id: str,
+        prepared: _PreparedToolCall,
+        exc: Exception,
+    ) -> _ToolExecutionItem:
+        action = prepared.action
+        reason = "tool_host_exception"
+        observation = Observation(
+            observation_id=f"obs-{action.action_id}-{reason}",
+            run_id=task.run_id,
+            kind=reason,
+            status="failed",
+            source="deep_agent_loop",
+            content={
+                "reason": reason,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc)[:1000],
+                "host_boundary": (
+                    "host converted a tool execution exception into a normal tool_result observation; "
+                    "the agent loop remains alive and the model/evaluator can decide recovery"
+                ),
+            },
+            observed_at_ms=self.clock_ms(),
+            action_id=action.action_id,
+            tool_call_id=prepared.call.tool_call_id,
+        )
+        tool_result_artifact_ref = self._write_tool_result_artifact_for_observation(
+            task,
+            turn_id=prepared.turn_id,
+            step_id=step_id,
+            tool_call_id=prepared.call.tool_call_id,
+            action=action,
+            observation=observation,
+        )
+        return _ToolExecutionItem(
+            tool_call_id=prepared.call.tool_call_id,
+            action=action,
+            manifest=prepared.manifest,
+            observation=observation,
+            artifact_refs=[],
+            context_updates=[],
+            policy_allowed=False,
+            policy_reason=reason,
+            tool_result_artifact_ref=tool_result_artifact_ref,
+        )
+
     def _append_tool_execution_event(self, task: TaskState, *, step_id: str, event: ToolExecutionEvent) -> None:
         data = event.to_dict()
         self.journal.append(
@@ -1617,6 +1706,15 @@ class DeepAgentLoopController(LoopControllerV3):
             return None
         content = observation.content if isinstance(observation.content, dict) else {}
         return _host_budget_guard_reason_from_batch_payload(content)
+
+    def _execution_items_guard_stop_reason(self, execution_items: list[_ToolExecutionItem]) -> str | None:
+        for item in execution_items:
+            reason = self._guard_stop_reason(item.observation)
+            if reason is not None:
+                return reason
+            if item.policy_reason in _HOST_BUDGET_GUARD_REASONS:
+                return item.policy_reason
+        return None
 
     def _synthetic_batch_action(self, turn: AssistantTurn, *, step_id: str) -> CandidateAction:
         return CandidateAction(

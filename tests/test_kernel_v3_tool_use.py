@@ -130,6 +130,45 @@ def test_tool_discovery_select_query_loads_exact_tools_and_reports_missing() -> 
     assert result.content["tools"][0]["input_schema"]["ticker"]["required"] is True
 
 
+def test_invalid_tool_payload_points_model_to_tool_discovery_recovery() -> None:
+    registry = ToolRegistry.with_builtin_respond()
+    registry.register(
+        "finance.metric.fetch",
+        _noop_tool,
+        manifest=ToolManifest(
+            name="finance.metric.fetch",
+            version="1",
+            resource_kind="finance",
+            operator_kind="fetch",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Fetch a typed finance metric.",
+            input_schema={"ticker": {"type": "str", "required": True, "min_length": 1}},
+            runtime={"should_defer": True, "read_only": True},
+        ),
+    )
+
+    observation = _execute_with_policy(
+        registry,
+        CandidateAction(
+            action_id="act-invalid-payload",
+            kind="tool",
+            name="finance.metric.fetch",
+            description="fetch without required ticker",
+            score=1.0,
+            payload={},
+            reasons=["need_metric"],
+            side_effect_class="read",
+        ),
+    )
+
+    assert observation.status == "blocked"
+    assert observation.content["reason"] == "invalid_tool_payload"
+    assert observation.content["schema_available_via"] == TOOL_DISCOVERY_NAME
+    assert "select:finance.metric.fetch" in observation.content["recovery_hint"]
+
+
 def test_tool_use_context_exposes_runtime_spec_to_executors() -> None:
     action = CandidateAction(
         action_id="act-runtime",
@@ -332,6 +371,35 @@ def test_streaming_tool_executor_abort_callback_reaches_running_siblings() -> No
     assert abort_calls == [("slow", "sibling_tool_failed")]
     assert {outcome["item"] for outcome in outcomes} == {"slow", "fail"}
     assert {outcome["status"] for outcome in outcomes} == {"cancelled", "failed"}
+
+
+def test_streaming_tool_executor_converts_host_exception_to_outcome() -> None:
+    executor = StreamingToolExecutor(max_concurrency=1)
+
+    def execute_one(item: str) -> dict[str, object]:
+        raise RuntimeError(f"host failure: {item}")
+
+    outcomes = executor.execute_batches(
+        ["bad"],
+        execute_one=execute_one,
+        is_concurrency_safe=lambda _item: True,
+        is_failed=lambda outcome: outcome["status"] != "ok",
+        exception_one=lambda item, exc: {
+            "status": "failed",
+            "item": item,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        },
+    )
+
+    assert outcomes == [
+        {
+            "status": "failed",
+            "item": "bad",
+            "error_type": "RuntimeError",
+            "error_message": "host failure: bad",
+        }
+    ]
 
 
 def test_tool_result_projection_preserves_shape_and_budget_state() -> None:

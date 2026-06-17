@@ -541,6 +541,25 @@ benchmark CLI tests plus `py_compile`), and an actual temporary CLI smoke
 returned the expected blocked status without writing output files.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
+The next 2026-06-18 mature-loop checkpoint closes three more loop-host
+contracts copied from the inspected TypeScript agent-loop architecture. Live
+model preflight can now import `DEEPSEEK_API_KEY` from an explicit key file or
+the local `.holo_runtime/secrets/deepseek.key` without exposing the key value;
+streaming provider continuations now stop immediately when a just-executed tool
+round hits a host budget guard such as `max_tool_calls`; and
+`StreamingToolExecutor` can convert host-side execution exceptions into a
+normal `tool_host_exception` tool-result observation instead of crashing the
+agent loop. Invalid tool payloads now include a model-visible recovery protocol:
+inspect the schema with `tool.discovery query='select:<tool>'`, then retry with
+the returned input schema. A live DeepSeek model-smoke succeeded through the
+local key-file path. A live FinanceBench probe for `financebench_id_04672`
+completed end-to-end after the continuation guard but failed
+`numeric_outside_tolerance` (`0/1`, matched `1.577` vs expected `8.7` in
+post-run dev scoring), so it is diagnostic evidence only, not a finance score
+improvement. Final structural validation passed (`129` core
+deep-loop/tool/provider/processor/finance-open/workloop tests, `61` finance
+benchmark harness tests, and `git diff --check`), with targeted
+tool/deep/provider-native checks covered inside that set.
 The debug50 architecture reset is recorded in
 `docs/KERNEL_V3_DEBUG50_REQUIREMENTS_AND_GENERIC_FINANCE_LOOP_2026-06-17_ZH.md`.
 It stops per-question patching, groups the first 50 FinanceBench debug prompts

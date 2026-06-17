@@ -1257,3 +1257,90 @@ git diff --check
 说明：这是 live diagnostic 驱动的 agent-loop 稳定性修复，不是新的
 FinanceBench/FinQA score。下一步做 live debug50 类型簇时，这个边界应防止工具预算
 耗尽后继续向模型发送 20-30 万字符级上下文。
+
+## 30. Mature-loop exception/result recovery checkpoint
+
+用户再次明确：优先照搬成熟 agent loop 的实现思想，不再自造低层循环。本轮继续
+对照本地 TypeScript 项目的 `QueryEngine`、`query.ts`、
+`StreamingToolExecutor`、`toolExecution.ts`、`Tool.ts` 和 `ToolSearchTool`。
+这次迁移的重点不是 UI、命令系统或多 agent，而是单 agent 工具闭环：
+
+- 模型发出 tool use；
+- host 做 schema、权限、预算、并发、超时、执行、记录；
+- 每个 tool use 都必须得到 tool result，包括失败、取消、host 异常；
+- tool result 以 bounded provider continuation 和 durable journal/artifact 形式回到下一轮；
+- schema 不清时通过 tool discovery 恢复，而不是让模型盲猜参数。
+
+本轮补齐：
+
+- live 模型预检支持从显式 `DEEPSEEK_API_KEY_FILE`、
+  `HOLO_DEEPSEEK_API_KEY_FILE` 或默认 `.holo_runtime/secrets/deepseek.key`
+  导入 key；诊断只暴露来源，不打印密钥。
+- `_live_processor_fabric(...)` 对 DeepSeek provider 也走同一 preflight，避免
+  `model-smoke`/chat/agent/bench 路径各自失败。
+- streaming provider continuation 在每轮工具结果后检查刚产生的
+  `_ToolExecutionItem`；如果出现 `max_tool_calls` / `max_network_fetches`
+  等 host budget guard，立即写
+  `holo.kernel_v3.provider_tool_result_continuation_budget_guard.v1` 并停止继续
+  调 provider。外层 deep loop 从 journaled batch 进入 host guard/finalize。
+- `StreamingToolExecutor` 新增 `exception_one` 回调。执行线程里的 host 异常
+  可以被转换成 outcome，而不是冒泡打断整个 loop。
+- `DeepAgentLoopController` 把该回调绑定为 `tool_host_exception` observation，
+  保留 `tool_call_id`、action、artifact 和 batch 结果；模型/evaluator 下一轮
+  看到的是失败工具结果，不是进程崩溃。
+- `ToolRegistry` 对 `invalid_tool_payload` 增加 model-visible 恢复协议：
+  `schema_available_via=tool.discovery`，并提示
+  `tool.discovery query='select:<tool>'` 后按返回 `input_schema` 重试。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_tool_use.py::test_invalid_tool_payload_points_model_to_tool_discovery_recovery \
+  tests/test_kernel_v3_tool_use.py::test_streaming_tool_executor_converts_host_exception_to_outcome -q
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_deep_agent_loop.py::test_deep_agent_loop_records_host_tool_exception_as_tool_result \
+  tests/test_kernel_v3_deep_agent_loop.py::test_streaming_provider_continuation_stops_when_round_hits_tool_budget_guard -q
+.venv/bin/python -m py_compile \
+  kernel_v3/tool_use.py kernel_v3/deep_loop.py kernel_v3/tools.py \
+  tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_deep_agent_loop.py
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_tool_use.py \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_provider_native_tools.py -q
+```
+
+结果：
+
+- targeted tool-use tests: `2 passed in 0.13s`
+- targeted deep-loop tests: `2 passed in 0.57s`
+- `py_compile` passed
+- broader tool/deep/provider-native set: `62 passed in 3.99s`
+- final core loop/tool/provider/processor/finance-open/workloop set:
+  `129 passed in 18.77s`
+- final finance benchmark harness structural tests: `61 passed in 175.32s`
+- `git diff --check` passed
+
+同一 checkpoint 线还保留上一轮结构验证结果：
+
+- core loop/tool/provider/finance-open set: `126 passed in 18.97s`
+- finance benchmark harness structural tests: `61 passed in 169.30s`
+
+Live 诊断：
+
+- DeepSeek `model-smoke` 通过本地 key-file preflight 成功返回结构化
+  `planner.propose`，文本为 `model smoke ok`。这是 provider/key 连通性证据，
+  不是金融分数。
+- `financebench_id_04672` live probe 在 streaming continuation guard 后完整结束，
+  不再需要手动 interrupt；但结果为 `numeric_outside_tolerance`，`0/1`，
+  matched values 包含 `1.577`，dev-gold post-run expected numeric 为 `8.7`。
+  该 run 证明 provider/SEC/tool loop 可以结束并被评分，但金融答案仍失败。
+
+结论：
+
+- 可以声明：成熟 loop 的 key preflight、streaming budget stop、host exception
+  result recovery、invalid payload discovery recovery 已落地并通过结构测试。
+- 不可以声明：FinanceBench/FinQA 准确率提升。
+- 下一步应继续从 `financebench_id_04672` 的 live journal 复盘 slot/statement
+  binding：为什么缺 `balance_sheet net PP&E` 时 finalizer 仍用 cash-flow PP&E
+  purchases 或错误数值完成。这是证据槽和合成 gate 的通用问题，不应写成 3M 规则。
