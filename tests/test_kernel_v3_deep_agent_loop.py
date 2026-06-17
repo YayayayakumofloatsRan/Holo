@@ -1124,6 +1124,55 @@ def test_deep_agent_loop_consumes_streamed_tool_call_delta() -> None:
     assert batch.data["content"]["results"][0]["tool"] == "alpha.read"
 
 
+def test_streaming_loop_injects_tool_results_into_provider_continuation() -> None:
+    registry = ToolRegistry()
+    registry.register("alpha.read", _read_tool("alpha"))
+    journal = JournalStore.in_memory()
+    provider = _ToolResultContinuationProvider()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        tool_manifests=registry.manifests(),
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done after tool"),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("read alpha and continue with tool result")
+
+    assert result.status == "completed"
+    assert len(provider.requests) == 2
+    continuation_messages = provider.requests[1].parameters["provider_messages"]
+    assert [message["role"] for message in continuation_messages] == ["user", "assistant", "tool"]
+    assert continuation_messages[1]["tool_calls"][0]["id"] == "tc-alpha"
+    tool_payload = json.loads(continuation_messages[2]["content"])
+    assert tool_payload["schema"] == "holo.kernel_v3.provider_tool_result_message.v1"
+    assert tool_payload["tool"] == "alpha.read"
+    assert tool_payload["content_projection"]["shape"]["type"] == "object"
+
+    updates = journal.records(task_id=result.task_id, kind="provider_conversation_update")
+    assert updates[0].data["tool_result_count"] == 1
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    continuation = batch.data["content"]["assistant_continuation"]
+    assert continuation["source"] == "provider_tool_result_continuation"
+    assert continuation["has_final_answer"] is True
+    assert "done after tool" in continuation["text_preview"]
+
+
 def test_streamed_malformed_tool_arguments_become_parse_error_observation() -> None:
     journal = JournalStore.in_memory()
     planner = ModelAssistantTurnPlanner(
@@ -1704,6 +1753,49 @@ class _StreamingToolCallProvider:
             event_type="stream_end",
             request_id=request.request_id,
             sequence=3,
+            delta={"status": "ok"},
+        )
+
+
+class _ToolResultContinuationProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def __init__(self) -> None:
+        self.requests: list[ProcessorRequest] = []
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        self.requests.append(request)
+        provider_messages = request.parameters.get("provider_messages")
+        if isinstance(provider_messages, list):
+            assert provider_messages[-1]["role"] == "tool"
+            yield ProcessorStreamEvent(
+                event_type="stream_end",
+                request_id=request.request_id,
+                sequence=1,
+                delta={"status": "ok", "text": '{"final_answer":"done after tool"}'},
+            )
+            return
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=1,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-alpha",
+                        "function": {
+                            "name": "alpha.read",
+                            "arguments": '{"query":"A"}',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=2,
             delta={"status": "ok"},
         )
 

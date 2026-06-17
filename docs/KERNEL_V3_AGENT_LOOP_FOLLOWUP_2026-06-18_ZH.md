@@ -515,3 +515,54 @@ deferred tool 的 schema，只能再绕一次 `tool.discovery`。本轮继续对
 
 剩余 P0 继续缩小：下一块应做运行中 progress/result 注入同一 provider conversation，
 然后按 FB/FQA debug50 题型簇做 live 验证，而不是继续做长回归或单题补丁。
+
+## 16. Provider tool-result continuation checkpoint
+
+成熟 TypeScript loop 的另一个关键点是 tool_use 与 tool_result 在 provider conversation
+里闭合：模型发出工具调用后，host 执行工具，再把 tool result 作为下一条消息送回同一
+provider/model 会话，而不是只等外层 loop 重新编译上下文。Holo 之前已经能 streaming
+执行工具，但工具结果只进入 journal/context，provider 本轮看不到结果。本轮补上这个
+结构接口。
+
+实现：
+
+- `AssistantTurnStream` 新增 `provider_messages` 和 `continue_events` callback。
+  `ModelAssistantTurnPlanner.stream_turn(...)` 初始请求仍走 provider-native tools；当
+  deep loop 产生工具结果后，可以通过 callback 向同一 provider/model 发 continuation。
+- `DeepAgentLoopController._execute_streaming_turn(...)` 在 streamed tools 执行完成后，
+  组装 provider-compatible messages：
+  - 原始 user prompt；
+  - assistant tool_calls，其中 tool name 使用 provider 原始/native name，arguments
+    使用 provider 原始 JSON；
+  - 每个 tool 的 bounded `role=tool` result，内容为
+    `holo.kernel_v3.provider_tool_result_message.v1`，只包含 observation id/status/source、
+    content projection、artifact refs 和 host boundary。
+- continuation stream 的文本会进入 deep `tool_batch_result.content.assistant_continuation`，
+  evaluator 仍然决定是否 final；host 不把 continuation 文本直接当作金融正确答案。
+- 每次注入写入 `provider_conversation_update` ledger，记录 message count 和 tool result
+  count，方便 live run 进程可视化与排障。
+- 如果 continuation 再次返回 tool_call_delta，目前记录为
+  `tool_call_delta_after_tool_result_continuation` parse error，让外层 loop 重规划；这避免
+  在第一版里引入无界 provider recursion。
+
+边界：这是运行时消息闭合，不是金融题规则。工具结果是 bounded projection，完整输出仍在
+Holo journal/artifact；模型仍然负责解释工具结果、决定下一步、绑定公式和最终回答。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_processor_streaming.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase1_journal_store.py tests/test_kernel_v3_phase3_context_compiler.py tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_processor_streaming.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_tool_readiness.py tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_phase61_workloop.py -q
+```
+
+结果：
+
+- `30 passed in 3.32s`
+- `350 passed in 11.39s`
+- `498 passed in 32.65s`
+
+至此，单 agent loop 的 P0 substrate 已经具备：streaming tool executor、tool-use context、
+tool discovery、context updates、context-aware tool expansion、tool-result provider
+continuation、budget guard、agent trace 和 artifact/result replacement。下一步必须进入
+FB/FQA debug50 题型簇 live 验证，用真实线上做题结果来驱动剩余修复。

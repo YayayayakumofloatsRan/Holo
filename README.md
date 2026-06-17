@@ -270,6 +270,15 @@ tool set, with token-aware visible-tool limits that prioritize `always_load` and
 context-requested tools while leaving overflow tools discoverable through
 `tool.discovery`. Targeted structure tests pass (`497` kernel-v3 loop/context/
 tool/finance tests). This is substrate evidence, not a benchmark score.
+The next mature-loop continuation closes the streamed provider tool-result
+message path. When a provider-native stream emits tool calls, the deep loop now
+executes bounded tools, builds provider-compatible assistant/tool messages, and
+sends a continuation request to the same provider/model with bounded
+`holo.kernel_v3.provider_tool_result_message.v1` content. The resulting
+assistant continuation is recorded in the tool batch observation, while the
+evaluator still decides finality. Targeted structure tests pass (`498`
+kernel-v3 loop/context/tool/finance tests). This is loop substrate evidence, not
+a benchmark score.
 The provider-message replacement continuation extends replacement beyond prompt
 strings: deep-loop assistant prompts, `ProcessorFabric` JSON prompts, request
 parameters, OpenAI-compatible `provider_messages`, and structured provider
@@ -284,8 +293,7 @@ batches the same runtime timeout/abort boundary as streaming tool execution:
 over-time tools now produce `tool_call_timeout` observations and journal
 `abort_requested` events instead of blocking the loop. Remaining gaps are
 process/network-level signal propagation for already-running non-cooperative
-tools, runtime progress/result injection into the same provider conversation,
-and type-family live debug50 evidence.
+tools and type-family live debug50 evidence.
 This estimate is architectural only, not a FinanceBench or FinQA score.
 The 2026-06-18 follow-up is recorded in
 `docs/KERNEL_V3_AGENT_LOOP_FOLLOWUP_2026-06-18_ZH.md`. A live type-cluster probe

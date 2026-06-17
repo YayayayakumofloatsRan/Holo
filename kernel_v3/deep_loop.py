@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, JsonObject, Observation, ToolManifest
@@ -142,6 +142,8 @@ class AssistantTurnStream:
     index: int
     events: Iterable[ProcessorStreamEvent]
     tool_name_map: dict[str, str]
+    provider_messages: list[JsonObject] = field(default_factory=list)
+    continue_events: Callable[[list[JsonObject]], Iterable[ProcessorStreamEvent]] | None = None
 
 
 class AssistantTurnPlanner(Protocol):
@@ -243,6 +245,25 @@ class ModelAssistantTurnPlanner:
         if native_surface.tools:
             stream_parameters.update(native_surface.to_parameters())
             stream_parameters.setdefault("tool_choice", "auto")
+        provider_messages = [{"role": "user", "content": prompt}]
+
+        def continue_events(messages: list[JsonObject]) -> Iterable[ProcessorStreamEvent]:
+            return self.fabric.iter_stream_events(
+                task_type="assistant.turn",
+                task_id=task_id,
+                run_id=run_id,
+                context_id=context.context_id,
+                prompt=prompt,
+                step_id=step_id,
+                provider=self.provider,
+                model=self.model,
+                parameters={
+                    **stream_parameters,
+                    "streaming_planner_continuation": True,
+                    "provider_messages": messages,
+                },
+            )
+
         return AssistantTurnStream(
             turn_id=f"turn-stream-{index}",
             index=index,
@@ -258,6 +279,8 @@ class ModelAssistantTurnPlanner:
                 parameters=stream_parameters,
             ),
             tool_name_map=native_surface.name_map,
+            provider_messages=provider_messages,
+            continue_events=continue_events,
         )
 
 
@@ -511,6 +534,7 @@ class DeepAgentLoopController(LoopControllerV3):
         executed_chunk_keys: set[str] = set()
         tool_call_requests: list[ToolCallRequest] = []
         execution_items: list[_ToolExecutionItem] = []
+        provider_continuation: JsonObject = {}
         executor = StreamingToolExecutor(
             emit_event=lambda event: self._append_tool_execution_event(task, step_id=step_id, event=event),
             max_concurrency=4,
@@ -645,10 +669,60 @@ class DeepAgentLoopController(LoopControllerV3):
                 self._append_tool_execution_observation(task, step_id=step_id, item=item)
 
             record_execution_items(executor.finish_remaining())
+            if execution_items and callable(stream.continue_events):
+                continuation_messages = _provider_tool_result_continuation_messages(
+                    stream.provider_messages,
+                    assistant_text="".join(text_parts),
+                    tool_chunks=tool_chunks,
+                    execution_items=execution_items,
+                )
+                if continuation_messages:
+                    self.journal.append(
+                        task_id=task.task_id,
+                        run_id=task.run_id,
+                        step_id=step_id,
+                        kind="provider_conversation_update",
+                        data=redact_journal_data(
+                            {
+                                "schema": "holo.kernel_v3.provider_tool_result_continuation.v1",
+                                "turn_id": stream.turn_id,
+                                "message_count": len(continuation_messages),
+                                "tool_result_count": sum(1 for item in continuation_messages if item.get("role") == "tool"),
+                                "host_boundary": (
+                                    "provider continuation receives bounded tool-result messages; "
+                                    "host still validates all future tool calls"
+                                ),
+                            }
+                        ),
+                        event_ref=self._last_ref(task.task_id, "event_ref"),
+                        state_delta={"provider_conversation_update": "tool_results_injected"},
+                    )
+                    provider_continuation = _consume_provider_continuation_events(
+                        stream.continue_events(continuation_messages)
+                    )
         finally:
             executor.close()
 
         text = "".join(text_parts) or final_text
+        continuation_text = str(provider_continuation.get("text") or "")
+        if continuation_text:
+            parsed_continuation = _try_parse_json_object(continuation_text)
+            if parsed_continuation is not None:
+                continuation_turn = _assistant_turn_from_json(parsed_continuation, index=stream.index)
+                if continuation_turn.final_answer:
+                    final_text = continuation_turn.final_answer
+                elif continuation_turn.message:
+                    final_text = continuation_turn.message
+            else:
+                final_text = continuation_text
+        if provider_continuation.get("tool_call_delta_seen"):
+            parse_errors.append(
+                ToolCallParseError(
+                    tool_call_id=f"provider-continuation-{stream.index}",
+                    error="tool_call_delta_after_tool_result_continuation",
+                    raw_preview=_preview_json_value(provider_continuation, limit=400),
+                )
+            )
         parsed = _try_parse_json_object(text)
         if parsed is not None and not tool_chunks and not parse_errors:
             return _StreamingTurnExecution(
@@ -660,11 +734,16 @@ class DeepAgentLoopController(LoopControllerV3):
             )
         turn = AssistantTurn(
             turn_id=stream.turn_id,
-            message=text or None,
+            message=(final_text or text) or None,
             tool_calls=tool_call_requests,
-            final_answer=None if tool_call_requests or parse_errors else (text or None),
+            final_answer=(final_text or None) if provider_continuation and not parse_errors else (None if tool_call_requests or parse_errors else (text or None)),
             stop_reason="processor_stream_error" if parse_errors and not tool_call_requests else finish_reason,
-            reasons=["processor_stream", "incremental_tool_execution"] + ([finish_reason] if finish_reason else []),
+            reasons=[
+                "processor_stream",
+                "incremental_tool_execution",
+                *(["provider_tool_result_continuation"] if provider_continuation else []),
+                *([finish_reason] if finish_reason else []),
+            ],
             parse_errors=parse_errors,
         )
         return _StreamingTurnExecution(
@@ -1200,6 +1279,7 @@ class DeepAgentLoopController(LoopControllerV3):
                 "results": results,
                 "new_replacements": new_replacements,
                 "replacement_state": self._tool_result_replacement_state(task.task_id).to_dict(),
+                **_assistant_continuation_for_batch(turn),
             },
             observed_at_ms=self.clock_ms(),
             action_id=None,
@@ -2472,6 +2552,132 @@ def _with_tool_call_id(observation: Observation, tool_call_id: str) -> Observati
         action_id=observation.action_id,
         tool_call_id=observation.tool_call_id or tool_call_id,
     )
+
+
+def _provider_tool_result_continuation_messages(
+    base_messages: list[JsonObject],
+    *,
+    assistant_text: str,
+    tool_chunks: dict[str, dict[str, object]],
+    execution_items: list[_ToolExecutionItem],
+) -> list[JsonObject]:
+    chunks_by_id = {
+        str(chunk.get("id") or ""): chunk
+        for chunk in tool_chunks.values()
+        if str(chunk.get("id") or "")
+    }
+    tool_calls: list[JsonObject] = []
+    tool_messages: list[JsonObject] = []
+    for item in execution_items:
+        chunk = chunks_by_id.get(item.tool_call_id, {})
+        raw_name = str(chunk.get("name") or item.action.name or "")
+        raw_arguments = str(chunk.get("arguments") or "").strip()
+        if not raw_arguments:
+            raw_arguments = json.dumps(item.action.payload, ensure_ascii=False, sort_keys=True)
+        if not raw_name:
+            continue
+        tool_calls.append(
+            {
+                "id": item.tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": raw_name,
+                    "arguments": raw_arguments,
+                },
+            }
+        )
+        tool_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": item.tool_call_id,
+                "content": json.dumps(_provider_tool_result_content(item), ensure_ascii=False, sort_keys=True),
+            }
+        )
+    if not tool_calls:
+        return []
+    messages = [dict(message) for message in base_messages if isinstance(message, dict)]
+    messages.append(
+        {
+            "role": "assistant",
+            "content": assistant_text or None,
+            "tool_calls": tool_calls,
+        }
+    )
+    messages.extend(tool_messages)
+    return messages
+
+
+def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
+    artifact_refs = [
+        str(artifact.artifact_id)
+        for artifact in item.artifact_refs
+        if hasattr(artifact, "artifact_id")
+    ]
+    projection = project_tool_result_content(item.observation.content, limit=1600).to_dict()
+    return {
+        "schema": "holo.kernel_v3.provider_tool_result_message.v1",
+        "tool": item.action.name,
+        "tool_call_id": item.tool_call_id,
+        "status": item.observation.status,
+        "observation_id": item.observation.observation_id,
+        "observation_kind": item.observation.kind,
+        "source": item.observation.source,
+        "content_projection": projection,
+        "artifact_refs": artifact_refs[:8],
+        "host_boundary": "bounded tool result for provider continuation; full payload remains in Holo artifacts/journal",
+    }
+
+
+def _consume_provider_continuation_events(events: Iterable[ProcessorStreamEvent]) -> JsonObject:
+    text_parts: list[str] = []
+    final_text = ""
+    event_count = 0
+    tool_call_delta_seen = False
+    errors: list[JsonObject] = []
+    for event in events:
+        event_count += 1
+        delta = event.delta
+        if event.event_type == "content_delta":
+            text = delta.get("text")
+            if isinstance(text, str):
+                text_parts.append(text)
+        elif event.event_type == "stream_end":
+            text = delta.get("text")
+            if isinstance(text, str):
+                final_text = text
+            status = delta.get("status")
+            if isinstance(status, str) and status != "ok":
+                errors.append({"status": status, "delta": _preview_json_value(delta, limit=320)})
+        elif event.event_type == "tool_call_delta":
+            tool_call_delta_seen = True
+        elif event.event_type == "stream_error":
+            errors.append({"status": "stream_error", "delta": _preview_json_value(delta, limit=320)})
+    text = "".join(text_parts) or final_text
+    result: JsonObject = {
+        "schema": "holo.kernel_v3.provider_tool_result_continuation_result.v1",
+        "event_count": event_count,
+        "text": text,
+        "text_preview": _preview_text(text, 480),
+        "tool_call_delta_seen": tool_call_delta_seen,
+    }
+    if errors:
+        result["errors"] = errors[:4]
+    return result
+
+
+def _assistant_continuation_for_batch(turn: AssistantTurn) -> JsonObject:
+    if "provider_tool_result_continuation" not in set(turn.reasons or []):
+        return {}
+    text = turn.final_answer or turn.message or ""
+    return {
+        "assistant_continuation": {
+            "schema": "holo.kernel_v3.assistant_continuation.v1",
+            "source": "provider_tool_result_continuation",
+            "text_preview": _preview_text(text, 600),
+            "has_final_answer": bool(turn.final_answer),
+            "host_boundary": "continuation text is model output after bounded tool results; evaluator still decides finality",
+        }
+    }
 
 
 def _tool_context_updates_for_result(
