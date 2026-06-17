@@ -1173,6 +1173,59 @@ def test_streaming_loop_injects_tool_results_into_provider_continuation() -> Non
     assert "done after tool" in continuation["text_preview"]
 
 
+def test_streaming_loop_continues_provider_tool_result_rounds_until_final_text() -> None:
+    registry = ToolRegistry()
+    registry.register("alpha.read", _read_tool("alpha"))
+    registry.register("beta.read", _read_tool("beta"))
+    journal = JournalStore.in_memory()
+    provider = _MultiRoundToolResultContinuationProvider()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read", "beta.read"},
+        tool_manifests=registry.manifests(),
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done after beta"),
+        max_steps=3,
+        max_tool_calls=4,
+    )
+
+    result = loop.run("read alpha, then decide whether beta is needed")
+
+    assert result.status == "completed"
+    assert len(provider.requests) == 3
+    second_messages = provider.requests[1].parameters["provider_messages"]
+    assert [message["role"] for message in second_messages] == ["user", "assistant", "tool"]
+    third_messages = provider.requests[2].parameters["provider_messages"]
+    assert [message["role"] for message in third_messages] == ["user", "assistant", "tool", "assistant", "tool"]
+    assert third_messages[3]["tool_calls"][0]["id"] == "tc-beta"
+    beta_payload = json.loads(third_messages[4]["content"])
+    assert beta_payload["tool"] == "beta.read"
+
+    updates = journal.records(task_id=result.task_id, kind="provider_conversation_update")
+    assert [record.data["continuation_round"] for record in updates] == [1, 2]
+    turn = journal.records(task_id=result.task_id, kind="assistant_turn")[0]
+    assert turn.data["tool_call_count"] == 2
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    assert batch.data["content"]["tool_call_count"] == 2
+    assert {item["tool"] for item in batch.data["content"]["results"]} == {"alpha.read", "beta.read"}
+    continuation = batch.data["content"]["assistant_continuation"]
+    assert continuation["has_final_answer"] is True
+    assert "done after beta" in continuation["text_preview"]
+
+
 def test_streamed_malformed_tool_arguments_become_parse_error_observation() -> None:
     journal = JournalStore.in_memory()
     planner = ModelAssistantTurnPlanner(
@@ -1774,6 +1827,75 @@ class _ToolResultContinuationProvider:
                 request_id=request.request_id,
                 sequence=1,
                 delta={"status": "ok", "text": '{"final_answer":"done after tool"}'},
+            )
+            return
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=1,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-alpha",
+                        "function": {
+                            "name": "alpha.read",
+                            "arguments": '{"query":"A"}',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=2,
+            delta={"status": "ok"},
+        )
+
+
+class _MultiRoundToolResultContinuationProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def __init__(self) -> None:
+        self.requests: list[ProcessorRequest] = []
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        self.requests.append(request)
+        provider_messages = request.parameters.get("provider_messages")
+        if isinstance(provider_messages, list) and len(provider_messages) == 3:
+            assert provider_messages[-1]["role"] == "tool"
+            yield ProcessorStreamEvent(
+                event_type="tool_call_delta",
+                request_id=request.request_id,
+                sequence=1,
+                delta={
+                    "tool_calls": [
+                        {
+                            "id": "tc-beta",
+                            "function": {
+                                "name": "beta.read",
+                                "arguments": '{"query":"B"}',
+                            },
+                        }
+                    ]
+                },
+            )
+            yield ProcessorStreamEvent(
+                event_type="stream_end",
+                request_id=request.request_id,
+                sequence=2,
+                delta={"status": "ok"},
+            )
+            return
+        if isinstance(provider_messages, list):
+            assert len(provider_messages) == 5
+            assert provider_messages[-1]["role"] == "tool"
+            yield ProcessorStreamEvent(
+                event_type="stream_end",
+                request_id=request.request_id,
+                sequence=1,
+                delta={"status": "ok", "text": '{"final_answer":"done after beta"}'},
             )
             return
         yield ProcessorStreamEvent(

@@ -274,11 +274,14 @@ The next mature-loop continuation closes the streamed provider tool-result
 message path. When a provider-native stream emits tool calls, the deep loop now
 executes bounded tools, builds provider-compatible assistant/tool messages, and
 sends a continuation request to the same provider/model with bounded
-`holo.kernel_v3.provider_tool_result_message.v1` content. The resulting
+`holo.kernel_v3.provider_tool_result_message.v1` content. Continuations can now
+emit further provider-native tool calls: the same streaming parser/executor runs
+them, appends new bounded tool results, and repeats the provider continuation up
+to a host-owned cap while deduplicating already-seen tool-call ids. The resulting
 assistant continuation is recorded in the tool batch observation, while the
-evaluator still decides finality. Targeted structure tests pass (`498`
-kernel-v3 loop/context/tool/finance tests). This is loop substrate evidence, not
-a benchmark score.
+evaluator still decides finality. Targeted structure tests pass (`31` deep-loop
+tests, `351` loop/native/processor/tool/finance tests, and `499` kernel-v3
+structural tests). This is loop substrate evidence, not a benchmark score.
 The provider-message replacement continuation extends replacement beyond prompt
 strings: deep-loop assistant prompts, `ProcessorFabric` JSON prompts, request
 parameters, OpenAI-compatible `provider_messages`, and structured provider

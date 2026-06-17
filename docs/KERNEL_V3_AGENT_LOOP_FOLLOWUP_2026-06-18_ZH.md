@@ -522,7 +522,7 @@ deferred tool 的 schema，只能再绕一次 `tool.discovery`。本轮继续对
 里闭合：模型发出工具调用后，host 执行工具，再把 tool result 作为下一条消息送回同一
 provider/model 会话，而不是只等外层 loop 重新编译上下文。Holo 之前已经能 streaming
 执行工具，但工具结果只进入 journal/context，provider 本轮看不到结果。本轮补上这个
-结构接口。
+结构接口，并继续推进到有限多轮 continuation。
 
 实现：
 
@@ -539,11 +539,17 @@ provider/model 会话，而不是只等外层 loop 重新编译上下文。Holo 
     content projection、artifact refs 和 host boundary。
 - continuation stream 的文本会进入 deep `tool_batch_result.content.assistant_continuation`，
   evaluator 仍然决定是否 final；host 不把 continuation 文本直接当作金融正确答案。
+- 如果 continuation 再次返回 provider-native `tool_call_delta`，现在不再当作
+  `tool_call_delta_after_tool_result_continuation` parse error，而是回到同一个 streaming
+  解析/执行状态机：解析工具名和原始参数、走 policy/budget/timeout、执行工具、写
+  observation，然后把新的 bounded tool result 再追加进同一个 provider conversation。
 - 每次注入写入 `provider_conversation_update` ledger，记录 message count 和 tool result
   count，方便 live run 进程可视化与排障。
-- 如果 continuation 再次返回 tool_call_delta，目前记录为
-  `tool_call_delta_after_tool_result_continuation` parse error，让外层 loop 重规划；这避免
-  在第一版里引入无界 provider recursion。
+- 为避免 provider adapter 或异常模型重复吐同一 tool_use，单个 provider conversation
+  内已经见过的 `tool_call_id` 不会重复执行；这修复了 fake provider 不理解
+  `provider_messages` 时自激循环到工具上限的问题。
+- continuation 有 host-owned 上限：`_MAX_PROVIDER_TOOL_RESULT_CONTINUATIONS = 16`。
+  超限后不继续递归，已产生的工具结果进入 journal/context，由外层 deep loop 重规划。
 
 边界：这是运行时消息闭合，不是金融题规则。工具结果是 bounded projection，完整输出仍在
 Holo journal/artifact；模型仍然负责解释工具结果、决定下一步、绑定公式和最终回答。
@@ -558,11 +564,11 @@ Holo journal/artifact；模型仍然负责解释工具结果、决定下一步�
 
 结果：
 
-- `30 passed in 3.32s`
-- `350 passed in 11.39s`
-- `498 passed in 32.65s`
+- `31 passed in 3.32s`
+- `351 passed in 11.63s`
+- `499 passed in 32.99s`
 
 至此，单 agent loop 的 P0 substrate 已经具备：streaming tool executor、tool-use context、
 tool discovery、context updates、context-aware tool expansion、tool-result provider
-continuation、budget guard、agent trace 和 artifact/result replacement。下一步必须进入
-FB/FQA debug50 题型簇 live 验证，用真实线上做题结果来驱动剩余修复。
+multi-round continuation、budget guard、agent trace 和 artifact/result replacement。下一步
+必须进入 FB/FQA debug50 题型簇 live 验证，用真实线上做题结果来驱动剩余修复。

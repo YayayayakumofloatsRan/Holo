@@ -70,6 +70,9 @@ replanning. If enough evidence is present, return no tool_calls and put the
 answer in final_answer. Do not include markdown fences or prose outside JSON."""
 
 
+_MAX_PROVIDER_TOOL_RESULT_CONTINUATIONS = 16
+
+
 @dataclass(frozen=True)
 class ToolCallRequest:
     tool_call_id: str
@@ -527,14 +530,21 @@ class DeepAgentLoopController(LoopControllerV3):
         total_artifact_bytes: int,
     ) -> _StreamingTurnExecution:
         text_parts: list[str] = []
-        final_text = ""
+        initial_final_text = ""
+        terminal_text = ""
+        latest_assistant_text = ""
         finish_reason: str | None = None
         parse_errors: list[ToolCallParseError] = []
         tool_chunks: dict[str, dict[str, object]] = {}
         executed_chunk_keys: set[str] = set()
+        seen_tool_call_ids: set[str] = set()
         tool_call_requests: list[ToolCallRequest] = []
         execution_items: list[_ToolExecutionItem] = []
-        provider_continuation: JsonObject = {}
+        provider_messages = [dict(message) for message in stream.provider_messages if isinstance(message, dict)]
+        provider_continuation_seen = False
+        provider_continuation_limited = False
+        provider_continuation_rounds = 0
+        active_round_items: list[_ToolExecutionItem] | None = None
         executor = StreamingToolExecutor(
             emit_event=lambda event: self._append_tool_execution_event(task, step_id=step_id, event=event),
             max_concurrency=4,
@@ -552,6 +562,8 @@ class DeepAgentLoopController(LoopControllerV3):
                 nonlocal network_fetches, total_artifact_bytes
                 for item in items:
                     execution_items.append(item)
+                    if active_round_items is not None:
+                        active_round_items.append(item)
                     if item.policy_allowed and item.policy_reason == "allowed" and self._is_network_action(item.action, manifest=item.manifest):
                         network_fetches += self._network_action_actual_cost(
                             item.action,
@@ -564,119 +576,179 @@ class DeepAgentLoopController(LoopControllerV3):
             def drain_ready_streaming_tools() -> None:
                 record_execution_items(executor.drain_completed())
 
-            for event in stream.events:
-                drain_ready_streaming_tools()
-                delta = event.delta
-                if event.event_type == "content_delta":
-                    text = delta.get("text")
-                    if isinstance(text, str):
-                        text_parts.append(text)
-                    continue
-                if event.event_type == "finish_delta":
-                    reason = delta.get("finish_reason")
-                    if isinstance(reason, str):
-                        finish_reason = reason
-                    continue
-                if event.event_type == "stream_end":
-                    text = delta.get("text")
-                    if isinstance(text, str):
-                        final_text = text
-                    status = delta.get("status")
-                    if isinstance(status, str) and status != "ok":
-                        parse_errors.append(
-                            ToolCallParseError(
-                                tool_call_id=f"stream-error-{event.sequence}",
-                                error=f"processor_stream_{status}",
+            def consume_provider_round(
+                events: Iterable[ProcessorStreamEvent],
+                *,
+                round_label: str,
+                initial: bool,
+            ) -> tuple[dict[str, dict[str, object]], list[_ToolExecutionItem], str]:
+                nonlocal active_round_items, finish_reason, initial_final_text, latest_assistant_text, terminal_text
+                nonlocal tool_calls, network_fetches
+                round_chunks: dict[str, dict[str, object]] = {}
+                round_items: list[_ToolExecutionItem] = []
+                round_text_parts: list[str] = []
+                round_final_text = ""
+                previous_round_items = active_round_items
+                active_round_items = round_items
+                try:
+                    for event in events:
+                        drain_ready_streaming_tools()
+                        delta = event.delta
+                        if event.event_type == "content_delta":
+                            text = delta.get("text")
+                            if isinstance(text, str):
+                                round_text_parts.append(text)
+                                if initial:
+                                    text_parts.append(text)
+                            continue
+                        if event.event_type == "finish_delta":
+                            reason = delta.get("finish_reason")
+                            if isinstance(reason, str):
+                                finish_reason = reason
+                            continue
+                        if event.event_type == "stream_end":
+                            text = delta.get("text")
+                            if isinstance(text, str):
+                                round_final_text = text
+                                if initial:
+                                    initial_final_text = text
+                            status = delta.get("status")
+                            if isinstance(status, str) and status != "ok":
+                                parse_error = ToolCallParseError(
+                                    tool_call_id=f"{round_label}-stream-error-{event.sequence}",
+                                    error=f"processor_stream_{status}",
+                                    raw_preview=_preview_json_value(delta, limit=400),
+                                )
+                                parse_errors.append(parse_error)
+                                item = self._parse_error_execution_item(
+                                    task,
+                                    AssistantTurn(stream.turn_id, None, []),
+                                    step_id=step_id,
+                                    parse_error=parse_error,
+                                )
+                                execution_items.append(item)
+                                round_items.append(item)
+                                self._append_tool_execution_observation(task, step_id=step_id, item=item)
+                            continue
+                        if event.event_type == "stream_error":
+                            parse_error = ToolCallParseError(
+                                tool_call_id=f"{round_label}-stream-error-{event.sequence}",
+                                error=str(delta.get("error") or "processor_stream_error"),
                                 raw_preview=_preview_json_value(delta, limit=400),
                             )
+                            parse_errors.append(parse_error)
+                            item = self._parse_error_execution_item(
+                                task,
+                                AssistantTurn(stream.turn_id, None, []),
+                                step_id=step_id,
+                                parse_error=parse_error,
+                            )
+                            execution_items.append(item)
+                            round_items.append(item)
+                            self._append_tool_execution_observation(task, step_id=step_id, item=item)
+                            continue
+                        if event.event_type != "tool_call_delta":
+                            continue
+
+                        for raw_call in _stream_tool_call_items(delta.get("tool_calls")):
+                            raw_key = _stream_tool_call_key(raw_call, fallback=f"stream-tool-{len(tool_chunks) + 1}")
+                            key = f"{round_label}:{raw_key}"
+                            current = tool_chunks.setdefault(key, {"id": key, "name": "", "arguments": "", "raw": []})
+                            round_chunks[key] = current
+                            call_id = raw_call.get("id")
+                            if not isinstance(call_id, str):
+                                call_id = raw_call.get("tool_call_id")
+                            if isinstance(call_id, str) and call_id:
+                                current["id"] = call_id
+                            raw_items = current.get("raw")
+                            if isinstance(raw_items, list):
+                                raw_items.append(raw_call)
+                            function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+                            name = raw_call.get("name")
+                            if not isinstance(name, str):
+                                name = function.get("name") if isinstance(function, dict) else None
+                            if isinstance(name, str) and name:
+                                current["name"] = str(current.get("name") or "") + name
+                            arguments = raw_call.get("arguments")
+                            if not isinstance(arguments, str):
+                                arguments = function.get("arguments") if isinstance(function, dict) else None
+                            if isinstance(arguments, str) and arguments:
+                                current["arguments"] = str(current.get("arguments") or "") + arguments
+
+                        for offset, (chunk_key, chunk) in enumerate(round_chunks.items(), start=1):
+                            if chunk_key in executed_chunk_keys:
+                                continue
+                            call = _stream_chunk_ready_tool_call(
+                                chunk,
+                                turn_id=stream.turn_id,
+                                offset=len(tool_call_requests) + offset,
+                                tool_name_map=stream.tool_name_map,
+                            )
+                            if call is None:
+                                continue
+                            executed_chunk_keys.add(chunk_key)
+                            if call.tool_call_id in seen_tool_call_ids:
+                                continue
+                            seen_tool_call_ids.add(call.tool_call_id)
+                            tool_call_requests.append(call)
+                            prepared, tool_calls, network_fetches = self._prepare_tool_call(
+                                task,
+                                turn_id=stream.turn_id,
+                                step_id=step_id,
+                                call=call,
+                                index=len(tool_call_requests),
+                                tool_calls=tool_calls,
+                                network_fetches=network_fetches,
+                            )
+                            executor.add_item(prepared)
+
+                    for offset, (chunk_key, chunk) in enumerate(round_chunks.items(), start=1):
+                        if chunk_key in executed_chunk_keys:
+                            continue
+                        tool_call_id = str(chunk.get("id") or f"{stream.turn_id}-{len(tool_call_requests) + offset}")
+                        executed_chunk_keys.add(chunk_key)
+                        if tool_call_id in seen_tool_call_ids:
+                            continue
+                        seen_tool_call_ids.add(tool_call_id)
+                        parse_error = _stream_chunk_final_parse_error(
+                            chunk,
+                            turn_id=stream.turn_id,
+                            offset=len(tool_call_requests) + offset,
+                            tool_name_map=stream.tool_name_map,
                         )
-                    continue
-                if event.event_type == "stream_error":
-                    parse_errors.append(
-                        ToolCallParseError(
-                            tool_call_id=f"stream-error-{event.sequence}",
-                            error=str(delta.get("error") or "processor_stream_error"),
-                            raw_preview=_preview_json_value(delta, limit=400),
+                        if parse_error is None:
+                            continue
+                        parse_errors.append(parse_error)
+                        tool_calls += 1
+                        item = self._parse_error_execution_item(
+                            task,
+                            AssistantTurn(stream.turn_id, None, []),
+                            step_id=step_id,
+                            parse_error=parse_error,
                         )
-                    )
-                    continue
-                if event.event_type != "tool_call_delta":
-                    continue
+                        execution_items.append(item)
+                        round_items.append(item)
+                        self._append_tool_execution_observation(task, step_id=step_id, item=item)
 
-                for raw_call in _stream_tool_call_items(delta.get("tool_calls")):
-                    key = _stream_tool_call_key(raw_call, fallback=f"stream-tool-{len(tool_chunks) + 1}")
-                    current = tool_chunks.setdefault(key, {"id": key, "name": "", "arguments": "", "raw": []})
-                    call_id = raw_call.get("id")
-                    if not isinstance(call_id, str):
-                        call_id = raw_call.get("tool_call_id")
-                    if isinstance(call_id, str) and call_id:
-                        current["id"] = call_id
-                    raw_items = current.get("raw")
-                    if isinstance(raw_items, list):
-                        raw_items.append(raw_call)
-                    function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
-                    name = raw_call.get("name")
-                    if not isinstance(name, str):
-                        name = function.get("name") if isinstance(function, dict) else None
-                    if isinstance(name, str) and name:
-                        current["name"] = str(current.get("name") or "") + name
-                    arguments = raw_call.get("arguments")
-                    if not isinstance(arguments, str):
-                        arguments = function.get("arguments") if isinstance(function, dict) else None
-                    if isinstance(arguments, str) and arguments:
-                        current["arguments"] = str(current.get("arguments") or "") + arguments
+                    record_execution_items(executor.finish_remaining())
+                finally:
+                    active_round_items = previous_round_items
 
-                for offset, (chunk_key, chunk) in enumerate(tool_chunks.items(), start=1):
-                    if chunk_key in executed_chunk_keys:
-                        continue
-                    call = _stream_chunk_ready_tool_call(
-                        chunk,
-                        turn_id=stream.turn_id,
-                        offset=offset,
-                        tool_name_map=stream.tool_name_map,
-                    )
-                    if call is None:
-                        continue
-                    executed_chunk_keys.add(chunk_key)
-                    tool_call_requests.append(call)
-                    prepared, tool_calls, network_fetches = self._prepare_tool_call(
-                        task,
-                        turn_id=stream.turn_id,
-                        step_id=step_id,
-                        call=call,
-                        index=len(tool_call_requests),
-                        tool_calls=tool_calls,
-                        network_fetches=network_fetches,
-                    )
-                    executor.add_item(prepared)
+                round_text = "".join(round_text_parts) or round_final_text
+                if round_text:
+                    latest_assistant_text = round_text
+                    if not round_items:
+                        terminal_text = _provider_terminal_text(round_text, index=stream.index)
+                return round_chunks, round_items, round_text
 
-            for offset, (chunk_key, chunk) in enumerate(tool_chunks.items(), start=1):
-                if chunk_key in executed_chunk_keys:
-                    continue
-                parse_error = _stream_chunk_final_parse_error(
-                    chunk,
-                    turn_id=stream.turn_id,
-                    offset=offset,
-                    tool_name_map=stream.tool_name_map,
-                )
-                if parse_error is not None:
-                    parse_errors.append(parse_error)
-
-            for parse_error in parse_errors:
-                tool_calls += 1
-                item = self._parse_error_execution_item(task, AssistantTurn(stream.turn_id, None, []), step_id=step_id, parse_error=parse_error)
-                execution_items.append(item)
-                self._append_tool_execution_observation(task, step_id=step_id, item=item)
-
-            record_execution_items(executor.finish_remaining())
-            if execution_items and callable(stream.continue_events):
-                continuation_messages = _provider_tool_result_continuation_messages(
-                    stream.provider_messages,
-                    assistant_text="".join(text_parts),
-                    tool_chunks=tool_chunks,
-                    execution_items=execution_items,
-                )
-                if continuation_messages:
+            round_chunks, round_items, round_text = consume_provider_round(
+                stream.events,
+                round_label="initial",
+                initial=True,
+            )
+            while round_items and callable(stream.continue_events):
+                if provider_continuation_rounds >= _MAX_PROVIDER_TOOL_RESULT_CONTINUATIONS:
+                    provider_continuation_limited = True
                     self.journal.append(
                         task_id=task.task_id,
                         run_id=task.run_id,
@@ -684,45 +756,61 @@ class DeepAgentLoopController(LoopControllerV3):
                         kind="provider_conversation_update",
                         data=redact_journal_data(
                             {
-                                "schema": "holo.kernel_v3.provider_tool_result_continuation.v1",
+                                "schema": "holo.kernel_v3.provider_tool_result_continuation_limit.v1",
                                 "turn_id": stream.turn_id,
-                                "message_count": len(continuation_messages),
-                                "tool_result_count": sum(1 for item in continuation_messages if item.get("role") == "tool"),
+                                "max_continuations": _MAX_PROVIDER_TOOL_RESULT_CONTINUATIONS,
+                                "tool_result_count": len(round_items),
                                 "host_boundary": (
-                                    "provider continuation receives bounded tool-result messages; "
-                                    "host still validates all future tool calls"
+                                    "provider continuation limit reached; outer deep loop will replan from journaled tool results"
                                 ),
                             }
                         ),
                         event_ref=self._last_ref(task.task_id, "event_ref"),
-                        state_delta={"provider_conversation_update": "tool_results_injected"},
+                        state_delta={"provider_conversation_update": "continuation_limit"},
                     )
-                    provider_continuation = _consume_provider_continuation_events(
-                        stream.continue_events(continuation_messages)
-                    )
+                    break
+                continuation_messages = _provider_tool_result_continuation_messages(
+                    provider_messages,
+                    assistant_text=round_text,
+                    tool_chunks=round_chunks,
+                    execution_items=round_items,
+                )
+                if not continuation_messages:
+                    break
+                provider_continuation_rounds += 1
+                provider_continuation_seen = True
+                provider_messages = continuation_messages
+                self.journal.append(
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    step_id=step_id,
+                    kind="provider_conversation_update",
+                    data=redact_journal_data(
+                        {
+                            "schema": "holo.kernel_v3.provider_tool_result_continuation.v1",
+                            "turn_id": stream.turn_id,
+                            "continuation_round": provider_continuation_rounds,
+                            "message_count": len(continuation_messages),
+                            "tool_result_count": sum(1 for item in continuation_messages if item.get("role") == "tool"),
+                            "host_boundary": (
+                                "provider continuation receives bounded tool-result messages; "
+                                "host still validates all future tool calls"
+                            ),
+                        }
+                    ),
+                    event_ref=self._last_ref(task.task_id, "event_ref"),
+                    state_delta={"provider_conversation_update": "tool_results_injected"},
+                )
+                round_chunks, round_items, round_text = consume_provider_round(
+                    stream.continue_events(continuation_messages),
+                    round_label=f"continuation-{provider_continuation_rounds}",
+                    initial=False,
+                )
         finally:
             executor.close()
 
-        text = "".join(text_parts) or final_text
-        continuation_text = str(provider_continuation.get("text") or "")
-        if continuation_text:
-            parsed_continuation = _try_parse_json_object(continuation_text)
-            if parsed_continuation is not None:
-                continuation_turn = _assistant_turn_from_json(parsed_continuation, index=stream.index)
-                if continuation_turn.final_answer:
-                    final_text = continuation_turn.final_answer
-                elif continuation_turn.message:
-                    final_text = continuation_turn.message
-            else:
-                final_text = continuation_text
-        if provider_continuation.get("tool_call_delta_seen"):
-            parse_errors.append(
-                ToolCallParseError(
-                    tool_call_id=f"provider-continuation-{stream.index}",
-                    error="tool_call_delta_after_tool_result_continuation",
-                    raw_preview=_preview_json_value(provider_continuation, limit=400),
-                )
-            )
+        text = "".join(text_parts) or initial_final_text
+        final_text = terminal_text or latest_assistant_text or text
         parsed = _try_parse_json_object(text)
         if parsed is not None and not tool_chunks and not parse_errors:
             return _StreamingTurnExecution(
@@ -736,12 +824,13 @@ class DeepAgentLoopController(LoopControllerV3):
             turn_id=stream.turn_id,
             message=(final_text or text) or None,
             tool_calls=tool_call_requests,
-            final_answer=(final_text or None) if provider_continuation and not parse_errors else (None if tool_call_requests or parse_errors else (text or None)),
+            final_answer=(terminal_text or None) if provider_continuation_seen and not parse_errors else (None if tool_call_requests or parse_errors else (text or None)),
             stop_reason="processor_stream_error" if parse_errors and not tool_call_requests else finish_reason,
             reasons=[
                 "processor_stream",
                 "incremental_tool_execution",
-                *(["provider_tool_result_continuation"] if provider_continuation else []),
+                *(["provider_tool_result_continuation"] if provider_continuation_seen else []),
+                *(["provider_tool_result_continuation_limit"] if provider_continuation_limited else []),
                 *([finish_reason] if finish_reason else []),
             ],
             parse_errors=parse_errors,
@@ -2607,6 +2696,16 @@ def _provider_tool_result_continuation_messages(
     return messages
 
 
+def _provider_terminal_text(text: str, *, index: int) -> str:
+    parsed = _try_parse_json_object(text)
+    if parsed is None:
+        return text
+    turn = _assistant_turn_from_json(parsed, index=index)
+    if turn.tool_calls or turn.parse_errors:
+        return text
+    return turn.final_answer or turn.message or text
+
+
 def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
     artifact_refs = [
         str(artifact.artifact_id)
@@ -2626,43 +2725,6 @@ def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
         "artifact_refs": artifact_refs[:8],
         "host_boundary": "bounded tool result for provider continuation; full payload remains in Holo artifacts/journal",
     }
-
-
-def _consume_provider_continuation_events(events: Iterable[ProcessorStreamEvent]) -> JsonObject:
-    text_parts: list[str] = []
-    final_text = ""
-    event_count = 0
-    tool_call_delta_seen = False
-    errors: list[JsonObject] = []
-    for event in events:
-        event_count += 1
-        delta = event.delta
-        if event.event_type == "content_delta":
-            text = delta.get("text")
-            if isinstance(text, str):
-                text_parts.append(text)
-        elif event.event_type == "stream_end":
-            text = delta.get("text")
-            if isinstance(text, str):
-                final_text = text
-            status = delta.get("status")
-            if isinstance(status, str) and status != "ok":
-                errors.append({"status": status, "delta": _preview_json_value(delta, limit=320)})
-        elif event.event_type == "tool_call_delta":
-            tool_call_delta_seen = True
-        elif event.event_type == "stream_error":
-            errors.append({"status": "stream_error", "delta": _preview_json_value(delta, limit=320)})
-    text = "".join(text_parts) or final_text
-    result: JsonObject = {
-        "schema": "holo.kernel_v3.provider_tool_result_continuation_result.v1",
-        "event_count": event_count,
-        "text": text,
-        "text_preview": _preview_text(text, 480),
-        "tool_call_delta_seen": tool_call_delta_seen,
-    }
-    if errors:
-        result["errors"] = errors[:4]
-    return result
 
 
 def _assistant_continuation_for_batch(turn: AssistantTurn) -> JsonObject:
