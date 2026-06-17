@@ -886,3 +886,64 @@ type-cluster slice，下一步可以按公式题、表格题、driver/bridge 题
 题面 requirements -> context requested tools -> prompt tool surface ->
 provider-native tools。后续 live slice 不需要模型先绕一轮 `tool.discovery` 才看到
 表格/SEC/calculator/verifier工具 schema。
+
+## 23. ToolSearch-style discovery continuation checkpoint
+
+用户再次强调：优先照搬成熟 agent loop 的实现，不要继续在旧 harness 上小修小补。
+本轮对照本地 TypeScript 项目的 `ToolSearchTool`、`queryLoop`、
+`StreamingToolExecutor` 后，补的是 ToolSearch 语义本身：
+
+- `tool.discovery` 支持 `query="select:tool.a,tool.b"` 精确加载，返回
+  `matched_tool_names` / `missing_tool_names` / `requested_tool_names`。
+- discovery 返回的 manifest summary 被压缩，只保留模型下一步调用所需的
+  name、description、input_schema 和关键 runtime 字段，避免 discovery 结果挤爆
+  `recent_observations`。
+- provider streaming continuation 每一轮都会重新构建 native tool surface。
+  如果上一轮 `tool.discovery` 发现了 allowed deferred tool，下一轮 continuation
+  会把该工具 schema 暴露给 provider-native tool call。
+- 这不扩大权限边界：allowed-tool set、policy gate、schema validation、journal
+  和 verifier 仍由 host 控制；模型只获得“可调用工作台”的正确入口。
+
+同时补了 live-slice preflight 可观测性：
+
+- `bench finance` 在带 requirements filter 且没有 `--predictions` 时，会先执行
+  no-gold requirements slice，再做 live-model/provider preflight。
+- 如果 API key 或 live model 开关阻断，payload 仍包含 `requirements_filter`、
+  `selected_item_ids`、工具类别摘要和 `preflight_item_count`。
+- 该路径不写 results/summary，不启动 fake run，不读 gold/reference，不报告
+  benchmark accuracy。
+
+本轮结构验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_tool_use.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_provider_native_tools.py -q
+```
+
+结果：
+
+- `11 passed in 0.34s`
+- `34 passed in 3.76s`
+- `61 passed in 181.40s`
+- `5 passed in 0.22s`
+
+实际 CLI preflight smoke：
+
+```bash
+.venv/bin/python -m kernel_v3.cli \
+  --journal /tmp/holo_live_preflight.journal.jsonl \
+  --index /tmp/holo_live_preflight.sqlite \
+  bench finance \
+  --dataset data/bench/finance/financebench_doc_retrieval.jsonl \
+  --split debug50 \
+  --requirements-family table_ranking_or_comparison \
+  --requirements-limit 1 \
+  --output /tmp/holo_live_preflight.results.jsonl \
+  --summary-output /tmp/holo_live_preflight.summary.json
+```
+
+返回 `status=blocked` / `reason=live_model_not_enabled`，但保留
+`selected_item_ids=["financebench_id_01865"]`，并确认 results/summary 未写出。
+这说明切片和工具需求链路可观测，但不构成 live finance score。

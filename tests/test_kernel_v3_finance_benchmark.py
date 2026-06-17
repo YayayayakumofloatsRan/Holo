@@ -1159,6 +1159,76 @@ def test_finance_benchmark_live_blocks_before_writing_rows_when_api_key_missing(
     assert not JournalStore(journal, index_path=index).records(kind="finance_benchmark_item_started")
 
 
+def test_finance_benchmark_live_block_reports_requirements_slice_without_writing_rows(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "results.jsonl"
+    summary = tmp_path / "summary.json"
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    dataset.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "Q1", "question": "What was FY2024 revenue?", "gold_answer": "SECRET_ONE"}),
+                json.dumps(
+                    {
+                        "id": "Q2",
+                        "question": "Which segment had the largest FY2024 operating income in the table?",
+                        "gold_answer": "SECRET_TWO",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_read_windows_env_value",
+        lambda name: {"checked": True, "value": "", "error": "windows interop unavailable"},
+    )
+
+    code = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "bench",
+            "finance",
+            "--dataset",
+            str(dataset),
+            "--requirements-family",
+            "table_ranking_or_comparison",
+            "--requirements-limit",
+            "1",
+            "--output",
+            str(output),
+            "--summary-output",
+            str(summary),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    assert code == 1
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "missing_live_model_api_key"
+    assert payload["preflight_item_count"] == 1
+    assert payload["requirements_filter"]["selected_item_ids"] == ["Q2"]
+    assert payload["requirements_filter"]["no_gold_fields_used"] is True
+    assert "SECRET_ONE" not in rendered
+    assert "SECRET_TWO" not in rendered
+    assert not output.exists()
+    assert not summary.exists()
+    assert not JournalStore(journal, index_path=index).records(kind="finance_benchmark_item_started")
+
+
 def test_finance_requirements_audit_excludes_gold_reference_values(tmp_path: Path) -> None:
     dataset = tmp_path / "dataset.jsonl"
     dataset.write_text(

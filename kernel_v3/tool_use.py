@@ -436,9 +436,19 @@ def register_tool_discovery(
         ]
         query = str(action.payload.get("query") or "").strip()
         side_effect = str(action.payload.get("side_effect_class") or "").strip()
-        names = _string_list(action.payload.get("tool_names"))
+        selected_names = _selected_tool_names_from_query(query)
+        names = _ordered_unique([*selected_names, *_string_list(action.payload.get("tool_names"))])
         limit = _positive_int(action.payload.get("max_results"), default=12, maximum=50)
-        matches = _discover_tools(manifests, query=query, side_effect_class=side_effect, tool_names=names, limit=limit)
+        query_mode = "select" if selected_names else "explicit_names" if names and not query else "keyword"
+        matches = _discover_tools(
+            manifests,
+            query="" if selected_names else query,
+            side_effect_class=side_effect,
+            tool_names=names,
+            limit=max(limit, len(names)) if names else limit,
+        )
+        matched_names = {str(item.get("name") or "") for item in matches if isinstance(item, dict)}
+        missing_names = [name for name in names if name not in matched_names]
         return Observation(
             observation_id=f"obs-{action.action_id}",
             run_id="",
@@ -448,13 +458,16 @@ def register_tool_discovery(
             content={
                 "schema": TOOL_DISCOVERY_SCHEMA,
                 "query": query,
+                "query_mode": query_mode,
                 "side_effect_class": side_effect,
                 "requested_tool_names": names,
+                "matched_tool_names": [str(item.get("name") or "") for item in matches if isinstance(item, dict)],
+                "missing_tool_names": missing_names,
                 "matched_count": len(matches),
                 "tools": matches,
+                "loading_protocol": "Use query='select:tool.name' for exact loading; then call returned tools[].name.",
                 "host_boundary": (
-                    "tool.discovery only exposes host-registered tool contracts; "
-                    "the model still chooses the next concrete tool call and the host still validates policy."
+                    "tool.discovery exposes allowed host tool contracts; host still validates every call."
                 ),
             },
             observed_at_ms=0,
@@ -479,7 +492,7 @@ def register_tool_discovery(
                     "type": "str",
                     "required": False,
                     "min_length": 1,
-                    "description": "Optional natural-language or keyword query such as sec filings, calculator, table, workspace, memory.",
+                    "description": "Optional natural-language query, or select:tool.a,tool.b for exact tool loading.",
                 },
                 "side_effect_class": {
                     "type": "str",
@@ -795,18 +808,26 @@ def _discover_tools(
 
 def _manifest_summary(manifest: ToolManifest) -> JsonObject:
     input_schema = manifest.input_schema if isinstance(manifest.input_schema, dict) else {}
+    runtime = tool_runtime_spec_for_manifest(manifest).to_dict()
     return {
         "name": manifest.name,
-        "version": manifest.version,
         "description": manifest.description,
         "resource_kind": manifest.resource_kind,
         "operator_kind": manifest.operator_kind,
         "side_effect_class": manifest.side_effect_class,
         "permissions_required": list(manifest.permissions_required),
-        "enabled": manifest.enabled,
         "input_schema": input_schema,
-        "runtime": tool_runtime_spec_for_manifest(manifest).to_dict(),
-        "input_keys": [str(key) for key in input_schema.keys() if not str(key).startswith("_")],
+        "runtime": {
+            "concurrency_safe": runtime["concurrency_safe"],
+            "read_only": runtime["read_only"],
+            "destructive": runtime["destructive"],
+            "open_world": runtime["open_world"],
+            "interrupt_behavior": runtime["interrupt_behavior"],
+            "max_result_size_chars": runtime["max_result_size_chars"],
+            "should_defer": runtime["should_defer"],
+            "always_load": runtime["always_load"],
+            "timeout_seconds": runtime["timeout_seconds"],
+        },
     }
 
 
@@ -842,6 +863,26 @@ def _string_list(value: object) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _selected_tool_names_from_query(query: str) -> list[str]:
+    text = str(query or "").strip()
+    if not text.casefold().startswith("select:"):
+        return []
+    _, _, tail = text.partition(":")
+    return _ordered_unique(part.strip() for part in tail.split(",") if part.strip())
+
+
+def _ordered_unique(values: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _positive_int(value: object, *, default: int, maximum: int) -> int:

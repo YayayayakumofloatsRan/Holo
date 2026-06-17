@@ -238,19 +238,45 @@ class ModelAssistantTurnPlanner:
             context,
             allowed_tool_names=self.allowed_tool_names,
         )
-        native_surface = openai_native_tool_surface(
-            self.tool_manifests,
-            allowed_tool_names=self.allowed_tool_names,
-            expand_tool_names=requested_tool_names,
-            max_tools=_context_tool_surface_limit(context),
-        )
-        stream_parameters = {**parameters, "streaming_planner": True}
-        if native_surface.tools:
-            stream_parameters.update(native_surface.to_parameters())
-            stream_parameters.setdefault("tool_choice", "auto")
+        mutable_tool_name_map: dict[str, str] = {}
+
+        def native_surface_for(expand_tool_names: set[str]) -> Any:
+            return openai_native_tool_surface(
+                self.tool_manifests,
+                allowed_tool_names=self.allowed_tool_names,
+                expand_tool_names=expand_tool_names,
+                max_tools=_context_tool_surface_limit(context),
+            )
+
+        def stream_parameters_for(
+            expand_tool_names: set[str],
+            *,
+            continuation: bool = False,
+            provider_messages_arg: list[JsonObject] | None = None,
+        ) -> JsonObject:
+            surface = native_surface_for(expand_tool_names)
+            mutable_tool_name_map.clear()
+            mutable_tool_name_map.update(surface.name_map)
+            result: JsonObject = {**parameters, "streaming_planner": True}
+            if continuation:
+                result["streaming_planner_continuation"] = True
+                result["provider_messages"] = list(provider_messages_arg or [])
+            if surface.tools:
+                result.update(surface.to_parameters())
+                result.setdefault("tool_choice", "auto")
+            return result
+
+        stream_parameters = stream_parameters_for(requested_tool_names)
         provider_messages = [{"role": "user", "content": prompt}]
 
         def continue_events(messages: list[JsonObject]) -> Iterable[ProcessorStreamEvent]:
+            continuation_requested_tool_names = set(requested_tool_names)
+            continuation_requested_tool_names.update(
+                _provider_messages_requested_tool_names(
+                    messages,
+                    allowed_tool_names=self.allowed_tool_names,
+                )
+            )
             return self.fabric.iter_stream_events(
                 task_type="assistant.turn",
                 task_id=task_id,
@@ -260,11 +286,11 @@ class ModelAssistantTurnPlanner:
                 step_id=step_id,
                 provider=self.provider,
                 model=self.model,
-                parameters={
-                    **stream_parameters,
-                    "streaming_planner_continuation": True,
-                    "provider_messages": messages,
-                },
+                parameters=stream_parameters_for(
+                    continuation_requested_tool_names,
+                    continuation=True,
+                    provider_messages_arg=messages,
+                ),
             )
 
         return AssistantTurnStream(
@@ -281,7 +307,7 @@ class ModelAssistantTurnPlanner:
                 model=self.model,
                 parameters=stream_parameters,
             ),
-            tool_name_map=native_surface.name_map,
+            tool_name_map=mutable_tool_name_map,
             provider_messages=provider_messages,
             continue_events=continue_events,
         )
@@ -2753,7 +2779,7 @@ def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
         if hasattr(artifact, "artifact_id")
     ]
     projection = project_tool_result_content(item.observation.content, limit=1600).to_dict()
-    return {
+    payload: JsonObject = {
         "schema": "holo.kernel_v3.provider_tool_result_message.v1",
         "tool": item.action.name,
         "tool_call_id": item.tool_call_id,
@@ -2765,6 +2791,50 @@ def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
         "artifact_refs": artifact_refs[:8],
         "host_boundary": "bounded tool result for provider continuation; full payload remains in Holo artifacts/journal",
     }
+    if item.action.name == TOOL_DISCOVERY_NAME or item.observation.kind == "tool_discovery_result":
+        content = item.observation.content if isinstance(item.observation.content, dict) else {}
+        tools = content.get("tools")
+        discovered = [
+            str(tool.get("name"))
+            for tool in tools
+            if isinstance(tool, dict) and isinstance(tool.get("name"), str) and tool.get("name")
+        ] if isinstance(tools, list) else []
+        payload["discovered_tool_names"] = _ordered_unique_strings(discovered)
+        payload["requested_tool_names"] = _json_string_list(content.get("requested_tool_names"))
+        payload["missing_tool_names"] = _json_string_list(content.get("missing_tool_names"))
+        payload["tool_discovery_query_mode"] = str(content.get("query_mode") or "")
+        payload["provider_continuation_effect"] = (
+            "Discovered allowed tools may be exposed as native tool schemas on the next provider continuation."
+        )
+    return payload
+
+
+def _provider_messages_requested_tool_names(
+    messages: list[JsonObject],
+    *,
+    allowed_tool_names: set[str],
+) -> set[str]:
+    names: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        data = (
+            _try_parse_json_object(content)
+            if isinstance(content, str)
+            else dict(content)
+            if isinstance(content, dict)
+            else None
+        )
+        if not isinstance(data, dict):
+            continue
+        names.extend(_json_string_list(data.get("discovered_tool_names")))
+        names.extend(_json_string_list(data.get("loaded_tool_names")))
+    allowed = set(allowed_tool_names)
+    result = _ordered_unique_strings(names)
+    if allowed:
+        result = [name for name in result if name in allowed]
+    return set(result)
 
 
 def _assistant_continuation_for_batch(turn: AssistantTurn) -> JsonObject:

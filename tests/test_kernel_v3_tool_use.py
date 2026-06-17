@@ -79,6 +79,55 @@ def test_tool_discovery_returns_allowed_manifest_contracts() -> None:
     assert tools[0]["runtime"]["max_result_size_chars"] == 12000
 
 
+def test_tool_discovery_select_query_loads_exact_tools_and_reports_missing() -> None:
+    registry = ToolRegistry.with_builtin_respond()
+    registry.register(
+        "sec.edgar.financials",
+        _noop_tool,
+        manifest=ToolManifest(
+            name="sec.edgar.financials",
+            version="1",
+            resource_kind="finance",
+            operator_kind="sec_edgar",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="Retrieve SEC EDGAR filing facts and source lines.",
+            input_schema={"ticker": {"type": "str", "required": True}},
+            runtime={"concurrency_safe": True, "read_only": True, "should_defer": True},
+        ),
+    )
+    register_tool_discovery(
+        registry,
+        allowed_tool_names={TOOL_DISCOVERY_NAME, "sec.edgar.financials"},
+    )
+
+    action = CandidateAction(
+        action_id="act-select-discover",
+        kind="tool",
+        name=TOOL_DISCOVERY_NAME,
+        description="select SEC tool",
+        score=1.0,
+        payload={"query": "select:sec.edgar.financials,missing.tool"},
+        reasons=["need_exact_tool_schema"],
+        side_effect_class="read",
+    )
+    manifest = registry.manifest_for_action(action)
+    decision = PolicyGate(permission="read_write").validate(run_id="run-1", action=action, manifest=manifest)
+    result = registry.execute_with_artifacts(
+        action,
+        policy_decision=decision,
+        execution_context={"task_id": "task-1", "run_id": "run-1"},
+    ).observation
+
+    assert result.status == "ok"
+    assert result.content["query_mode"] == "select"
+    assert result.content["requested_tool_names"] == ["sec.edgar.financials", "missing.tool"]
+    assert result.content["matched_tool_names"] == ["sec.edgar.financials"]
+    assert result.content["missing_tool_names"] == ["missing.tool"]
+    assert result.content["tools"][0]["input_schema"]["ticker"]["required"] is True
+
+
 def test_tool_use_context_exposes_runtime_spec_to_executors() -> None:
     action = CandidateAction(
         action_id="act-runtime",

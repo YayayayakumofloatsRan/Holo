@@ -2610,6 +2610,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
     effective_offset = benchmark_split.offset if benchmark_split is not None else args.offset
     effective_limit = benchmark_split.limit if benchmark_split is not None else args.limit
     requirements_filter_payload: JsonObject = {}
+    preflight_items: list[FinanceBenchmarkItem] | None = None
     if getattr(args, "predictions", None):
         slice_items, requirements_filter_payload = _finance_requirements_slice_items(
             args,
@@ -2652,23 +2653,43 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             "requirements_filter": requirements_filter_payload,
         }
 
+    if _finance_requirements_filter_requested(args):
+        preflight_items, requirements_filter_payload = _finance_requirements_slice_items(
+            args,
+            limit=effective_limit,
+            offset=effective_offset,
+        )
+        if requirements_filter_payload and not preflight_items:
+            return {
+                "status": "failed",
+                "reason": "empty_finance_requirements_slice",
+                "requirements_filter": requirements_filter_payload,
+                "split": benchmark_split.to_dict() if benchmark_split is not None else None,
+            }
+
     live_block = _chat_live_model_block(args)
     if live_block is not None:
         return {
             **live_block,
             "benchmark": "finance",
             "message": "Finance benchmark live runs require the model stack. Use --predictions to score existing outputs.",
+            "split": benchmark_split.to_dict() if benchmark_split is not None else None,
+            "requirements_filter": requirements_filter_payload,
+            "preflight_item_count": len(preflight_items) if preflight_items is not None else None,
         }
     live_retrieval = _live_retrieval_config_for_args(args)
     if isinstance(live_retrieval, dict):
         return live_retrieval
     artifact_store = _runtime_artifact_store(args)
     research_corpus_store = _runtime_corpus_store(args)
-    items, requirements_filter_payload = _finance_requirements_slice_items(
-        args,
-        limit=effective_limit,
-        offset=effective_offset,
-    )
+    if preflight_items is None:
+        items, requirements_filter_payload = _finance_requirements_slice_items(
+            args,
+            limit=effective_limit,
+            offset=effective_offset,
+        )
+    else:
+        items = preflight_items
     if requirements_filter_payload and not items:
         return {
             "status": "failed",
@@ -2788,6 +2809,17 @@ def _finance_requirements_slice_items(args, *, limit: int | None, offset: int) -
         loop_stages=getattr(args, "requirements_loop_stage", None),
         limit=getattr(args, "requirements_limit", None),
         offset=int(getattr(args, "requirements_offset", 0) or 0),
+    )
+
+
+def _finance_requirements_filter_requested(args) -> bool:
+    return bool(
+        getattr(args, "requirements_family", None)
+        or getattr(args, "requirements_tool_category", None)
+        or getattr(args, "requirements_risk_flag", None)
+        or getattr(args, "requirements_loop_stage", None)
+        or getattr(args, "requirements_limit", None) is not None
+        or int(getattr(args, "requirements_offset", 0) or 0) != 0
     )
 
 

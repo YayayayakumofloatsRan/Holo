@@ -366,6 +366,20 @@ input schemas and runtime metadata, while deferred tools expose only briefs and
 route schema lookup through `tool.discovery`. Targeted structural tests pass
 (`25` deep-loop tests, `9` tool-use tests, `15` provider/context tests). This is
 agent-loop/tool-interface evidence, not a FinanceBench/FAB/FinQA score claim.
+The latest 2026-06-18 ToolSearch parity checkpoint ports one more inspected
+TypeScript-loop behavior: `tool.discovery` now supports exact
+`select:tool.a,tool.b` loading, reports matched/missing tool names, and returns a
+budgeted manifest summary rather than bloating `recent_observations`.
+Streaming provider continuations rebuild the native tool surface after each
+tool-result round; if a `tool.discovery` result discovered an allowed deferred
+tool, that tool's native schema is exposed on the next continuation while policy
+and allowed-tool boundaries remain host-owned. `bench finance` also computes a
+no-gold requirements slice before live-model preflight when requirements filters
+are present, so provider/key blocks still report selected item ids and required
+tool categories without writing fake benchmark outputs. Targeted structural
+tests pass (`34` deep-loop tests, `11` tool-use tests, `61` finance benchmark
+tests, `5` provider-native tests). This is loop/toolchain readiness evidence,
+not a live FinanceBench or FinQA score.
 The next finance tool-runtime P0 checkpoint makes those tool contracts executable
 rather than merely descriptive. `retrieval.run`, SEC/EDGAR, Trafilatura, OpenBB,
 DuckDB, SymPy, `calculator.compute`, `finance.slot_bind`, and

@@ -37,6 +37,14 @@ Holo 已经从旧的一步一工具循环，升级到“provider-visible native 
 
 所以，Holo 现在的核心缺口不是再加某一道题的规则，而是把已经落地的流式工具骨架继续推进到“运行中 progress/result 可回注、进程/网络级 signal 传递、动态工具集预算优化、live debug50 证明”的工作台。
 
+2026-06-18 ToolSearch parity follow-up：Holo 已把外部项目
+`ToolSearchTool` 的 `select:tool.a,tool.b` 精确加载语义迁移到
+`tool.discovery`，并让 provider streaming continuation 在每轮工具结果后重建
+native tool surface。上一轮 `tool.discovery` 发现到的 allowed deferred tool 会在
+下一轮 continuation 中以 provider-native schema 暴露，权限、allowed set、
+schema validation 和 journal 仍由 host 控制。该修复补齐的是工具发现/加载
+链路，不是金融 benchmark accuracy。
+
 2026-06-18 follow-up：FinanceBench live 探针暴露 streaming path 绕过
 workbench follow-up scaffold，导致模型重复读取同一 artifact。Holo 已将
 workbench follow-up 检查前移到 streaming planner 之前，并新增三次重复

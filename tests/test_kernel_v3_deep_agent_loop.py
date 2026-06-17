@@ -26,7 +26,7 @@ from kernel_v3.policy import PolicyGate
 from kernel_v3.processors.contracts import ProcessorStreamEvent
 from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.testing.fakes import FakeEvaluator
-from kernel_v3.tool_use import emit_tool_progress, tool_abort_requested
+from kernel_v3.tool_use import TOOL_DISCOVERY_NAME, emit_tool_progress, register_tool_discovery, tool_abort_requested
 from kernel_v3.tools import ToolRegistry, ToolResult
 
 
@@ -1425,6 +1425,65 @@ def test_streaming_loop_continues_provider_tool_result_rounds_until_final_text()
     assert "done after beta" in continuation["text_preview"]
 
 
+def test_streaming_continuation_loads_tool_discovered_native_schema() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "sec.edgar.financials",
+        _read_tool("sec"),
+        manifest=ToolManifest(
+            name="sec.edgar.financials",
+            version="1",
+            resource_kind="finance",
+            operator_kind="sec_edgar",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="Retrieve SEC filing facts.",
+            input_schema={"identifier": {"type": "str", "required": True}},
+            runtime={"should_defer": True, "read_only": True, "concurrency_safe": True},
+        ),
+    )
+    register_tool_discovery(
+        registry,
+        allowed_tool_names={TOOL_DISCOVERY_NAME, "sec.edgar.financials"},
+    )
+    journal = JournalStore.in_memory()
+    provider = _DiscoveryThenNativeToolContinuationProvider()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={TOOL_DISCOVERY_NAME, "sec.edgar.financials"},
+        tool_manifests=registry.manifests(),
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done after sec"),
+        max_steps=3,
+        max_tool_calls=4,
+    )
+
+    result = loop.run("discover the SEC tool, then retrieve 3M facts")
+
+    assert result.status == "completed"
+    assert len(provider.requests) == 3
+    first_map = provider.requests[0].parameters["native_tool_name_map"]
+    assert set(first_map.values()) == {TOOL_DISCOVERY_NAME}
+    second_map = provider.requests[1].parameters["native_tool_name_map"]
+    assert "sec.edgar.financials" in set(second_map.values())
+    assert "sec.edgar.financials" not in {
+        item["name"] for item in provider.requests[1].parameters["native_tool_deferred"]
+    }
+    discovery_payload = json.loads(provider.requests[1].parameters["provider_messages"][2]["content"])
+    assert discovery_payload["discovered_tool_names"] == ["sec.edgar.financials"]
+    assert discovery_payload["provider_continuation_effect"].startswith("Discovered allowed tools")
+
+
 def test_streamed_malformed_tool_arguments_become_parse_error_observation() -> None:
     journal = JournalStore.in_memory()
     planner = ModelAssistantTurnPlanner(
@@ -2118,6 +2177,78 @@ class _MultiRoundToolResultContinuationProvider:
             request_id=request.request_id,
             sequence=2,
             delta={"status": "ok"},
+        )
+
+
+class _DiscoveryThenNativeToolContinuationProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def __init__(self) -> None:
+        self.requests: list[ProcessorRequest] = []
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        self.requests.append(request)
+        provider_messages = request.parameters.get("provider_messages")
+        native_name_map = request.parameters.get("native_tool_name_map")
+        assert isinstance(native_name_map, dict)
+        exposed = set(native_name_map.values())
+        if not isinstance(provider_messages, list):
+            assert exposed == {TOOL_DISCOVERY_NAME}
+            yield ProcessorStreamEvent(
+                event_type="tool_call_delta",
+                request_id=request.request_id,
+                sequence=1,
+                delta={
+                    "tool_calls": [
+                        {
+                            "id": "tc-discover-sec",
+                            "function": {
+                                "name": TOOL_DISCOVERY_NAME,
+                                "arguments": '{"query":"select:sec.edgar.financials"}',
+                            },
+                        }
+                    ]
+                },
+            )
+            yield ProcessorStreamEvent(
+                event_type="stream_end",
+                request_id=request.request_id,
+                sequence=2,
+                delta={"status": "ok"},
+            )
+            return
+        if len(provider_messages) == 3:
+            assert "sec.edgar.financials" in exposed
+            native_sec_name = next(name for name, tool in native_name_map.items() if tool == "sec.edgar.financials")
+            yield ProcessorStreamEvent(
+                event_type="tool_call_delta",
+                request_id=request.request_id,
+                sequence=1,
+                delta={
+                    "tool_calls": [
+                        {
+                            "id": "tc-sec",
+                            "function": {
+                                "name": native_sec_name,
+                                "arguments": '{"identifier":"MMM"}',
+                            },
+                        }
+                    ]
+                },
+            )
+            yield ProcessorStreamEvent(
+                event_type="stream_end",
+                request_id=request.request_id,
+                sequence=2,
+                delta={"status": "ok"},
+            )
+            return
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=1,
+            delta={"status": "ok", "text": '{"final_answer":"done after sec"}'},
         )
 
 
