@@ -151,6 +151,75 @@ def test_deep_agent_loop_executes_multi_tool_turn_and_journals_batch() -> None:
     assert {context["tool_call_id"] for context in contexts} == {"call-alpha", "call-beta"}
 
 
+def test_deep_agent_loop_stops_before_evaluator_when_batch_contains_host_guard() -> None:
+    class EvaluatorMustNotRun:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, context: ContextBundle, observation: Observation) -> Feedback:
+            self.calls += 1
+            raise AssertionError("batch host guard should stop before evaluator")
+
+    registry = ToolRegistry()
+    registry.register("alpha.read", _read_tool("alpha"))
+    registry.register("beta.read", _read_tool("beta"))
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-over-budget",
+                message="try two reads",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-alpha",
+                        name="alpha.read",
+                        arguments={"query": "A"},
+                        reason="first read",
+                        side_effect_class="read",
+                    ),
+                    ToolCallRequest(
+                        tool_call_id="call-beta",
+                        name="beta.read",
+                        arguments={"query": "B"},
+                        reason="second read",
+                        side_effect_class="read",
+                    ),
+                ],
+            )
+        ]
+    )
+    evaluator = EvaluatorMustNotRun()
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=evaluator,
+        max_steps=4,
+        max_tool_calls=1,
+    )
+
+    result = loop.run("read alpha and beta")
+
+    assert result.status == "step_limit_exceeded"
+    assert result.stop_reason == "max_tool_calls"
+    assert evaluator.calls == 0
+    assert [action.name for action in registry.executed_actions] == ["alpha.read"]
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    assert batch.data["status"] == "partial"
+    assert batch.data["content"]["results"][1]["kind"] == "host_guard"
+    assert batch.data["content"]["results"][1]["policy"] == "max_tool_calls"
+    guard = journal.records(task_id=result.task_id, kind="guard")[0]
+    assert guard.data["stop_reason"] == "max_tool_calls"
+    feedback = journal.records(task_id=result.task_id, kind="feedback")[0]
+    assert feedback.data["status"] == "step_limit_exceeded"
+
+
 def test_deep_agent_loop_projects_tool_context_updates_into_next_turn() -> None:
     registry = ToolRegistry()
     registry.register("stateful.read", _context_update_tool())

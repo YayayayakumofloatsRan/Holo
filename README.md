@@ -456,6 +456,19 @@ running sibling tools while keeping normal read/network failures independent.
 Targeted structural tests prove both the executor callback and the deep-loop
 `_host_context` signal path. This is agent-loop stability work, not benchmark
 score evidence.
+The follow-up live diagnostic on `financebench_id_04672` exposed the next
+generic boundary in the same mature-loop line: a completed deep
+`tool_batch_result` could contain a child `host_guard` / `loop_guard` for
+`max_tool_calls`, but the deep loop still called the normal evaluator and let
+the model continue with an oversized context. `DeepAgentLoopController` now
+recognizes host budget guards inside nested batch results before evaluator
+dispatch, writes a host `step_limit_exceeded` feedback and guard record, and
+only invokes an explicit `finalize_guard` hook when the evaluator provides one.
+This mirrors the inspected TypeScript loop's hard host-boundary behavior:
+semantic decisions stay model-owned, while budgets and abort/stop contracts stay
+outside the model. Targeted structural tests pass (`125` loop/tool/provider/
+finance-open tests). This is loop-stability evidence, not a FinanceBench/FinQA
+accuracy claim.
 The next mature-loop checkpoint ports the same fallback/discard/rebuild idea to
 final synthesis. `Synthesizer` now checks `processor_budget.max_prompt_chars_per_call`
 before provider dispatch; if a retrieval/fact/citation packet is too large, it

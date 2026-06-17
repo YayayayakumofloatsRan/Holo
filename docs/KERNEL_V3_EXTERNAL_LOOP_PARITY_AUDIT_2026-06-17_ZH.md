@@ -721,3 +721,36 @@ P0 不是“再多注册几个金融工具”。P0 是把通用 agent loop 的�
 5. tool execution progress/abort：cooperative helper 与 batch/streaming timeout boundary 已有，下一步要让 subprocess/network 工具真正接入进程组/request 级 signal 边界。
 
 现在可以说单 agent loop 骨架已经超过约 95% 的 P0 架构阈值。只有这些剩余闭环和 live debug50 完成后，Holo 才能说“理论上给足工具后可以解决 FB/FQA 所有类型题”并把架构成熟度推进到外部项目级别。
+
+### 2026-06-18 补充：deep batch host-guard boundary
+
+继续按“照搬成熟 agent loop 的 host boundary”推进，本轮修复了 live 诊断暴露的一个
+关键不一致：Holo deep loop 已经能在子工具层产生 `host_guard` / `loop_guard`，但
+完成后的 `tool_batch_result status=partial` 没有被外层 deep loop 当成 hard stop。
+这会让普通 evaluator 在 `max_tool_calls` 后继续收到巨大 context，并驱动模型继续
+请求工具。
+
+已补齐：
+
+- `DeepAgentLoopController` 在 evaluator dispatch 前检查 nested
+  `tool_batch_result.content.results[]`。
+- 子结果若为 `status=blocked` 且来自 `loop_guard` / `host_guard`，并携带
+  `max_tool_calls` 或 `max_network_fetches`，deep loop 直接生成
+  `step_limit_exceeded` feedback 和 `guard` ledger。
+- 普通 evaluator 不再参与 budget-exhausted continuation；只有显式提供
+  `finalize_guard` 的 evaluator 才能获得一次收尾机会。
+- 新增结构测试证明：两个 tool call、`max_tool_calls=1` 时，第一项执行，第二项被
+  host guard 阻断，batch 立即终止，evaluator 调用次数为 0。
+
+这把成熟 loop 的“模型负责语义，host 负责预算和终止”的边界进一步闭合。当前
+外部项目 parity 的剩余 gap 不再是“deep batch host guard 会继续跑”，而是：
+
+- 具体 shell/script/network/document 工具是否把 cooperative abort 映射到真实
+  process group、HTTP request 或 worker cancellation。
+- provider-message replacement/resume/fork 的长会话稳定审计。
+- 用 live debug50 类型簇证明这些 loop 合同确实提升 FinanceBench / FinQA 做题能力。
+
+验证结果：targeted host-guard test `1 passed`，deep-loop/tool-use `53 passed`，
+workloop/context-compiler `42 passed`，core loop/tool/provider/finance-open structural set
+`125 passed`，`git diff --check` passed。这些仍是结构成熟度证据，不是 benchmark
+accuracy。

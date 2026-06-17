@@ -474,11 +474,38 @@ class DeepAgentLoopController(LoopControllerV3):
                         if hasattr(artifact, "artifact_id")
                     ],
                 )
+                batch_guard_reason = self._tool_batch_guard_stop_reason(aggregate)
+                if batch_guard_reason is not None:
+                    current_feedback = self._limit_feedback(task.run_id, batch_guard_reason)
+                    self._append_feedback_record(task, current_feedback, step_id=step_id, observation=aggregate)
+                    self._append_guard(
+                        task,
+                        batch_guard_reason,
+                        step_id=step_id,
+                        data={
+                            "tool_batch_count": len(execution_items),
+                            "tool_calls": tool_calls,
+                            "network_fetches": network_fetches,
+                            "source": "deep_tool_batch_result",
+                        },
+                    )
+                    if callable(getattr(self.evaluator, "finalize_guard", None)):
+                        guard_context = self.context_compiler.compile(task, self.journal)
+                        current_feedback = self._finalize_guard_feedback(
+                            guard_context,
+                            aggregate,
+                            current_feedback,
+                            task=task,
+                            action=self._synthetic_batch_action(turn, step_id=step_id),
+                            step_id=step_id,
+                        )
+                    return self._result(task, current_feedback, step_id=step_id)
+
                 evaluation_context = self.context_compiler.compile(task, self.journal)
                 current_feedback = self.evaluator.evaluate(evaluation_context, aggregate)
                 self._append_feedback_record(task, current_feedback, step_id=step_id, observation=aggregate)
 
-                guard_reason = self._guard_stop_reason(aggregate)
+                guard_reason = self._tool_batch_guard_stop_reason(aggregate)
                 if guard_reason is not None and not callable(getattr(self.evaluator, "finalize_guard", None)):
                     current_feedback = self._limit_feedback(task.run_id, guard_reason)
                     self._append_feedback_record(task, current_feedback, step_id=step_id, observation=aggregate)
@@ -1582,6 +1609,15 @@ class DeepAgentLoopController(LoopControllerV3):
             state_delta={"feedback_status": feedback.status},
         )
 
+    def _tool_batch_guard_stop_reason(self, observation: Observation) -> str | None:
+        direct = self._guard_stop_reason(observation)
+        if direct is not None:
+            return direct
+        if observation.kind != "tool_batch_result":
+            return None
+        content = observation.content if isinstance(observation.content, dict) else {}
+        return _host_budget_guard_reason_from_batch_payload(content)
+
     def _synthetic_batch_action(self, turn: AssistantTurn, *, step_id: str) -> CandidateAction:
         return CandidateAction(
             action_id=f"act-{turn.turn_id}-{step_id}-batch",
@@ -1593,6 +1629,62 @@ class DeepAgentLoopController(LoopControllerV3):
             reasons=["deep_agent_loop_tool_batch"],
             side_effect_class="read",
         )
+
+
+_HOST_BUDGET_GUARD_REASONS = {"max_tool_calls", "max_network_fetches"}
+
+
+def _host_budget_guard_reason_from_batch_payload(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    reason = payload.get("reason")
+    if isinstance(reason, str) and reason in _HOST_BUDGET_GUARD_REASONS:
+        return reason
+    nested_content = payload.get("content")
+    if isinstance(nested_content, dict):
+        nested_reason = _host_budget_guard_reason_from_batch_payload(nested_content)
+        if nested_reason is not None:
+            return nested_reason
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return None
+    for item in results:
+        nested_reason = _host_budget_guard_reason_from_batch_result(item)
+        if nested_reason is not None:
+            return nested_reason
+    return None
+
+
+def _host_budget_guard_reason_from_batch_result(item: object) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    status = str(item.get("status") or "")
+    source = str(item.get("source") or "")
+    kind = str(item.get("kind") or "")
+    policy = item.get("policy")
+    policy_text = str(policy) if isinstance(policy, str) else ""
+    is_host_guard = status == "blocked" and (
+        source == "loop_guard"
+        or kind == "host_guard"
+        or policy_text in _HOST_BUDGET_GUARD_REASONS
+    )
+    if not is_host_guard:
+        return None
+    if policy_text in _HOST_BUDGET_GUARD_REASONS:
+        return policy_text
+    preview = item.get("content_preview")
+    if isinstance(preview, str) and preview:
+        try:
+            parsed = json.loads(preview)
+        except json.JSONDecodeError:
+            parsed = None
+        nested_reason = _host_budget_guard_reason_from_batch_payload(parsed)
+        if nested_reason is not None:
+            return nested_reason
+    nested_reason = _host_budget_guard_reason_from_batch_payload(item)
+    if nested_reason in _HOST_BUDGET_GUARD_REASONS:
+        return nested_reason
+    return None
 
 
 def _assistant_turn_from_action(action: CandidateAction) -> AssistantTurn:

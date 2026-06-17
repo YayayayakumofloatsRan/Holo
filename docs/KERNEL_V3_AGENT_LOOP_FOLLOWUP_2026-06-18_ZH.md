@@ -1196,3 +1196,64 @@ FinanceBench/FinQA 准确率。
 - `finance_benchmark` harness structural tests: `61 passed in 173.79s`
 
 说明：这是 agent-loop 稳定性和资源边界修复，不是 FinanceBench/FinQA accuracy。
+
+## 29. Deep batch host-guard terminal boundary
+
+本轮继续按“优先照搬成熟 agent loop，而不是继续单题补丁”的方向推进。上一轮 live
+诊断在 `financebench_id_04672` 上证明 provider/key/streaming 工具链已经能跑起来，
+但也暴露了一个更通用的 loop 缺陷：deep batch 内部已经出现
+`host_guard reason=max_tool_calls`，外层 deep loop 仍把整个
+`tool_batch_result status=partial` 当普通 observation，先调用 evaluator，再允许后续
+turn 继续膨胀上下文。这不是金融题规则问题，而是成熟 agent loop 的 hard host
+boundary 没有完全闭合。
+
+本轮按外部 TypeScript `query` / `StreamingToolExecutor` 的思想补齐：
+
+- 模型只负责语义决策和工具选择；host 负责预算、权限、执行、abort、stop 和记录。
+- `DeepAgentLoopController` 现在会在调用 evaluator 之前检查
+  `tool_batch_result.content.results[]`。
+- 若任一子结果是 `status=blocked` 且来自 `loop_guard` / `host_guard`，并携带
+  `max_tool_calls` 或 `max_network_fetches`，deep loop 立即写出
+  `step_limit_exceeded` feedback 和 `guard` 记录。
+- 普通 evaluator 不再收到这个 oversized post-budget context；只有 evaluator 显式实现
+  `finalize_guard` 时，host 才给它一次 guard-finalize 机会，用已有证据收尾。
+- 这不是 FinanceBench 打表：host 不选择财务事实、公式、引用或答案，只是在工具预算
+  已被 host 阻断时停止无效继续。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_deep_agent_loop.py::test_deep_agent_loop_stops_before_evaluator_when_batch_contains_host_guard -q
+.venv/bin/python -m py_compile \
+  kernel_v3/deep_loop.py \
+  tests/test_kernel_v3_deep_agent_loop.py
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_tool_use.py -q
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_phase61_workloop.py \
+  tests/test_kernel_v3_phase3_context_compiler.py -q
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_tool_use.py \
+  tests/test_kernel_v3_provider_native_tools.py \
+  tests/test_kernel_v3_processor_streaming.py \
+  tests/test_kernel_v3_finance_open_components.py \
+  tests/test_kernel_v3_finance_tool_readiness.py \
+  tests/test_kernel_v3_phase61_workloop.py -q
+git diff --check
+```
+
+结果：
+
+- targeted batch host-guard test: `1 passed in 0.52s`
+- `py_compile` passed
+- `deep-loop/tool-use`: `53 passed in 3.84s`
+- `workloop/context-compiler`: `42 passed in 9.39s`
+- core loop/tool/provider/finance-open structural set: `125 passed in 17.28s`
+- `git diff --check` passed
+
+说明：这是 live diagnostic 驱动的 agent-loop 稳定性修复，不是新的
+FinanceBench/FinQA score。下一步做 live debug50 类型簇时，这个边界应防止工具预算
+耗尽后继续向模型发送 20-30 万字符级上下文。
