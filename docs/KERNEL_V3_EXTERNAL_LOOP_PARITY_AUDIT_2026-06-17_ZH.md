@@ -617,6 +617,31 @@ git diff --check
 
 结果：新增 Docling focus-snippet grounding 测试通过，相关定点测试通过。下一步必须重跑 live 单题；只有 live run 通过后才能把它记为 finance 做题能力进展。
 
+live rerun 已完成：
+
+```text
+.state/kernel_v3/bench/finance/fb_debug50_stream_grounding_o000_l001_20260617.jsonl
+.state/kernel_v3/bench/finance/fb_debug50_stream_grounding_o000_l001_20260617.summary.json
+```
+
+结果：
+
+- item: `financebench_id_03029`
+- status: `passed`
+- score reason: `numeric_within_tolerance`
+- matched numeric: `1577.0`
+- answer: 3M FY2018 capital expenditure was `1,577` USD millions, from `Purchases of property, plant and equipment (PP&E)`.
+- tool observations: `document.docling.convert:1`, `sec.edgar.financials:1`, `artifact.read:3`, `calculator.compute:1`
+- finance facts / claims: `210 / 210`
+- formula trace: `1`, calculator calls: `1`
+- citation present: `true`
+- numeric verifier: `passed`
+- verifier gate: `passed`
+- synthesis gate: `passed`
+- total tokens: `282,939`
+
+这是一个有效 live debug-row 结果，证明本轮 P0 evidence adapter 闭合了上一轮 `missing_retrieval_report` 失败。但它仍只是 debug50 第 1 行，不是 FinanceBench debug50 或 test100 成绩。成本仍偏高，下一步要做类型簇 debug，而不是把单题成功当总体能力。
+
 ### 与外部项目 agent loop 的剩余差距估计
 
 这个估计只描述 agent loop 技术 parity，不是 FinanceBench / FinQA 分数。

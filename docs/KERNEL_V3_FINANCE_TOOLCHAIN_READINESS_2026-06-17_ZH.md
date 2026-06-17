@@ -43,6 +43,7 @@ This document records the FB/FQA tool exposure and open-component readiness boun
 - Long-result artifact boundary: SEC/EDGAR, document extraction/conversion, OpenBB, and DuckDB table-query tools return bounded observations plus `artifact_id` / `artifact.read` hints while storing the full JSON tool payload in `ArtifactStore`.
 - Document evidence visibility: `document.docling.convert` now gives PDF URLs a lightweight PDF-reader path before heavy Docling, reports isolated worker failures as observations, and returns `focus_snippets` before truncated text. The snippets are only candidate evidence windows selected from model-provided/default finance terms; the LLM still chooses facts, line items, formulas, and conclusions.
 - Open-component evidence adapter: finance tool observations from Docling, Trafilatura, SEC EdgarTools, OpenBB, DuckDB, and SymPy can now enter the same synthetic `toolchain_grounding` evidence/citation path as workspace/script tools. This prevents successful model-called document tools from being discarded merely because no separate `retrieval.run` record exists.
+- Live proof point: `.state/kernel_v3/bench/finance/fb_debug50_stream_grounding_o000_l001_20260617.jsonl` passed one live FinanceBench debug row (`financebench_id_03029`) with Docling/SEC tool observations, synthetic toolchain grounding, finance fact/claim ledgers, formula trace, numeric verifier, verifier gate, and synthesis gate. This is a single-row debug result only.
 
 ## 隔离组件策略
 

@@ -34,6 +34,28 @@ the filing line item "Purchases of property, plant and equipment (PP&E)" and
 used the absolute value of the cash outflow. Gold/reference material remained
 out of model context and was used only after completion for scoring.
 
+Later on 2026-06-17, after adopting the streaming deep loop and open-component
+evidence adapter, the same row passed again through the new toolchain path:
+
+| Field | Value |
+| --- | --- |
+| Output | `.state/kernel_v3/bench/finance/fb_debug50_stream_grounding_o000_l001_20260617.jsonl` |
+| Summary | `.state/kernel_v3/bench/finance/fb_debug50_stream_grounding_o000_l001_20260617.summary.json` |
+| Live status | `1/1`, `passed`, `numeric_within_tolerance` |
+| Matched numeric | expected `1577.0`, matched `1577.0` |
+| Tool observations | `document.docling.convert:1`, `sec.edgar.financials:1`, `artifact.read:3`, `calculator.compute:1` |
+| Evidence adapter | synthetic `toolchain_grounding`, no separate `retrieval.run` |
+| Finance substrate | `210` facts, `210` claims, citations present |
+| Numeric chain | calculator `1`, formula trace `1`, verifier `passed`, verifier gate `passed`, synthesis gate `passed` |
+| Cost | `282,939` tokens |
+
+This latest result is important because the immediately preceding streaming run
+failed despite Docling returning the exact PP&E line: the finalizer still
+required a `retrieval_report`. The new open-component evidence adapter promotes
+model-called Docling/SEC observations into the same evidence/citation substrate,
+closing that loop break. It remains a single debug-row result, not a debug50 or
+test100 score.
+
 Earlier same-day provider/environment failures, including a zero-token
 non-escalated WSL environment failure and prior `HTTP_402_INSUFFICIENT_BALANCE`
 checks, are not capability scores.

@@ -263,6 +263,15 @@ payloads, through the existing synthetic `toolchain_grounding` report path. The
 LLM still chooses facts and conclusions; the host only makes model-called tool
 observations visible to the same evidence, citation, ledger, verifier, and
 synthesis contracts.
+The verified live rerun
+`.state/kernel_v3/bench/finance/fb_debug50_stream_grounding_o000_l001_20260617.jsonl`
+passed `financebench_id_03029` at `1/1` with `numeric_within_tolerance`:
+`document.docling.convert` and `sec.edgar.financials` supplied model-called
+evidence, synthetic toolchain grounding produced `210` finance facts and `210`
+claims, one calculator/formula trace ran, numeric verifier, verifier gate, and
+synthesis gate all passed, and the matched value was `1577.0`. This is a single
+debug-row live result, not a debug50/test100 score; it also remains expensive at
+`282,939` tokens.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in
