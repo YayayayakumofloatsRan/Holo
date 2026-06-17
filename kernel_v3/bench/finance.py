@@ -307,6 +307,7 @@ FINANCE_REQUIREMENTS_AUDIT_EXCLUDED_FIELDS = (
     "rubric",
     "dev_gold",
 )
+FINANCE_REQUIREMENTS_FILTER_SCHEMA = "holo.kernel_v3.finance_requirements_filter.v1"
 
 
 def resolve_finance_benchmark_split(split: str | None) -> FinanceBenchmarkSplitSpec | None:
@@ -332,12 +333,95 @@ def load_finance_benchmark_items(path: Path | str, *, limit: int | None = None, 
     return items
 
 
+def filter_finance_benchmark_items_by_requirements(
+    items: list[FinanceBenchmarkItem],
+    *,
+    families: list[str] | tuple[str, ...] | None = None,
+    tool_categories: list[str] | tuple[str, ...] | None = None,
+    risk_flags: list[str] | tuple[str, ...] | None = None,
+    loop_stages: list[str] | tuple[str, ...] | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> tuple[list[FinanceBenchmarkItem], JsonObject]:
+    family_filter = _normalized_filter_values(families)
+    tool_filter = _normalized_filter_values(tool_categories)
+    risk_filter = _normalized_filter_values(risk_flags)
+    stage_filter = _normalized_filter_values(loop_stages)
+    filter_offset = max(0, int(offset or 0))
+    filter_limit = max(0, int(limit)) if limit is not None else None
+    filter_active = bool(family_filter or tool_filter or risk_filter or stage_filter or filter_offset or filter_limit is not None)
+    if not filter_active:
+        return items, {}
+
+    matched: list[tuple[FinanceBenchmarkItem, JsonObject]] = []
+    family_counts: Counter[str] = Counter()
+    tool_counts: Counter[str] = Counter()
+    stage_counts: Counter[str] = Counter()
+    risk_counts: Counter[str] = Counter()
+    for item in items:
+        requirements = _finance_item_requirements(item)
+        item_families = set(_string_list(requirements.get("families")))
+        item_tools = set(_string_list(requirements.get("required_tool_categories")))
+        item_risks = set(_string_list(requirements.get("risk_flags")))
+        item_stages = set(_string_list(requirements.get("loop_stages")))
+        if family_filter and not item_families.intersection(family_filter):
+            continue
+        if tool_filter and not item_tools.intersection(tool_filter):
+            continue
+        if risk_filter and not item_risks.intersection(risk_filter):
+            continue
+        if stage_filter and not item_stages.intersection(stage_filter):
+            continue
+        matched.append((item, requirements))
+        family_counts.update(item_families)
+        tool_counts.update(item_tools)
+        stage_counts.update(item_stages)
+        risk_counts.update(item_risks)
+
+    selected_pairs = matched[filter_offset:]
+    if filter_limit is not None:
+        selected_pairs = selected_pairs[:filter_limit]
+    selected_items = [item for item, _requirements in selected_pairs]
+    payload: JsonObject = {
+        "schema": FINANCE_REQUIREMENTS_FILTER_SCHEMA,
+        "active": True,
+        "no_gold_fields_used": True,
+        "capability_claim": False,
+        "benchmark_progress_claim": False,
+        "source": "question_text_and_public_metadata_only",
+        "match_policy": "and_across_dimensions_or_within_dimension",
+        "filters": {
+            "families": family_filter,
+            "tool_categories": tool_filter,
+            "risk_flags": risk_filter,
+            "loop_stages": stage_filter,
+        },
+        "offset": filter_offset,
+        "limit": filter_limit,
+        "candidate_count": len(items),
+        "matched_count": len(matched),
+        "selected_count": len(selected_items),
+        "selected_item_ids": [item.item_id for item in selected_items],
+        "family_summary": finance_requirement_counter_summary(family_counts),
+        "tool_category_summary": finance_tool_category_counter_summary(tool_counts),
+        "loop_stage_summary": finance_loop_stage_counter_summary(stage_counts),
+        "risk_summary": finance_risk_counter_summary(risk_counts),
+    }
+    return selected_items, payload
+
+
 def build_finance_requirements_audit(
     dataset_path: Path | str,
     *,
     split: str | None = None,
     limit: int | None = None,
     offset: int = 0,
+    requirements_families: list[str] | tuple[str, ...] | None = None,
+    requirements_tool_categories: list[str] | tuple[str, ...] | None = None,
+    requirements_risk_flags: list[str] | tuple[str, ...] | None = None,
+    requirements_loop_stages: list[str] | tuple[str, ...] | None = None,
+    requirements_limit: int | None = None,
+    requirements_offset: int = 0,
 ) -> JsonObject:
     """Summarize finance task families and tool contracts from questions only.
 
@@ -351,6 +435,15 @@ def build_finance_requirements_audit(
     effective_offset = benchmark_split.offset if benchmark_split is not None else int(offset or 0)
     effective_limit = benchmark_split.limit if benchmark_split is not None else limit
     items = load_finance_benchmark_items(dataset_path, limit=effective_limit, offset=effective_offset)
+    items, requirements_filter = filter_finance_benchmark_items_by_requirements(
+        items,
+        families=requirements_families,
+        tool_categories=requirements_tool_categories,
+        risk_flags=requirements_risk_flags,
+        loop_stages=requirements_loop_stages,
+        limit=requirements_limit,
+        offset=requirements_offset,
+    )
     item_audits = [_finance_requirements_item_audit(item) for item in items]
 
     family_counts: Counter[str] = Counter()
@@ -389,6 +482,7 @@ def build_finance_requirements_audit(
         "public_fields_used": list(FINANCE_REQUIREMENTS_AUDIT_PUBLIC_FIELDS),
         "excluded_gold_or_reference_fields": list(FINANCE_REQUIREMENTS_AUDIT_EXCLUDED_FIELDS),
         "unused_gold_like_fields_present": sorted(gold_like_fields_present),
+        "requirements_filter": requirements_filter,
         "family_summary": finance_requirement_counter_summary(family_counts),
         "tool_category_summary": finance_tool_category_counter_summary(tool_counts),
         "loop_stage_summary": finance_loop_stage_counter_summary(loop_stage_counts),
@@ -451,17 +545,33 @@ def render_finance_requirements_audit(audit: JsonObject) -> str:
 
 
 def _finance_requirements_item_audit(item: FinanceBenchmarkItem) -> JsonObject:
-    requirements = infer_finance_question_requirements(
-        item.question,
-        category=item.category,
-        source=item.source,
-        workflow_type=item.workflow_type,
-    )
+    requirements = _finance_item_requirements(item)
     return {
         "item_id": item.item_id,
         "question": item.question,
         **requirements,
     }
+
+
+def _finance_item_requirements(item: FinanceBenchmarkItem) -> JsonObject:
+    return infer_finance_question_requirements(
+        item.question,
+        category=item.category,
+        source=item.source,
+        workflow_type=item.workflow_type,
+    )
+
+
+def _normalized_filter_values(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _finance_gold_like_fields_present(item: FinanceBenchmarkItem) -> set[str]:

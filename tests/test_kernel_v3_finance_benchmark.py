@@ -8,6 +8,7 @@ from kernel_v3.bench import (
     FinanceBenchmarkResult,
     convert_public_finance_benchmark,
     fetch_public_finance_benchmark,
+    filter_finance_benchmark_items_by_requirements,
     load_finance_benchmark_items,
     resolve_finance_benchmark_split,
     run_finance_benchmark,
@@ -1269,6 +1270,111 @@ def test_finance_requirements_audit_text_renderer_marks_scope(tmp_path: Path) ->
     assert "capability_claim: false" in text
     assert "benchmark_progress_claim: false" in text
     assert "calculation_then_business_judgment" in text
+
+
+def test_finance_requirements_filter_selects_type_cluster_without_gold_values(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "id": "Q1",
+                        "question": "What was FY2024 revenue?",
+                        "gold_answer": "SECRET_REVENUE_GOLD",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "id": "Q2",
+                        "question": "Which segment had the largest FY2024 operating income in the table?",
+                        "gold_answer": "SECRET_TABLE_GOLD",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    items = load_finance_benchmark_items(dataset)
+    selected, payload = filter_finance_benchmark_items_by_requirements(
+        items,
+        families=["table_ranking_or_comparison"],
+        limit=1,
+    )
+    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    assert [item.item_id for item in selected] == ["Q2"]
+    assert payload["schema"] == "holo.kernel_v3.finance_requirements_filter.v1"
+    assert payload["no_gold_fields_used"] is True
+    assert payload["selected_item_ids"] == ["Q2"]
+    assert "SECRET_REVENUE_GOLD" not in rendered
+    assert "SECRET_TABLE_GOLD" not in rendered
+
+
+def test_finance_benchmark_cli_scores_prediction_file_with_requirements_family_slice(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    predictions = tmp_path / "predictions.jsonl"
+    output = tmp_path / "results.jsonl"
+    summary = tmp_path / "summary.json"
+    dataset.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "Q1", "question": "What was FY2024 revenue?", "gold_answer": "$10"}),
+                json.dumps(
+                    {
+                        "id": "Q2",
+                        "question": "Which segment had the largest FY2024 operating income in the table?",
+                        "gold_answer": "Segment B",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    predictions.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "Q1", "answer": "Revenue was $10."}),
+                json.dumps({"id": "Q2", "answer": "Segment B had the largest operating income."}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    code = cli.main(
+        [
+            "bench",
+            "finance",
+            "--dataset",
+            str(dataset),
+            "--predictions",
+            str(predictions),
+            "--output",
+            str(output),
+            "--summary-output",
+            str(summary),
+            "--requirements-family",
+            "table_ranking_or_comparison",
+            "--requirements-limit",
+            "1",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    result_rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines() if line.strip()]
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert code == 0
+    assert payload["requirements_filter"]["selected_item_ids"] == ["Q2"]
+    assert summary_payload["item_count"] == 1
+    assert [row["item_id"] for row in result_rows] == ["Q2"]
+    assert result_rows[0]["metadata"]["requirements_filter"]["filters"]["families"] == ["table_ranking_or_comparison"]
 
 
 def test_finance_dev_annotation_scorer_keeps_gold_post_run(tmp_path: Path) -> None:

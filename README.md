@@ -167,7 +167,11 @@ type-cluster debugging, not a FinanceBench/FinQA score. The same no-gold
 inference now lives in `kernel_v3/finance/requirements.py` and is injected into
 finance-capability planner directives and compact provider payloads as
 `finance_question_requirements`, so the model sees the task-family/tool-category
-workbench needs during one-shot tool selection.
+workbench needs during one-shot tool selection. The same ABI also drives
+`bench finance` slicing through `--requirements-family`,
+`--requirements-tool-category`, `--requirements-risk-flag`,
+`--requirements-loop-stage`, and `--requirements-limit`, enabling small
+type-cluster live debug runs without reading gold/reference fields.
 The same-day loop logic audit is recorded in
 `docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`; its first checkpoint moved
 finance/web/long profiles onto a LangGraph-backed controller. The later

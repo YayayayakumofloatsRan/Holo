@@ -32,6 +32,7 @@ from kernel_v3.bench import (
     build_finance_requirements_audit,
     convert_public_finance_benchmark,
     fetch_public_finance_benchmark,
+    filter_finance_benchmark_items_by_requirements,
     finance_benchmark_run_id,
     load_finance_benchmark_items,
     render_finance_benchmark_report,
@@ -44,6 +45,12 @@ from kernel_v3.bench import (
     write_general_capability_gauntlet_outputs,
     write_finance_dev_annotations_from_dataset,
     write_finance_benchmark_outputs,
+)
+from kernel_v3.finance.requirements import (
+    FINANCE_REQUIREMENT_FAMILY_ORDER,
+    FINANCE_REQUIREMENT_LOOP_STAGE_ORDER,
+    FINANCE_REQUIREMENT_RISK_ORDER,
+    FINANCE_REQUIREMENT_TOOL_ORDER,
 )
 from kernel_v3.capabilities import compact_semantic_capability_catalog, semantic_capability_catalog
 from kernel_v3.chat import ChatRuntime
@@ -261,6 +268,49 @@ def _add_context_budget_args(command_parser: argparse.ArgumentParser, *, default
     command_parser.add_argument("--context-section-budget", type=int, default=None)
     command_parser.add_argument("--workspace-evidence-chars", type=int, default=None)
     command_parser.add_argument("--synthesis-evidence-preview-chars", type=int, default=None)
+
+
+def _add_finance_requirements_filter_args(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--requirements-family",
+        action="append",
+        choices=list(FINANCE_REQUIREMENT_FAMILY_ORDER),
+        default=[],
+        help="No-gold question-family slice. Repeat to OR within this dimension; dimensions are ANDed.",
+    )
+    command_parser.add_argument(
+        "--requirements-tool-category",
+        action="append",
+        choices=list(FINANCE_REQUIREMENT_TOOL_ORDER),
+        default=[],
+        help="No-gold required-tool-category slice. Repeat to OR within this dimension.",
+    )
+    command_parser.add_argument(
+        "--requirements-risk-flag",
+        action="append",
+        choices=list(FINANCE_REQUIREMENT_RISK_ORDER),
+        default=[],
+        help="No-gold risk-flag slice. Repeat to OR within this dimension.",
+    )
+    command_parser.add_argument(
+        "--requirements-loop-stage",
+        action="append",
+        choices=list(FINANCE_REQUIREMENT_LOOP_STAGE_ORDER),
+        default=[],
+        help="No-gold loop-stage slice. Repeat to OR within this dimension.",
+    )
+    command_parser.add_argument(
+        "--requirements-limit",
+        type=int,
+        default=None,
+        help="Optional limit after applying no-gold requirements filters.",
+    )
+    command_parser.add_argument(
+        "--requirements-offset",
+        type=int,
+        default=0,
+        help="Optional offset after applying no-gold requirements filters.",
+    )
 
 
 def _add_generation_args(command_parser: argparse.ArgumentParser) -> None:
@@ -794,6 +844,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     finance_requirements_audit.add_argument("--limit", type=int, default=None)
     finance_requirements_audit.add_argument("--offset", type=int, default=0)
+    _add_finance_requirements_filter_args(finance_requirements_audit)
     finance_requirements_audit.add_argument("--format", choices=["json", "text"], default="json")
     finance_requirements_audit.add_argument("--output", default=None)
     finance_tool_audit = bench_sub.add_parser("finance-tool-audit")
@@ -844,6 +895,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     finance_bench.add_argument("--limit", type=int, default=None)
     finance_bench.add_argument("--offset", type=int, default=0)
+    _add_finance_requirements_filter_args(finance_bench)
     finance_bench.add_argument("--thread-prefix", default="finance-bench")
     finance_bench.add_argument(
         "--execution-profile",
@@ -2474,6 +2526,12 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
                 split=getattr(args, "split", None),
                 limit=getattr(args, "limit", None),
                 offset=int(getattr(args, "offset", 0) or 0),
+                requirements_families=getattr(args, "requirements_family", None),
+                requirements_tool_categories=getattr(args, "requirements_tool_category", None),
+                requirements_risk_flags=getattr(args, "requirements_risk_flag", None),
+                requirements_loop_stages=getattr(args, "requirements_loop_stage", None),
+                requirements_limit=getattr(args, "requirements_limit", None),
+                requirements_offset=int(getattr(args, "requirements_offset", 0) or 0),
             )
         except ValueError as exc:
             return {"status": "failed", "reason": "invalid_finance_requirements_audit_args", "message": str(exc)}
@@ -2551,14 +2609,31 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         }
     effective_offset = benchmark_split.offset if benchmark_split is not None else args.offset
     effective_limit = benchmark_split.limit if benchmark_split is not None else args.limit
+    requirements_filter_payload: JsonObject = {}
     if getattr(args, "predictions", None):
+        slice_items, requirements_filter_payload = _finance_requirements_slice_items(
+            args,
+            limit=effective_limit,
+            offset=effective_offset,
+        )
+        if requirements_filter_payload and not slice_items:
+            return {
+                "status": "failed",
+                "reason": "empty_finance_requirements_slice",
+                "requirements_filter": requirements_filter_payload,
+                "split": benchmark_split.to_dict() if benchmark_split is not None else None,
+            }
+        selected_ids = {item.item_id for item in slice_items}
         results = score_finance_prediction_file(
             dataset_path=args.dataset,
             predictions_path=args.predictions,
             limit=effective_limit,
             offset=effective_offset,
         )
+        if requirements_filter_payload:
+            results = [result for result in results if result.item_id in selected_ids]
         results = _tag_finance_results_with_split(results, benchmark_split)
+        results = _tag_finance_results_with_requirements_filter(results, requirements_filter_payload)
         summary = write_finance_benchmark_outputs(
             results,
             output_path=output_path,
@@ -2574,6 +2649,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             "output": str(output_path) if output_path is not None else None,
             "summary_output": str(summary_path) if summary_path is not None else None,
             "split": benchmark_split.to_dict() if benchmark_split is not None else None,
+            "requirements_filter": requirements_filter_payload,
         }
 
     live_block = _chat_live_model_block(args)
@@ -2588,7 +2664,18 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         return live_retrieval
     artifact_store = _runtime_artifact_store(args)
     research_corpus_store = _runtime_corpus_store(args)
-    items = load_finance_benchmark_items(args.dataset, limit=effective_limit, offset=effective_offset)
+    items, requirements_filter_payload = _finance_requirements_slice_items(
+        args,
+        limit=effective_limit,
+        offset=effective_offset,
+    )
+    if requirements_filter_payload and not items:
+        return {
+            "status": "failed",
+            "reason": "empty_finance_requirements_slice",
+            "requirements_filter": requirements_filter_payload,
+            "split": benchmark_split.to_dict() if benchmark_split is not None else None,
+        }
     execution = _execution_profile_for_args(args)
     mission_enabled = _mission_enabled_for_args(args, execution)
     start_callback = _finance_benchmark_start_callback(enabled=bool(getattr(args, "progress_events", False)), total=len(items))
@@ -2655,6 +2742,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         )
         worker_state_root = None
     results = _tag_finance_results_with_split(results, benchmark_split)
+    results = _tag_finance_results_with_requirements_filter(results, requirements_filter_payload)
     summary = write_finance_benchmark_outputs(
         results,
         output_path=output_path,
@@ -2674,6 +2762,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         "execution_profile": execution.profile_id if execution is not None else None,
         "mission_enabled": mission_enabled,
         "split": benchmark_split.to_dict() if benchmark_split is not None else None,
+        "requirements_filter": requirements_filter_payload,
     }
 
 
@@ -2685,6 +2774,33 @@ def _tag_finance_results_with_split(results: list[FinanceBenchmarkResult], split
     for result in results:
         metadata = dict(result.metadata)
         metadata["benchmark_split"] = split_payload
+        tagged.append(replace(result, metadata=metadata))
+    return tagged
+
+
+def _finance_requirements_slice_items(args, *, limit: int | None, offset: int) -> tuple[list[FinanceBenchmarkItem], JsonObject]:
+    items = load_finance_benchmark_items(args.dataset, limit=limit, offset=offset)
+    return filter_finance_benchmark_items_by_requirements(
+        items,
+        families=getattr(args, "requirements_family", None),
+        tool_categories=getattr(args, "requirements_tool_category", None),
+        risk_flags=getattr(args, "requirements_risk_flag", None),
+        loop_stages=getattr(args, "requirements_loop_stage", None),
+        limit=getattr(args, "requirements_limit", None),
+        offset=int(getattr(args, "requirements_offset", 0) or 0),
+    )
+
+
+def _tag_finance_results_with_requirements_filter(
+    results: list[FinanceBenchmarkResult],
+    requirements_filter: JsonObject | None,
+) -> list[FinanceBenchmarkResult]:
+    if not requirements_filter:
+        return results
+    tagged: list[FinanceBenchmarkResult] = []
+    for result in results:
+        metadata = dict(result.metadata)
+        metadata["requirements_filter"] = requirements_filter
         tagged.append(replace(result, metadata=metadata))
     return tagged
 

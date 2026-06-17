@@ -781,3 +781,65 @@ item、不设置硬阈值；模型仍负责工具选择、事实绑定、公式�
 
 说明：这仍不是 live benchmark accuracy；它只是把“按类型簇突破”的任务需求
 从 CLI 报告推进到模型真实可见的 agent-loop ABI。
+
+## 21. Type-cluster benchmark slicing checkpoint
+
+为了真正开始“按类型簇刷 debug50”，本轮把 requirements ABI 接入
+`bench finance` 运行入口。现在可以用题面需求切片选择 live/prediction scoring
+子集：
+
+```bash
+.venv/bin/python -m kernel_v3.cli bench finance \
+  --dataset data/bench/finance/financebench_doc_retrieval.jsonl \
+  --split debug50 \
+  --requirements-family table_ranking_or_comparison \
+  --requirements-limit 3
+```
+
+支持的 no-gold 过滤维度：
+
+- `--requirements-family`
+- `--requirements-tool-category`
+- `--requirements-risk-flag`
+- `--requirements-loop-stage`
+- `--requirements-offset`
+- `--requirements-limit`
+
+过滤只读取题面和公开元数据；输出结果 metadata 会写入
+`requirements_filter`，包含 `no_gold_fields_used=true`、selected item ids、
+matched/selected counts 和 filter 条件。空 slice 会返回
+`empty_finance_requirements_slice`，避免误把空 summary 当成结果。
+
+实跑 smoke：
+
+```bash
+.venv/bin/python -m kernel_v3.cli bench finance-requirements-audit \
+  --dataset data/bench/finance/financebench_doc_retrieval.jsonl \
+  --split debug50 \
+  --requirements-family table_ranking_or_comparison \
+  --requirements-limit 3 \
+  --format text
+```
+
+结果列出 3 个表格排序/比较类型簇题：
+
+- `financebench_id_01865`
+- `financebench_id_01858`
+- `financebench_id_08286`
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_requirements_filter_selects_type_cluster_without_gold_values \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_benchmark_cli_scores_prediction_file_with_requirements_family_slice \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_requirements_audit_excludes_gold_reference_values \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_requirements_audit_cli_is_no_gold_structural_check -q
+```
+
+结果：`4 passed in 26.88s`。
+
+完整 finance benchmark 结构测试随后通过：`60 passed in 172.52s`。
+
+说明：这一步仍不是 live accuracy。它把后续 live debug 的单位从 offset 单题推进到
+type-cluster slice，下一步可以按公式题、表格题、driver/bridge 题分别跑小批 live。

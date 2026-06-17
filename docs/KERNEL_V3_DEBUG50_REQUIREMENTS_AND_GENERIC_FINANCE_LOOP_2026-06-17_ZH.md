@@ -191,6 +191,20 @@ benchmark_progress_claim=false
 provider compact payload 和 `finance_working_state.workbench`。这使 debug50
 类型簇需求不只是人读报告，而是模型 one-shot 工具选择时真实可见的 ABI。
 
+同一 ABI 也已经进入 `bench finance` 切片入口。后续 live debug 不必继续按
+offset 单题推进，可以用：
+
+```bash
+.venv/bin/python -m kernel_v3.cli bench finance \
+  --dataset data/bench/finance/financebench_doc_retrieval.jsonl \
+  --split debug50 \
+  --requirements-family table_ranking_or_comparison \
+  --requirements-limit 3
+```
+
+这只决定运行哪些题，不决定答案；筛选 metadata 固定标记
+`no_gold_fields_used=true`。
+
 本次 debug50 实跑结果：
 
 ```text
