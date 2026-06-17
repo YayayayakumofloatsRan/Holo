@@ -229,6 +229,18 @@ process/network-level signal propagation for already-running non-cooperative
 tools, runtime progress/result injection into the same provider conversation,
 dynamic token-aware tool-set expansion, and type-family live debug50 evidence.
 This estimate is architectural only, not a FinanceBench or FinQA score.
+The 2026-06-18 follow-up is recorded in
+`docs/KERNEL_V3_AGENT_LOOP_FOLLOWUP_2026-06-18_ZH.md`. A live type-cluster probe
+on `financebench_id_04672` exposed a generic streaming-loop defect: workbench
+and slot-binding signals identified missing balance-sheet net PP&E, but the
+streaming path repeated `artifact.read` instead of executing the workbench
+follow-up retrieval. Kernel v3 now checks pending workbench follow-up before
+calling the streaming planner, so model/workbench-proposed target URLs can be
+scaffolded into `retrieval.run` through the normal policy/tool/journal path.
+The workloop also detects repeated `artifact.read` after three identical reads.
+Targeted structural tests pass (`21` deep-loop tests, `31` workloop tests).
+The attempted live rerun was blocked by sandbox escalation review timeouts, so
+this is a loop-contract repair, not a new FinanceBench accuracy claim.
 The streaming path now also mirrors the inspected TypeScript
 `StreamingToolExecutor` scheduling rule: a streamed tool starts immediately
 when possible, explicitly concurrency-safe tools may run together, and exclusive

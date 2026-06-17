@@ -104,6 +104,7 @@ class TerminationDecision(Contract):
 @dataclass(frozen=True, kw_only=True)
 class WorkloopConfig:
     repeated_action_limit: int = 16
+    repeated_artifact_read_limit: int = 3
     repeated_missing_evidence_limit: int = 32
     repeated_failed_fetch_limit: int = 64
     no_progress_step_limit: int = 16
@@ -335,6 +336,11 @@ def detect_repetition(
             _failed_fetch_targets(journal, task_id=task_id, run_id=run_id),
             threshold=config.repeated_failed_fetch_limit,
             repeat_type="same_failed_fetch_target",
+        ),
+        _repeat_for_values(
+            _artifact_read_targets(journal, task_id=task_id, run_id=run_id),
+            threshold=config.repeated_artifact_read_limit,
+            repeat_type="same_artifact_read",
         ),
         _repeat_for_values(_retrieval_queries(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_retrieval_query"),
         _repeat_for_values(_action_fingerprints(journal, task_id=task_id, run_id=run_id), threshold=config.repeated_action_limit, repeat_type="same_action_payload"),
@@ -1231,6 +1237,34 @@ def _failed_fetch_targets(journal: JournalStore, *, task_id: str, run_id: str) -
         target = uri if isinstance(uri, str) and uri.strip() else source_id
         if isinstance(target, str) and target.strip():
             values.append((target.strip().lower(), record.record_id))
+    return values
+
+
+def _artifact_read_targets(journal: JournalStore, *, task_id: str, run_id: str) -> list[tuple[str, str]]:
+    values = []
+    for record in journal.records(task_id=task_id, kind="action"):
+        if record.run_id != run_id:
+            continue
+        if record.data.get("name") != "artifact.read":
+            continue
+        payload = record.data.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        artifact_id = str(payload.get("artifact_id") or "").strip()
+        if not artifact_id:
+            continue
+        values.append(
+            (
+                _hash(
+                    {
+                        "artifact_id": artifact_id,
+                        "mode": str(payload.get("mode") or "preview").strip().casefold(),
+                        "max_chars": _int_or_zero(payload.get("max_chars")),
+                    }
+                ),
+                record.record_id,
+            )
+        )
     return values
 
 

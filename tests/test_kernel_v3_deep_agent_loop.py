@@ -41,6 +41,24 @@ class FakeTurnPlanner:
         return self.turns.pop(0)
 
 
+class FakePlannerWithStreamingProbe(FakeTurnPlanner):
+    def __init__(self, turns: list[AssistantTurn]) -> None:
+        super().__init__(turns)
+        self.stream_calls = 0
+
+    def stream_turn(
+        self,
+        context: ContextBundle,
+        feedback: Feedback | None = None,
+        *,
+        step_id: str | None = None,
+    ) -> None:
+        self.stream_calls += 1
+        if feedback is not None and "retrieval_workbench_followup" in feedback.missing_evidence:
+            raise AssertionError("workbench follow-up should be scaffolded before streaming")
+        return None
+
+
 def test_deep_agent_loop_executes_multi_tool_turn_and_journals_batch() -> None:
     registry = ToolRegistry()
     registry.register("alpha.read", _read_tool("alpha"))
@@ -178,6 +196,66 @@ def test_deep_agent_loop_prompt_blocks_final_when_feedback_requires_tool_work() 
     assert contract["feedback_status"] == "continue"
     assert contract["must_not_finalize_without_new_tool_observation"] is True
     assert "retrieval_workbench_followup" in contract["missing_evidence"]
+
+
+def test_streaming_loop_executes_pending_workbench_followup_before_model_turn() -> None:
+    journal = JournalStore.in_memory()
+    registry = ToolRegistry()
+    registry.register("seed.read", _workbench_seed_tool(journal))
+    registry.register("retrieval.run", _read_tool("retrieval"))
+    planner = FakePlannerWithStreamingProbe(
+        [
+            AssistantTurn(
+                turn_id="turn-seed",
+                message="create workbench follow-up state",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="tc-seed",
+                        name="seed.read",
+                        arguments={"query": "seed"},
+                        reason="seed workbench decision",
+                    )
+                ],
+            )
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator(
+            [
+                {
+                    "status": "continue",
+                    "stop_reason": None,
+                    "answer": None,
+                    "missing_evidence": ["retrieval_workbench_followup"],
+                },
+                {
+                    "status": "final_answer_ready",
+                    "stop_reason": "completed",
+                    "answer": "done",
+                    "missing_evidence": [],
+                },
+            ]
+        ),
+        max_steps=4,
+        max_tool_calls=4,
+    )
+
+    result = loop.run("Find 3M FY2018 net PP&E from the filing.")
+
+    assert result.status == "completed"
+    assert result.answer == "done"
+    assert planner.stream_calls == 1
+    assert [action.name for action in registry.executed_actions] == ["seed.read", "retrieval.run"]
+    followup = registry.executed_actions[-1]
+    assert followup.payload["query"] == "https://example.test/3m-2018-10k.pdf"
+    assert followup.payload["metadata"]["workbench_followup"] is True
+    assistant_turns = journal.records(task_id=result.task_id, kind="assistant_turn")
+    assert assistant_turns[1].data["turn_id"].startswith("turn-workbench-followup-")
 
 
 def test_finance_workloop_does_not_finalize_on_workbench_fail_with_missing_slots() -> None:
@@ -1359,6 +1437,43 @@ def _read_tool(name: str):
             status="ok",
             source=f"tool:{action.name}",
             content={"name": name, "payload": action.payload},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
+
+
+def _workbench_seed_tool(journal: JournalStore):
+    def execute(action: CandidateAction) -> Observation:
+        host_context = action.payload.get("_host_context") if isinstance(action.payload, dict) else {}
+        host_context = host_context if isinstance(host_context, dict) else {}
+        task_id = str(host_context.get("task_id") or "task-unknown")
+        run_id = str(host_context.get("run_id") or "run-unknown")
+        step_id = str(host_context.get("step_id") or "step-unknown")
+        journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            kind="retrieval_workbench_decision",
+            data={
+                "status": "ok",
+                "decision": "continue",
+                "missing_slots": ["net PP&E"],
+                "next_queries": ["3M 2018 10-K net PP&E"],
+                "next_document_targets": ["https://example.test/3m-2018-10k.pdf"],
+                "next_source_families": ["company_ir_pdf"],
+                "reason_summary": "Need balance sheet line item from target filing.",
+            },
+        )
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source=f"tool:{action.name}",
+            content={"seeded_workbench_followup": True},
             observed_at_ms=0,
             action_id=action.action_id,
             tool_call_id=None,

@@ -37,6 +37,13 @@ Holo 已经从旧的一步一工具循环，升级到“provider-visible native 
 
 所以，Holo 现在的核心缺口不是再加某一道题的规则，而是把已经落地的流式工具骨架继续推进到“运行中 progress/result 可回注、进程/网络级 signal 传递、动态工具集预算优化、live debug50 证明”的工作台。
 
+2026-06-18 follow-up：FinanceBench live 探针暴露 streaming path 绕过
+workbench follow-up scaffold，导致模型重复读取同一 artifact。Holo 已将
+workbench follow-up 检查前移到 streaming planner 之前，并新增三次重复
+`artifact.read` 的专用 repetition signal。这是对外部成熟 loop 中“工具状态
+迁移必须约束下一步执行”的直接吸收；结构测试已过，但 live accuracy 复测因
+sandbox escalation 审核超时未启动，因此不计入金融 benchmark 成绩。
+
 ## 外部项目做对的事情
 
 ### 1. Query loop 是真正的流式工具循环

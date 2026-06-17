@@ -303,34 +303,52 @@ class DeepAgentLoopController(LoopControllerV3):
                 event_ref=self._last_ref(task.task_id, "event_ref"),
                 state_delta={"context_id": context.context_id, "loop_runtime": self.runtime_backend},
             )
-            streamed = self._try_execute_streaming_turn(
-                task,
-                context,
-                current_feedback,
-                step_id=step_id,
-                tool_calls=tool_calls,
-                network_fetches=network_fetches,
-                total_artifact_bytes=total_artifact_bytes,
+            scaffold_turn = _workbench_followup_scaffold_turn(
+                self.journal,
+                task_id=task.task_id,
+                run_id=task.run_id,
+                input_text=task.input_text,
+                feedback=current_feedback,
+                proposed_turn=AssistantTurn(
+                    turn_id=f"turn-workbench-followup-pending-{step_index}",
+                    message=None,
+                    tool_calls=[],
+                    final_answer=None,
+                    reasons=["pending_before_model_turn"],
+                ),
             )
-            if streamed is not None:
-                turn = streamed.turn
-                preexecuted_items = streamed.execution_items
-                tool_calls = streamed.tool_calls
-                network_fetches = streamed.network_fetches
-                total_artifact_bytes = streamed.total_artifact_bytes
-            else:
-                turn = self._propose_turn(context, current_feedback)
+            if scaffold_turn is not None:
+                turn = scaffold_turn
                 preexecuted_items = None
-                scaffold_turn = _workbench_followup_scaffold_turn(
-                    self.journal,
-                    task_id=task.task_id,
-                    run_id=task.run_id,
-                    input_text=task.input_text,
-                    feedback=current_feedback,
-                    proposed_turn=turn,
+            else:
+                streamed = self._try_execute_streaming_turn(
+                    task,
+                    context,
+                    current_feedback,
+                    step_id=step_id,
+                    tool_calls=tool_calls,
+                    network_fetches=network_fetches,
+                    total_artifact_bytes=total_artifact_bytes,
                 )
-                if scaffold_turn is not None:
-                    turn = scaffold_turn
+                if streamed is not None:
+                    turn = streamed.turn
+                    preexecuted_items = streamed.execution_items
+                    tool_calls = streamed.tool_calls
+                    network_fetches = streamed.network_fetches
+                    total_artifact_bytes = streamed.total_artifact_bytes
+                else:
+                    turn = self._propose_turn(context, current_feedback)
+                    preexecuted_items = None
+                    scaffold_turn = _workbench_followup_scaffold_turn(
+                        self.journal,
+                        task_id=task.task_id,
+                        run_id=task.run_id,
+                        input_text=task.input_text,
+                        feedback=current_feedback,
+                        proposed_turn=turn,
+                    )
+                    if scaffold_turn is not None:
+                        turn = scaffold_turn
             self._append_assistant_turn(task, turn, step_id=step_id)
 
             if not turn.tool_calls and not turn.parse_errors:

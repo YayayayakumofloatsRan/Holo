@@ -256,6 +256,39 @@ def test_phase61_default_failed_fetch_repetition_limit_allows_deep_retrieval_ret
     assert WorkloopConfig().repeated_failed_fetch_limit == 64
 
 
+def test_phase61_repeated_artifact_read_sets_repetition_signal_before_step_limit():
+    journal = JournalStore.in_memory()
+    for index in range(3):
+        journal.append(
+            task_id="task-artifact-repeat",
+            run_id="run-1",
+            step_id=f"step-{index + 1}",
+            kind="action",
+            data={
+                "name": "artifact.read",
+                "payload": {
+                    "artifact_id": "artifact-sec-financials",
+                    "mode": "read",
+                    "max_chars": 20000,
+                },
+            },
+        )
+
+    signal = detect_repetition(
+        journal,
+        task_id="task-artifact-repeat",
+        run_id="run-1",
+        step_id="step-3",
+        config=WorkloopConfig(),
+        latest_missing_evidence=[],
+    )
+
+    assert signal.repeated is True
+    assert signal.repeat_type == "same_artifact_read"
+    assert signal.repeat_count == 3
+    assert signal.threshold == 3
+
+
 def test_phase61_retrieval_rejection_diagnostic_counts_as_progress():
     journal = JournalStore.in_memory()
     journal.append(

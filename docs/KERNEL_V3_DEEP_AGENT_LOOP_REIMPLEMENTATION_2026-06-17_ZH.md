@@ -176,7 +176,44 @@ LLM 可以一次性组装工作台，host 则保持验证、权限、预算和 p
 
 说明：这是结构/连通性测试，不是金融 benchmark 成绩。任何金融能力声明仍必须来自在线 live run，且 gold/reference 不进入模型上下文。
 
-## 7. 下一步
+## 7. 2026-06-18 streaming workbench follow-up 修复
+
+2026-06-18 的 follow-up 记录见：
+
+`docs/KERNEL_V3_AGENT_LOOP_FOLLOWUP_2026-06-18_ZH.md`
+
+新 live 探针显示：`financebench_id_04672` 不是缺少金融判断，而是 streaming
+路径绕过了已有的 workbench follow-up scaffold。workbench 已经指出缺的是
+balance-sheet net PP&E，slot binder 也拒绝了错误的 cash-flow PP&E purchase
+候选，但主循环继续重复 `artifact.read`，没有把缺槽信号转成下一轮
+`retrieval.run`。
+
+本轮已修复：
+
+- `DeepAgentLoopController` 在尝试 provider streaming planner 之前，先检查
+  `retrieval_workbench_followup` feedback；如果 workbench 给出下一步 query /
+  target document / source family，则直接 scaffold `retrieval.run`，仍走 host
+  policy、tool registry、journal 和 observation 边界。
+- `WorkloopConfig` 新增 `repeated_artifact_read_limit = 3`，同一 artifact/mode/
+  max_chars 重复读取三次时产生 `same_artifact_read` repetition signal。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase61_workloop.py -q
+```
+
+结果：
+
+- `21 passed in 3.20s`
+- `31 passed in 9.28s`
+
+本轮尝试对 `financebench_id_04672` 做 live 单题复测，但两次联网/live 命令均在
+sandbox escalation 自动审核阶段超时，命令未启动。因此这次只记录为 agent
+loop 合同修复，不记录为 FinanceBench 准确率提升。
+
+## 8. 下一步
 
 下一步不应再回到逐题补丁，而应沿 deep loop 补齐：
 
