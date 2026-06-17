@@ -15,8 +15,10 @@ from kernel_v3.tools import ToolRegistry
 
 TOOL_DISCOVERY_NAME = "tool.discovery"
 ARTIFACT_READ_NAME = "artifact.read"
+ARTIFACT_QUERY_NAME = "artifact.query"
 TOOL_DISCOVERY_SCHEMA = "holo.kernel_v3.tool_discovery.v1"
 ARTIFACT_READ_SCHEMA = "holo.kernel_v3.artifact_read.v1"
+ARTIFACT_QUERY_SCHEMA = "holo.kernel_v3.artifact_query.v1"
 TOOL_USE_CONTEXT_SCHEMA = "holo.kernel_v3.tool_use_context.v1"
 TOOL_EXECUTION_EVENT_SCHEMA = "holo.kernel_v3.tool_execution_event.v1"
 
@@ -523,7 +525,7 @@ def register_artifact_tools(
     *,
     artifact_store: ArtifactStore,
 ) -> ToolRegistry:
-    def execute(action: CandidateAction) -> Observation:
+    def execute_read(action: CandidateAction) -> Observation:
         artifact_id = str(action.payload.get("artifact_id") or "").strip()
         mode = str(action.payload.get("mode") or "preview").strip().casefold() or "preview"
         max_chars = _positive_int(action.payload.get("max_chars"), default=4000, maximum=20000)
@@ -584,12 +586,108 @@ def register_artifact_tools(
                 "blob_available": artifact_store.has_blob(artifact_id),
                 "host_boundary": "use mode=read only when the preview is insufficient and the artifact has a blob",
             },
-            kind="artifact_read_result",
+                kind="artifact_read_result",
+            )
+
+    def execute_query(action: CandidateAction) -> Observation:
+        artifact_id = str(action.payload.get("artifact_id") or "").strip()
+        path = str(action.payload.get("path") or "").strip()
+        query = str(action.payload.get("query") or "").strip()
+        max_matches = _positive_int(action.payload.get("max_matches"), default=20, maximum=100)
+        max_chars = _positive_int(action.payload.get("max_chars"), default=8000, maximum=20000)
+        if not artifact_id:
+            return _artifact_observation(action, "failed", {"reason": "missing_artifact_id"}, kind="artifact_query_result")
+        ref = artifact_store.get(artifact_id)
+        if ref is None:
+            return _artifact_observation(
+                action,
+                "failed",
+                {"schema": ARTIFACT_QUERY_SCHEMA, "artifact_id": artifact_id, "reason": "artifact_not_found"},
+                kind="artifact_query_result",
+            )
+        if not artifact_store.has_blob(artifact_id):
+            preview = str(ref.metadata.get("preview") or "")
+            matches = _text_line_matches(preview, query=query, max_matches=max_matches, max_chars=max_chars)
+            return _artifact_observation(
+                action,
+                "ok",
+                {
+                    "schema": ARTIFACT_QUERY_SCHEMA,
+                    "artifact": ref.to_dict(),
+                    "path": path,
+                    "query": query,
+                    "mode": "metadata_preview",
+                    "matches": matches,
+                    "match_count": len(matches),
+                    "blob_available": False,
+                    "host_boundary": "artifact.query searched only artifact metadata preview because no blob is stored",
+                },
+                kind="artifact_query_result",
+            )
+        payload = artifact_store.read_blob(
+            artifact_id,
+            record_access=True,
+            access_context={
+                "tool": ARTIFACT_QUERY_NAME,
+                "action_id": action.action_id,
+                "artifact_id": artifact_id,
+                "path": path,
+                "query": query,
+            },
+        )
+        text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else payload
+        json_value, json_error = _try_load_json(text)
+        if json_error is None:
+            selected = _select_json_path(json_value, path) if path else [("$", json_value)]
+            matches = _query_json_values(selected, query=query, max_matches=max_matches, max_chars=max_chars)
+            omitted = max(0, _count_queryable_json_matches(selected, query=query) - len(matches))
+            return _artifact_observation(
+                action,
+                "ok",
+                {
+                    "schema": ARTIFACT_QUERY_SCHEMA,
+                    "artifact": ref.to_dict(),
+                    "mode": "json",
+                    "path": path,
+                    "query": query,
+                    "selected_count": len(selected),
+                    "matches": matches,
+                    "match_count": len(matches),
+                    "omitted_match_count": omitted,
+                    "truncated": omitted > 0 or _stable_json_chars(matches) > max_chars,
+                    "root_shape": _value_shape(json_value),
+                    "host_boundary": (
+                        "artifact.query returns bounded structural matches only; semantic interpretation, "
+                        "financial line-item binding, and final judgment remain model-owned"
+                    ),
+                },
+                kind="artifact_query_result",
+            )
+        matches = _text_line_matches(text, query=query, max_matches=max_matches, max_chars=max_chars)
+        return _artifact_observation(
+            action,
+            "ok",
+            {
+                "schema": ARTIFACT_QUERY_SCHEMA,
+                "artifact": ref.to_dict(),
+                "mode": "text",
+                "path": path,
+                "query": query,
+                "json_parse_error": json_error,
+                "matches": matches,
+                "match_count": len(matches),
+                "text_chars": len(text),
+                "truncated": _stable_json_chars(matches) > max_chars,
+                "host_boundary": (
+                    "artifact.query returns bounded text-line matches only; semantic interpretation remains model-owned"
+                ),
+            },
+            kind="artifact_query_result",
         )
 
     registry.register(
         ARTIFACT_READ_NAME,
-        execute,
+        execute_read,
         manifest=ToolManifest(
             name=ARTIFACT_READ_NAME,
             version="1",
@@ -611,6 +709,47 @@ def register_artifact_tools(
                     "required": False,
                     "description": "preview or read. Defaults to preview.",
                 },
+                "max_chars": {"type": "int", "required": False, "min": 1, "max": 20000},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "max_result_size_chars": 24000,
+                "result_persistence_policy": "never",
+            },
+        ),
+    )
+    registry.register(
+        ARTIFACT_QUERY_NAME,
+        execute_query,
+        manifest=ToolManifest(
+            name=ARTIFACT_QUERY_NAME,
+            version="1",
+            resource_kind="artifact",
+            operator_kind="query",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Query a host-exposed artifact blob by JSON path, table-row search, or bounded text search.",
+            input_schema={
+                "artifact_id": {
+                    "type": "str",
+                    "required": True,
+                    "min_length": 1,
+                    "description": "Artifact id from recent observations, tool results, or artifact_read_hint.",
+                },
+                "path": {
+                    "type": "str",
+                    "required": False,
+                    "description": "Optional dotted JSON path such as observation.content.records or records[0].",
+                },
+                "query": {
+                    "type": "str",
+                    "required": False,
+                    "description": "Optional case-insensitive term search over the selected JSON subtree or text lines.",
+                },
+                "max_matches": {"type": "int", "required": False, "min": 1, "max": 100},
                 "max_chars": {"type": "int", "required": False, "min": 1, "max": 20000},
             },
             runtime={
@@ -760,6 +899,219 @@ def _value_shape(value: object) -> JsonObject:
             "sample_item_types": item_types,
         }
     return {"type": _type_name(value)}
+
+
+def _try_load_json(text: str) -> tuple[object, str | None]:
+    try:
+        return json.loads(text), None
+    except json.JSONDecodeError as exc:
+        return None, f"{exc.__class__.__name__}: {str(exc)[:240]}"
+
+
+def _select_json_path(value: object, path: str) -> list[tuple[str, object]]:
+    tokens = _json_path_tokens(path)
+    if not tokens:
+        return [("$", value)]
+    current: list[tuple[str, object]] = [("$", value)]
+    for token in tokens:
+        next_values: list[tuple[str, object]] = []
+        for current_path, current_value in current:
+            next_values.extend(_json_child_values(current_path, current_value, token))
+        current = next_values
+        if not current:
+            break
+    return current
+
+
+def _json_path_tokens(path: str) -> list[str]:
+    text = str(path or "").strip()
+    if not text:
+        return []
+    if text.startswith("$."):
+        text = text[2:]
+    elif text == "$":
+        return []
+    elif text.startswith("$"):
+        text = text[1:].lstrip(".")
+    tokens: list[str] = []
+    current = ""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == ".":
+            if current:
+                tokens.append(current)
+                current = ""
+            index += 1
+            continue
+        if char == "[":
+            if current:
+                tokens.append(current)
+                current = ""
+            end = text.find("]", index + 1)
+            if end == -1:
+                current += text[index:]
+                break
+            token = text[index + 1 : end].strip().strip("\"'")
+            if token:
+                tokens.append(token)
+            index = end + 1
+            continue
+        current += char
+        index += 1
+    if current:
+        tokens.append(current)
+    return [token for token in tokens if token]
+
+
+def _json_child_values(path: str, value: object, token: str) -> list[tuple[str, object]]:
+    if token == "*":
+        if isinstance(value, dict):
+            return [(f"{path}.{key}", item) for key, item in value.items()]
+        if isinstance(value, list):
+            return [(f"{path}[{index}]", item) for index, item in enumerate(value)]
+        return []
+    if isinstance(value, dict):
+        if token in value:
+            return [(f"{path}.{token}", value[token])]
+        lowered = token.casefold()
+        for key, item in value.items():
+            if str(key).casefold() == lowered:
+                return [(f"{path}.{key}", item)]
+        return []
+    if isinstance(value, list):
+        if token.isdigit():
+            index = int(token)
+            if 0 <= index < len(value):
+                return [(f"{path}[{index}]", value[index])]
+            return []
+        if token == "rows":
+            return [(f"{path}[{index}]", item) for index, item in enumerate(value)]
+    return []
+
+
+def _query_json_values(
+    selected: list[tuple[str, object]],
+    *,
+    query: str,
+    max_matches: int,
+    max_chars: int,
+) -> list[JsonObject]:
+    matches: list[JsonObject] = []
+    terms = _query_terms(query)
+    for path, value in selected:
+        if not terms:
+            matches.append(_json_match(path, value))
+        elif isinstance(value, list) and value and all(isinstance(item, dict) for item in value[: min(len(value), 8)]):
+            for index, item in enumerate(value):
+                if _value_matches_terms(item, terms):
+                    matches.append(_json_match(f"{path}[{index}]", item))
+                    if _matches_full(matches, max_matches=max_matches, max_chars=max_chars):
+                        return matches[:max_matches]
+        else:
+            for match_path, match_value in _walk_json(value, base_path=path):
+                if _value_matches_terms(match_value, terms):
+                    matches.append(_json_match(match_path, match_value))
+                    if _matches_full(matches, max_matches=max_matches, max_chars=max_chars):
+                        return matches[:max_matches]
+        if _matches_full(matches, max_matches=max_matches, max_chars=max_chars):
+            return matches[:max_matches]
+    return matches[:max_matches]
+
+
+def _count_queryable_json_matches(selected: list[tuple[str, object]], *, query: str) -> int:
+    terms = _query_terms(query)
+    if not terms:
+        return len(selected)
+    count = 0
+    for _, value in selected:
+        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value[: min(len(value), 8)]):
+            count += sum(1 for item in value if _value_matches_terms(item, terms))
+            continue
+        count += sum(1 for _, item in _walk_json(value, base_path="$") if _value_matches_terms(item, terms))
+    return count
+
+
+def _json_match(path: str, value: object) -> JsonObject:
+    return {
+        "path": path,
+        "shape": _value_shape(value),
+        "value_preview": _bounded_json(value, 1600),
+        "value": _compact_json_value(value),
+    }
+
+
+def _walk_json(value: object, *, base_path: str) -> Iterable[tuple[str, object]]:
+    yield base_path, value
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk_json(item, base_path=f"{base_path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _walk_json(item, base_path=f"{base_path}[{index}]")
+
+
+def _text_line_matches(text: str, *, query: str, max_matches: int, max_chars: int) -> list[JsonObject]:
+    terms = _query_terms(query)
+    matches: list[JsonObject] = []
+    lines = str(text or "").splitlines() or [str(text or "")]
+    for index, line in enumerate(lines, start=1):
+        if terms and not _text_matches_terms(line, terms):
+            continue
+        matches.append({"line": index, "text_preview": _bounded_text(line, 1200)})
+        if _matches_full(matches, max_matches=max_matches, max_chars=max_chars):
+            break
+    return matches[:max_matches]
+
+
+def _query_terms(query: str) -> list[str]:
+    return [term for term in str(query or "").casefold().split() if term]
+
+
+def _value_matches_terms(value: object, terms: list[str]) -> bool:
+    return _text_matches_terms(_stable_json(value).casefold(), terms)
+
+
+def _text_matches_terms(text: str, terms: list[str]) -> bool:
+    folded = str(text or "").casefold()
+    return all(term in folded for term in terms)
+
+
+def _matches_full(matches: list[JsonObject], *, max_matches: int, max_chars: int) -> bool:
+    return len(matches) >= max_matches or _stable_json_chars(matches) >= max_chars
+
+
+def _stable_json_chars(value: object) -> int:
+    return len(_stable_json(value))
+
+
+def _stable_json(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except TypeError:
+        return str(value)
+
+
+def _bounded_json(value: object, limit: int) -> str:
+    return _bounded_text(_stable_json(value), limit)
+
+
+def _bounded_text(text: str, limit: int) -> str:
+    raw = str(text or "")
+    return raw if len(raw) <= limit else raw[: max(0, limit - 3)] + "..."
+
+
+def _compact_json_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): _compact_json_value(item)
+            for key, item in list(value.items())[:16]
+        }
+    if isinstance(value, list):
+        return [_compact_json_value(item) for item in value[:12]]
+    if isinstance(value, str):
+        return _bounded_text(value, 1000)
+    return value
 
 
 def _type_name(value: object) -> str:

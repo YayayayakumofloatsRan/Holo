@@ -403,6 +403,17 @@ to avoid context-budget inflation on small tool outputs. Targeted structural
 tests pass (`36` deep-loop tests, `16` tool/provider tests, `61` finance
 benchmark harness tests). This is agent-loop/tool-result contract readiness,
 not a live FinanceBench or FinQA score.
+The following mature-loop checkpoint upgrades the artifact workbench from
+whole-blob reads to bounded queries. `artifact.query` is now an always-loaded,
+read-only, concurrency-safe tool that can select JSON paths, search JSON
+subtrees or table-row lists, and search text artifact lines without forcing the
+model to pull an entire SEC filing, table extraction, retrieval report, or full
+tool-result JSON into context. Provider full-result hints now include
+`artifact_query_hint`, replacement hints prefer `artifact.query` before broad
+`artifact.read`, and the finance loop standard tool interface/capability
+catalog describe the new path. Targeted structural tests pass (`81` loop/tool/
+finance-open-component tests, `11` processor usage tests, `61` finance benchmark
+harness tests). This is P0 workbench readiness, not a live finance score.
 The next finance tool-runtime P0 checkpoint makes those tool contracts executable
 rather than merely descriptive. `retrieval.run`, SEC/EDGAR, Trafilatura, OpenBB,
 DuckDB, SymPy, `calculator.compute`, `finance.slot_bind`, and

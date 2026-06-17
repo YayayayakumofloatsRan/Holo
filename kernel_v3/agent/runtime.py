@@ -8628,6 +8628,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                             "planner_action": "Return planner.propose JSON with kind=tool/respond/ask_user, name, payload, reasons, side_effect_class.",
                             "tool.discovery": "Use when unsure which currently allowed tool contract or input schema fits the next step.",
                             "artifact.read": "Use when a compact observation references an artifact and the bounded preview/body is needed for the next reasoning step.",
+                            "artifact.query": "Use before broad artifact.read when a long JSON/table/text artifact can be narrowed by path, row terms, or line search.",
                             "retrieval.run": "Use payload.query plus metadata.retrieval_strategy for query plan, source family plan, evidence criteria, fallback moves, and stop_when.",
                             "sec.edgar.company_filings": "Use EdgarTools-backed filing discovery when official SEC issuer filings are the right source family.",
                             "sec.edgar.financials": "Use EdgarTools-backed SEC/XBRL statement candidates when line-item and period binding need structured filing facts.",

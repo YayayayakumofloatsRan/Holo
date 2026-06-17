@@ -1040,3 +1040,61 @@ artifact refs，不一定包含完整 tool-result JSON 的 artifact id。这会�
 说明：这是通用 agent loop/tool-result contract 成熟度修复，不是
 FinanceBench/FinQA accuracy。当前 UbuntuHolo 环境里 live key/model 变量仍未暴露，
 因此本轮没有新增 live 金融分数。
+
+## 26. Artifact workbench query checkpoint
+
+上一节让 provider continuation 能看到 full tool-result artifact，但如果模型只能
+继续整包 `artifact.read`，长 SEC filing、Docling 表格、检索报告和工具结果仍会造成
+上下文膨胀和重复读取。本轮继续按成熟 agent loop 的工作台思想补齐：
+artifact 不是只能读全文，而应支持模型 one-shot 做有界结构查询。
+
+本轮新增：
+
+- `artifact.query` 工具，由 `register_artifact_tools(...)` 注册，默认 always-load、
+  read-only、concurrency-safe。
+- 支持 JSON path 查询，例如 `observation.content.records`、
+  `$.facts.Revenue`、`records[0]` 和 `*` wildcard。
+- 支持对 JSON subtree 做关键词搜索；当 path 指向 list[dict] 时，返回匹配行，
+  适合 SEC/table/document rows 的候选筛选。
+- 支持非 JSON artifact 的 bounded text-line search。
+- 输出只包含 bounded matches、shape、preview 和 compact value；不做财务语义判断、
+  不选择 line item、不计算公式、不读取 gold/reference。
+- provider continuation 和 tool context 的 full-result hint 现在同时包含
+  `artifact_query_hint`；replacement read hint 也改为优先 `artifact.query`，必要时
+  再 `artifact.read`。
+- finance loop 的标准工具接口和 capability catalog 已加入 `artifact.query`，让模型
+  知道长 artifact 应先窄查，再决定是否整包读取。
+
+结构验证：
+
+```bash
+.venv/bin/python -m py_compile \
+  kernel_v3/tool_use.py kernel_v3/deep_loop.py kernel_v3/tool_result_budget.py \
+  kernel_v3/capabilities.py kernel_v3/agent/runtime.py \
+  tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_deep_agent_loop.py
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_tool_use.py \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_provider_native_tools.py \
+  tests/test_kernel_v3_finance_open_components.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_processor_usage.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+```
+
+结果：
+
+- `tool_use + deep_loop + provider_native + finance_open_components`: `81 passed in 5.96s`
+- `processor_usage`: `11 passed in 0.67s`
+- `finance_benchmark`: `61 passed in 170.80s`
+
+新增覆盖：
+
+- JSON artifact 可按 path 查询并按关键词返回匹配 table row。
+- JSON artifact 可无 query 返回目标 path 的 shape/value preview。
+- 文本 artifact 可按多词 line search 返回 bounded lines。
+- provider continuation 的 full tool-result payload 包含 `artifact_query_hint`。
+- 长结果 replacement 的 hint 包含 `artifact.query` 和 `artifact.read`。
+
+说明：这是 P0 mature-loop 工作台能力，不是 FinanceBench/FinQA accuracy。它减少
+未来 live debug 中反复整包 `artifact.read` 的概率，并给模型一个更接近成熟 agent
+loop 的临时工作台查询接口。

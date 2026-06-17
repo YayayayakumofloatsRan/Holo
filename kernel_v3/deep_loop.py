@@ -2902,6 +2902,12 @@ def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
     }
     if tool_result_artifact_id:
         payload["tool_result_artifact_id"] = tool_result_artifact_id
+        payload["artifact_query_hint"] = {
+            "tool": "artifact.query",
+            "artifact_id": tool_result_artifact_id,
+            "path": "observation.content",
+            "purpose": "narrow full result before broad read",
+        }
         payload["artifact_read_hint"] = {
             "tool": "artifact.read",
             "artifact_id": tool_result_artifact_id,
@@ -3049,13 +3055,16 @@ def _tool_result_artifact_context_update(
         "source": observation.source,
         "status": observation.status,
         "hints": {
+            "artifact_query_hint": {
+                "tool": "artifact.query",
+                "artifact_id": artifact_id,
+                "path": "observation.content",
+            },
             "artifact_read_hint": {
                 "tool": "artifact.read",
                 "artifact_id": artifact_id,
                 "mode": "read",
-                "purpose": "read the full tool result JSON when projection or preview is insufficient",
             },
-            "tool_result_artifact_id": artifact_id,
         },
         "artifact_refs": [artifact_id],
         "host_boundary": _TOOL_CONTEXT_UPDATE_BOUNDARY,

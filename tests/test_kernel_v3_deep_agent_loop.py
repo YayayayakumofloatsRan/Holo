@@ -1361,6 +1361,8 @@ def test_streaming_loop_injects_tool_results_into_provider_continuation() -> Non
     assert tool_payload["content_projection"]["shape"]["type"] == "object"
     assert tool_payload["tool_result_artifact_id"]
     assert tool_payload["tool_result_artifact_id"] in tool_payload["artifact_refs"]
+    assert tool_payload["artifact_query_hint"]["tool"] == "artifact.query"
+    assert tool_payload["artifact_query_hint"]["artifact_id"] == tool_payload["tool_result_artifact_id"]
     assert tool_payload["artifact_read_hint"]["tool"] == "artifact.read"
     assert tool_payload["artifact_read_hint"]["artifact_id"] == tool_payload["tool_result_artifact_id"]
     full_payload = json.loads(context_compiler.artifact_store.read_blob(tool_payload["tool_result_artifact_id"]))
@@ -2174,6 +2176,7 @@ def test_deep_agent_loop_persists_full_tool_result_artifact_for_replaced_batch()
     assert item["content_replacement_applied"] is True
     assert artifact_id in item["artifact_refs"]
     assert artifact_id in replacement["artifact_refs"]
+    assert "artifact.query" in replacement["read_hint"]
     assert "artifact.read" in replacement["read_hint"]
     context_updates = journal.records(task_id=result.task_id, kind="tool_context_update")
     artifact_updates = [
@@ -2183,6 +2186,7 @@ def test_deep_agent_loop_persists_full_tool_result_artifact_for_replaced_batch()
     ]
     assert artifact_updates
     assert artifact_id in artifact_updates[0].data["artifact_refs"]
+    assert artifact_updates[0].data["hints"]["artifact_query_hint"]["tool"] == "artifact.query"
     assert artifact_updates[0].data["hints"]["artifact_read_hint"]["artifact_id"] == artifact_id
 
     full_payload = json.loads(context_compiler.artifact_store.read_blob(artifact_id))

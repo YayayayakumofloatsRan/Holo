@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -12,6 +13,7 @@ from kernel_v3.tool_result_budget import (
     apply_tool_result_replacement_budget,
 )
 from kernel_v3.tool_use import (
+    ARTIFACT_QUERY_NAME,
     ARTIFACT_READ_NAME,
     TOOL_DISCOVERY_NAME,
     StreamingToolExecutor,
@@ -429,6 +431,111 @@ def test_artifact_read_returns_bounded_preview_and_text() -> None:
     assert read.content["truncated"] is True
     assert len(read.content["text"]) <= 24
     assert artifact_store.audit_records()[0]["artifact_id"] == artifact.artifact_id
+
+
+def test_artifact_query_selects_json_path_without_full_blob_context() -> None:
+    artifact_store = ArtifactStore.in_memory()
+    artifact = artifact_store.write_blob(
+        kind="tool_result_full",
+        payload=json.dumps(
+            {
+                "schema": "holo.kernel_v3.tool_result_full.v1",
+                "observation": {
+                    "content": {
+                        "records": [
+                            {"company": "HD", "dio": 76.34},
+                            {"company": "LOW", "dio": 112.20},
+                        ]
+                    }
+                },
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        mime_type="application/json",
+    )
+    registry = ToolRegistry.with_builtin_respond()
+    register_artifact_tools(registry, artifact_store=artifact_store)
+
+    observation = _execute_with_policy(
+        registry,
+        CandidateAction(
+            action_id="act-artifact-query-json",
+            kind="tool",
+            name=ARTIFACT_QUERY_NAME,
+            description="query artifact json",
+            score=1.0,
+            payload={"artifact_id": artifact.artifact_id, "path": "observation.content.records", "query": "LOW"},
+            reasons=["need_low_row"],
+            side_effect_class="read",
+        ),
+    )
+
+    assert observation.status == "ok"
+    assert observation.kind == "artifact_query_result"
+    assert observation.content["mode"] == "json"
+    assert observation.content["selected_count"] == 1
+    assert observation.content["matches"][0]["path"].endswith("[1]")
+    assert observation.content["matches"][0]["value"]["company"] == "LOW"
+    assert observation.content["matches"][0]["value"]["dio"] == 112.20
+    assert "model-owned" in observation.content["host_boundary"]
+
+
+def test_artifact_query_returns_json_shape_for_path_without_query() -> None:
+    artifact_store = ArtifactStore.in_memory()
+    artifact = artifact_store.write_blob(
+        kind="sec_candidates",
+        payload=json.dumps({"facts": {"Revenue": [1, 2, 3]}}, sort_keys=True),
+        mime_type="application/json",
+    )
+    registry = ToolRegistry.with_builtin_respond()
+    register_artifact_tools(registry, artifact_store=artifact_store)
+
+    observation = _execute_with_policy(
+        registry,
+        CandidateAction(
+            action_id="act-artifact-query-shape",
+            kind="tool",
+            name=ARTIFACT_QUERY_NAME,
+            description="inspect artifact shape",
+            score=1.0,
+            payload={"artifact_id": artifact.artifact_id, "path": "$.facts.Revenue"},
+            reasons=["need_shape"],
+            side_effect_class="read",
+        ),
+    )
+
+    assert observation.status == "ok"
+    assert observation.content["matches"][0]["shape"]["type"] == "array"
+    assert observation.content["matches"][0]["value"] == [1, 2, 3]
+
+
+def test_artifact_query_searches_text_lines() -> None:
+    artifact_store = ArtifactStore.in_memory()
+    artifact = artifact_store.write_blob(
+        kind="filing_text",
+        payload="Revenue was 100\nInventory increased to 23.451B\nCost of sales was 106.206B\n",
+    )
+    registry = ToolRegistry.with_builtin_respond()
+    register_artifact_tools(registry, artifact_store=artifact_store)
+
+    observation = _execute_with_policy(
+        registry,
+        CandidateAction(
+            action_id="act-artifact-query-text",
+            kind="tool",
+            name=ARTIFACT_QUERY_NAME,
+            description="search text artifact",
+            score=1.0,
+            payload={"artifact_id": artifact.artifact_id, "query": "cost sales", "max_matches": 5},
+            reasons=["need_cost_line"],
+            side_effect_class="read",
+        ),
+    )
+
+    assert observation.status == "ok"
+    assert observation.content["mode"] == "text"
+    assert observation.content["matches"] == [{"line": 3, "text_preview": "Cost of sales was 106.206B"}]
 
 
 def _execute_with_policy(registry: ToolRegistry, action: CandidateAction) -> Observation:
