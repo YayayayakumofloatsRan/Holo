@@ -1030,6 +1030,10 @@ def _compact_tool_chain_for_model(plan: JsonObject) -> JsonObject:
             item
             for item in (
                 {"name": "retrieval.run", "use_for": "evidence/source acquisition"},
+                {"name": "sec.edgar.company_filings", "use_for": "official SEC filing discovery through EdgarTools"},
+                {"name": "sec.edgar.financials", "use_for": "standardized SEC/XBRL statement candidates through EdgarTools"},
+                {"name": "document.docling.convert", "use_for": "URL document/table conversion through Docling"},
+                {"name": "market.openbb.fetch", "use_for": "allowlisted market/fundamental data routes through OpenBB"},
                 {"name": "calculator.compute", "use_for": "deterministic arithmetic after inputs are supported"},
                 {"name": "workspace.search", "use_for": "local/cached document discovery"},
                 {"name": "file.read", "use_for": "known local artifact inspection"},
@@ -2048,6 +2052,26 @@ def _tool_chain_plan(
             {
                 "name": "retrieval.run",
                 "use_for": "source acquisition, document reading, evidence slot filling",
+            },
+            {
+                "name": "sec.edgar.company_filings",
+                "use_for": "use EdgarTools for SEC issuer filing discovery when the task names a public company, ticker, CIK, form, or filing period",
+                "host_boundary": "network:fetch policy applies; returns filing candidates rather than final answers",
+            },
+            {
+                "name": "sec.edgar.financials",
+                "use_for": "use EdgarTools for standardized SEC/XBRL financial statement candidates when line-item, statement, period, and unit binding matter",
+                "host_boundary": "the model still owns metric/period/line-item selection and formula intent",
+            },
+            {
+                "name": "document.docling.convert",
+                "use_for": "use Docling for URL document/table conversion when filing/PDF/HTML structure is needed beyond snippets",
+                "host_boundary": "only http(s) sources are accepted; local files must go through workspace tools",
+            },
+            {
+                "name": "market.openbb.fetch",
+                "use_for": "use OpenBB for allowlisted price, market, macro, or non-filing fundamental data when relevant to the question",
+                "host_boundary": "route allowlist prevents arbitrary component calls",
             },
             {
                 "name": "workspace.list",

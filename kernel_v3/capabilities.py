@@ -1445,6 +1445,11 @@ def _tool_capabilities(
         "memory.recall": ("durable_memory.search", "memory", "Recall committed workspace/project and thread memory."),
         "calculator.compute": ("calculator.compute", "data", "Evaluate deterministic numeric expressions from model-proposed, evidence-backed inputs."),
         "finance.verify_numeric": ("finance.verify_numeric", "data", "Verify model-proposed finance numeric claims against provided facts, formula traces, citations, and evidence."),
+        "finance.toolchain.describe": ("finance.toolchain.describe", "finance", "Inspect optional mature finance components registered in the Holo toolchain."),
+        "sec.edgar.company_filings": ("sec.edgar.company_filings", "finance", "Use EdgarTools to discover SEC issuer filings under host network policy."),
+        "sec.edgar.financials": ("sec.edgar.financials", "finance", "Use EdgarTools SEC/XBRL financial statement candidates for model-owned fact binding."),
+        "document.docling.convert": ("document.docling.convert", "retrieval", "Use Docling to convert URL documents and tables into structured text candidates."),
+        "market.openbb.fetch": ("market.openbb.fetch", "finance", "Use allowlisted OpenBB routes for external market and fundamental data."),
     }
     for tool_name, manifest in manifests.items():
         capability_id, family, description = mappings.get(

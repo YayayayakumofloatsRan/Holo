@@ -36,10 +36,17 @@ from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback,
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
+    DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+    FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES,
+    FINANCE_OPEN_COMPONENT_TOOL_NAMES,
+    FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     FinanceFact,
     FinanceFormulaPlan,
     FormulaTrace,
+    MARKET_OPENBB_FETCH_TOOL_NAME,
+    SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
+    SEC_EDGAR_FINANCIALS_TOOL_NAME,
     attach_target_binding_to_facts,
     build_finance_fact_ledger,
     compile_finance_task_program,
@@ -6504,6 +6511,9 @@ def task_recipe(
         if _metadata_requires_finance_numeric_verifier(recipe_metadata):
             allowed_tools.append(CALCULATOR_TOOL_NAME)
             allowed_tools.append(FINANCE_VERIFY_NUMERIC_TOOL_NAME)
+            allowed_tools.append(FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME)
+            if max_network_fetches > 0:
+                allowed_tools.extend(FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES)
         toolchain = _composable_toolchain_config(recipe_metadata)
         if _truthy(toolchain.get("workspace_read")):
             allowed_tools.extend(["workspace.list", "workspace.search", "file.read"])
@@ -7269,6 +7279,60 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     ],
                 }
             )
+        if FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": "the model needs to inspect which mature finance components are installed and callable before choosing a data path",
+                    "payload_requirements": [],
+                }
+            )
+        if SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
+                    "side_effect_class": "network",
+                    "use_when": "SEC filing discovery for a known issuer/ticker/CIK is needed before binding official filing evidence",
+                    "payload_requirements": ["identifier: ticker, CIK, or company identifier", "form: optional 10-K/10-Q/8-K/etc.", "limit: optional"],
+                    "host_boundary": "uses EdgarTools under network:fetch policy; returns filing candidates, not final answers",
+                }
+            )
+        if SEC_EDGAR_FINANCIALS_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": SEC_EDGAR_FINANCIALS_TOOL_NAME,
+                    "side_effect_class": "network",
+                    "use_when": "standardized SEC/XBRL financial statement candidates are useful for line-item, period, unit, or statement binding",
+                    "payload_requirements": ["identifier: ticker, CIK, or company identifier", "statement: optional income_statement/balance_sheet/cash_flow_statement", "form: optional"],
+                    "host_boundary": "uses EdgarTools under network:fetch policy; the model still chooses facts and formulas",
+                }
+            )
+        if DOCUMENT_DOCLING_CONVERT_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+                    "side_effect_class": "network",
+                    "use_when": "a filing, PDF, HTML, spreadsheet, or other document URL needs stronger structural conversion/table extraction than plain retrieval snippets",
+                    "payload_requirements": ["source: http(s) URL", "output_format: optional markdown/json/html", "max_chars: optional"],
+                    "host_boundary": "uses Docling under network:fetch policy; local files must go through workspace tools",
+                }
+            )
+        if MARKET_OPENBB_FETCH_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": MARKET_OPENBB_FETCH_TOOL_NAME,
+                    "side_effect_class": "network",
+                    "use_when": "market, price, or non-filing fundamental data is relevant and an allowlisted OpenBB route matches the question",
+                    "payload_requirements": ["route: allowlisted OpenBB route", "kwargs: route arguments", "limit: optional"],
+                    "host_boundary": "uses OpenBB under network:fetch policy; bounded route allowlist prevents arbitrary component calls",
+                }
+            )
         if "workspace.list" in recipe.allowed_tools:
             tool_selection.append(
                 {
@@ -7360,6 +7424,10 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                         "standard_tool_interface": {
                             "planner_action": "Return planner.propose JSON with kind=tool/respond/ask_user, name, payload, reasons, side_effect_class.",
                             "retrieval.run": "Use payload.query plus metadata.retrieval_strategy for query plan, source family plan, evidence criteria, fallback moves, and stop_when.",
+                            "sec.edgar.company_filings": "Use EdgarTools-backed filing discovery when official SEC issuer filings are the right source family.",
+                            "sec.edgar.financials": "Use EdgarTools-backed SEC/XBRL statement candidates when line-item and period binding need structured filing facts.",
+                            "document.docling.convert": "Use Docling-backed conversion for URL documents whose table/text structure matters.",
+                            "market.openbb.fetch": "Use allowlisted OpenBB routes only when market/fundamental data outside filing text is semantically relevant.",
                             "calculator.compute": "Use only after observed evidence supplies numeric inputs; put expression, variables, unit, formula_name, and input_fact_ids when available.",
                             "respond": "Use only when evidence is sufficient for the root question or remaining gaps can be explicitly limited.",
                         },
@@ -8989,7 +9057,15 @@ def _finance_numeric_verifier_required(recipe: TaskRecipe) -> bool:
 def _toolchain_grounding_enabled(recipe: TaskRecipe) -> bool:
     return recipe.mode == "retrieval_answer" and any(
         name in set(recipe.allowed_tools)
-        for name in ("workspace.list", "workspace.search", "file.read", "workspace.write", "shell.exec", "script.exec")
+        for name in (
+            "workspace.list",
+            "workspace.search",
+            "file.read",
+            "workspace.write",
+            "shell.exec",
+            "script.exec",
+            *FINANCE_OPEN_COMPONENT_TOOL_NAMES,
+        )
     )
 
 

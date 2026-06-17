@@ -121,7 +121,10 @@ AutoGen later for multi-agent collaboration experiments. Holo still keeps the
 host-owned harness boundary: the LLM owns semantic financial judgment, while
 the host validates tools, records journal/fact/claim/formula traces, verifies
 results, preserves gold isolation, and reports only live benchmark evidence as
-finance capability.
+finance capability. The first implementation checkpoint adds
+`kernel_v3/finance/open_components.py`, registering `finance.toolchain.describe`,
+`sec.edgar.company_filings`, `sec.edgar.financials`, `document.docling.convert`,
+and `market.openbb.fetch` as host-policy-bound optional component tools.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in

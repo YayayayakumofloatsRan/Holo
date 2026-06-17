@@ -192,7 +192,41 @@ InnerFinanceSolverGraph
 - 是否降低 token 浪费、重复检索和不可恢复长跑失败；
 - 是否保持 Holo 的 host-owned 安全边界和审计能力。
 
-## 6. 来源
+## 6. 2026-06-17 第一实现检查点
+
+本记录之后的第一步代码落地是 `kernel_v3/finance/open_components.py`：
+
+```text
+finance.toolchain.describe
+sec.edgar.company_filings
+sec.edgar.financials
+document.docling.convert
+market.openbb.fetch
+```
+
+设计边界：
+
+- 这些工具通过 Holo `ToolRegistry` 注册，进入同一套 manifest、policy、observation、artifact 和 journal 管线。
+- `finance.toolchain.describe` 是 read-only，用来告诉模型 EdgarTools、Docling、OpenBB、LangGraph 是否已安装。
+- SEC、Docling、OpenBB 工具标记为 `network`，要求 `network:fetch` 权限；没有 live/network budget 的 finance recipe 不开放这些联网工具。
+- OpenBB 第一版只允许有限 route allowlist，避免把任意组件调用暴露给模型。
+- Docling 第一版只接受 `http(s)` source；本地文件仍走 workspace tools，避免绕过 workspace policy。
+- EdgarTools 需要 `EDGAR_IDENTITY` / `SEC_EDGAR_IDENTITY` / `HOLO_SEC_IDENTITY` 环境变量；缺少时工具返回明确诊断，不伪造 SEC 数据。
+- 缺少可选依赖时，工具返回 `dependency_missing`，不让 host fallback 推断答案。
+
+这一步不是 live benchmark 分数。它是成熟组件工具链的工程接入点，为后续真实 live `debug50` 调试和双层 LangGraph loop 做准备。
+
+工程回归：
+
+```bash
+.venv/bin/python -m py_compile kernel_v3/finance/open_components.py kernel_v3/finance/__init__.py kernel_v3/agent/runtime.py kernel_v3/finance/task_compiler.py kernel_v3/capabilities.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_open_components.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_calculator_rejects_unsafe_expressions tests/test_kernel_v3_finance_engine.py::test_finance_numeric_verifier_is_registered_as_read_only_tool -q
+```
+
+最新结果：新增成熟组件工具边界测试 `5 passed`，旧 calculator/verifier 注册回归 `2 passed`，py_compile 通过。
+
+## 7. 来源
 
 - LangGraph overview: <https://docs.langchain.com/oss/python/langgraph/overview>
 - AutoGen documentation: <https://microsoft.github.io/autogen/stable/>
