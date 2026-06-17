@@ -199,15 +199,20 @@ tools can call the shared helpers to emit `progress` events and honor host
 abort requests. Provider-native tool exposure now respects runtime loading hints:
 `always_load` tools are prioritized, while `should_defer` tools are summarized
 for discovery instead of flooding the provider `tools` payload.
-The latest P0 continuation adds a provider-message replacement view: deep-loop
-assistant prompts and `ProcessorFabric` JSON prompts now rewrite replaced large
-tool results to stable bounded previews before provider dispatch, so raw
-oversized `content_preview` / `content_projection.preview` payloads do not
-re-enter model context. This moves the generic single-agent loop parity estimate
-to roughly 94%; remaining gaps are native/non-JSON message-surface replacement,
-durable tool-results storage, non-cooperative subprocess/network cancellation,
-and type-family live debug50 evidence. This estimate is architectural only, not
-a FinanceBench or FinQA score.
+The latest P0 continuation extends provider-message replacement beyond prompt
+strings: deep-loop assistant prompts, `ProcessorFabric` JSON prompts, request
+parameters, OpenAI-compatible `provider_messages`, and structured provider
+message content now rewrite replaced large tool results to stable bounded
+previews before provider dispatch. Deep loop batch observations also persist
+full tool results as `tool_result_full` artifacts and expose those artifact ids
+through replacement `artifact_refs`, while context budget views compact large
+individual `tool_result` observations and omit host-only execution context. This
+moves the generic single-agent loop parity estimate to roughly the 95% P0
+architecture threshold. Remaining gaps are non-cooperative subprocess/network
+cancellation, runtime progress/result injection into the same provider
+conversation, dynamic token-aware tool-set expansion, and type-family live
+debug50 evidence. This estimate is architectural only, not a FinanceBench or
+FinQA score.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in
@@ -219,13 +224,14 @@ provider compact packet. This is an interface/architecture milestone, not a
 benchmark score.
 The external-loop parity audit is recorded in
 `docs/KERNEL_V3_EXTERNAL_LOOP_PARITY_AUDIT_2026-06-17_ZH.md`. It compares the
-local TypeScript agent-loop project against Holo Kernel v3 and identifies the
-remaining hard gaps after the first P0 substrate checkpoint: provider-native
-instant tool execution inside the deep loop, full execution semantics for the
-thicker tool runtime spec, provider-packet-level tool-result replacement for all
-message surfaces, forceful subprocess/network cancellation for non-cooperative
-tools, and type-family live debug50 evaluation. This is a design audit, not a
-finance benchmark score.
+local TypeScript agent-loop project against Holo Kernel v3. After the latest P0
+continuations, provider-native eager tool execution, cooperative progress/abort,
+provider-message replacement, and durable tool-result artifacts are structural
+capabilities rather than paper plans. The remaining hard gaps are forceful
+subprocess/network cancellation for non-cooperative tools, runtime result/progress
+injection into the same provider conversation, dynamic token-aware tool-set
+expansion, resume/fork cache-stability audit, and type-family live debug50
+evaluation. This is a design audit, not a finance benchmark score.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in

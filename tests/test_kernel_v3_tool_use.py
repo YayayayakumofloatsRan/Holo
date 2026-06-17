@@ -211,11 +211,13 @@ def test_provider_message_replacement_view_sanitizes_replaced_tool_results() -> 
                     {
                         "content": {
                             "results": [
-                                {
-                                    "tool_call_id": "tc-large",
-                                    "content_preview": "RAW-" + "x" * 5000,
-                                    "content_projection": {
-                                        "preview": "PROJECTED-" + "y" * 5000,
+                                    {
+                                        "tool_call_id": "tc-large",
+                                        "content": "RAW-CONTENT-" + "z" * 5000,
+                                        "raw_content": "RAW-RAW-" + "r" * 5000,
+                                        "content_preview": "RAW-" + "x" * 5000,
+                                        "content_projection": {
+                                            "preview": "PROJECTED-" + "y" * 5000,
                                         "estimated_chars": 100000,
                                     },
                                     "content_replacement": {
@@ -237,6 +239,10 @@ def test_provider_message_replacement_view_sanitizes_replaced_tool_results() -> 
 
     assert result["content_preview"] == "bounded replacement"
     assert result["content_projection"]["preview"] == "bounded replacement"
+    assert result["content"]["omitted"] is True
+    assert result["raw_content"]["omitted"] is True
+    assert "RAW-CONTENT" not in str(sanitized)
+    assert "RAW-RAW" not in str(sanitized)
     assert result["content_replacement_applied"] is True
     assert result["provider_message_replacement_applied"] is True
 

@@ -11,6 +11,7 @@ from collections.abc import Iterable, Sequence
 
 from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
 from kernel_v3.processors.contracts import ProcessorStreamEvent
+from kernel_v3.tool_result_budget import apply_provider_message_replacement_text, apply_provider_message_replacement_view
 from kernel_v3.processors.usage import coerce_usage, usage_from_text
 
 
@@ -271,10 +272,7 @@ class OpenAICompatibleProvider:
         native_tools = _native_tools_payload(request.parameters.get("native_tools"))
         payload: JsonObject = {
             "model": str(request.parameters.get("model") or self.model),
-            "messages": [
-                {"role": "system", "content": PROCESSOR_SYSTEM_PROMPT},
-                {"role": "user", "content": request.prompt},
-            ],
+            "messages": _messages_payload(request),
             "stream": bool(stream),
         }
         if native_tools:
@@ -298,7 +296,7 @@ class OpenAICompatibleProvider:
         reasoning_effort = request.parameters.get("reasoning_effort")
         if _thinking_enabled(thinking) and reasoning_effort in {"low", "medium", "high", "max"}:
             payload["reasoning_effort"] = str(reasoning_effort)
-        return payload
+        return _provider_message_payload(payload)
 
     def packet_preview(self, request: ProcessorRequest, *, include_prompt: bool = False) -> JsonObject:
         return {
@@ -507,6 +505,57 @@ def _optional_positive_int(value: object) -> int | None:
     return parsed
 
 
+def _messages_payload(request: ProcessorRequest) -> list[JsonObject]:
+    provider_messages = _provider_messages(request.parameters.get("provider_messages"))
+    if provider_messages:
+        if not _has_holo_system_prompt(provider_messages):
+            provider_messages.insert(0, {"role": "system", "content": PROCESSOR_SYSTEM_PROMPT})
+        return provider_messages
+    return [
+        {"role": "system", "content": PROCESSOR_SYSTEM_PROMPT},
+        {"role": "user", "content": apply_provider_message_replacement_text(request.prompt)},
+    ]
+
+
+def _provider_messages(value: object) -> list[JsonObject]:
+    if not isinstance(value, list):
+        return []
+    sanitized = apply_provider_message_replacement_view(json.loads(json.dumps(value, ensure_ascii=False)))
+    if not isinstance(sanitized, list):
+        return []
+    messages: list[JsonObject] = []
+    for item in sanitized:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        if not role:
+            continue
+        message = dict(item)
+        message["role"] = role
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = apply_provider_message_replacement_text(content)
+        messages.append(message)
+    return messages
+
+
+def _has_holo_system_prompt(messages: list[JsonObject]) -> bool:
+    if not messages:
+        return False
+    first = messages[0]
+    return first.get("role") == "system" and first.get("content") == PROCESSOR_SYSTEM_PROMPT
+
+
+def _provider_message_payload(payload: JsonObject) -> JsonObject:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if "content_replacement" not in encoded:
+        return payload
+    sanitized = apply_provider_message_replacement_view(payload)
+    if isinstance(sanitized, dict):
+        return sanitized
+    return payload
+
+
 def _thinking_payload(value: object) -> JsonObject | None:
     if isinstance(value, dict) and value.get("type") in {"enabled", "disabled"}:
         return {"type": str(value["type"])}
@@ -628,12 +677,12 @@ def _safe_payload(payload: JsonObject, *, include_prompt: bool) -> JsonObject:
         if message.get("role") == "system":
             continue
         content = message.get("content")
-        if isinstance(content, str):
-            message["content"] = {
-                "preview": _preview(content, 640),
-                "hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
-                "chars": len(content),
-            }
+        content_text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, sort_keys=True)
+        message["content"] = {
+            "preview": _preview(content_text, 640),
+            "hash": hashlib.sha256(content_text.encode("utf-8")).hexdigest(),
+            "chars": len(content_text),
+        }
     return safe
 
 

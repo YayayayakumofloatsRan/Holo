@@ -58,9 +58,11 @@ class CapturePromptProvider:
 
     def __init__(self) -> None:
         self.prompts: list[str] = []
+        self.parameters: list[dict[str, object]] = []
 
     def run(self, request: ProcessorRequest) -> ProcessorResult:
         self.prompts.append(request.prompt)
+        self.parameters.append(dict(request.parameters))
         return ProcessorResult(
             result_id=f"result-{request.request_id}",
             request_id=request.request_id,
@@ -169,6 +171,52 @@ def test_processor_fabric_applies_provider_message_replacement_view_to_json_prom
     result = sanitized["context"]["results"][0]
     assert result["content_preview"] == "bounded replacement"
     assert result["content_projection"]["preview"] == "bounded replacement"
+
+
+def test_processor_fabric_applies_provider_message_replacement_view_to_parameters() -> None:
+    provider = CapturePromptProvider()
+    fabric = ProcessorFabric(providers={"capture": provider})
+
+    outcome = fabric.run_json(
+        task_type="assistant.turn",
+        run_id="run-1",
+        context_id="ctx-1",
+        prompt="use provider messages",
+        schema=JsonSchema(name="capture", required={"ok": "bool"}),
+        provider="capture",
+        model="capture-model",
+        parameters={
+            "provider_messages": [
+                {
+                    "role": "user",
+                    "content": {
+                        "results": [
+                            {
+                                "tool_call_id": "tc-large",
+                                "content": "RAW-CONTENT-" + "z" * 5000,
+                                "content_preview": "RAW-" + "x" * 5000,
+                                "content_projection": {"preview": "PROJECTED-" + "y" * 5000},
+                                "content_replacement": {
+                                    "schema": "holo.kernel_v3.tool_result_replacement.v1",
+                                    "tool_call_id": "tc-large",
+                                    "replacement_preview": "bounded replacement",
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    )
+
+    assert outcome.parsed == {"ok": True}
+    encoded = json.dumps(provider.parameters[0], ensure_ascii=False, sort_keys=True)
+    assert "RAW-" not in encoded
+    assert "PROJECTED-" not in encoded
+    assert "RAW-CONTENT" not in encoded
+    result = provider.parameters[0]["provider_messages"][0]["content"]["results"][0]
+    assert result["content_preview"] == "bounded replacement"
+    assert result["content"]["omitted"] is True
 
 
 class IncrementalStreamingProvider:

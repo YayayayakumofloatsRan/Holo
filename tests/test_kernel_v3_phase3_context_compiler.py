@@ -268,6 +268,41 @@ def test_context_pack_compacts_tool_batch_results_with_projection_not_raw_previe
     assert "x" * 200 not in encoded
 
 
+def test_context_pack_budget_view_compacts_large_individual_tool_result():
+    journal = JournalStore.in_memory()
+    task = SessionEngine.from_journal(journal).start("inspect large tool result", thread_id="thread-a", journal=journal)
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-0",
+        kind="event",
+        data={"event_id": "evt-1", "payload": {"text": "inspect large tool result"}},
+        event_ref="evt-1",
+    )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="observation",
+        data={
+            "observation_id": "obs-large-tool",
+            "kind": "tool_result",
+            "status": "ok",
+            "source": "tool:large.read",
+            "content": {"blob": "RAW-INDIVIDUAL-" + "z" * 60000},
+        },
+        observation_ref="obs-large-tool",
+    )
+
+    pack = ContextPackCompiler(section_budget=1024).compile(task, journal)
+    encoded = json.dumps(pack.to_dict(), ensure_ascii=False)
+    recent = next(section for section in pack.sections if section["name"] == "recent_observations")
+    content = recent["records"][-1]["content"]
+
+    assert content["blob"].startswith("RAW-INDIVIDUAL-")
+    assert "z" * 1000 not in encoded
+
+
 def test_context_pack_exposes_tool_result_replacement_view():
     journal = JournalStore.in_memory()
     task = SessionEngine.from_journal(journal).start("inspect replaced tool batch", thread_id="thread-a", journal=journal)

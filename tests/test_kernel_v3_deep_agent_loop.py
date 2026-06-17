@@ -531,6 +531,62 @@ def test_assistant_turn_prompt_applies_provider_message_replacement_view() -> No
     assert "PROJECTED-" not in prompt
 
 
+def test_deep_agent_loop_persists_full_tool_result_artifact_for_replaced_batch() -> None:
+    registry = ToolRegistry()
+    registry.register("large.read", _large_read_tool())
+    journal = JournalStore.in_memory()
+    context_compiler = ContextCompiler()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-large",
+                message="read large source",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-large",
+                        name="large.read",
+                        arguments={"query": "large"},
+                        reason="need large evidence",
+                        side_effect_class="read",
+                    )
+                ],
+            )
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=context_compiler,
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=4,
+        max_tool_calls=4,
+    )
+
+    result = loop.run("read large source")
+
+    assert result.status == "completed"
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    item = batch.data["content"]["results"][0]
+    artifact_id = item["tool_result_artifact_id"]
+    replacement = item["content_replacement"]
+
+    assert item["content_replacement_applied"] is True
+    assert artifact_id in item["artifact_refs"]
+    assert artifact_id in replacement["artifact_refs"]
+    assert "artifact.read" in replacement["read_hint"]
+
+    full_payload = json.loads(context_compiler.artifact_store.read_blob(artifact_id))
+    assert full_payload["schema"] == "holo.kernel_v3.tool_result_full.v1"
+    assert full_payload["tool_call_id"] == "call-large"
+    assert full_payload["observation"]["content"]["blob"].startswith("RAW-LARGE-")
+
+
 class _StreamingToolCallProvider:
     name = "streaming"
     model = "stream-model"
@@ -684,6 +740,23 @@ def _read_tool(name: str):
             status="ok",
             source=f"tool:{action.name}",
             content={"name": name, "payload": action.payload},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
+
+
+def _large_read_tool():
+    def execute(action: CandidateAction) -> Observation:
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source=f"tool:{action.name}",
+            content={"blob": "RAW-LARGE-" + "z" * 60000},
             observed_at_ms=0,
             action_id=action.action_id,
             tool_call_id=None,

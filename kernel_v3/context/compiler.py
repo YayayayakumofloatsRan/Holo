@@ -404,8 +404,11 @@ class ContextPackCompiler:
 
 
 class ContextCompiler:
+    def __init__(self, *, artifact_store: ArtifactStore | None = None) -> None:
+        self.artifact_store = artifact_store or ArtifactStore.in_memory()
+
     def compile(self, task: TaskState, journal: JournalStore) -> ContextBundle:
-        pack = ContextPackCompiler().compile(task, journal)
+        pack = ContextPackCompiler(artifact_store=self.artifact_store).compile(task, journal)
         safe_input_text, input_redactions = Redactor().redact(task.input_text)
         redactions = _ordered_unique([*pack.redactions, *input_redactions])
         event_ids = [
@@ -597,6 +600,8 @@ def _compact_content_projection(projection: JsonObject) -> JsonObject:
 def _compact_content(content: JsonObject) -> JsonObject:
     compacted: JsonObject = {}
     for key, value in content.items():
+        if str(key).startswith("_host_"):
+            continue
         if isinstance(value, str):
             compacted[key] = _compact_text(value, limit=256)
         elif key == "report" and isinstance(value, dict):
@@ -613,6 +618,8 @@ def _compact_content(content: JsonObject) -> JsonObject:
 def _compact_nested_content(value: JsonObject) -> JsonObject:
     result: JsonObject = {}
     for key, item in list(value.items())[:24]:
+        if str(key).startswith("_host_"):
+            continue
         if isinstance(item, str):
             result[key] = _compact_text(item, limit=160)
         elif isinstance(item, (int, float, bool)) or item is None:
@@ -1007,7 +1014,7 @@ def _observation_budget_view(data: JsonObject) -> JsonObject:
     if data.get("kind") == "tool_batch_result" and isinstance(content, dict):
         content_view = _tool_batch_budget_view(content)
     elif isinstance(content, dict):
-        content_view = {key: value for key, value in content.items() if isinstance(value, str)}
+        content_view = _compact_content(content)
     elif isinstance(content, str):
         content_view = {"text": content}
     else:

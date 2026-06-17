@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from kernel_v3.contracts import ProcessorRequest, ToolManifest
 from kernel_v3.processors.providers import OpenAICompatibleProvider
 from kernel_v3.provider_tools import openai_native_tool_surface
@@ -77,6 +79,57 @@ def test_openai_compatible_payload_uses_native_tools_without_json_response_forma
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
     assert "response_format" not in payload
+
+
+def test_openai_compatible_payload_applies_replacement_view_to_provider_messages() -> None:
+    request = ProcessorRequest(
+        request_id="proc-1",
+        run_id="run-1",
+        processor="assistant.turn",
+        prompt="fallback prompt",
+        context_id="ctx-1",
+        parameters={
+            "model": "test-model",
+            "provider_messages": [
+                {
+                    "role": "user",
+                    "content": {
+                        "results": [
+                            {
+                                "tool_call_id": "tc-large",
+                                "content": "RAW-CONTENT-" + "z" * 5000,
+                                "content_preview": "RAW-" + "x" * 5000,
+                                "content_projection": {"preview": "PROJECTED-" + "y" * 5000},
+                                "content_replacement": {
+                                    "schema": "holo.kernel_v3.tool_result_replacement.v1",
+                                    "tool_call_id": "tc-large",
+                                    "replacement_preview": "bounded replacement",
+                                },
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
+    )
+
+    provider = OpenAICompatibleProvider(enabled=True, base_url="https://example.test", model="fallback")
+    payload = provider.build_payload(request, stream=True)
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    assert payload["messages"][0]["role"] == "system"
+    user_content = payload["messages"][1]["content"]
+    result = user_content["results"][0]
+    assert result["content_preview"] == "bounded replacement"
+    assert result["content_projection"]["preview"] == "bounded replacement"
+    assert result["content"]["omitted"] is True
+    assert "RAW-" not in encoded
+    assert "PROJECTED-" not in encoded
+    assert "RAW-CONTENT" not in encoded
+
+    preview = provider.packet_preview(request, include_prompt=False)
+    assert isinstance(preview["body"]["messages"][1]["content"], dict)
+    assert "RAW-CONTENT" not in json.dumps(preview, ensure_ascii=False, sort_keys=True)
 
 
 def test_native_tool_surface_defers_should_defer_tools_but_keeps_always_load() -> None:

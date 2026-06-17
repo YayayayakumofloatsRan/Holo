@@ -138,9 +138,31 @@ def apply_provider_message_replacement_view(value: object) -> object:
             projection = updated.get("content_projection")
             if isinstance(projection, dict):
                 updated["content_projection"] = {**projection, "preview": preview}
+            for key in ("content", "raw_content", "full_content", "raw_output", "full_output", "raw_payload", "full_payload"):
+                if key in updated:
+                    updated[key] = {
+                        "omitted": True,
+                        "reason": "replaced_for_provider_message",
+                        "preview": preview,
+                    }
         updated["content_replacement_applied"] = True
         updated["provider_message_replacement_applied"] = True
     return updated
+
+
+def apply_provider_message_replacement_text(text: str) -> str:
+    if not isinstance(text, str) or "content_replacement" not in text:
+        return text
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(decoded, (dict, list)):
+        return text
+    sanitized = apply_provider_message_replacement_view(decoded)
+    if sanitized == decoded:
+        return text
+    return json.dumps(sanitized, ensure_ascii=False, sort_keys=True)
 
 
 @dataclass(frozen=True)

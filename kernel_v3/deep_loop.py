@@ -1061,8 +1061,15 @@ class DeepAgentLoopController(LoopControllerV3):
     ) -> Observation:
         statuses = {item.observation.status for item in execution_items}
         status = "ok" if statuses == {"ok"} else "failed" if statuses == {"failed"} else "partial"
-        results = [
-            {
+        results: list[JsonObject] = []
+        for item in execution_items:
+            artifact_refs = [
+                artifact.artifact_id
+                for artifact in item.artifact_refs
+                if hasattr(artifact, "artifact_id")
+            ]
+            tool_result_artifact = self._write_tool_result_artifact(task, turn=turn, step_id=step_id, item=item)
+            result: JsonObject = {
                 "tool_call_id": item.tool_call_id,
                 "action_id": item.action.action_id,
                 "tool": item.action.name,
@@ -1071,16 +1078,15 @@ class DeepAgentLoopController(LoopControllerV3):
                 "kind": item.observation.kind,
                 "observation_id": item.observation.observation_id,
                 "policy": item.policy_reason,
-                "artifact_refs": [
-                    artifact.artifact_id
-                    for artifact in item.artifact_refs
-                    if hasattr(artifact, "artifact_id")
-                ],
+                "artifact_refs": artifact_refs,
                 "content_preview": _preview_json_value(item.observation.content),
                 "content_projection": project_tool_result_content(item.observation.content).to_dict(),
             }
-            for item in execution_items
-        ]
+            if tool_result_artifact is not None:
+                artifact_id = str(tool_result_artifact.artifact_id)
+                result["tool_result_artifact_id"] = artifact_id
+                result["artifact_refs"] = [*artifact_refs, artifact_id]
+            results.append(result)
         results, new_replacements = apply_tool_result_replacement_budget(
             results,
             self._tool_result_replacement_state(task.task_id),
@@ -1102,6 +1108,43 @@ class DeepAgentLoopController(LoopControllerV3):
             observed_at_ms=self.clock_ms(),
             action_id=None,
             tool_call_id=None,
+        )
+
+    def _write_tool_result_artifact(
+        self,
+        task: TaskState,
+        *,
+        turn: AssistantTurn,
+        step_id: str,
+        item: _ToolExecutionItem,
+    ) -> object | None:
+        artifact_store = getattr(self.context_compiler, "artifact_store", None)
+        if artifact_store is None or not hasattr(artifact_store, "write_blob"):
+            return None
+        payload = {
+            "schema": "holo.kernel_v3.tool_result_full.v1",
+            "task_id": task.task_id,
+            "run_id": task.run_id,
+            "step_id": step_id,
+            "turn_id": turn.turn_id,
+            "tool_call_id": item.tool_call_id,
+            "action_id": item.action.action_id,
+            "tool": item.action.name,
+            "observation": item.observation.to_dict(),
+        }
+        return artifact_store.write_blob(
+            kind="tool_result_full",
+            payload=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            mime_type="application/json",
+            metadata={
+                "task_id": task.task_id,
+                "run_id": task.run_id,
+                "step_id": step_id,
+                "turn_id": turn.turn_id,
+                "tool_call_id": item.tool_call_id,
+                "tool": str(item.action.name or ""),
+                "observation_id": item.observation.observation_id,
+            },
         )
 
     def _tool_result_replacement_state(self, task_id: str) -> ToolResultReplacementState:

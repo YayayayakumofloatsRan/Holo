@@ -14,7 +14,7 @@ from kernel_v3.processors.generation import adapt_generation_parameters
 from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.routing import ProcessorRouter
 from kernel_v3.processors.usage import coerce_usage
-from kernel_v3.tool_result_budget import apply_provider_message_replacement_view
+from kernel_v3.tool_result_budget import apply_provider_message_replacement_text, apply_provider_message_replacement_view
 
 
 class ProcessorFabric:
@@ -589,6 +589,7 @@ class ProcessorFabric:
             "timeout_seconds": timeout_seconds,
         }
         merged = adapt_generation_parameters(task_type=task_type, prompt=prompt, parameters=merged)
+        merged = _provider_message_parameters(merged)
         merged["task_type"] = task_type
         merged["provider"] = route_provider
         merged.setdefault("model", route_model)
@@ -993,18 +994,17 @@ def _safe_request(request: ProcessorRequest) -> JsonObject:
 
 
 def _provider_message_prompt(prompt: str) -> str:
-    if not isinstance(prompt, str) or "content_replacement" not in prompt:
-        return prompt
-    try:
-        decoded = json.loads(prompt)
-    except json.JSONDecodeError:
-        return prompt
-    if not isinstance(decoded, (dict, list)):
-        return prompt
-    sanitized = apply_provider_message_replacement_view(decoded)
-    if sanitized == decoded:
-        return prompt
-    return json.dumps(sanitized, ensure_ascii=False, sort_keys=True)
+    return apply_provider_message_replacement_text(prompt)
+
+
+def _provider_message_parameters(parameters: JsonObject) -> JsonObject:
+    encoded = json.dumps(parameters, ensure_ascii=False, sort_keys=True)
+    if "content_replacement" not in encoded:
+        return parameters
+    sanitized = apply_provider_message_replacement_view(parameters)
+    if isinstance(sanitized, dict):
+        return sanitized
+    return parameters
 
 
 def _safe_result(
