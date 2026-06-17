@@ -358,6 +358,113 @@ def test_docling_tool_uses_isolated_worker_when_main_dependency_is_missing(monke
     assert observation.content["text"] == "Converted filing markdown"
 
 
+def test_docling_tool_uses_isolated_worker_when_nested_import_probe_raises(monkeypatch) -> None:
+    def fake_find_spec(import_name: str):
+        if import_name == "docling.document_converter":
+            raise ModuleNotFoundError("No module named 'docling'")
+        return object()
+
+    def fake_run(argv, **kwargs):
+        script = argv[2]
+        if "find_spec" in script:
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"available": True}), stderr="")
+        payload = json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps(
+                {
+                    "status": "ok",
+                    "content": {
+                        "component": "docling",
+                        "source": payload["source"],
+                        "output_format": payload["output_format"],
+                        "text": "Converted PDF markdown from isolated worker",
+                        "text_chars": 43,
+                        "truncated": False,
+                        "semantic_decision_owner": "model",
+                    },
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setenv("HOLO_DOCLING_PYTHON", "python-worker")
+    monkeypatch.setattr(open_components.importlib.util, "find_spec", fake_find_spec)
+    monkeypatch.setattr(open_components.subprocess, "run", fake_run)
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-docling-nested-probe",
+        kind="tool",
+        name=DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+        description="convert filing pdf",
+        score=0.9,
+        payload={"source": "https://www.sec.gov/example.pdf", "max_chars": 2000},
+        reasons=["need isolated pdf conversion"],
+        side_effect_class="network",
+    )
+    decision = PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}).validate(
+        run_id="run-docling-nested-probe",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "docling_conversion"
+    assert observation.content["component_execution"] == "isolated_worker"
+    assert observation.content["main_process_import_error"]["probe_error_type"] == "ModuleNotFoundError"
+    assert observation.content["text"] == "Converted PDF markdown from isolated worker"
+
+
+def test_docling_tool_prefers_light_pdf_reader_before_heavy_docling(monkeypatch) -> None:
+    def fail_import_component(import_name: str, *, package: str):  # pragma: no cover - should not be called
+        raise AssertionError("PDF light reader should run before heavy docling import")
+
+    def fake_download(source: str, *, byte_limit: int):
+        return b"%PDF fake", {"mime_type": "application/pdf", "sha256": "hash-pdf", "size_bytes": 9}
+
+    def fake_readable_text(body: str, *, document, goal=None):
+        return (
+            "Consolidated Statement of Cash Flows\nPurchases of property, plant and equipment 1,577",
+            "pdf_text_pymupdf",
+            {"parser_used": "pdf_text_pymupdf", "pages_extracted": 120},
+        )
+
+    monkeypatch.setattr(open_components, "_import_component", fail_import_component)
+    monkeypatch.setattr(open_components, "_download_document_bytes", fake_download)
+    monkeypatch.setattr(open_components, "readable_document_text_with_diagnostics", fake_readable_text)
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-docling-light-pdf",
+        kind="tool",
+        name=DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+        description="convert filing pdf",
+        score=0.9,
+        payload={"source": "https://www.sec.gov/example.pdf", "max_chars": 2000},
+        reasons=["need pdf text"],
+        side_effect_class="network",
+    )
+    decision = PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}).validate(
+        run_id="run-docling-light-pdf",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "docling_conversion"
+    assert observation.content["component_execution"] == "light_pdf_reader_before_docling"
+    assert observation.content["reader_mode"] == "pdf_text_pymupdf"
+    assert observation.content["source_materialization"]["sha256"] == "hash-pdf"
+    assert observation.content["focus_snippets"][0]["term"] == "purchases of property, plant and equipment"
+    assert "Purchases of property" in observation.content["text"]
+
+
 def test_openbb_tool_blocks_unallowlisted_routes_before_component_import(monkeypatch) -> None:
     def fail_import_component(import_name: str, *, package: str):  # pragma: no cover - should not be called
         raise AssertionError("unallowlisted OpenBB route should be blocked before import")

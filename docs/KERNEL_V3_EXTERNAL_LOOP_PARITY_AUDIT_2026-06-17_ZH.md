@@ -560,6 +560,28 @@ Holo 的工具执行事件在 `kernel_v3/tool_use.py`。这里的 `StreamingTool
 
 同时，finance final numeric preflight 增加了一个非评分性质的稳定性边界：最终 ledger 生成前的 model-first task.compile 可配置 1-120 秒 timeout，并且 final preflight 路径禁用 retry，避免 provider 卡顿导致已经完成 retrieval/tool/ledger 的 live run 在最后一步长时间挂住。这个边界不做语义判断，也不替代 LLM 解题；它只保证 loop 不被辅助编译请求拖死。
 
+### 2026-06-17 P0 续进：finance document result budgeting
+
+本轮 live streaming 单题探针证明 provider-native tool-call delta 已经能进入 Holo 的 policy/tool/journal 链路，但也暴露出真正的 P0 工具链问题：模型能调用 `document.docling.convert`，却可能只收到长 10-K/PDF 的开头截断文本，看不到远处的 capex、inventory、cash-flow 或资产负债表行。
+
+这不是某一道 FinanceBench 题的规则补丁，而是成熟 agent loop 必须具备的工具结果预算能力：
+
+- `_import_component(...)` 现在把 nested import probe 的 `ModuleNotFoundError` 等异常规范化为 `dependency_missing` observation，Docling 主进程缺依赖时能进入隔离 worker，而不是在 host 边界外抛异常。
+- `document.docling.convert` 对 PDF URL 先走现有轻量 PDF extraction stack，再考虑 heavy Docling。这样 score-critical filing PDF 不会因为 full Docling worker 超时而直接失去证据。
+- document conversion 返回 `focus_snippets`，并把这些高信号候选窗口放在 `text` 截断正文之前；默认覆盖 capex、PPE、operating cash flow、net sales/revenue、cost of sales、inventory、total assets、net income 等通用金融证据锚点，也允许模型通过 `focus_terms` 传入任务相关词。
+- 隔离 Docling worker 也在完整导出文本上生成 `focus_snippets`，不再只把截断后的正文交给主进程补片段。
+- 这些 snippets 只是候选证据窗口，不做事实绑定、公式选择、阈值判断或 benchmark answer 推断；语义判断仍由 LLM 完成，host 只治理工具结果的可见性、稳定性和 artifact 边界。
+
+结构验证：
+
+```bash
+.venv/bin/python -m py_compile kernel_v3/finance/open_components.py tests/test_kernel_v3_finance_open_components.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_open_components.py -q
+git diff --check
+```
+
+结果：`25 passed`。这是工具接口稳定性证据，不是 FinanceBench / FinQA accuracy。
+
 ### 与外部项目 agent loop 的剩余差距估计
 
 这个估计只描述 agent loop 技术 parity，不是 FinanceBench / FinQA 分数。

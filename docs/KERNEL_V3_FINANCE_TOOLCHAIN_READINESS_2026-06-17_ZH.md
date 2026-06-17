@@ -41,6 +41,7 @@ This document records the FB/FQA tool exposure and open-component readiness boun
 - FinQA/FQA table/program-like transforms: `data.table.query`, `calculator.compute`, `math.sympy.compute`, `finance.verify_numeric`
 - Temporary workbench assembly: `workspace.list`, `workspace.search`, `file.read`, `workspace.write`, `shell.exec`, `script.exec`
 - Long-result artifact boundary: SEC/EDGAR, document extraction/conversion, OpenBB, and DuckDB table-query tools return bounded observations plus `artifact_id` / `artifact.read` hints while storing the full JSON tool payload in `ArtifactStore`.
+- Document evidence visibility: `document.docling.convert` now gives PDF URLs a lightweight PDF-reader path before heavy Docling, reports isolated worker failures as observations, and returns `focus_snippets` before truncated text. The snippets are only candidate evidence windows selected from model-provided/default finance terms; the LLM still chooses facts, line items, formulas, and conclusions.
 
 ## 隔离组件策略
 
@@ -89,6 +90,11 @@ export HOLO_FINANCE_COMPONENT_TIMEOUT_SECONDS=120
 ```
 
 `requirements-finance-isolated-documents.txt` 默认只安装 score-critical 的 Docling document/table conversion 路径。`playwright`/`crawl4ai` 属于后续动态页面/浏览器抓取扩展，不能阻塞 FB/FQA filing 解析主路径；需要时单独安装。
+
+Live finance runs should invoke `.venv/bin/python -m kernel_v3.cli ...` rather
+than system `python3`: the project venv contains EdgarTools, Trafilatura, DuckDB,
+PDF readers, and related score-critical packages. Using system Python can make
+the agent loop look broken even when the repo-local toolchain is installed.
 
 ## 安全边界
 

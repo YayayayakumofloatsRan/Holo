@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import hashlib
 import io
 import json
 import math
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -21,6 +25,8 @@ from kernel_v3.finance.tool_catalog import (
     finance_tool_surface_catalog,
     finance_toolchain_install_summary,
 )
+from kernel_v3.retrieval.contracts import FetchedDocument
+from kernel_v3.retrieval.extract import readable_document_text_with_diagnostics
 from kernel_v3.tools import ToolRegistry, ToolResult
 
 
@@ -78,6 +84,7 @@ _ISOLATED_COMPONENT_IMPORT_NAMES = {
     "openbb": "openbb",
 }
 _ISOLATED_COMPONENT_TIMEOUT_SECONDS = 120
+_DOCUMENT_DOWNLOAD_BYTE_LIMIT = 200_000_000
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LOCAL_ISOLATED_COMPONENT_PYTHONS = {
     "docling": _REPO_ROOT / ".holo_components" / "docling-worker" / "bin" / "python",
@@ -87,7 +94,13 @@ _LOCAL_OPENBB_HOME = _REPO_ROOT / ".holo_components" / "openbb-home"
 
 _DOCLING_WORKER_SCRIPT = r"""
 import json
+import os
+import re
 import sys
+import tempfile
+import urllib.parse
+import urllib.request
+from pathlib import Path
 
 try:
     payload = json.load(sys.stdin)
@@ -105,17 +118,134 @@ try:
             return str(document.export_to_markdown())
         return str(document)
 
+    def user_agent():
+        return (
+            os.environ.get("EDGAR_IDENTITY")
+            or os.environ.get("SEC_EDGAR_IDENTITY")
+            or os.environ.get("HOLO_SEC_IDENTITY")
+            or "HoloKernelV3 finance document converter; contact=research@example.invalid"
+        )
+
+    def materialize_source(source, byte_limit):
+        if not source.lower().startswith(("http://", "https://")):
+            return source, None, {"downloaded": False}
+        parsed = urllib.parse.urlparse(source)
+        filename = Path(parsed.path).name or "document"
+        suffix = Path(filename).suffix or ".bin"
+        request = urllib.request.Request(
+            source,
+            headers={
+                "User-Agent": user_agent(),
+                "Accept": "application/pdf,text/html,application/xhtml+xml,*/*",
+            },
+            method="GET",
+        )
+        tmp_dir = tempfile.TemporaryDirectory(prefix="holo-docling-")
+        target = Path(tmp_dir.name) / ("source" + suffix)
+        total = 0
+        with urllib.request.urlopen(request, timeout=45) as response:
+            with target.open("wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > byte_limit:
+                        raise RuntimeError(f"document download exceeds byte limit: {byte_limit}")
+                    handle.write(chunk)
+        return target, tmp_dir, {
+            "downloaded": True,
+            "source_url": source,
+            "local_name": target.name,
+            "bytes": total,
+        }
+
+    DEFAULT_FOCUS_TERMS = (
+        "purchases of property, plant and equipment",
+        "property, plant and equipment",
+        "capital expenditures",
+        "cash flows from investing activities",
+        "cash flows",
+        "net cash provided by operating activities",
+        "operating activities",
+        "investing activities",
+        "net sales",
+        "revenue",
+        "cost of sales",
+        "cost of revenue",
+        "inventories",
+        "inventory",
+        "total assets",
+        "net income",
+    )
+
+    def ordered_focus_terms(value):
+        terms = []
+        seen = set()
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, list):
+            candidates = [str(item) for item in value]
+        else:
+            candidates = []
+        for candidate in candidates:
+            term = str(candidate or "").strip()[:120]
+            key = term.casefold()
+            if term and key not in seen:
+                seen.add(key)
+                terms.append(term)
+        for term in DEFAULT_FOCUS_TERMS:
+            key = term.casefold()
+            if key not in seen:
+                seen.add(key)
+                terms.append(term)
+        return terms
+
+    def focus_snippets(text, payload, limit=12):
+        source_text = str(text or "")
+        lowered = source_text.casefold()
+        snippets = []
+        used_ranges = []
+        for term in ordered_focus_terms(payload.get("focus_terms")):
+            needle = term.casefold().strip()
+            if not needle:
+                continue
+            start = lowered.find(needle)
+            if start < 0:
+                continue
+            left = max(0, start - 360)
+            right = min(len(source_text), start + len(term) + 760)
+            if any(not (right < used_left or left > used_right) for used_left, used_right in used_ranges):
+                continue
+            used_ranges.append((left, right))
+            snippets.append({
+                "term": term,
+                "start_offset": start,
+                "snippet": re.sub(r"\s+", " ", source_text[left:right]).strip(),
+            })
+            if len(snippets) >= limit:
+                break
+        return snippets
+
     source = str(payload.get("source") or "")
     output_format = str(payload.get("output_format") or "markdown").lower()
     max_chars = max(1, min(int(payload.get("max_chars") or 8000), 20000))
-    result = DocumentConverter().convert(source)
-    exported = export_document(result.document, output_format)
+    byte_limit = max(1_000_000, min(int(payload.get("download_byte_limit") or 200_000_000), 500_000_000))
+    converted_source, cleanup, materialization = materialize_source(source, byte_limit)
+    try:
+        result = DocumentConverter().convert(converted_source)
+        exported = export_document(result.document, output_format)
+    finally:
+        if cleanup is not None:
+            cleanup.cleanup()
     print(json.dumps({
         "status": "ok",
         "content": {
             "component": "docling",
             "source": source,
+            "source_materialization": materialization,
             "output_format": output_format,
+            "focus_snippets": focus_snippets(exported, payload),
             "text": exported[:max_chars - 3] + "..." if len(exported) > max_chars else exported,
             "text_chars": len(exported),
             "truncated": len(exported) > max_chars,
@@ -326,6 +456,11 @@ def register_finance_open_component_tools(
                 "source": {"type": "str", "required": True, "min_length": 1, "aliases": ["url", "source_url"]},
                 "output_format": {"type": "str", "required": False, "min_length": 1},
                 "max_chars": {"type": "int", "required": False, "min": 500, "max": 20000},
+                "focus_terms": {
+                    "type": "list[str]",
+                    "required": False,
+                    "description": "Optional model-selected terms to index in the converted document.",
+                },
             },
         ),
     )
@@ -593,6 +728,15 @@ def _execute_docling_convert(
         )
     output_format = str(action.payload.get("output_format") or "markdown").strip().lower()
     max_chars = _positive_int(action.payload.get("max_chars"), default=8000, maximum=20000)
+    light_pdf = _try_light_pdf_document_convert(
+        action,
+        source=source,
+        output_format=output_format,
+        max_chars=max_chars,
+        artifact_store=artifact_store,
+    )
+    if light_pdf is not None:
+        return light_pdf
     docling_converter, error = _import_component("docling.document_converter", package="docling")
     if error is not None:
         isolated = _run_isolated_docling_convert(
@@ -623,10 +767,71 @@ def _execute_docling_convert(
             "component": "docling",
             "source": source,
             "output_format": output_format,
+            "focus_snippets": _document_focus_snippets(exported, action_payload=action.payload),
             "text": _truncate(exported, max_chars),
             "text_chars": len(exported),
             "truncated": len(exported) > max_chars,
             "semantic_decision_owner": "model",
+        },
+        kind="docling_conversion",
+        artifact_store=artifact_store,
+        artifact_kind="docling_conversion_payload",
+    )
+
+
+def _try_light_pdf_document_convert(
+    action: CandidateAction,
+    *,
+    source: str,
+    output_format: str,
+    max_chars: int,
+    artifact_store: ArtifactStore | None,
+) -> Observation | ToolResult | None:
+    if not _looks_like_pdf_url(source):
+        return None
+    try:
+        data, metadata = _download_document_bytes(source, byte_limit=_DOCUMENT_DOWNLOAD_BYTE_LIMIT)
+        body = data.decode("latin-1", errors="ignore")
+        document = FetchedDocument(
+            document_id=f"doc-{action.action_id}",
+            goal_id=f"goal-{action.action_id}",
+            source_id=f"source-{action.action_id}",
+            uri=source,
+            title=Path(urllib.parse.urlparse(source).path).name or source,
+            artifact_id=f"artifact-{action.action_id}-download",
+            payload_hash=str(metadata.get("sha256") or ""),
+            preview=body[:500],
+            size_bytes=len(data),
+            metadata={"mime_type": metadata.get("mime_type") or "application/pdf", "source_url": source},
+        )
+        text, mode, diagnostics = readable_document_text_with_diagnostics(body, document=document)
+    except Exception:
+        return None
+    text = str(text or "")
+    if not text.strip():
+        return None
+    return _artifact_tool_result(
+        action,
+        "ok",
+        {
+            "component": "docling",
+            "component_execution": "light_pdf_reader_before_docling",
+            "source": source,
+            "source_materialization": {
+                "downloaded": True,
+                "bytes": len(data),
+                "mime_type": metadata.get("mime_type"),
+                "sha256": metadata.get("sha256"),
+            },
+            "output_format": output_format,
+            "focus_snippets": _document_focus_snippets(text, action_payload=action.payload),
+            "text": _truncate(text, max_chars),
+            "text_chars": len(text),
+            "truncated": len(text) > max_chars,
+            "reader_mode": mode,
+            "reader_diagnostics": diagnostics,
+            "semantic_decision_owner": "model",
+            "host_boundary": "light PDF extraction supplies text candidates; finance interpretation remains model-owned",
         },
         kind="docling_conversion",
         artifact_store=artifact_store,
@@ -920,13 +1125,20 @@ def _run_isolated_docling_convert(
 ) -> Observation | None:
     worker = _run_isolated_component(
         "docling",
-        payload={"source": source, "output_format": output_format, "max_chars": max_chars},
+        payload={
+            "source": source,
+            "output_format": output_format,
+            "max_chars": max_chars,
+            "focus_terms": _ordered_focus_terms(action.payload.get("focus_terms")),
+        },
         script=_DOCLING_WORKER_SCRIPT,
     )
     if worker is None:
         return None
     content = dict(worker.get("content")) if isinstance(worker.get("content"), dict) else {}
     content.setdefault("component", "docling")
+    if isinstance(content.get("text"), str) and "focus_snippets" not in content:
+        content["focus_snippets"] = _document_focus_snippets(str(content.get("text") or ""), action_payload=action.payload)
     content["component_execution"] = "isolated_worker"
     content["main_process_import_error"] = import_error
     return _observation(action, str(worker.get("status") or "failed"), _record(content), kind="docling_conversion")
@@ -1026,6 +1238,129 @@ def _run_isolated_component(component: str, *, payload: JsonObject, script: str)
         "status": str(parsed.get("status") or "failed") if isinstance(parsed, dict) else "failed",
         "content": _record(content),
     }
+
+
+_DEFAULT_DOCUMENT_FOCUS_TERMS = (
+    "purchases of property, plant and equipment",
+    "property, plant and equipment",
+    "capital expenditures",
+    "cash flows from investing activities",
+    "cash flows",
+    "net cash provided by operating activities",
+    "operating activities",
+    "investing activities",
+    "net sales",
+    "revenue",
+    "cost of sales",
+    "cost of revenue",
+    "inventories",
+    "inventory",
+    "total assets",
+    "net income",
+)
+
+
+def _document_focus_snippets(text: str, *, action_payload: JsonObject, limit: int = 12) -> list[JsonObject]:
+    source_text = str(text or "")
+    if not source_text:
+        return []
+    terms = _ordered_focus_terms(action_payload.get("focus_terms"))
+    terms.extend(term for term in _DEFAULT_DOCUMENT_FOCUS_TERMS if term.casefold() not in {item.casefold() for item in terms})
+    lowered = source_text.casefold()
+    snippets: list[JsonObject] = []
+    used_ranges: list[tuple[int, int]] = []
+    for term in terms:
+        needle = term.casefold().strip()
+        if not needle:
+            continue
+        start = lowered.find(needle)
+        if start < 0:
+            continue
+        left = max(0, start - 360)
+        right = min(len(source_text), start + len(term) + 760)
+        if any(not (right < used_left or left > used_right) for used_left, used_right in used_ranges):
+            continue
+        used_ranges.append((left, right))
+        snippets.append(
+            {
+                "term": term,
+                "start_offset": start,
+                "snippet": _normalize_snippet(source_text[left:right]),
+            }
+        )
+        if len(snippets) >= limit:
+            break
+    return snippets
+
+
+def _ordered_focus_terms(value: object) -> list[str]:
+    result: list[str] = []
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        candidates = [str(item) for item in value]
+    else:
+        candidates = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        term = str(candidate or "").strip()
+        key = term.casefold()
+        if term and key not in seen:
+            seen.add(key)
+            result.append(term[:120])
+    return result
+
+
+def _normalize_snippet(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _looks_like_pdf_url(source: str) -> bool:
+    parsed = urllib.parse.urlparse(str(source or ""))
+    path = urllib.parse.unquote(parsed.path or "").lower()
+    return path.endswith(".pdf")
+
+
+def _download_document_bytes(source: str, *, byte_limit: int) -> tuple[bytes, JsonObject]:
+    request = urllib.request.Request(
+        source,
+        headers={
+            "User-Agent": _finance_document_user_agent(),
+            "Accept": "application/pdf,text/html,application/xhtml+xml,*/*",
+        },
+        method="GET",
+    )
+    chunks: list[bytes] = []
+    total = 0
+    mime_type = ""
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            mime_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > byte_limit:
+                    raise RuntimeError(f"document download exceeds byte limit: {byte_limit}")
+                chunks.append(chunk)
+    except urllib.error.URLError:
+        raise
+    data = b"".join(chunks)
+    return data, {
+        "mime_type": mime_type or ("application/pdf" if data.startswith(b"%PDF") else "application/octet-stream"),
+        "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _finance_document_user_agent() -> str:
+    return (
+        os.environ.get("EDGAR_IDENTITY")
+        or os.environ.get("SEC_EDGAR_IDENTITY")
+        or os.environ.get("HOLO_SEC_IDENTITY")
+        or "HoloKernelV3 finance document converter; contact=research@example.invalid"
+    )
 
 
 def _isolated_component_python(component: str) -> str | None:
@@ -1128,18 +1463,35 @@ def _component_status(
 def _import_component(import_name: str, *, package: str) -> tuple[Any | None, JsonObject | None]:
     if import_name == "edgar":
         _prepare_edgar_environment()
-    if importlib.util.find_spec(import_name) is None:
-        return None, {
-            "error": "dependency_missing",
-            "component": package,
-            "import_name": import_name,
-            "install_hint": f"pip install {package}",
-            "host_boundary": "tool did not run; no benchmark answer was inferred by host fallback",
-        }
+    try:
+        spec = importlib.util.find_spec(import_name)
+    except (ImportError, AttributeError, ValueError) as exc:
+        return None, _dependency_missing(import_name=import_name, package=package, probe_error=exc)
+    if spec is None:
+        return None, _dependency_missing(import_name=import_name, package=package)
     try:
         return importlib.import_module(import_name), None
     except Exception as exc:
         return None, _component_exception(package, exc)
+
+
+def _dependency_missing(
+    *,
+    import_name: str,
+    package: str,
+    probe_error: Exception | None = None,
+) -> JsonObject:
+    payload: JsonObject = {
+        "error": "dependency_missing",
+        "component": package,
+        "import_name": import_name,
+        "install_hint": f"pip install {package}",
+        "host_boundary": "tool did not run; no benchmark answer was inferred by host fallback",
+    }
+    if probe_error is not None:
+        payload["probe_error_type"] = type(probe_error).__name__
+        payload["probe_error_message"] = str(probe_error)[:500]
+    return payload
 
 
 def _prepare_edgar_environment() -> None:

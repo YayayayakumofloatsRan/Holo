@@ -241,6 +241,17 @@ non-empty JSON argument object has arrived. Finance final numeric preflight task
 compilation is bounded and non-retrying so provider stalls cannot hang an
 already-completed live run at ledger-writing time. These are loop-stability
 contracts, not benchmark score claims.
+The finance document toolchain now applies the same result-budgeting principle
+inside `document.docling.convert`: PDF URLs first use the lightweight existing
+PDF extraction stack before heavy Docling, nested Docling import probes fall
+back cleanly to the isolated worker, and converted documents expose
+`focus_snippets` ahead of truncated text so the model can see high-signal
+candidate filing lines without host-side answer selection. This is a tool
+interface and evidence-visibility fix; finance capability numbers still require
+separate live model runs with gold/reference kept out of model context. Live
+finance runs should use `.venv/bin/python`, because the project venv contains
+the installed SEC/document/table dependencies that the system Python may not
+have.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in
