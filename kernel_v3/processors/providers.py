@@ -7,9 +7,10 @@ import time
 import urllib.error
 import urllib.request
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
+from kernel_v3.processors.contracts import ProcessorStreamEvent
 from kernel_v3.processors.usage import coerce_usage, usage_from_text
 
 
@@ -163,7 +164,7 @@ class OpenAICompatibleProvider:
         available = self.availability()
         if not available["available"]:
             return _failed_result(request, str(available["reason"]), provider=self.name, model=self.model)
-        payload = self.build_payload(request)
+        payload = self.build_payload(request, stream=False)
         decoded = self._post_json_with_retries(
             self._completion_url(),
             self._api_key(),
@@ -180,7 +181,92 @@ class OpenAICompatibleProvider:
             error=None,
         )
 
-    def build_payload(self, request: ProcessorRequest) -> JsonObject:
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        available = self.availability()
+        if not available["available"]:
+            yield ProcessorStreamEvent(
+                event_type="stream_error",
+                request_id=request.request_id,
+                sequence=1,
+                delta={"error": str(available["reason"]), "provider": self.name, "model": self.model},
+            )
+            return
+        payload = self.build_payload(request, stream=True)
+        sequence = 1
+        yield ProcessorStreamEvent(
+            event_type="stream_start",
+            request_id=request.request_id,
+            sequence=sequence,
+            delta={"provider": self.name, "model": payload["model"]},
+        )
+        text_parts: list[str] = []
+        usage: JsonObject = {}
+        try:
+            for chunk in self._post_sse_json(
+                self._completion_url(),
+                self._api_key(),
+                payload,
+                _timeout(request, self.timeout_seconds),
+            ):
+                choices = chunk.get("choices")
+                if isinstance(choices, list) and choices:
+                    first = choices[0] if isinstance(choices[0], dict) else {}
+                    delta = first.get("delta") if isinstance(first, dict) else {}
+                    if isinstance(delta, dict):
+                        content = delta.get("content")
+                        if isinstance(content, str) and content:
+                            text_parts.append(content)
+                            sequence += 1
+                            yield ProcessorStreamEvent(
+                                event_type="content_delta",
+                                request_id=request.request_id,
+                                sequence=sequence,
+                                delta={"text": content},
+                            )
+                        tool_calls = delta.get("tool_calls")
+                        if isinstance(tool_calls, list) and tool_calls:
+                            sequence += 1
+                            yield ProcessorStreamEvent(
+                                event_type="tool_call_delta",
+                                request_id=request.request_id,
+                                sequence=sequence,
+                                delta={"tool_calls": tool_calls},
+                            )
+                    finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+                    if finish_reason:
+                        sequence += 1
+                        yield ProcessorStreamEvent(
+                            event_type="finish_delta",
+                            request_id=request.request_id,
+                            sequence=sequence,
+                            delta={"finish_reason": str(finish_reason)},
+                        )
+                chunk_usage = chunk.get("usage")
+                if isinstance(chunk_usage, dict):
+                    usage = dict(chunk_usage)
+        except Exception as exc:
+            sequence += 1
+            yield ProcessorStreamEvent(
+                event_type="stream_error",
+                request_id=request.request_id,
+                sequence=sequence,
+                delta={"error": type(exc).__name__, "error_preview": str(exc)[:240]},
+            )
+            return
+        text = "".join(text_parts)
+        sequence += 1
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=sequence,
+            delta={
+                "status": "ok",
+                "text": text,
+                "usage": coerce_usage(usage, prompt=request.prompt, completion=text),
+            },
+        )
+
+    def build_payload(self, request: ProcessorRequest, *, stream: bool = False) -> JsonObject:
         thinking = _thinking_payload(request.parameters.get("thinking"))
         payload: JsonObject = {
             "model": str(request.parameters.get("model") or self.model),
@@ -189,7 +275,7 @@ class OpenAICompatibleProvider:
                 {"role": "user", "content": request.prompt},
             ],
             "response_format": {"type": "json_object"},
-            "stream": False,
+            "stream": bool(stream),
         }
         if thinking is not None:
             payload["thinking"] = thinking
@@ -277,6 +363,27 @@ class OpenAICompatibleProvider:
             raise RuntimeError(f"{self.name} returned non-object response")
         return decoded
 
+    def _post_sse_json(self, url: str, api_key: str, payload: JsonObject, timeout_seconds: int) -> Iterable[JsonObject]:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=max(1, int(timeout_seconds))) as response:
+                yield from _iter_sse_json_with_deadline(response, timeout_seconds, provider_name=self.name)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"{self.name} HTTP {exc.code}: {detail[:240]}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"{self.name} network error: {exc.reason}") from exc
+
 
 class DeepSeekProvider(OpenAICompatibleProvider):
     name = "deepseek"
@@ -332,6 +439,40 @@ def _read_response_text_with_deadline(response: object, timeout_seconds: int, *,
             chunk = chunk.encode("utf-8")
         chunks.extend(chunk)
     return bytes(chunks).decode("utf-8", errors="replace")
+
+
+def _iter_sse_json_with_deadline(response: object, timeout_seconds: int, *, provider_name: str) -> Iterable[JsonObject]:
+    timeout = max(1, int(timeout_seconds))
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"{provider_name} stream read exceeded {timeout}s")
+        _set_response_socket_timeout(response, max(0.001, remaining))
+        try:
+            line = response.readline()  # type: ignore[attr-defined]
+        except (TimeoutError, OSError) as exc:
+            raise TimeoutError(f"{provider_name} stream read exceeded {timeout}s") from exc
+        if not line:
+            break
+        if isinstance(line, bytes):
+            text = line.decode("utf-8", errors="replace")
+        else:
+            text = str(line)
+        text = text.strip()
+        if not text or text.startswith(":"):
+            continue
+        if not text.startswith("data:"):
+            continue
+        data = text[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            decoded = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, dict):
+            yield decoded
 
 
 def _set_response_socket_timeout(response: object, timeout_seconds: float) -> None:

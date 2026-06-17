@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from kernel_v3.context.artifacts import ArtifactStore
 from kernel_v3.contracts import CandidateAction, JsonObject, Observation, PolicyDecision, ToolManifest
+from kernel_v3.tool_runtime import tool_runtime_spec_for_action, tool_runtime_spec_for_manifest
 from kernel_v3.tools import ToolRegistry
 
 
@@ -31,6 +32,7 @@ class ToolUseContext:
     side_effect_class: str
     policy_reason: str
     allowed_tool_names: list[str]
+    runtime_spec: JsonObject = field(default_factory=dict)
 
     def to_execution_context(self) -> JsonObject:
         return {
@@ -46,6 +48,7 @@ class ToolUseContext:
             "side_effect_class": self.side_effect_class,
             "policy_reason": self.policy_reason,
             "allowed_tool_names": list(self.allowed_tool_names),
+            "runtime_spec": dict(self.runtime_spec),
         }
 
 
@@ -245,7 +248,13 @@ def register_tool_discovery(
                     "description": "Optional exact tool names to inspect.",
                 },
                 "max_results": {"type": "int", "required": False, "min": 1, "max": 50},
+            },
+            runtime={
                 "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "max_result_size_chars": 20000,
+                "result_persistence_policy": "never",
             },
         ),
     )
@@ -346,7 +355,13 @@ def register_artifact_tools(
                     "description": "preview or read. Defaults to preview.",
                 },
                 "max_chars": {"type": "int", "required": False, "min": 1, "max": 20000},
+            },
+            runtime={
                 "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "max_result_size_chars": 24000,
+                "result_persistence_policy": "never",
             },
         ),
     )
@@ -367,6 +382,7 @@ def tool_use_context_for_action(
     allowed_tool_names: Iterable[str],
 ) -> ToolUseContext:
     side_effect = str(getattr(manifest, "side_effect_class", action.side_effect_class) or action.side_effect_class)
+    runtime_spec = tool_runtime_spec_for_action(action, manifest).to_dict()
     return ToolUseContext(
         task_id=task_id,
         run_id=run_id,
@@ -379,6 +395,7 @@ def tool_use_context_for_action(
         side_effect_class=side_effect,
         policy_reason=str(getattr(policy_decision, "reason", "") or ""),
         allowed_tool_names=sorted(str(name) for name in allowed_tool_names if str(name)),
+        runtime_spec=runtime_spec,
     )
 
 
@@ -520,6 +537,7 @@ def _manifest_summary(manifest: ToolManifest) -> JsonObject:
         "permissions_required": list(manifest.permissions_required),
         "enabled": manifest.enabled,
         "input_schema": input_schema,
+        "runtime": tool_runtime_spec_for_manifest(manifest).to_dict(),
         "input_keys": [str(key) for key in input_schema.keys() if not str(key).startswith("_")],
     }
 
@@ -533,6 +551,7 @@ def _manifest_search_text(manifest: ToolManifest) -> str:
             manifest.operator_kind,
             manifest.side_effect_class,
             json.dumps(manifest.input_schema, ensure_ascii=False, sort_keys=True, default=str),
+            json.dumps(manifest.runtime, ensure_ascii=False, sort_keys=True, default=str),
         ]
     ).casefold()
 

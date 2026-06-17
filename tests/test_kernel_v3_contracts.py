@@ -179,6 +179,32 @@ def test_all_contract_schemas_round_trip_through_dicts():
         decoded = type(schema).from_dict(encoded)
 
         assert decoded == schema
+
+
+def test_tool_manifest_from_dict_keeps_runtime_backward_compatible():
+    decoded = ToolManifest.from_dict(
+        {
+            "name": "tool.old",
+            "version": "1",
+            "resource_kind": "legacy",
+            "operator_kind": "read",
+            "side_effect_class": "read",
+            "permissions_required": [],
+            "enabled": True,
+            "description": "legacy manifest without runtime",
+            "input_schema": {},
+        }
+    )
+
+    assert decoded.runtime == {}
+    assert decoded.to_dict()["runtime"] == {}
+
+
+def test_all_contract_schemas_round_trip_include_runtime_defaults():
+    for schema in SCHEMA_EXAMPLES:
+        encoded = schema.to_dict()
+        decoded = type(schema).from_dict(encoded)
+
         assert decoded.to_dict() == encoded
 
 

@@ -171,9 +171,14 @@ component tools now write long SEC/EDGAR, document, market, and DuckDB table
 payloads into `ArtifactStore` blobs when the runtime provides a store; the model
 gets a short observation, `artifact_id`, and `artifact.read` hint instead of the
 full payload. The executor is ready for provider-streaming integration, but
-current validation still feeds it completed assistant turns. `finance-fact-fast`
-remains on the LangGraph fast lane for now. This is a structural loop
-milestone, not a finance benchmark score.
+current validation still feeds it completed assistant turns. The next P0
+substrate checkpoint adds manifest-level `ToolRuntimeSpec` projection into
+tool discovery and execution context, batch-observation tool-result replacement
+state, and a processor streaming event contract with OpenAI-compatible SSE
+parsing scaffolding; native streaming tool-use is still not wired into
+`DeepAgentLoopController`. `finance-fact-fast` remains on the LangGraph fast
+lane for now. This is a structural loop milestone, not a finance benchmark
+score.
 The debug50 architecture reset is recorded in
 `docs/KERNEL_V3_DEBUG50_REQUIREMENTS_AND_GENERIC_FINANCE_LOOP_2026-06-17_ZH.md`.
 It stops per-question patching, groups the first 50 FinanceBench debug prompts
@@ -184,10 +189,11 @@ benchmark score.
 The external-loop parity audit is recorded in
 `docs/KERNEL_V3_EXTERNAL_LOOP_PARITY_AUDIT_2026-06-17_ZH.md`. It compares the
 local TypeScript agent-loop project against Holo Kernel v3 and identifies the
-remaining hard gaps: provider-native streaming tool-use, a thicker tool runtime
-spec, stable cross-turn tool-result replacement, progress/abort-capable tool
-execution, deferred tool loading, and type-family live debug50 evaluation. This
-is a design audit, not a finance benchmark score.
+remaining hard gaps after the first P0 substrate checkpoint: provider-native
+streaming tool-use inside the deep loop, full execution semantics for the thicker
+tool runtime spec, provider-packet-level stable tool-result replacement,
+progress/abort-capable tool execution, deferred tool loading, and type-family
+live debug50 evaluation. This is a design audit, not a finance benchmark score.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in

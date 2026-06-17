@@ -1,21 +1,38 @@
 from __future__ import annotations
 
 from kernel_v3.context import ArtifactStore
-from kernel_v3.contracts import CandidateAction, Observation
+from kernel_v3.contracts import CandidateAction, Observation, PolicyDecision, ToolManifest
 from kernel_v3.policy import PolicyGate
+from kernel_v3.tool_result_budget import ToolResultReplacementState, apply_tool_result_replacement_budget
 from kernel_v3.tool_use import (
     ARTIFACT_READ_NAME,
     TOOL_DISCOVERY_NAME,
     project_tool_result_content,
     register_artifact_tools,
     register_tool_discovery,
+    tool_use_context_for_action,
 )
 from kernel_v3.tools import ToolRegistry
 
 
 def test_tool_discovery_returns_allowed_manifest_contracts() -> None:
     registry = ToolRegistry.with_builtin_respond()
-    registry.register("sec.edgar.financials", _noop_tool)
+    registry.register(
+        "sec.edgar.financials",
+        _noop_tool,
+        manifest=ToolManifest(
+            name="sec.edgar.financials",
+            version="1",
+            resource_kind="finance",
+            operator_kind="sec_edgar",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="Retrieve SEC EDGAR filing facts and source lines.",
+            input_schema={"ticker": {"type": "str", "required": True}},
+            runtime={"concurrency_safe": True, "read_only": True, "open_world": True, "max_result_size_chars": 12000},
+        ),
+    )
     registry.register("math.sympy.compute", _noop_tool)
     register_tool_discovery(
         registry,
@@ -44,6 +61,57 @@ def test_tool_discovery_returns_allowed_manifest_contracts() -> None:
     tools = result.content["tools"]
     assert [tool["name"] for tool in tools] == ["sec.edgar.financials"]
     assert result.content["schema"] == "holo.kernel_v3.tool_discovery.v1"
+    assert tools[0]["runtime"]["concurrency_safe"] is True
+    assert tools[0]["runtime"]["open_world"] is True
+    assert tools[0]["runtime"]["max_result_size_chars"] == 12000
+
+
+def test_tool_use_context_exposes_runtime_spec_to_executors() -> None:
+    action = CandidateAction(
+        action_id="act-runtime",
+        kind="tool",
+        name="finance.table.query",
+        description="query table",
+        score=1.0,
+        payload={"sql": "select 1"},
+        reasons=["need_table"],
+        side_effect_class="read",
+    )
+    manifest = ToolManifest(
+        name="finance.table.query",
+        version="1",
+        resource_kind="finance",
+        operator_kind="table_query",
+        side_effect_class="read",
+        permissions_required=[],
+        enabled=True,
+        description="Query a finance evidence table.",
+        input_schema={"sql": {"type": "str", "required": True}},
+        runtime={"concurrency_safe": True, "read_only": True, "interrupt_behavior": "cancel"},
+    )
+    context = tool_use_context_for_action(
+        task_id="task-1",
+        run_id="run-1",
+        step_id="step-1",
+        thread_id="local:default",
+        input_text="query",
+        tool_call_id="tc-1",
+        action=action,
+        manifest=manifest,
+        policy_decision=PolicyDecision(
+            decision_id="pd-1",
+            run_id="run-1",
+            action_id="act-runtime",
+            allowed=True,
+            reason="allowed",
+            constraints={"tool_name": "finance.table.query", "side_effect_class": "read"},
+        ),
+        allowed_tool_names=["finance.table.query"],
+    ).to_execution_context()
+
+    assert context["runtime_spec"]["concurrency_safe"] is True
+    assert context["runtime_spec"]["interrupt_behavior"] == "cancel"
+    assert context["runtime_spec"]["read_only"] is True
 
 
 def test_tool_result_projection_preserves_shape_and_budget_state() -> None:
@@ -59,6 +127,36 @@ def test_tool_result_projection_preserves_shape_and_budget_state() -> None:
     assert projection["estimated_chars"] > projection["preview_chars"]
     assert projection["shape"]["type"] == "object"
     assert "rows" in projection["shape"]["keys"]
+
+
+def test_tool_result_replacement_state_reapplies_byte_stable_replacements() -> None:
+    state = ToolResultReplacementState()
+    large = {
+        "tool_call_id": "tc-large",
+        "content_preview": "x" * 5000,
+        "content_projection": {"estimated_chars": 100000, "preview": "x" * 100, "truncated": True, "shape": {"type": "object"}},
+        "artifact_refs": ["artifact-large"],
+    }
+    small = {
+        "tool_call_id": "tc-small",
+        "content_preview": "ok",
+        "content_projection": {"estimated_chars": 2, "preview": "ok", "truncated": False, "shape": {"type": "str"}},
+        "artifact_refs": [],
+    }
+
+    first, records = apply_tool_result_replacement_budget([large, small], state, limit_chars=1000)
+    assert len(records) == 1
+    assert first[0]["content_replacement_applied"] is True
+    replacement = first[0]["content_replacement"]
+    assert replacement["artifact_refs"] == ["artifact-large"]
+
+    second, second_records = apply_tool_result_replacement_budget(
+        [{**large, "content_preview": "changed", "content_projection": {"estimated_chars": 1}}],
+        state,
+        limit_chars=1_000_000,
+    )
+    assert second_records == []
+    assert second[0]["content_replacement"] == replacement
 
 
 def test_artifact_read_returns_bounded_preview_and_text() -> None:

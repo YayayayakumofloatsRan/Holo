@@ -19,6 +19,8 @@ from kernel_v3.processors.contracts import (
     ProcessorOutcome,
     ProcessorProvider,
     ProcessorRoute,
+    ProcessorStreamEvent,
+    StreamingProcessorProvider,
 )
 from kernel_v3.processors.adapters import ModelEvaluator, ModelPlanner, Synthesizer
 from kernel_v3.processors.fabric import ProcessorFabric
@@ -78,8 +80,10 @@ __all__ = [
     "ProcessorProvider",
     "ProcessorRoute",
     "ProcessorRouter",
+    "ProcessorStreamEvent",
     "SEMANTIC_INTAKE_PROMPT_CONTRACT",
     "SEMANTIC_INTAKE_SCHEMA",
+    "StreamingProcessorProvider",
     "adapt_generation_parameters",
     "deepseek_v4_router",
     "deepseek_v4_routes",

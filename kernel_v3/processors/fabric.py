@@ -9,7 +9,7 @@ from kernel_v3.contracts import JsonObject, ProcessorRequest, ProcessorResult
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
 from kernel_v3.privacy import contains_secret_like_content
-from kernel_v3.processors.contracts import JsonSchema, ProcessorOutcome, ProcessorProvider
+from kernel_v3.processors.contracts import JsonSchema, ProcessorOutcome, ProcessorProvider, ProcessorStreamEvent
 from kernel_v3.processors.generation import adapt_generation_parameters
 from kernel_v3.processors.json_repair import parse_json_object
 from kernel_v3.processors.routing import ProcessorRouter
@@ -34,6 +34,137 @@ class ProcessorFabric:
         self._counter = 0
         self._provider_circuit: dict[str, JsonObject] = {}
         self._budget_counters: dict[str, JsonObject] = {}
+
+    def stream_events(
+        self,
+        *,
+        task_type: str,
+        run_id: str,
+        context_id: str,
+        prompt: str,
+        task_id: str | None = None,
+        step_id: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        timeout_seconds: int | None = None,
+        parameters: JsonObject | None = None,
+    ) -> list[ProcessorStreamEvent]:
+        route = self.router.route(task_type, provider=provider, model=model, timeout_seconds=timeout_seconds)
+        request = self._request(
+            task_type=task_type,
+            run_id=run_id,
+            context_id=context_id,
+            prompt=prompt,
+            route_provider=route.provider,
+            route_model=route.model,
+            timeout_seconds=route.timeout_seconds,
+            route_parameters=route.parameters,
+            parameters=parameters,
+        )
+        self._journal_request(task_id=task_id, run_id=run_id, step_id=step_id, request=request)
+        selected = self.providers.get(route.provider)
+        if selected is None:
+            return self._stream_error(
+                request,
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                provider=route.provider,
+                model=str(request.parameters.get("model") or route.model),
+                task_type=task_type,
+                error="provider_not_registered",
+                delta={"provider": route.provider},
+            )
+        provider_model = str(request.parameters.get("model") or route.model)
+        budget_error = self._processor_budget_error(request, task_id=task_id)
+        if budget_error is not None:
+            return self._stream_error(
+                request,
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                error="processor_budget_exceeded",
+                delta={"budget": budget_error.get("budget", {}), "budget_state": budget_error.get("state", {})},
+            )
+        circuit = self._provider_circuit.get(route.provider)
+        if circuit is not None:
+            return self._stream_error(
+                request,
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                error="provider_circuit_open",
+                delta={"circuit": circuit},
+            )
+        boundary_error = _external_private_context_boundary_error(request, provider_name=route.provider, provider=selected)
+        if boundary_error is not None:
+            return self._stream_error(
+                request,
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                error=boundary_error,
+                delta={"boundary": "private_context_external_model"},
+            )
+
+        stream_method = getattr(selected, "stream", None)
+        started = self.clock_ms()
+        events: list[ProcessorStreamEvent] = []
+        try:
+            if callable(stream_method):
+                events = list(stream_method(request))
+            else:
+                result = selected.run(request)
+                events = _events_from_non_streaming_result(request, result)
+        except Exception as exc:
+            duration_ms = max(0, self.clock_ms() - started)
+            error_preview = _preview(str(exc) or type(exc).__name__, 240)
+            self._open_provider_circuit(
+                route.provider,
+                task_type=task_type,
+                error=type(exc).__name__,
+                error_preview=error_preview,
+            )
+            events = [
+                ProcessorStreamEvent(
+                    event_type="stream_error",
+                    request_id=request.request_id,
+                    sequence=1,
+                    delta={"error": type(exc).__name__, "error_preview": error_preview},
+                )
+            ]
+            self._journal_stream_events(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                provider=route.provider,
+                model=provider_model,
+                task_type=task_type,
+                duration_ms=duration_ms,
+                events=events,
+            )
+            return events
+        duration_ms = max(0, self.clock_ms() - started)
+        self._journal_stream_events(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            provider=route.provider,
+            model=provider_model,
+            task_type=task_type,
+            duration_ms=duration_ms,
+            events=events,
+        )
+        return events
 
     def run_json(
         self,
@@ -495,6 +626,73 @@ class ProcessorFabric:
             },
         )
 
+    def _journal_stream_events(
+        self,
+        *,
+        task_id: str | None,
+        run_id: str,
+        step_id: str | None,
+        provider: str,
+        model: str,
+        task_type: str,
+        duration_ms: int,
+        events: list[ProcessorStreamEvent],
+    ) -> None:
+        if self.journal is None:
+            return
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            kind="processor_stream",
+            data=redact_journal_data(
+                {
+                    "provider": provider,
+                    "model": model,
+                    "task_type": task_type,
+                    "duration_ms": duration_ms,
+                    "event_count": len(events),
+                    "events": [event.to_dict() for event in events],
+                }
+            ),
+            state_delta={
+                "processor_stage": "stream",
+                "processor_task_type": task_type,
+                "processor_stream_event_count": len(events),
+            },
+        )
+
+    def _stream_error(
+        self,
+        request: ProcessorRequest,
+        *,
+        task_id: str | None,
+        run_id: str,
+        step_id: str | None,
+        provider: str,
+        model: str,
+        task_type: str,
+        error: str,
+        delta: JsonObject,
+    ) -> list[ProcessorStreamEvent]:
+        event = ProcessorStreamEvent(
+            event_type="stream_error",
+            request_id=request.request_id,
+            sequence=1,
+            delta={"error": error, **dict(delta)},
+        )
+        self._journal_stream_events(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=step_id,
+            provider=provider,
+            model=model,
+            task_type=task_type,
+            duration_ms=0,
+            events=[event],
+        )
+        return [event]
+
 
 def validate_json_schema(value: JsonObject, schema: JsonSchema) -> str | None:
     for key, expected in schema.required.items():
@@ -617,6 +815,46 @@ def _processor_budget(request: ProcessorRequest) -> JsonObject:
     if not isinstance(value, dict):
         return {}
     return {str(key): item for key, item in value.items()}
+
+
+def _events_from_non_streaming_result(
+    request: ProcessorRequest,
+    result: ProcessorResult,
+) -> list[ProcessorStreamEvent]:
+    if result.status != "ok":
+        return [
+            ProcessorStreamEvent(
+                event_type="stream_error",
+                request_id=request.request_id,
+                sequence=1,
+                delta={
+                    "status": result.status,
+                    "error": result.error or "provider_failed",
+                    "output": _safe_json(result.output),
+                },
+            )
+        ]
+    text = _result_text(result)
+    return [
+        ProcessorStreamEvent(
+            event_type="stream_start",
+            request_id=request.request_id,
+            sequence=1,
+            delta={"fallback": "non_streaming"},
+        ),
+        ProcessorStreamEvent(
+            event_type="content_delta",
+            request_id=request.request_id,
+            sequence=2,
+            delta={"text": text},
+        ),
+        ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=3,
+            delta={"status": "ok", "usage": coerce_usage(result.usage, prompt=request.prompt, completion=text)},
+        ),
+    ]
 
 
 def _processor_budget_key(request: ProcessorRequest, *, task_id: str | None) -> str:

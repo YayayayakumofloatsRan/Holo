@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -37,6 +38,23 @@ class ProcessorOutcome:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProcessorStreamEvent:
+    event_type: str
+    request_id: str
+    sequence: int
+    delta: JsonObject = field(default_factory=dict)
+
+    def to_dict(self) -> JsonObject:
+        return {
+            "schema": "holo.kernel_v3.processor_stream_event.v1",
+            "event_type": self.event_type,
+            "request_id": self.request_id,
+            "sequence": self.sequence,
+            "delta": dict(self.delta),
+        }
+
+
+@dataclass(frozen=True, kw_only=True)
 class FinalAnswer:
     status: str
     answer: str | None
@@ -63,6 +81,11 @@ class ProcessorProvider(Protocol):
     model: str
 
     def run(self, request: ProcessorRequest) -> ProcessorResult:
+        ...
+
+
+class StreamingProcessorProvider(ProcessorProvider, Protocol):
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
         ...
 
 

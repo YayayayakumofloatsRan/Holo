@@ -11,6 +11,12 @@ from kernel_v3.processors.contracts import JsonSchema
 from kernel_v3.processors.fabric import ProcessorFabric
 from kernel_v3.result import AgentResult
 from kernel_v3.session import TaskState
+from kernel_v3.tool_result_budget import (
+    ToolResultReplacementState,
+    apply_tool_result_replacement_budget,
+    reconstruct_tool_result_replacement_state,
+)
+from kernel_v3.tool_runtime import tool_runtime_spec_for_action
 from kernel_v3.tool_use import (
     StreamingToolExecutor,
     ToolExecutionEvent,
@@ -643,6 +649,30 @@ class DeepAgentLoopController(LoopControllerV3):
     ) -> Observation:
         statuses = {item.observation.status for item in execution_items}
         status = "ok" if statuses == {"ok"} else "failed" if statuses == {"failed"} else "partial"
+        results = [
+            {
+                "tool_call_id": item.tool_call_id,
+                "action_id": item.action.action_id,
+                "tool": item.action.name,
+                "status": item.observation.status,
+                "source": item.observation.source,
+                "kind": item.observation.kind,
+                "observation_id": item.observation.observation_id,
+                "policy": item.policy_reason,
+                "artifact_refs": [
+                    artifact.artifact_id
+                    for artifact in item.artifact_refs
+                    if hasattr(artifact, "artifact_id")
+                ],
+                "content_preview": _preview_json_value(item.observation.content),
+                "content_projection": project_tool_result_content(item.observation.content).to_dict(),
+            }
+            for item in execution_items
+        ]
+        results, new_replacements = apply_tool_result_replacement_budget(
+            results,
+            self._tool_result_replacement_state(task.task_id),
+        )
         return Observation(
             observation_id=f"obs-{turn.turn_id}-{step_id}-tool-batch",
             run_id=task.run_id,
@@ -653,31 +683,25 @@ class DeepAgentLoopController(LoopControllerV3):
                 "schema": "holo.kernel_v3.deep_tool_batch_result.v1",
                 "turn_id": turn.turn_id,
                 "tool_call_count": len(execution_items),
-                "results": [
-                    {
-                        "tool_call_id": item.tool_call_id,
-                        "action_id": item.action.action_id,
-                        "tool": item.action.name,
-                        "status": item.observation.status,
-                        "source": item.observation.source,
-                        "kind": item.observation.kind,
-                        "observation_id": item.observation.observation_id,
-                        "policy": item.policy_reason,
-                        "artifact_refs": [
-                            artifact.artifact_id
-                            for artifact in item.artifact_refs
-                            if hasattr(artifact, "artifact_id")
-                        ],
-                        "content_preview": _preview_json_value(item.observation.content),
-                        "content_projection": project_tool_result_content(item.observation.content).to_dict(),
-                    }
-                    for item in execution_items
-                ],
+                "results": results,
+                "new_replacements": new_replacements,
+                "replacement_state": self._tool_result_replacement_state(task.task_id).to_dict(),
             },
             observed_at_ms=self.clock_ms(),
             action_id=None,
             tool_call_id=None,
         )
+
+    def _tool_result_replacement_state(self, task_id: str) -> ToolResultReplacementState:
+        state_by_task = getattr(self, "_tool_result_replacement_state_by_task", None)
+        if not isinstance(state_by_task, dict):
+            state_by_task = {}
+            setattr(self, "_tool_result_replacement_state_by_task", state_by_task)
+        state = state_by_task.get(task_id)
+        if not isinstance(state, ToolResultReplacementState):
+            state = reconstruct_tool_result_replacement_state(self.journal.records(task_id=task_id, kind="observation"))
+            state_by_task[task_id] = state
+        return state
 
     def _append_assistant_turn(self, task: TaskState, turn: AssistantTurn, *, step_id: str) -> None:
         self.journal.append(
@@ -917,10 +941,7 @@ def _partition_execution_batches(items: list[_PreparedToolCall]) -> list[list[_P
 
 
 def _is_concurrency_safe(action: CandidateAction, manifest: Any) -> bool:
-    side_effect = str(getattr(manifest, "side_effect_class", action.side_effect_class) or action.side_effect_class)
-    schema = getattr(manifest, "input_schema", {})
-    explicit = schema.get("concurrency_safe") if isinstance(schema, dict) else None
-    return explicit is True and side_effect in {"none", "read", "network"}
+    return tool_runtime_spec_for_action(action, manifest).concurrency_safe
 
 
 def _execution_item_failed(item: _ToolExecutionItem) -> bool:

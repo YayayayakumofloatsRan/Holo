@@ -98,6 +98,22 @@ def tool_runtime_spec_for_action(
     )
 
 
+def tool_runtime_spec_for_manifest(manifest: ToolManifest) -> ToolRuntimeSpec:
+    return tool_runtime_spec_for_action(
+        CandidateAction(
+            action_id=f"manifest-{manifest.name}-runtime",
+            kind="tool",
+            name=manifest.name,
+            description=manifest.description,
+            score=1.0,
+            payload={},
+            reasons=["manifest_runtime_projection"],
+            side_effect_class=manifest.side_effect_class,
+        ),
+        manifest,
+    )
+
+
 def _bool(value: object, *, default: bool) -> bool:
     if isinstance(value, bool):
         return value

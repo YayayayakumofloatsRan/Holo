@@ -417,6 +417,7 @@ def _manifest(
     permissions_required: list[str] | None = None,
     enabled: bool = True,
     input_schema: JsonObject | None = None,
+    runtime: JsonObject | None = None,
 ) -> ToolManifest:
     return ToolManifest(
         name=name,
@@ -428,6 +429,7 @@ def _manifest(
         enabled=enabled,
         description=f"{resource_kind}.{operator_kind}",
         input_schema=input_schema or {},
+        runtime=runtime or {},
     )
 
 
@@ -453,6 +455,7 @@ def _workspace_input_schema(name: str) -> JsonObject:
                 "description": "Workspace-relative directory path. Defaults to the workspace root.",
             },
             "max_entries": {"type": "int", "required": False, "min": 1, "max": WORKSPACE_LIST_MAX_ENTRIES},
+            "_runtime": {"concurrency_safe": True, "read_only": True, "max_result_size_chars": 20000},
         }
     if name == "workspace.search":
         return {
@@ -464,6 +467,7 @@ def _workspace_input_schema(name: str) -> JsonObject:
                 "description": "Non-empty search query. If a target file path is known, use it as query.",
             },
             "max_matches": {"type": "int", "required": False, "min": 1, "max": WORKSPACE_SEARCH_MAX_MATCHES},
+            "_runtime": {"concurrency_safe": True, "read_only": True, "max_result_size_chars": 30000},
         }
     if name == "file.read":
         return {
@@ -472,7 +476,8 @@ def _workspace_input_schema(name: str) -> JsonObject:
                 "required": True,
                 "min_length": 1,
                 "description": "Workspace-relative file path.",
-            }
+            },
+            "_runtime": {"concurrency_safe": True, "read_only": True, "max_result_size_chars": "infinity"},
         }
     if name == "workspace.write":
         return {
@@ -508,6 +513,7 @@ def _system_time_manifest() -> ToolManifest:
                 "description": "IANA timezone name such as Asia/Shanghai or UTC. Defaults to the host local timezone.",
             }
         },
+        runtime={"concurrency_safe": True, "read_only": True, "max_result_size_chars": 4000},
     )
 
 
