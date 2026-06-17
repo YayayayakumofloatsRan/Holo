@@ -70,6 +70,28 @@ def test_journal_store_replaces_lone_surrogates_before_hashing_and_writing():
         _unlink(journal_path)
 
 
+def test_journal_store_skips_partial_jsonl_rows_and_records_load_warning(tmp_path: Path):
+    journal_path = tmp_path / "journal.jsonl"
+    index_path = tmp_path / "journal.sqlite"
+    seed = JournalStore(journal_path=journal_path)
+    record = seed.append(
+        task_id="task-1",
+        run_id="run-1",
+        step_id=None,
+        kind="event",
+        data={"ok": True},
+    )
+    with journal_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"schema_version":1,"record_id":"partial"\n')
+
+    reloaded = JournalStore(journal_path=journal_path, index_path=index_path)
+
+    assert reloaded.records() == [record]
+    assert reloaded.load_warnings[0]["line_number"] == 2
+    assert reloaded.load_warnings[0]["error"] == "JSONDecodeError"
+    assert "partial" in reloaded.load_warnings[0]["preview"]
+
+
 def test_phase0_journal_alias_uses_durable_store():
     journal_path = Path("kernel_v3/.test-phase1-journal-alias.jsonl")
     _unlink(journal_path)

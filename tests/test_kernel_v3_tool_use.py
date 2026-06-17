@@ -189,6 +189,41 @@ def test_streaming_tool_executor_bounds_concurrent_safe_batch() -> None:
     assert peak <= 2
 
 
+def test_streaming_tool_executor_incremental_mode_gates_exclusive_tools() -> None:
+    executor = StreamingToolExecutor(max_concurrency=2)
+    trace: list[str] = []
+
+    def execute_one(item: str) -> dict[str, object]:
+        trace.append(f"start:{item}")
+        if item == "slow-safe":
+            time.sleep(0.05)
+        if item == "exclusive":
+            time.sleep(0.01)
+        trace.append(f"end:{item}")
+        return {"status": "ok", "item": item}
+
+    executor.begin_incremental(
+        execute_one=execute_one,
+        is_concurrency_safe=lambda item: item != "exclusive",
+        is_failed=lambda outcome: outcome["status"] != "ok",
+    )
+    try:
+        executor.add_item("slow-safe")
+        executor.add_item("fast-safe")
+        time.sleep(0.02)
+        outcomes = executor.drain_completed()
+        executor.add_item("exclusive")
+        executor.add_item("after-safe")
+        outcomes.extend(executor.finish_remaining())
+    finally:
+        executor.close()
+
+    assert {outcome["item"] for outcome in outcomes} == {"slow-safe", "fast-safe", "exclusive", "after-safe"}
+    assert trace.index("start:fast-safe") < trace.index("end:slow-safe")
+    assert trace.index("end:slow-safe") < trace.index("start:exclusive")
+    assert trace.index("end:exclusive") < trace.index("start:after-safe")
+
+
 def test_streaming_tool_executor_failure_cancel_callback_can_keep_independent_reads() -> None:
     executor = StreamingToolExecutor(max_concurrency=1)
     calls: list[str] = []

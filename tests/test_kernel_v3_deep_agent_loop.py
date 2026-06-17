@@ -121,15 +121,22 @@ def test_deep_agent_loop_executes_multi_tool_turn_and_journals_batch() -> None:
     assert {item["content_projection"]["shape"]["type"] for item in batch.data["content"]["results"]} == {"object"}
     assert all("payload" in item["content_projection"]["shape"]["keys"] for item in batch.data["content"]["results"])
     events = journal.records(task_id=result.task_id, kind="tool_execution_event")
-    assert [record.data["event_type"] for record in events] == [
-        "queued",
-        "started",
+    assert sorted(record.data["event_type"] for record in events) == [
+        "completed",
         "completed",
         "queued",
+        "queued",
         "started",
-        "completed",
+        "started",
     ]
     assert {record.data["tool_call_id"] for record in events} == {"call-alpha", "call-beta"}
+    for tool_call_id in {"call-alpha", "call-beta"}:
+        lifecycle = [
+            record.data["event_type"]
+            for record in events
+            if record.data["tool_call_id"] == tool_call_id
+        ]
+        assert lifecycle == ["queued", "started", "completed"]
     individual = [
         record
         for record in journal.records(task_id=result.task_id, kind="observation")
@@ -719,6 +726,57 @@ def test_deep_agent_loop_scaffold_does_not_mark_candidate_queries_as_attempted()
 
     assert scaffold is not None
     assert scaffold.tool_calls[0].arguments["query"] == sec_url
+
+
+def test_deep_agent_loop_scaffold_stops_after_network_budget_guard() -> None:
+    journal = JournalStore.in_memory()
+    task_id = "task-workbench-network-guard"
+    run_id = "run-1"
+    workbench = journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-4",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "continue",
+            "missing_slots": ["net_ppe_2018"],
+            "next_queries": ["3M 2018 10-K balance sheet PP&E"],
+            "next_document_targets": ["https://www.sec.gov/Archives/edgar/data/66740/000006674019000011/0000066740-19-000011-index.htm"],
+            "next_source_families": ["sec_edgar"],
+        },
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-5",
+        kind="observation",
+        data={
+            "kind": "host_guard",
+            "status": "blocked",
+            "content": {"reason": "max_network_fetches"},
+            "workbench_ref": workbench.record_id,
+        },
+    )
+    feedback = Feedback(
+        feedback_id="fb-workbench-followup",
+        run_id=run_id,
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=["retrieval_workbench_followup", "workbench_missing:net_ppe_2018"],
+    )
+
+    scaffold = _workbench_followup_scaffold_turn(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        input_text="What is the year end FY2018 net PPNE for 3M?",
+        feedback=feedback,
+        proposed_turn=AssistantTurn(turn_id="turn-no-tool", message=None, tool_calls=[]),
+    )
+
+    assert scaffold is None
 
 
 def test_deep_agent_loop_returns_parse_errors_as_observations_for_replanning() -> None:

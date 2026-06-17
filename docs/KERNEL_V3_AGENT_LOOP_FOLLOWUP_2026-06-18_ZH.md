@@ -222,3 +222,111 @@ Docling、Trafilatura、OpenBB、DuckDB、SymPy、slot_bind、calculator、verif
 说明：这是金融工具接口和 loop 调度成熟度修复，不是 FinanceBench/FQA/FAB 分数。
 下一步仍需要 live debug50 类型簇验证这些 runtime/schema hints 是否让模型更少
 走错期间、更稳定地组合 retrieval/SEC/document/calculator/slot_bind。
+
+## 10. Mature-loop incremental executor checkpoint
+
+用户再次指出应优先照搬成熟 agent loop 的实现，而不是继续自研低层循环。本轮
+对照 TypeScript 项目的 `StreamingToolExecutor.addTool(...)`、
+`getCompletedResults(...)`、`getRemainingResults(...)`、`discard(...)` 后，
+发现 Holo 仍有一个结构性问题：non-streaming 工具批处理使用
+`StreamingToolExecutor.execute_batches(...)`，但 provider streaming 路径在
+`DeepAgentLoopController._execute_streaming_turn(...)` 内部另写了一套
+`pending + ThreadPoolExecutor + wait_for_streaming_slot`。
+
+这会造成同一个 agent loop 有两套并发/顺序/取消/超时语义。短期看像是某道
+FinanceBench 题没做出，长期看是 loop 理论能力不稳：同一批工具在 JSON planner
+和 native streaming planner 下可能有不同执行边界。
+
+本轮补齐：
+
+- `StreamingToolExecutor` 升级为真正的增量状态机，新增
+  `begin_incremental(...)`、`add_item(...)`、`drain_completed(...)`、
+  `finish_remaining(...)`、`discard()`、`close()`。
+- `execute_batches(...)` 不再维护另一套批处理逻辑，而是复用同一个增量状态机。
+- 增量 executor 保留成熟实现的核心语义：concurrency-safe 工具可并发启动；
+  非 concurrency-safe 工具必须独占；exclusive 工具会阻塞其后的 safe 工具；
+  结果在安全时可提前 drain；每个工具生命周期继续发出 queued/started/completed
+  或 cancelled 事件。
+- `_execute_streaming_turn(...)` 删除本地 pending future 调度，provider
+  `tool_call_delta` 一旦形成完整工具调用，就通过同一个 executor 增量加入。
+  这使 streaming 与 non-streaming 路径共享失败取消、超时、progress、事件记录
+  和工具结果回收语义。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_tool_use.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_provider_native_tools.py -q
+```
+
+结果：
+
+- `10 passed in 0.32s`
+- `29 passed in 3.34s`
+
+说明：这是 mature-loop 架构迁移，不是新的金融 benchmark 分数。它的意义在于
+把工具调用 substrate 从“双路径实现”推进到“同一 executor 合同”，为后续
+debug50 类型簇 live 调试提供更稳定的理论基础。
+
+## 11. Live stability and convergence checkpoint
+
+在增量 executor 迁移后，本轮继续做了一次真实 live 单题探针，仍使用
+`financebench_id_04672`。该探针不是成绩，而是线上诊断；gold/reference 没有进入
+模型上下文。
+
+先暴露出一个稳定性问题：默认全局 journal 曾包含半截 JSONL 行，旧
+`JournalStore` 初始化时一次性 `read_text(...).splitlines()` 并直接解析，导致
+CLI 在 live 开始前因 `JSONDecodeError` 崩溃，也会对大 journal 带来不必要内存
+压力。本轮将 journal 加载改为逐行流式读取，遇到损坏/半截行时跳过并记录
+`load_warnings`，不再让历史 partial row 阻断新的 isolated live run。
+
+随后使用 isolated journal 运行：
+
+```text
+.state/kernel_v3/bench/finance/fb_debug50_o001_l001_incremental_executor_journalfix_20260618.*
+```
+
+该 run 证明 streaming executor 和 workbench follow-up scaffold 能进入真实
+`retrieval.run` 路径，但在 `--live-max-network-fetches 8` 下触发 host guard 后，
+后续 evaluator 仍反复要求同一类 workbench follow-up。为避免 host 自动生成一个
+它已经知道会被同一 guard 阻塞的动作，本轮让
+`_workbench_followup_scaffold_turn(...)` 检查最近同一 workbench decision 之后
+是否已经出现 `reason=max_network_fetches` 的 host guard。若出现，则不再自动
+scaffold 同一 follow-up，而是把控制权交回模型重规划。这个修复不选择答案事实，
+也不绕过 guard。
+
+再用更高 fetch budget 做第二次真实 live 探针：
+
+```text
+.state/kernel_v3/bench/finance/fb_debug50_o001_l001_guardaware_20260618.*
+```
+
+该 run 被手动中断，没有产生 benchmark row，因此不能报告准确率。它暴露出更上层
+的通用收敛问题：模型/工具链拿到了 3M Wikipedia 和错误期间的 3M 2018 PDF 后，
+`document.docling.convert`、`sec.edgar.financials`、`shell.exec` 等工具结果混合
+进入 fact/claim ledger；slot/target-document binding 能把这些错源打低分或拒绝，
+但 final numeric repair 又触发新的 `task.compile`，导致上下文继续膨胀，而不是
+压缩成“错源已排除、必须重新定位 FY2022 10-K/目标行项目”的工作台状态。
+
+因此本轮真实 live 的结论是：
+
+- UbuntuHolo 稳定性边界可控；内存保持稳定，失控前已手动中断。
+- executor/tool surface 已向成熟 loop 靠拢，但还缺“错误证据隔离”和“工作台压缩
+  后重规划”的上层合同。
+- 下一步不能再围绕某个答案写题目补丁，应继续照搬成熟 agent loop 的状态机思想：
+  tool result 进入可替换工作台，错源进入 rejected-evidence ledger，模型下一轮只
+  看到必要 trace 和可调用工具，而不是完整错误事实洪水。
+
+新增/回归结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_phase1_journal_store.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_tool_use.py -q
+```
+
+已覆盖：
+
+- partial/corrupt JSONL row 不再阻断 journal store 初始化；
+- incremental executor 在 streaming/non-streaming 路径共享并发和独占语义；
+- workbench follow-up 在同一 network budget guard 后停止自动重复 scaffold。

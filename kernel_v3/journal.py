@@ -29,12 +29,9 @@ class JournalStore:
         self.path = Path(journal_path) if journal_path is not None else None
         self.index_path = Path(index_path) if index_path is not None else None
         self._records: list[LedgerRecord] = []
+        self.load_warnings: list[JsonObject] = []
         if self.path is not None and self.path.exists():
-            self._records = [
-                LedgerRecord.from_dict(json.loads(line))
-                for line in self.path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
+            self._records = self._load_records(self.path)
         if self.index_path is not None:
             self._rebuild_index()
 
@@ -173,6 +170,25 @@ class JournalStore:
             raise RuntimeError("index_path is not configured")
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         return sqlite3.connect(self.index_path)
+
+    def _load_records(self, path: Path) -> list[LedgerRecord]:
+        records: list[LedgerRecord] = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    records.append(LedgerRecord.from_dict(json.loads(line)))
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                    self.load_warnings.append(
+                        {
+                            "path": str(path),
+                            "line_number": line_number,
+                            "error": type(exc).__name__,
+                            "preview": line.strip()[:200],
+                        }
+                    )
+        return records
 
     def _rebuild_index(self) -> None:
         conn = self._connect()

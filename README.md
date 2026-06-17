@@ -212,6 +212,25 @@ tools can call the shared helpers to emit `progress` events and honor host
 abort requests. Provider-native tool exposure now respects runtime loading hints:
 `always_load` tools are prioritized, while `should_defer` tools are summarized
 for discovery instead of flooding the provider `tools` payload.
+The 2026-06-18 mature-loop continuation upgrades `StreamingToolExecutor` from
+batch-only execution to a reusable incremental state machine with
+`begin_incremental`, `add_item`, `drain_completed`, `finish_remaining`,
+`discard`, and `close`. `DeepAgentLoopController` now uses that same executor
+for provider streaming tool calls instead of maintaining a separate pending
+future scheduler, so JSON-turn and native streaming paths share the same
+concurrency-safe, exclusive-tool, timeout, progress, cancellation, and
+journal-event semantics. This is architecture/tool-loop readiness, not a
+FinanceBench or FinQA score.
+The same follow-up document now records the next live stability checkpoint:
+`JournalStore` loads JSONL line-by-line and records warnings for partial rows,
+so a damaged historical ledger no longer prevents isolated live runs from
+starting. Workbench follow-up scaffolding also stops auto-repeating the same
+retrieval action after a `max_network_fetches` host guard. A real
+`financebench_id_04672` probe was manually interrupted after exposing a higher
+level convergence issue: wrong-source evidence could still enter fact/claim
+ledgers and make final numeric repair trigger another task compile instead of
+compressing rejected evidence into a clean replanning state. This is live loop
+diagnostic evidence, not a benchmark accuracy result.
 The latest P0 continuation extends provider-message replacement beyond prompt
 strings: deep-loop assistant prompts, `ProcessorFabric` JSON prompts, request
 parameters, OpenAI-compatible `provider_messages`, and structured provider

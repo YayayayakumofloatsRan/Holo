@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -501,25 +501,22 @@ class DeepAgentLoopController(LoopControllerV3):
         executed_chunk_keys: set[str] = set()
         tool_call_requests: list[ToolCallRequest] = []
         execution_items: list[_ToolExecutionItem] = []
-        pending: list[tuple[_PreparedToolCall, Future[_ToolExecutionItem]]] = []
-
-        pool = ThreadPoolExecutor(max_workers=4)
+        executor = StreamingToolExecutor(
+            emit_event=lambda event: self._append_tool_execution_event(task, step_id=step_id, event=event),
+            max_concurrency=4,
+        )
+        executor.begin_incremental(
+            execute_one=lambda item: self._execute_prepared_tool_with_timeout(task, step_id, item),
+            is_concurrency_safe=lambda item: _is_concurrency_safe(item.action, item.manifest),
+            cancel_pending_on_failure=True,
+            is_failed=_execution_item_failed,
+            failure_cancels_siblings=_tool_failure_cancels_siblings,
+            cancel_one=lambda item, reason: self._cancelled_execution_item(task, step_id=step_id, prepared=item, reason=reason),
+        )
         try:
-            def finish_pending(
-                items: list[tuple[_PreparedToolCall, Future[_ToolExecutionItem]]] | None = None,
-            ) -> None:
+            def record_execution_items(items: list[_ToolExecutionItem]) -> None:
                 nonlocal network_fetches, total_artifact_bytes
-                selected = list(items or pending)
-                if not selected:
-                    return
-                selected_ids = {id(item[1]) for item in selected}
-                remaining: list[tuple[_PreparedToolCall, Future[_ToolExecutionItem]]] = []
-                for existing in pending:
-                    if id(existing[1]) not in selected_ids:
-                        remaining.append(existing)
-                pending[:] = remaining
-                for prepared, future in selected:
-                    item = self._finish_streaming_future(task, step_id=step_id, prepared=prepared, future=future)
+                for item in items:
                     execution_items.append(item)
                     if item.policy_allowed and item.policy_reason == "allowed" and self._is_network_action(item.action, manifest=item.manifest):
                         network_fetches += self._network_action_actual_cost(
@@ -531,20 +528,7 @@ class DeepAgentLoopController(LoopControllerV3):
                     self._append_tool_execution_observation(task, step_id=step_id, item=item)
 
             def drain_ready_streaming_tools() -> None:
-                ready = [(prepared, future) for prepared, future in pending if future.done()]
-                finish_pending(ready)
-
-            def wait_for_streaming_slot(prepared: _PreparedToolCall) -> None:
-                while True:
-                    drain_ready_streaming_tools()
-                    running = [(item, future) for item, future in pending if not future.done()]
-                    if not running:
-                        return
-                    if _is_concurrency_safe(prepared.action, prepared.manifest) and all(
-                        _is_concurrency_safe(item.action, item.manifest) for item, _future in running
-                    ):
-                        return
-                    finish_pending([running[0]])
+                record_execution_items(executor.drain_completed())
 
             for event in stream.events:
                 drain_ready_streaming_tools()
@@ -630,18 +614,7 @@ class DeepAgentLoopController(LoopControllerV3):
                         tool_calls=tool_calls,
                         network_fetches=network_fetches,
                     )
-                    wait_for_streaming_slot(prepared)
-                    self._append_tool_execution_event(
-                        task,
-                        step_id=step_id,
-                        event=_prepared_tool_execution_event("queued", prepared),
-                    )
-                    self._append_tool_execution_event(
-                        task,
-                        step_id=step_id,
-                        event=_prepared_tool_execution_event("started", prepared),
-                    )
-                    pending.append((prepared, pool.submit(self._execute_prepared_tool, task, step_id, prepared)))
+                    executor.add_item(prepared)
 
             for offset, (chunk_key, chunk) in enumerate(tool_chunks.items(), start=1):
                 if chunk_key in executed_chunk_keys:
@@ -661,9 +634,9 @@ class DeepAgentLoopController(LoopControllerV3):
                 execution_items.append(item)
                 self._append_tool_execution_observation(task, step_id=step_id, item=item)
 
-            finish_pending()
+            record_execution_items(executor.finish_remaining())
         finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+            executor.close()
 
         text = "".join(text_parts) or final_text
         parsed = _try_parse_json_object(text)
@@ -691,40 +664,6 @@ class DeepAgentLoopController(LoopControllerV3):
             network_fetches=network_fetches,
             total_artifact_bytes=total_artifact_bytes,
         )
-
-    def _finish_streaming_future(
-        self,
-        task: TaskState,
-        *,
-        step_id: str,
-        prepared: _PreparedToolCall,
-        future: Future[_ToolExecutionItem],
-    ) -> _ToolExecutionItem:
-        timeout = prepared.control.timeout_seconds
-        try:
-            item = future.result(timeout=timeout)
-        except FutureTimeoutError:
-            prepared.control.abort_signal.request("tool_timeout")
-            self._append_tool_execution_event(
-                task,
-                step_id=step_id,
-                event=_prepared_tool_execution_event(
-                    "abort_requested",
-                    prepared,
-                    detail={"reason": "tool_timeout", "timeout_seconds": timeout},
-                ),
-            )
-            try:
-                item = future.result(timeout=0.25)
-            except FutureTimeoutError:
-                future.cancel()
-                item = self._timeout_execution_item(task, step_id=step_id, prepared=prepared, reason="tool_timeout")
-        self._append_tool_execution_event(
-            task,
-            step_id=step_id,
-            event=_prepared_tool_execution_event("completed", prepared, outcome=item),
-        )
-        return item
 
     def _handle_terminal_turn(
         self,
@@ -1569,6 +1508,13 @@ def _workbench_followup_scaffold_turn(
     decision = str(data.get("decision") or "")
     if data.get("status") != "ok" or decision not in {"continue", "fail_with_limitations"}:
         return None
+    if _network_budget_guard_seen_after_record(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        record_id=str(getattr(record, "record_id", "") or ""),
+    ):
+        return None
     next_document_targets = _json_string_list(data.get("next_document_targets"))
     next_queries = _ordered_unique_strings([*_json_string_list(data.get("next_queries")), *next_document_targets])
     source_families = _json_string_list(data.get("next_source_families"))
@@ -1924,6 +1870,34 @@ def _attempted_retrieval_queries(journal: Any, *, task_id: str, run_id: str) -> 
         if isinstance(query, str) and query.strip():
             attempted.add(query.strip().casefold())
     return attempted
+
+
+def _network_budget_guard_seen_after_record(
+    journal: Any,
+    *,
+    task_id: str,
+    run_id: str,
+    record_id: str,
+) -> bool:
+    if not record_id:
+        return False
+    records = getattr(journal, "records", None)
+    if not callable(records):
+        return False
+    seen_anchor = False
+    for record in records(task_id=task_id):
+        if getattr(record, "run_id", None) != run_id:
+            continue
+        if getattr(record, "record_id", None) == record_id:
+            seen_anchor = True
+            continue
+        if not seen_anchor or getattr(record, "kind", None) != "observation":
+            continue
+        data = record.data if isinstance(record.data, dict) else {}
+        content = data.get("content") if isinstance(data.get("content"), dict) else {}
+        if data.get("kind") == "host_guard" and content.get("reason") == "max_network_fetches":
+            return True
+    return False
 
 
 def _source_family_followup_query(input_text: str, *, source_families: list[str], missing_slots: list[str]) -> str:

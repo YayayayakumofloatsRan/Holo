@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
@@ -117,6 +117,16 @@ class ToolResultProjection:
         }
 
 
+@dataclass
+class _TrackedExecution:
+    item: Any
+    is_concurrency_safe: bool
+    status: str = "queued"
+    future: Future[Any] | None = None
+    outcome: Any | None = None
+    completed_event_emitted: bool = False
+
+
 class StreamingToolExecutor:
     """Evented single-agent tool executor.
 
@@ -134,6 +144,16 @@ class StreamingToolExecutor:
     ) -> None:
         self.emit_event = emit_event
         self.max_concurrency = max(1, int(max_concurrency or 1))
+        self._incremental_items: list[_TrackedExecution] = []
+        self._incremental_pool: ThreadPoolExecutor | None = None
+        self._incremental_execute_one: Callable[[Any], Any] | None = None
+        self._incremental_is_concurrency_safe: Callable[[Any], bool] | None = None
+        self._incremental_cancel_pending_on_failure = False
+        self._incremental_is_failed: Callable[[Any], bool] | None = None
+        self._incremental_failure_cancels_siblings: Callable[[Any, Any], bool] | None = None
+        self._incremental_cancel_one: Callable[[Any, str], Any] | None = None
+        self._incremental_failure_seen = False
+        self._discarded = False
 
     def execute_batches(
         self,
@@ -146,61 +166,163 @@ class StreamingToolExecutor:
         failure_cancels_siblings: Callable[[Any, Any], bool] | None = None,
         cancel_one: Callable[[Any, str], Any] | None = None,
     ) -> list[Any]:
+        self.begin_incremental(
+            execute_one=execute_one,
+            is_concurrency_safe=is_concurrency_safe,
+            cancel_pending_on_failure=cancel_pending_on_failure,
+            is_failed=is_failed,
+            failure_cancels_siblings=failure_cancels_siblings,
+            cancel_one=cancel_one,
+        )
+        try:
+            for item in items:
+                self.add_item(item)
+            return self.finish_remaining()
+        finally:
+            self.close()
+
+    def begin_incremental(
+        self,
+        *,
+        execute_one: Callable[[Any], Any],
+        is_concurrency_safe: Callable[[Any], bool],
+        cancel_pending_on_failure: bool = False,
+        is_failed: Callable[[Any], bool] | None = None,
+        failure_cancels_siblings: Callable[[Any, Any], bool] | None = None,
+        cancel_one: Callable[[Any, str], Any] | None = None,
+    ) -> None:
+        self.close()
+        self._discarded = False
+        self._incremental_items = []
+        self._incremental_execute_one = execute_one
+        self._incremental_is_concurrency_safe = is_concurrency_safe
+        self._incremental_cancel_pending_on_failure = bool(cancel_pending_on_failure)
+        self._incremental_is_failed = is_failed
+        self._incremental_failure_cancels_siblings = failure_cancels_siblings
+        self._incremental_cancel_one = cancel_one
+        self._incremental_failure_seen = False
+        self._incremental_pool = ThreadPoolExecutor(max_workers=self.max_concurrency)
+
+    def add_item(self, item: Any) -> None:
+        if self._discarded:
+            return
+        if self._incremental_pool is None or self._incremental_is_concurrency_safe is None:
+            raise RuntimeError("begin_incremental must be called before add_item")
+        tracked = _TrackedExecution(
+            item=item,
+            is_concurrency_safe=bool(self._incremental_is_concurrency_safe(item)),
+        )
+        self._incremental_items.append(tracked)
+        self._emit("queued", item)
+        self._process_incremental_queue()
+
+    def drain_completed(self) -> list[Any]:
+        if self._discarded:
+            return []
+        self._process_incremental_queue()
         outcomes: list[Any] = []
-        for batch in _partition_batches(items, is_concurrency_safe=is_concurrency_safe):
-            for item in batch:
-                self._emit("queued", item)
-            if len(batch) > 1 and all(is_concurrency_safe(item) for item in batch):
-                with ThreadPoolExecutor(max_workers=min(len(batch), self.max_concurrency)) as pool:
-                    futures = []
-                    for item in batch:
-                        futures.append((item, pool.submit(self._execute_with_started_event, item, execute_one)))
-                    batch_outcomes = []
-                    failure_seen = False
-                    for item, future in futures:
-                        if failure_seen and cancel_pending_on_failure and future.cancel():
-                            cancelled = _cancelled_outcome(item, cancel_one, "sibling_tool_failed")
-                            self._emit("cancelled", item, outcome=cancelled)
-                            batch_outcomes.append(cancelled)
-                            continue
-                        outcome = future.result()
-                        self._emit("completed", item, outcome=outcome)
-                        if _outcome_cancels_siblings(
-                            item,
-                            outcome,
-                            cancel_pending_on_failure=cancel_pending_on_failure,
-                            is_failed=is_failed,
-                            failure_cancels_siblings=failure_cancels_siblings,
-                        ):
-                            failure_seen = True
-                        batch_outcomes.append(outcome)
-            else:
-                batch_outcomes = []
-                failure_seen = False
-                for item in batch:
-                    if failure_seen and cancel_pending_on_failure:
-                        cancelled = _cancelled_outcome(item, cancel_one, "sibling_tool_failed")
-                        self._emit("cancelled", item, outcome=cancelled)
-                        batch_outcomes.append(cancelled)
-                        continue
-                    self._emit("started", item)
-                    outcome = execute_one(item)
-                    self._emit("completed", item, outcome=outcome)
-                    if _outcome_cancels_siblings(
-                        item,
-                        outcome,
-                        cancel_pending_on_failure=cancel_pending_on_failure,
-                        is_failed=is_failed,
-                        failure_cancels_siblings=failure_cancels_siblings,
-                    ):
-                        failure_seen = True
-                    batch_outcomes.append(outcome)
-            outcomes.extend(batch_outcomes)
+        for tracked in self._incremental_items:
+            if tracked.status == "yielded":
+                continue
+            self._refresh_incremental_completion(tracked, block=False)
+            if tracked.status == "completed":
+                tracked.status = "yielded"
+                outcomes.append(tracked.outcome)
+                continue
+            if tracked.status == "running" and not tracked.is_concurrency_safe:
+                break
+        self._process_incremental_queue()
         return outcomes
+
+    def finish_remaining(self) -> list[Any]:
+        outcomes: list[Any] = []
+        while not self._discarded and any(item.status != "yielded" for item in self._incremental_items):
+            drained = self.drain_completed()
+            if drained:
+                outcomes.extend(drained)
+                continue
+            running = [item.future for item in self._incremental_items if item.status == "running" and item.future is not None]
+            if running:
+                wait(running, return_when=FIRST_COMPLETED)
+                continue
+            self._process_incremental_queue()
+            queued = [item for item in self._incremental_items if item.status == "queued"]
+            if not queued:
+                break
+        outcomes.extend(self.drain_completed())
+        return outcomes
+
+    def discard(self) -> None:
+        self._discarded = True
+        for tracked in self._incremental_items:
+            if tracked.status == "queued":
+                tracked.status = "yielded"
+            elif tracked.status == "running" and tracked.future is not None:
+                tracked.future.cancel()
+        self.close()
+
+    def close(self) -> None:
+        if self._incremental_pool is not None:
+            self._incremental_pool.shutdown(wait=False, cancel_futures=True)
+            self._incremental_pool = None
 
     def _execute_with_started_event(self, item: Any, execute_one: Callable[[Any], Any]) -> Any:
         self._emit("started", item)
         return execute_one(item)
+
+    def _process_incremental_queue(self) -> None:
+        if self._discarded:
+            return
+        if self._incremental_pool is None or self._incremental_execute_one is None:
+            return
+        for tracked in self._incremental_items:
+            if tracked.status == "running":
+                self._refresh_incremental_completion(tracked, block=False)
+        for tracked in self._incremental_items:
+            if tracked.status != "queued":
+                continue
+            if self._incremental_failure_seen and self._incremental_cancel_pending_on_failure:
+                tracked.outcome = _cancelled_outcome(tracked.item, self._incremental_cancel_one, "sibling_tool_failed")
+                tracked.status = "completed"
+                self._emit("cancelled", tracked.item, outcome=tracked.outcome)
+                continue
+            if not self._can_start_incremental(tracked):
+                if not tracked.is_concurrency_safe:
+                    break
+                continue
+            tracked.status = "running"
+            tracked.future = self._incremental_pool.submit(
+                self._execute_with_started_event,
+                tracked.item,
+                self._incremental_execute_one,
+            )
+
+    def _can_start_incremental(self, tracked: _TrackedExecution) -> bool:
+        running = [item for item in self._incremental_items if item.status == "running"]
+        if len(running) >= self.max_concurrency:
+            return False
+        if not running:
+            return True
+        return tracked.is_concurrency_safe and all(item.is_concurrency_safe for item in running)
+
+    def _refresh_incremental_completion(self, tracked: _TrackedExecution, *, block: bool) -> None:
+        if tracked.status != "running" or tracked.future is None:
+            return
+        if not block and not tracked.future.done():
+            return
+        tracked.outcome = tracked.future.result()
+        tracked.status = "completed"
+        if not tracked.completed_event_emitted:
+            self._emit("completed", tracked.item, outcome=tracked.outcome)
+            tracked.completed_event_emitted = True
+        if _outcome_cancels_siblings(
+            tracked.item,
+            tracked.outcome,
+            cancel_pending_on_failure=self._incremental_cancel_pending_on_failure,
+            is_failed=self._incremental_is_failed,
+            failure_cancels_siblings=self._incremental_failure_cancels_siblings,
+        ):
+            self._incremental_failure_seen = True
 
     def _emit(self, event_type: str, item: Any, *, outcome: Any | None = None) -> None:
         if self.emit_event is None:
