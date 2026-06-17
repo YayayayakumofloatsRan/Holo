@@ -86,6 +86,8 @@ def compile_finance_task_program_model_first(
     context_id: str | None = None,
     processor_budget: JsonObject | None = None,
     llm_judgment_required: bool = False,
+    timeout_seconds: int = 120,
+    retry_on_failure: bool = True,
 ) -> CompiledTaskProgram:
     """Compile a finance task with the LLM as the semantic owner.
 
@@ -118,10 +120,13 @@ def compile_finance_task_program_model_first(
     }
     if processor_budget:
         parameters["processor_budget"] = processor_budget
+    if timeout_seconds != 120:
+        parameters["timeout_locked"] = True
     parameters["max_tokens"] = max(
         int(parameters.get("max_tokens") or 0),
         _task_compile_max_tokens(facts=facts, fallback=fallback),
     )
+    bounded_timeout = max(1, int(timeout_seconds))
     outcome = processor_fabric.run_json(
         task_type=TASK_COMPILE_TASK_TYPE,
         run_id=run_id,
@@ -135,10 +140,10 @@ def compile_finance_task_program_model_first(
         schema=TASK_COMPILE_SCHEMA,
         task_id=task_id,
         step_id=step_id,
-        timeout_seconds=120,
+        timeout_seconds=bounded_timeout,
         parameters=parameters,
     )
-    if outcome.result.status != "ok" or not isinstance(outcome.parsed, dict):
+    if retry_on_failure and (outcome.result.status != "ok" or not isinstance(outcome.parsed, dict)):
         retry_outcome = processor_fabric.run_json(
             task_type=TASK_COMPILE_TASK_TYPE,
             run_id=run_id,
@@ -154,7 +159,7 @@ def compile_finance_task_program_model_first(
             schema=TASK_COMPILE_SCHEMA,
             task_id=task_id,
             step_id=f"{step_id or 'task-compile'}-retry",
-            timeout_seconds=120,
+            timeout_seconds=bounded_timeout,
             parameters=parameters,
         )
         if retry_outcome.result.status == "ok" and isinstance(retry_outcome.parsed, dict):

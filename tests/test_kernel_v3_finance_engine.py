@@ -6097,6 +6097,33 @@ def test_model_first_finance_task_compiler_falls_back_on_invalid_model_output() 
     assert "capital_expenditures" in program.diagnostics["missing_slots"]
 
 
+def test_model_first_finance_task_compiler_can_disable_retry_and_bound_timeout() -> None:
+    journal = JournalStore.in_memory()
+    provider = FailingTaskCompileProvider()
+    fabric = ProcessorFabric(
+        providers={"fake_task_compile_fail": provider},
+        router=ProcessorRouter(default_provider="fake_task_compile_fail", default_model="fake-task-compile-fail"),
+        journal=journal,
+    )
+
+    program = compile_finance_task_program_model_first(
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+        facts=[],
+        processor_fabric=fabric,
+        task_id="task-compile-no-retry",
+        step_id="task-compile",
+        timeout_seconds=7,
+        retry_on_failure=False,
+    )
+
+    assert program.diagnostics["source"] == "finance_task_compiler"
+    assert program.diagnostics["task_compile_model"]["status"] == "fallback"
+    assert len(provider.requests) == 1
+    requests = journal.records(task_id="task-compile-no-retry", kind="processor_request")
+    assert len(requests) == 1
+    assert requests[0].data["parameters"]["timeout_seconds"] == 7
+
+
 def test_finance_capability_task_compiler_blocks_host_semantic_fallback_without_llm() -> None:
     program = compile_finance_task_program_model_first(
         question="Is 3M a capital-intensive business based on FY2022 data?",
@@ -13333,6 +13360,54 @@ def test_finance_capability_preflight_does_not_auto_compute_formula() -> None:
     assert not journal.records(task_id="task-llm-owned-preflight", kind="observation")
 
 
+def test_finance_final_preflight_task_compile_failure_is_bounded_and_non_blocking() -> None:
+    journal = JournalStore.in_memory()
+    provider = FailingTaskCompileProvider()
+    fabric = ProcessorFabric(
+        providers={"fake_task_compile_fail": provider},
+        router=ProcessorRouter(default_provider="fake_task_compile_fail", default_model="fake-task-compile-fail"),
+        journal=journal,
+    )
+    runtime = AgentRuntime(journal=journal, processor_fabric=fabric)
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-revenue",
+            title="TestCo 2024 10-K",
+            uri="https://www.sec.gov/Archives/testco-2024.htm",
+            text="entityName=TestCo metric=revenue label=Revenue unit=USD fy=2024 form=10-K value=200",
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-revenue")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "What was TestCo FY2024 revenue?",
+            "require_numeric_verifier": True,
+            "processor_budget": {"final_task_compile_timeout_seconds": 5},
+        },
+    )
+
+    runtime._run_finance_numeric_preflight(  # noqa: SLF001
+        "task-final-preflight-compile-failure",
+        "run-1",
+        recipe=recipe,
+        evidence=evidence,
+        citations=citations,
+    )
+
+    assert len(provider.requests) == 1
+    requests = journal.records(task_id="task-final-preflight-compile-failure", kind="processor_request")
+    assert len(requests) == 1
+    assert requests[0].data["processor"] == "task.compile"
+    assert requests[0].data["parameters"]["timeout_seconds"] == 5
+    assert journal.records(task_id="task-final-preflight-compile-failure", kind="finance_fact_ledger")
+    assert journal.records(task_id="task-final-preflight-compile-failure", kind="claim_ledger")
+    compiled = journal.records(task_id="task-final-preflight-compile-failure", kind="compiled_task_program")
+    assert compiled[-1].data["source"] == "finance_task_compiler"
+    assert compiled[-1].data["diagnostics"]["task_compile_model"]["status"] == "fallback"
+    assert journal.records(task_id="task-final-preflight-compile-failure", kind="slot_frame")
+
+
 def test_host_semantic_fallbacks_are_disabled_by_default_and_in_finance_capability() -> None:
     legacy_recipe = task_recipe("retrieval_answer", metadata={"host_semantic_fallbacks": {"enabled": True}})
     default_recipe = task_recipe("retrieval_answer", metadata={})
@@ -13843,6 +13918,25 @@ class MalformedThenTaskJsonProvider:
                 "total_tokens": len(request.prompt) + len(text),
             },
             error=None,
+        )
+
+
+class FailingTaskCompileProvider:
+    name = "fake_task_compile_fail"
+    model = "fake-task-compile-fail"
+
+    def __init__(self) -> None:
+        self.requests: list[ProcessorRequest] = []
+
+    def run(self, request: ProcessorRequest) -> ProcessorResult:
+        self.requests.append(request)
+        return ProcessorResult(
+            result_id=f"result-{request.request_id}",
+            request_id=request.request_id,
+            status="failed",
+            output={"provider": self.name, "model": self.model, "reason": "synthetic_task_compile_timeout"},
+            usage={},
+            error="synthetic_task_compile_timeout",
         )
 
 

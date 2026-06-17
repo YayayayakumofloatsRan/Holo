@@ -476,7 +476,49 @@ class DeepAgentLoopController(LoopControllerV3):
 
         pool = ThreadPoolExecutor(max_workers=4)
         try:
+            def finish_pending(
+                items: list[tuple[_PreparedToolCall, Future[_ToolExecutionItem]]] | None = None,
+            ) -> None:
+                nonlocal network_fetches, total_artifact_bytes
+                selected = list(items or pending)
+                if not selected:
+                    return
+                selected_ids = {id(item[1]) for item in selected}
+                remaining: list[tuple[_PreparedToolCall, Future[_ToolExecutionItem]]] = []
+                for existing in pending:
+                    if id(existing[1]) not in selected_ids:
+                        remaining.append(existing)
+                pending[:] = remaining
+                for prepared, future in selected:
+                    item = self._finish_streaming_future(task, step_id=step_id, prepared=prepared, future=future)
+                    execution_items.append(item)
+                    if item.policy_allowed and item.policy_reason == "allowed" and self._is_network_action(item.action, manifest=item.manifest):
+                        network_fetches += self._network_action_actual_cost(
+                            item.action,
+                            manifest=item.manifest,
+                            observation=item.observation,
+                        ) - self._network_action_cost(item.action, manifest=item.manifest)
+                    total_artifact_bytes += self._estimate_artifact_bytes(item.observation, item.artifact_refs)
+                    self._append_tool_execution_observation(task, step_id=step_id, item=item)
+
+            def drain_ready_streaming_tools() -> None:
+                ready = [(prepared, future) for prepared, future in pending if future.done()]
+                finish_pending(ready)
+
+            def wait_for_streaming_slot(prepared: _PreparedToolCall) -> None:
+                while True:
+                    drain_ready_streaming_tools()
+                    running = [(item, future) for item, future in pending if not future.done()]
+                    if not running:
+                        return
+                    if _is_concurrency_safe(prepared.action, prepared.manifest) and all(
+                        _is_concurrency_safe(item.action, item.manifest) for item, _future in running
+                    ):
+                        return
+                    finish_pending([running[0]])
+
             for event in stream.events:
+                drain_ready_streaming_tools()
                 delta = event.delta
                 if event.event_type == "content_delta":
                     text = delta.get("text")
@@ -554,6 +596,7 @@ class DeepAgentLoopController(LoopControllerV3):
                         tool_calls=tool_calls,
                         network_fetches=network_fetches,
                     )
+                    wait_for_streaming_slot(prepared)
                     self._append_tool_execution_event(
                         task,
                         step_id=step_id,
@@ -584,17 +627,7 @@ class DeepAgentLoopController(LoopControllerV3):
                 execution_items.append(item)
                 self._append_tool_execution_observation(task, step_id=step_id, item=item)
 
-            for prepared, future in pending:
-                item = self._finish_streaming_future(task, step_id=step_id, prepared=prepared, future=future)
-                execution_items.append(item)
-                if item.policy_allowed and item.policy_reason == "allowed" and self._is_network_action(item.action, manifest=item.manifest):
-                    network_fetches += self._network_action_actual_cost(
-                        item.action,
-                        manifest=item.manifest,
-                        observation=item.observation,
-                ) - self._network_action_cost(item.action, manifest=item.manifest)
-                total_artifact_bytes += self._estimate_artifact_bytes(item.observation, item.artifact_refs)
-                self._append_tool_execution_observation(task, step_id=step_id, item=item)
+            finish_pending()
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 

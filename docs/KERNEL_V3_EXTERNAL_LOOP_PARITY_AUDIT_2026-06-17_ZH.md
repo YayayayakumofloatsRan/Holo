@@ -542,11 +542,27 @@ Holo 的工具执行事件在 `kernel_v3/tool_use.py`。这里的 `StreamingTool
 
 这把 P0 架构成熟度推进到 95% 以上。仍需注意：Python 线程本身不能被强杀；真正的 100% 方案要继续把 shell/script/browser/network 工具接到进程组、HTTP request、worker process 级 signal/timeout。
 
+### 2026-06-17 P0 续进：复刻 StreamingToolExecutor 调度语义
+
+本轮续进不是新增金融题规则，而是把外部 TypeScript 项目 `StreamingToolExecutor` 的核心调度合同移入 Holo eager streaming path：
+
+- provider stream 中每次拿到完整 `tool_call_delta` 后，Holo 仍然立即走 `_prepare_tool_call(...)`，复用 manifest、policy、guard、network budget、tool budget 和 journal 路径。
+- streaming path 不再简单把所有 ready tool future 提交给线程池；它维护 pending 队列并按 runtime `concurrency_safe` 判定启动时机。
+- 当没有工具运行时，新工具可立即启动。
+- 当新工具和所有运行中工具都显式 `concurrency_safe=true` 时，可以并行启动。
+- 当任意运行中工具不是 concurrency-safe，或新工具自身不是 concurrency-safe 时，后续工具必须等待已有工具完成。
+- 已完成工具会在继续 drain provider stream 的过程中被及时收割，写入单项 `tool_result` observation 和 `queued` / `started` / `completed` tool execution events。
+- 结构测试覆盖了参考项目同款关键不变量：provider 连续吐出一个非并发安全写工具和一个并发安全读工具时，读工具必须等写工具 completed 后才 started。
+
+这一步把 eager streaming execution 从“边 stream 边 submit future”推进到“边 stream 边按成熟 executor 语义调度”。它是通用 agent loop 能力，不是 FinanceBench 打表。
+
+同时，finance final numeric preflight 增加了一个非评分性质的稳定性边界：最终 ledger 生成前的 model-first task.compile 可配置 1-120 秒 timeout，并且 final preflight 路径禁用 retry，避免 provider 卡顿导致已经完成 retrieval/tool/ledger 的 live run 在最后一步长时间挂住。这个边界不做语义判断，也不替代 LLM 解题；它只保证 loop 不被辅助编译请求拖死。
+
 ### 与外部项目 agent loop 的剩余差距估计
 
 这个估计只描述 agent loop 技术 parity，不是 FinanceBench / FinQA 分数。
 
-按“复刻成熟项目的通用 agent loop”口径，当前已经超过约 95%。已经完成的是合同底座和显式入口：host-owned loop、tool manifest/runtime spec、tool discovery 暴露、tool context 注入、processor stream event、stream-to-turn assembler、parse error observation、provider-native tool surface、native-to-Holo tool name map、eager streaming tool execution、streaming 与 completed-turn batch timeout/abort boundary、deferred provider tool surface、JSON/provider-message replacement view、durable `tool_result_full` artifact、context budget 旁路收口、replacement context exposure、journal 记录。模型已经可以通过显式 streaming planner 在 provider 请求里看到 native tools，并把 provider stream event 带入 Holo 的 policy/tool/journal 链路。
+按“复刻成熟项目的通用 agent loop”口径，当前已经超过约 95%。已经完成的是合同底座和显式入口：host-owned loop、tool manifest/runtime spec、tool discovery 暴露、tool context 注入、processor stream event、stream-to-turn assembler、parse error observation、provider-native tool surface、native-to-Holo tool name map、eager streaming tool execution、外部项目同款 concurrency-safe / exclusive streaming 调度、streaming 与 completed-turn batch timeout/abort boundary、deferred provider tool surface、JSON/provider-message replacement view、durable `tool_result_full` artifact、context budget 旁路收口、replacement context exposure、journal 记录。模型已经可以通过显式 streaming planner 在 provider 请求里看到 native tools，并把 provider stream event 带入 Holo 的 policy/tool/journal 链路。
 
 距离外部项目 100% 成熟度还差的部分主要集中在剩余工程闭环：
 

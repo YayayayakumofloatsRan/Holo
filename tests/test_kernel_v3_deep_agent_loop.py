@@ -703,6 +703,79 @@ def test_streaming_planner_starts_tool_before_provider_stream_is_drained() -> No
     assert execution_events[-1].data["event_type"] == "completed"
 
 
+def test_streaming_tool_executor_blocks_safe_tool_behind_exclusive_tool() -> None:
+    events: list[str] = []
+    registry = ToolRegistry()
+    registry.register(
+        "exclusive.write",
+        _ordered_tool("exclusive", events, sleep_seconds=0.05),
+        manifest=ToolManifest(
+            name="exclusive.write",
+            version="1",
+            resource_kind="exclusive",
+            operator_kind="write",
+            side_effect_class="write",
+            permissions_required=[],
+            enabled=True,
+            description="Exclusive write tool.",
+            input_schema={"query": {"type": "str", "required": True, "min_length": 1}},
+            runtime={"concurrency_safe": False, "read_only": False},
+        ),
+    )
+    registry.register(
+        "safe.read",
+        _ordered_tool("safe", events, sleep_seconds=0.0),
+        manifest=ToolManifest(
+            name="safe.read",
+            version="1",
+            resource_kind="safe",
+            operator_kind="read",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Concurrency-safe read tool.",
+            input_schema={"query": {"type": "str", "required": True, "min_length": 1}},
+            runtime={"concurrency_safe": True, "read_only": True},
+        ),
+    )
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": _TwoStreamingToolCallsProvider()}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"exclusive.write", "safe.read"},
+        tool_manifests=registry.manifests(),
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=4,
+    )
+
+    result = loop.run("run exclusive and safe streamed tools")
+
+    assert result.status == "completed"
+    assert [action.name for action in registry.executed_actions] == ["exclusive.write", "safe.read"]
+    assert events.index("exclusive:end") < events.index("safe:start")
+    execution_events = [
+        (record.data["event_type"], record.data["tool_name"])
+        for record in journal.records(task_id=result.task_id, kind="tool_execution_event")
+        if record.data["event_type"] in {"started", "completed"}
+    ]
+    assert execution_events == [
+        ("started", "exclusive.write"),
+        ("completed", "exclusive.write"),
+        ("started", "safe.read"),
+        ("completed", "safe.read"),
+    ]
+
+
 def test_streaming_tool_progress_is_journaled_from_host_context() -> None:
     registry = ToolRegistry()
     registry.register(
@@ -1124,8 +1197,80 @@ class _BlockingAfterToolDeltaProvider:
         )
 
 
+class _TwoStreamingToolCallsProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        yield ProcessorStreamEvent(
+            event_type="stream_start",
+            request_id=request.request_id,
+            sequence=1,
+            delta={"provider": self.name},
+        )
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=2,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-exclusive-write",
+                        "function": {
+                            "name": "exclusive.write",
+                            "arguments": '{"query":"A"}',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=3,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-safe-read",
+                        "function": {
+                            "name": "safe.read",
+                            "arguments": '{"query":"B"}',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=4,
+            delta={"status": "ok"},
+        )
+
+
 def _read_tool(name: str):
     def execute(action: CandidateAction) -> Observation:
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source=f"tool:{action.name}",
+            content={"name": name, "payload": action.payload},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
+
+
+def _ordered_tool(name: str, events: list[str], *, sleep_seconds: float):
+    def execute(action: CandidateAction) -> Observation:
+        events.append(f"{name}:start")
+        if sleep_seconds:
+            time.sleep(sleep_seconds)
+        events.append(f"{name}:end")
         return Observation(
             observation_id=f"obs-{action.action_id}",
             run_id="",

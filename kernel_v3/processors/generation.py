@@ -62,6 +62,7 @@ def adapt_generation_parameters(
     explicit_thinking = bool(merged.get("thinking_locked"))
     explicit_temperature = bool(merged.get("temperature_locked"))
     explicit_model = bool(merged.get("model_locked"))
+    explicit_timeout = bool(merged.get("timeout_locked"))
     model_before = str(merged.get("model") or "")
 
     if not explicit_model:
@@ -85,17 +86,19 @@ def adapt_generation_parameters(
     if not explicit_temperature:
         merged["temperature"] = _temperature_for(task_type=task_type, assessment=assessment)
 
-    merged["timeout_seconds"] = _timeout_for(
-        target=target,
-        current=merged.get("timeout_seconds"),
-        thinking_enabled=thinking_enabled,
-    )
+    if not explicit_timeout:
+        merged["timeout_seconds"] = _timeout_for(
+            target=target,
+            current=merged.get("timeout_seconds"),
+            thinking_enabled=thinking_enabled,
+        )
     merged["generation_policy"] = {
         "mode": "auto",
         "assessment": assessment.to_dict(),
         "thinking_locked": explicit_thinking,
         "temperature_locked": explicit_temperature,
         "model_locked": explicit_model,
+        "timeout_locked": explicit_timeout,
         "model_before": model_before,
         "model_after": str(merged.get("model") or ""),
     }

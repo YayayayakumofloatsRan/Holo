@@ -3059,6 +3059,8 @@ class AgentRuntime:
                 context_id=f"ctx-{task_id}-{run_id}-finance-fact-ledger-task-compile",
                 processor_budget=_processor_budget_metadata(recipe) if recipe is not None else None,
                 llm_judgment_required=_llm_semantic_judgment_required(recipe) if recipe is not None else False,
+                timeout_seconds=_finance_final_task_compile_timeout_seconds(recipe),
+                retry_on_failure=False,
             )
             self.journal.append(
                 task_id=task_id,
@@ -10055,6 +10057,23 @@ def _processor_budget_metadata(recipe: TaskRecipe) -> JsonObject:
         return dict(value)
     value = recipe.metadata.get("processor_budget")
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _finance_final_task_compile_timeout_seconds(recipe: TaskRecipe | None) -> int:
+    default_timeout = 30
+    if recipe is None:
+        return default_timeout
+    budget = _processor_budget_metadata(recipe)
+    for key in ("final_task_compile_timeout_seconds", "task_compile_final_timeout_seconds"):
+        value = budget.get(key)
+        if value is None:
+            value = recipe.metadata.get(key)
+        try:
+            if value is not None:
+                return max(1, min(120, int(value)))
+        except (TypeError, ValueError):
+            continue
+    return default_timeout
 
 
 def _thread_working_context_metadata(recipe: TaskRecipe) -> JsonObject:
