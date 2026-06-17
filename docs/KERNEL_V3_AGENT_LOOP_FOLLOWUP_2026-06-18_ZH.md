@@ -572,3 +572,69 @@ Holo journal/artifact；模型仍然负责解释工具结果、决定下一步�
 tool discovery、context updates、context-aware tool expansion、tool-result provider
 multi-round continuation、budget guard、agent trace 和 artifact/result replacement。下一步
 必须进入 FB/FQA debug50 题型簇 live 验证，用真实线上做题结果来驱动剩余修复。
+
+## 17. Tool input tolerance and SEC structured fact ranking checkpoint
+
+用户继续强调：优先照搬成熟 agent loop 的成熟实现，不要自己造零散补丁。对照
+TypeScript loop 后，本轮继续补的是工具执行合同，而不是单题答案规则：
+
+- 成熟 loop 不假设模型每次都能生成完整强类型对象；host 应该在 schema 边界给出
+  可恢复错误或做安全的最小规范化。
+- 工具执行失败必须回流为模型可理解的 tool result，而不是因为少了一个非关键字段
+  让整个 finance verifier 链断掉。
+- facts/evidence/formula trace 这种中间对象要支持 model one-shot 传入的最小
+  结构化 payload；完整 provenance 仍由 host/journal 维护。
+
+真实 live trace 暴露了两个通用问题：
+
+- `finance.verify_numeric` 被模型调用时，`facts` 里只有 metric/value 等最小字段；
+  旧入口直接按 `FinanceFact.from_dict` 严格反序列化，因缺少 `ticker` 等字段失败。
+  这导致 verifier tool observation 失败，后续只能靠内部 verifier/judge 修补。
+- `financebench_id_00499` 的 capital intensity trace 中，ledger 同时存在正确的
+  SEC XBRL `PropertyPlantAndEquipmentNet = 9.178B` 和一个 natural text 片段
+  `property plant and equipment net = 1321`。旧排序只看 `metadata.source`，
+  而 XBRL 事实没有写入 `source=structured`，于是 natural text 小片段错误胜出。
+
+本轮修复：
+
+- `finance.verify_numeric` 的 tool schema 明确接受 `FinanceFact` 完整行或模型
+  one-shot 最小 fact 对象；formula trace、citation、evidence 也支持最小对象。
+- `calculator.py` 在严格 `from_dict` 失败后，只对受支持的 finance contract 做
+  安全规范化：填入稳定 synthetic id、source/evidence/citation fallback、metadata
+  摘要和 payload hash。非 object 列表项仍被 schema/registry 拒绝。
+- `formula_planner.py` 的事实排序现在能从 SEC concept/form/fp/source_uri 推断
+  structured SEC XBRL 事实，即使 `metadata.source` 为空也不再排在 natural_text 后。
+  `html_table_fact` 排在 natural_text 前，但不会伪装成 SEC XBRL concept。
+- capital intensity PP&E/assets 绑定因此优先选择 `PropertyPlantAndEquipmentNet`
+  的 SEC XBRL 值；host 只修事实来源优先级和 slot candidate binding，不判断
+  “是否资本密集”这个语义结论。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_finance_numeric_verifier_accepts_minimal_model_fact_evidence_rows tests/test_kernel_v3_finance_engine.py::test_capital_intensity_prefers_sec_xbrl_ppe_over_natural_text_fragment tests/test_kernel_v3_finance_engine.py::test_capital_intensity_model_outputs_support_verifier_answer_numbers tests/test_kernel_v3_finance_engine.py::test_finance_formula_planner_does_not_fill_capital_intensity_with_wrong_year_or_cost_of_revenue -q
+.venv/bin/python -m py_compile kernel_v3/finance/calculator.py kernel_v3/finance/formula_planner.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_processor_streaming.py tests/test_kernel_v3_finance_engine.py -q
+git diff --check
+```
+
+结果：
+
+- `4 passed in 1.49s`
+- `py_compile` passed
+- `353 passed in 11.66s`
+- `git diff --check` clean
+
+live 复测状态：
+
+```text
+.state/kernel_v3/bench/finance/run_fb_debug_o002_l001_live_20260618_streaming_v4.jsonl
+.state/kernel_v3/bench/finance/run_fb_debug_o002_l001_live_20260618_streaming_v4.summary.json
+```
+
+这次不能作为能力证据：processor 调用没有真正发生，`tokens=0`，
+`proc_errors=missing_api_key_env:7`。同时 UbuntuHolo 当前无法通过 Windows
+interop 读取环境变量，`powershell.exe` 和 `cmd.exe` 都直接返回
+`UtilBindVsockAnyPort: socket failed 1`。因此本轮只记录结构修复和无效 live
+阻塞原因；下一次有效 finance live 必须先把 provider key 持久同步到 UbuntuHolo
+环境，再重跑该题和 debug50 类型簇。

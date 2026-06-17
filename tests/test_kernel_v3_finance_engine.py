@@ -857,6 +857,66 @@ def test_finance_numeric_verifier_tool_observation_exposes_unit_mismatch_example
     assert "model still owns semantic repair" in observation.content["repair_guidance"]["host_boundary"]
 
 
+def test_finance_numeric_verifier_accepts_minimal_model_fact_evidence_rows() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-verify-minimal-facts",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify model-built minimal fact rows",
+        score=0.9,
+        payload={
+            "answer": "Example Co FY2024 revenue was $10 million.",
+            "facts": [
+                {
+                    "fact_id": "fact-revenue",
+                    "entity": "Example Co",
+                    "period": "FY2024",
+                    "fiscal_year": 2024,
+                    "metric": "revenue",
+                    "value": "10000000",
+                    "unit": "USD",
+                    "evidence_ref": "ev-revenue",
+                    "citation_ref": "cite-revenue",
+                }
+            ],
+            "evidence": [
+                {
+                    "evidence_id": "ev-revenue",
+                    "quote": "Revenue was 10000000.",
+                    "source_title": "Example Filing",
+                    "source_uri": "https://example.test/filing",
+                }
+            ],
+            "citations": [
+                {
+                    "citation_id": "cite-revenue",
+                    "evidence_id": "ev-revenue",
+                    "quote": "Revenue was 10000000.",
+                    "source_title": "Example Filing",
+                    "source_uri": "https://example.test/filing",
+                }
+            ],
+            "question": "What was Example Co FY2024 revenue?",
+        },
+        reasons=["model one-shot verifier call"],
+        side_effect_class="read",
+    )
+    decision = PolicyGate(permission="read_only").validate(
+        run_id="run-finance-verify-minimal",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.content["verifier_status"] == "passed"
+    assert observation.content["matched_value_count"] >= 1
+    assert observation.content["verification"]["diagnostics"]["fact_count"] == 1
+
+
 def test_finance_numeric_verifier_tool_schema_rejects_non_object_fact_rows() -> None:
     registry = register_finance_tools(ToolRegistry.with_builtin_respond())
     action = CandidateAction(
@@ -7762,6 +7822,143 @@ def test_capital_intensity_model_outputs_support_verifier_answer_numbers() -> No
     )
 
     assert verification.status == "passed"
+
+
+def test_capital_intensity_prefers_sec_xbrl_ppe_over_natural_text_fragment() -> None:
+    facts = [
+        FinanceFact(
+            fact_id="capex",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="capital expenditures",
+            value="1749000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-capex",
+            evidence_ref="ev-capex",
+            citation_ref="cite-capex",
+            metadata={"concept": "PaymentsToAcquirePropertyPlantAndEquipment"},
+        ),
+        FinanceFact(
+            fact_id="revenue",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="revenue",
+            value="34229000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-revenue",
+            evidence_ref="ev-revenue",
+            citation_ref="cite-revenue",
+            metadata={"concept": "Revenues"},
+        ),
+        FinanceFact(
+            fact_id="ocf",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="operating cash flow",
+            value="5591000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-ocf",
+            evidence_ref="ev-ocf",
+            citation_ref="cite-ocf",
+            metadata={"concept": "NetCashProvidedByUsedInOperatingActivities"},
+        ),
+        FinanceFact(
+            fact_id="ppe-natural-fragment",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="property plant and equipment net",
+            value="1321",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-natural",
+            evidence_ref="ev-natural",
+            citation_ref="cite-natural",
+            metadata={
+                "source": "natural_text",
+                "source_uri": "https://www.sec.gov/Archives/edgar/data/66740/filing.txt",
+                "context": "Regional PP&E table fragment, not consolidated PP&E net.",
+            },
+        ),
+        FinanceFact(
+            fact_id="ppe-sec-xbrl",
+            entity="3M",
+            ticker="MMM",
+            period="annual",
+            fiscal_year=2022,
+            metric="property plant and equipment net",
+            value="9178000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-ppe",
+            evidence_ref="ev-ppe",
+            citation_ref="cite-ppe",
+            metadata={
+                "concept": "PropertyPlantAndEquipmentNet",
+                "label": "Property, Plant and Equipment, Net",
+                "form": "10-K",
+                "fp": "FY",
+                "end": "2022-12-31",
+                "filed": "2023-02-08",
+                "source_uri": "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/PropertyPlantAndEquipmentNet.json",
+            },
+        ),
+        FinanceFact(
+            fact_id="assets",
+            entity="3M",
+            ticker="MMM",
+            period="annual",
+            fiscal_year=2022,
+            metric="assets",
+            value="46455000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-assets",
+            evidence_ref="ev-assets",
+            citation_ref="cite-assets",
+            metadata={
+                "concept": "Assets",
+                "form": "10-K",
+                "fp": "FY",
+                "end": "2022-12-31",
+                "filed": "2023-02-08",
+                "source_uri": "https://data.sec.gov/api/xbrl/companyconcept/CIK0000066740/us-gaap/Assets.json",
+            },
+        ),
+        FinanceFact(
+            fact_id="net-income",
+            entity="3M",
+            ticker="MMM",
+            period="2022",
+            fiscal_year=2022,
+            metric="net income",
+            value="5777000000",
+            unit="USD",
+            scale="actual",
+            source_ref="cite-net-income",
+            evidence_ref="ev-net-income",
+            citation_ref="cite-net-income",
+            metadata={"concept": "NetIncomeLoss"},
+        ),
+    ]
+
+    plan = plan_finance_formula(question="Is 3M a capital-intensive business based on FY2022 data?", facts=facts)
+
+    assert plan.status == "ready"
+    assert plan.payload["variables"]["property_plant_and_equipment_net"] == "9178000000"
+    assert "ppe-sec-xbrl" in plan.input_fact_ids
+    assert "ppe-natural-fragment" not in plan.input_fact_ids
+    assert Decimal(plan.payload["diagnostics"]["model_outputs"]["ppe_to_assets"]).quantize(Decimal("0.0001")) == Decimal("0.1976")
 
 
 def test_numeric_verifier_accepts_absolute_percent_display_from_negative_capex_trace() -> None:

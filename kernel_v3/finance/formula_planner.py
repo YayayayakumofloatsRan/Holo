@@ -5368,11 +5368,30 @@ def _fact_source_priority(fact: FinanceFact) -> int:
     source = str(fact.metadata.get("source") or "").strip().lower()
     if source in {"structured", "sec_companyfacts", "sec_xbrl_companyfacts"}:
         return 4
+    if _looks_like_sec_structured_fact(fact):
+        return 4
     if source == "natural_table_row":
         return 3
+    if source == "html_table_fact":
+        return 2
     if source == "natural_text":
         return 1
     return 0
+
+
+def _looks_like_sec_structured_fact(fact: FinanceFact) -> bool:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    concept = str(metadata.get("concept") or "").strip()
+    source_uri = str(metadata.get("source_uri") or "").strip().lower()
+    form = str(metadata.get("form") or "").strip().upper()
+    fp = str(metadata.get("fp") or "").strip().upper()
+    if not concept or concept.lower().startswith("html_table_fact_"):
+        return False
+    if "data.sec.gov/api/xbrl/" in source_uri:
+        return True
+    if "sec.gov" in source_uri and form in {"10-K", "10-Q", "20-F", "40-F"} and fp:
+        return True
+    return False
 
 
 def _fact_sort_token(fact: FinanceFact | None) -> tuple[int, str, str, str]:

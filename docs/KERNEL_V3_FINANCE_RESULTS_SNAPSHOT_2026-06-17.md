@@ -60,6 +60,48 @@ Earlier same-day provider/environment failures, including a zero-token
 non-escalated WSL environment failure and prior `HTTP_402_INSUFFICIENT_BALANCE`
 checks, are not capability scores.
 
+## 2026-06-18 Tool-Contract Repair Note
+
+This note is structural evidence, not a new benchmark score. A live
+`financebench_id_00499` trace showed two mature-loop contract gaps:
+
+- `finance.verify_numeric` rejected model one-shot minimal fact/evidence rows
+  because strict contract deserialization required fields such as `ticker`.
+- Capital-intensity PP&E binding could rank a natural-text PP&E fragment above
+  the SEC XBRL `PropertyPlantAndEquipmentNet` fact when the structured fact did
+  not explicitly carry `metadata.source=structured`.
+
+The repair is generic:
+
+- `finance.verify_numeric` now accepts full finance contracts or minimal
+  model-built fact/formula/citation/evidence objects, normalizing only supported
+  object rows and still rejecting malformed non-object rows.
+- formula fact sorting now infers structured SEC XBRL priority from
+  concept/form/fp/source URI, so companyfacts concepts such as
+  `PropertyPlantAndEquipmentNet` outrank natural-text fragments for slot
+  binding. The LLM still owns qualitative financial judgment.
+
+Structural validation passed:
+
+```text
+353 passed in 11.66s
+py_compile passed
+git diff --check clean
+```
+
+Attempted live rerun:
+
+```text
+.state/kernel_v3/bench/finance/run_fb_debug_o002_l001_live_20260618_streaming_v4.jsonl
+```
+
+This rerun is invalid as capability evidence: it produced `tokens=0` with
+`missing_api_key_env:7`. The immediate cause was environment access, not finance
+reasoning: UbuntuHolo could not read the Windows provider key because
+`powershell.exe` and `cmd.exe` both failed through WSL interop with
+`UtilBindVsockAnyPort: socket failed 1`. A valid rerun requires the provider key
+to be visible directly in the UbuntuHolo environment.
+
 ## 2026-06-17 Deep Loop Follow-Up Repair
 
 After the P0 architecture pass moved finance-capability onto the

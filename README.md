@@ -414,6 +414,21 @@ claims, one calculator/formula trace ran, numeric verifier, verifier gate, and
 synthesis gate all passed, and the matched value was `1577.0`. This is a single
 debug-row live result, not a debug50/test100 score; it also remains expensive at
 `282,939` tokens.
+The next same-day mature-loop checkpoint is recorded in section 17 of
+`docs/KERNEL_V3_AGENT_LOOP_FOLLOWUP_2026-06-18_ZH.md`. It ports another
+Claude-Code-style tool contract into Holo's finance path: model one-shot tool
+payloads for `finance.verify_numeric` can now be normalized from minimal
+fact/formula/citation/evidence objects instead of failing on missing optional
+contract fields, while malformed non-object rows still fail at the host schema
+boundary. Formula planning also infers SEC structured XBRL priority from
+concept/form/fp/source URI, so a true `PropertyPlantAndEquipmentNet` companyfacts
+row outranks natural-text PP&E fragments when binding capital-intensity
+PP&E/assets slots. Targeted structural tests pass (`353` loop/provider/streaming/
+finance tests plus `py_compile` and `git diff --check`). An attempted live rerun
+on `financebench_id_00499` produced `tokens=0` and `missing_api_key_env:7`
+because UbuntuHolo could not read the Windows provider key through broken
+Windows interop; that run is recorded only as environment blockage, not finance
+capability evidence.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in

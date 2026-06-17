@@ -71,10 +71,26 @@ def register_finance_tools(registry: ToolRegistry) -> ToolRegistry:
             ),
             input_schema={
                 "answer": {"type": "str", "required": True, "min_length": 1},
-                "facts": {"type": "list[FinanceFact]", "required": False},
-                "formula_traces": {"type": "list[FormulaTrace]", "required": False},
-                "citations": {"type": "list[CitationItem]", "required": False},
-                "evidence": {"type": "list[EvidenceItem]", "required": False},
+                "facts": {
+                    "type": "list[FinanceFact]",
+                    "required": False,
+                    "description": "FinanceFact rows or minimal fact objects with at least metric and value.",
+                },
+                "formula_traces": {
+                    "type": "list[FormulaTrace]",
+                    "required": False,
+                    "description": "FormulaTrace rows or minimal trace objects with a result_value.",
+                },
+                "citations": {
+                    "type": "list[CitationItem]",
+                    "required": False,
+                    "description": "CitationItem rows or minimal citation objects with citation_id/evidence_id/quote.",
+                },
+                "evidence": {
+                    "type": "list[EvidenceItem]",
+                    "required": False,
+                    "description": "EvidenceItem rows or minimal evidence objects with evidence_id/text or quote.",
+                },
                 "question": {"type": "str", "required": False},
                 "target_binding": {"type": "object", "required": False},
             },
@@ -361,10 +377,160 @@ def _contract_list(value: object, cls, field_name: str):
         if not isinstance(item, dict):
             raise CalculatorError(f"invalid_{field_name}_item:{index}")
         try:
-            result.append(cls.from_dict(item))
+            result.append(_contract_from_tool_payload(item, cls, field_name=field_name, index=index))
         except Exception as exc:
             raise CalculatorError(f"invalid_{field_name}_item:{index}:{exc}") from exc
     return result
+
+
+def _contract_from_tool_payload(item: JsonObject, cls, *, field_name: str, index: int):
+    try:
+        return cls.from_dict(item)
+    except Exception:
+        if cls is FinanceFact:
+            return _finance_fact_from_tool_payload(item, index=index)
+        if cls is FormulaTrace:
+            return _formula_trace_from_tool_payload(item, index=index)
+        if cls is CitationItem:
+            return _citation_item_from_tool_payload(item, index=index)
+        if cls is EvidenceItem:
+            return _evidence_item_from_tool_payload(item, index=index)
+        raise
+
+
+def _finance_fact_from_tool_payload(item: JsonObject, *, index: int) -> FinanceFact:
+    metric = _first_text(item, "metric", "line_item", "name", "label", "concept")
+    value = _first_text(item, "value", "amount", "result_value", "numeric_value")
+    if not metric:
+        raise CalculatorError("FinanceFact missing fields: metric")
+    if not value:
+        raise CalculatorError("FinanceFact missing fields: value")
+    metadata = _metadata_from_tool_payload(item)
+    return FinanceFact(
+        fact_id=_first_text(item, "fact_id", "id") or f"tool-fact-{_payload_hash(item, index=index)}",
+        entity=_first_text(item, "entity", "company", "issuer") or None,
+        ticker=_first_text(item, "ticker", "symbol") or None,
+        period=_first_text(item, "period", "fiscal_period", "target_period") or None,
+        fiscal_year=_optional_int(item.get("fiscal_year", item.get("year"))),
+        metric=metric,
+        value=value,
+        unit=_first_text(item, "unit", "units", "currency") or None,
+        scale=_first_text(item, "scale", "display_unit") or None,
+        source_ref=(
+            _first_text(item, "source_ref", "source_uri", "uri", "source_id", "citation_ref", "evidence_ref")
+            or "tool_payload"
+        ),
+        evidence_ref=_first_text(item, "evidence_ref", "evidence_id") or None,
+        citation_ref=_first_text(item, "citation_ref", "citation_id") or None,
+        metadata=metadata,
+    )
+
+
+def _formula_trace_from_tool_payload(item: JsonObject, *, index: int) -> FormulaTrace:
+    result_value = _first_text(item, "result_value", "value", "formatted_value")
+    if not result_value:
+        raise CalculatorError("FormulaTrace missing fields: result_value")
+    input_fact_ids = item.get("input_fact_ids")
+    if not isinstance(input_fact_ids, list):
+        input_fact_ids = []
+    return FormulaTrace(
+        formula_id=_first_text(item, "formula_id", "id") or f"tool-formula-{_payload_hash(item, index=index)}",
+        formula_name=_first_text(item, "formula_name", "name") or "tool_formula_trace",
+        expression=_first_text(item, "expression", "formula") or "",
+        input_fact_ids=[str(raw) for raw in input_fact_ids if str(raw or "").strip()],
+        result_value=result_value,
+        unit=_first_text(item, "unit") or None,
+        diagnostics=_metadata_from_tool_payload(item),
+    )
+
+
+def _citation_item_from_tool_payload(item: JsonObject, *, index: int) -> CitationItem:
+    quote = _first_text(item, "quote", "quote_preview", "text", "text_preview", "content") or ""
+    span_start = _optional_int(item.get("span_start"))
+    span_end = _optional_int(item.get("span_end"))
+    return CitationItem(
+        citation_id=_first_text(item, "citation_id", "citation_ref", "id") or f"tool-cite-{_payload_hash(item, index=index)}",
+        goal_id=_first_text(item, "goal_id") or "",
+        evidence_id=_first_text(item, "evidence_id", "evidence_ref") or "",
+        artifact_id=_first_text(item, "artifact_id", "artifact_ref") or "",
+        uri=_first_text(item, "uri", "source_uri") or "",
+        title=_first_text(item, "title", "source_title") or "",
+        quote=quote,
+        span_start=span_start if span_start is not None else 0,
+        span_end=span_end if span_end is not None else len(quote),
+        metadata=_metadata_from_tool_payload(item),
+    )
+
+
+def _evidence_item_from_tool_payload(item: JsonObject, *, index: int) -> EvidenceItem:
+    text = _first_text(item, "text", "text_preview", "quote", "quote_preview", "content") or ""
+    score = item.get("score")
+    try:
+        parsed_score = float(score) if score is not None else 1.0
+    except (TypeError, ValueError):
+        parsed_score = 1.0
+    return EvidenceItem(
+        evidence_id=_first_text(item, "evidence_id", "evidence_ref", "id") or f"tool-ev-{_payload_hash(item, index=index)}",
+        goal_id=_first_text(item, "goal_id") or "",
+        span_id=_first_text(item, "span_id") or f"tool-span-{index}",
+        document_id=_first_text(item, "document_id", "doc_id") or "",
+        source_id=_first_text(item, "source_id") or "",
+        artifact_id=_first_text(item, "artifact_id", "artifact_ref") or "",
+        uri=_first_text(item, "uri", "source_uri") or "",
+        title=_first_text(item, "title", "source_title") or "",
+        text=text,
+        score=parsed_score,
+        payload_hash=_first_text(item, "payload_hash", "hash") or _payload_hash(item, index=index),
+        diagnostics=_metadata_from_tool_payload(item),
+    )
+
+
+def _first_text(item: JsonObject, *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metadata_from_tool_payload(item: JsonObject) -> JsonObject:
+    metadata = item.get("metadata")
+    result: JsonObject = dict(metadata) if isinstance(metadata, dict) else {}
+    for key in (
+        "source_title",
+        "source_uri",
+        "concept",
+        "label",
+        "statement",
+        "line_item",
+        "relevance",
+        "raw_metric",
+        "display_unit",
+    ):
+        if key in item and key not in result:
+            result[key] = item[key]
+    result.setdefault("tool_payload_normalized", True)
+    return _json_safe_diagnostics(result)
+
+
+def _payload_hash(item: JsonObject, *, index: int) -> str:
+    try:
+        text = str(sorted((str(key), str(value)) for key, value in item.items()))
+    except Exception:
+        text = str(item)
+    return hashlib.sha256(f"{index}:{text}".encode("utf-8")).hexdigest()[:12]
 
 
 def _decimal_string(value: Decimal) -> str:
