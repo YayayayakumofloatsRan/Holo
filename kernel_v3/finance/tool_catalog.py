@@ -29,7 +29,7 @@ def finance_tool_surface_catalog() -> list[JsonObject]:
                 _component("crewai", "crewai", source="https://docs.crewai.com/"),
             ],
             selected_component="langgraph",
-            integration_decision="candidate_for_double_layer_loop_runtime; Holo keeps policy, journal, gold isolation, and verifier gates",
+            integration_decision="active_profile_loop_backend_first_stage; Holo keeps policy, journal, gold isolation, and verifier gates inside graph nodes",
             boundary="framework may run control-flow primitives; model still owns finance judgment and host validates every state transition",
         ),
         _tool_family(

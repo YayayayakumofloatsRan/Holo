@@ -15,6 +15,7 @@ rich==15.0.0
 # These are exposed through host policy boundaries; the model decides when to use
 # them and Holo validates provenance, budget, citations, and gold isolation.
 langgraph==1.2.5
+langchain-core==1.4.7
 litellm==1.89.1
 trafilatura==2.1.0
 polars==1.41.2

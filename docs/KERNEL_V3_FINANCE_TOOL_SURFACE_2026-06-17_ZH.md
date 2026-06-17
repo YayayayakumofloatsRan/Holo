@@ -24,7 +24,7 @@ Holo 可以暴露工具、校验 schema、执行、记录、验证和停止；LL
 
 `kernel_v3/finance/tool_catalog.py` 现在定义 15 个金融做题工具族：
 
-1. `agent_loop_orchestration`：persistent loop、replan、termination、handoff。成熟组件候选：LangGraph / AutoGen / CrewAI；当前选 LangGraph 作为双层 loop 候选，Holo 仍保留 host 边界。
+1. `agent_loop_orchestration`：persistent loop、replan、termination、handoff。成熟组件候选：LangGraph / AutoGen / CrewAI；当前 LangGraph 已作为 finance/web/long profile 的 active loop backend，Holo 保留 host 边界。
 2. `llm_provider_gateway`：模型调用、fallback、usage、provider normalization。成熟组件候选：LiteLLM。
 3. `structured_output_schema`：JSON action、schema validate、typed packets、repair。成熟组件：Pydantic。
 4. `search_discovery`：搜索 official filing、issuer IR、source document、market/macro/news candidate。候选：SearXNG；当前由 `retrieval.run` 和 Holo source providers 承担。
@@ -50,6 +50,7 @@ pandas==3.0.3
 pydantic==2.13.4
 rich==15.0.0
 langgraph==1.2.5
+langchain-core==1.4.7
 litellm==1.89.1
 trafilatura==2.1.0
 polars==1.41.2
@@ -62,8 +63,8 @@ opentelemetry-sdk==1.42.1
 安装后 smoke：
 
 ```text
-installed: edgar, langgraph, litellm, trafilatura, polars, duckdb, sympy,
-           opentelemetry, rich, pandas, pydantic
+installed: edgar, langgraph, langchain-core, litellm, trafilatura, polars,
+           duckdb, sympy, opentelemetry, rich, pandas, pydantic
 missing:   docling, openbb
 ```
 
@@ -115,6 +116,12 @@ Planner 首包也会携带 compact `toolchain_install_summary`，让模型在
 one-shot 选择工具前知道哪些成熟组件已经可用、哪些重组件处于隔离/缺失状态。
 这只是可用性提示，不是 host 替模型选择数据路径。
 
+同日 agent loop 审查已把 provider prompt compact 路径一并收紧：真实发给
+模型的 `agent_runtime_directive.tool_selection` 非轻量路径保留 24 项，并携带
+`tool_selection_count`、`toolchain_install_summary` 和 compact
+`llm_first_finance_template.standard_tool_interface`。这保证模型看到的是完整
+one-shot 工具接口，而不是只看到 runtime 内部的工具目录。
+
 Planner directive 已同步更新：当数据路径不确定时，LLM 应先调用 `finance.toolchain.describe`，然后自己选择下一步具体工具，比如：
 
 ```json
@@ -156,7 +163,7 @@ Planner directive 已同步更新：当数据路径不确定时，LLM 应先调�
 - `finance.toolchain.describe` 扩展为完整工具面板，而不是仅报告 EdgarTools/Docling/OpenBB/LangGraph 四个组件。
 - 新增可调用成熟组件 wrapper：`document.trafilatura.extract` 用于 HTML/main text 抽取，`data.table.query` 用 DuckDB/Pandas 对证据表执行只读 SQL，`math.sympy.compute` 用 SymPy 执行模型提出的符号/高精度计算。
 - Runtime planner directive 和 finance task compiler 都暴露 `finance.toolchain.describe` 与 one-shot follow-up；finance profile 不再只有 `require_numeric_verifier` 时才看到工具链。
-- Compact planner directive 保留完整 finance open tool surface，不再因为前 6 个工具截断而让模型看不到 SEC/Docling/Trafilatura/OpenBB/DuckDB/SymPy 等工具。
+- Runtime planner directive 和 provider prompt compact 都保留完整 finance open tool surface，不再因为前 6 个工具截断而让模型看不到 SEC/Docling/Trafilatura/OpenBB/DuckDB/SymPy 等工具。
 - `_RecipeEvaluator` 对可恢复工具链失败返回 `continue` 让 LLM 重规划，例如 `dependency_missing`、`component_call_failed`、`route_not_allowlisted`、`unsupported_source`、`unsafe_or_unsupported_sql`。`policy_block`、预算 guard 和权限边界仍然按 host 安全语义阻断。
 - `bench finance-progress --format rich` 使用 Rich 渲染 run-root、process、stage、diagnostics、counters、recent events。
 - `requirements-finance-open-components.txt` 改为轻量核心 pin，重组件明确隔离。

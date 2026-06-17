@@ -60,9 +60,13 @@ from kernel_v3.finance import (
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+    FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     FinanceFact,
     FormulaTrace,
+    MARKET_OPENBB_FETCH_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
+    SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
+    SEC_EDGAR_FINANCIALS_TOOL_NAME,
     attach_target_binding_to_facts,
     build_finance_fact_ledger,
     compile_finance_task_program,
@@ -78,6 +82,7 @@ from kernel_v3.finance import (
     verify_finance_answer,
 )
 from kernel_v3.finance.calculator import register_finance_tools
+from kernel_v3.processors.adapters import _compact_runtime_directive_for_provider
 from kernel_v3.finance.task_compiler import TASK_COMPILE_FACT_LIMIT, _model_task_compile_prompt
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -6133,6 +6138,38 @@ def test_finance_capability_planner_directive_preserves_full_open_tool_surface()
     assert "installed_components" in install_summary
     assert "missing_components" in install_summary
     assert install_summary["host_rule"].startswith("Prefer installed components")
+
+
+def test_finance_capability_provider_compact_preserves_one_shot_tool_surface() -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    metadata["retrieval"] = {
+        **metadata["retrieval"],
+        "allow_network": True,
+        "max_network_fetches": 3,
+    }
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=metadata,
+    )
+    directive = _planner_directive(recipe)
+
+    compact = _compact_runtime_directive_for_provider(directive)
+    tool_names = [item["name"] for item in compact["tool_selection"]]
+
+    assert compact["tool_selection_count"] == len(directive["tool_selection"])
+    assert FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in tool_names
+    assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME in tool_names
+    assert SEC_EDGAR_FINANCIALS_TOOL_NAME in tool_names
+    assert DOCUMENT_DOCLING_CONVERT_TOOL_NAME in tool_names
+    assert DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME in tool_names
+    assert MARKET_OPENBB_FETCH_TOOL_NAME in tool_names
+    assert DATA_TABLE_QUERY_TOOL_NAME in tool_names
+    assert MATH_SYMPY_COMPUTE_TOOL_NAME in tool_names
+    assert "toolchain_install_summary" in compact
+    assert compact["toolchain_install_summary"]["host_rule"].startswith("Prefer installed components")
+    assert compact["llm_first_finance_template"]["standard_tool_interface"]["planner_action"].startswith(
+        "Return planner.propose JSON"
+    )
 
 
 def test_finance_fast_model_planner_can_select_verify_numeric_tool() -> None:

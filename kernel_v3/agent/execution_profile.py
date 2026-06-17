@@ -68,6 +68,7 @@ def execution_profile_runtime_metadata(profile: ExecutionProfile) -> JsonObject:
         "agent_loop": {
             "max_steps": profile.max_agent_steps,
             "max_tool_calls": profile.max_agent_tool_calls,
+            "runtime_backend": _agent_loop_runtime_backend(profile.profile_id),
         },
         "retrieval": {
             "max_queries": profile.max_queries,
@@ -329,3 +330,11 @@ def _composable_toolchain_defaults(profile_id: str) -> JsonObject:
         ],
         "principle": "LLM assembles the work chain; host validates permissions, provenance, policy, and numeric support.",
     }
+
+
+def _agent_loop_runtime_backend(profile_id: str) -> str:
+    if profile_id.startswith("finance-"):
+        return "langgraph"
+    if profile_id in {"web-research", "long-mission"}:
+        return "langgraph"
+    return "holo"

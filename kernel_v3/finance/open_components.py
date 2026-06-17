@@ -305,7 +305,7 @@ def _execute_toolchain_describe(action: CandidateAction) -> Observation:
                 package="langgraph",
                 tools=[],
                 source="https://docs.langchain.com/oss/python/langgraph/overview",
-                role="runtime_candidate_for_double_layer_agent_loop",
+                role="active_profile_loop_backend_first_stage",
             ),
         ],
         "tool_names": list(FINANCE_OPEN_COMPONENT_TOOL_NAMES),

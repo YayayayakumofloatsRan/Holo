@@ -20,6 +20,10 @@ from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalR
 
 SYNTHESIS_EVIDENCE_PREVIEW_CHARS = 4096
 SYNTHESIS_CITATION_PREVIEW_CHARS = 2048
+PROVIDER_TOOL_LIST_LIMIT = 48
+PROVIDER_PERMISSION_LIST_LIMIT = 32
+PROVIDER_TOOL_SELECTION_LIMIT = 24
+PROVIDER_LIGHTWEIGHT_TOOL_SELECTION_LIMIT = 8
 
 
 class ModelPlanner:
@@ -610,7 +614,7 @@ def _compact_agent_recipe_for_provider(recipe: JsonObject, *, lightweight: bool 
     data = {
         "recipe_id": recipe.get("recipe_id"),
         "mode": recipe.get("mode"),
-        "allowed_tools": _string_list(recipe.get("allowed_tools"))[:16],
+        "allowed_tools": _string_list(recipe.get("allowed_tools"))[:PROVIDER_TOOL_LIST_LIMIT],
         "permission_profile": recipe.get("permission_profile"),
         "citations_required": recipe.get("citations_required"),
         "finalizer": recipe.get("finalizer"),
@@ -623,7 +627,7 @@ def _compact_agent_recipe_for_provider(recipe: JsonObject, *, lightweight: bool 
         },
         "metadata": {
             "thread_id": metadata.get("thread_id"),
-            "allowed_permissions": _string_list(execution.get("allowed_permissions"))[:16],
+            "allowed_permissions": _string_list(execution.get("allowed_permissions"))[:PROVIDER_PERMISSION_LIST_LIMIT],
             "semantic_intake": _compact_prompt_value(metadata.get("semantic_intake")),
         },
     }
@@ -635,17 +639,20 @@ def _compact_agent_recipe_for_provider(recipe: JsonObject, *, lightweight: bool 
 
 
 def _compact_runtime_directive_for_provider(directive: JsonObject, *, lightweight: bool = False) -> JsonObject:
+    tool_selection = directive.get("tool_selection")
+    tool_selection_count = len(tool_selection) if isinstance(tool_selection, list) else 0
     data = {
         "mode": directive.get("mode"),
         "initial_action": _compact_prompt_value(directive.get("initial_action")),
         "required_first_action": _compact_prompt_value(directive.get("required_first_action")),
         "required_outcome": _compact_prompt_value(directive.get("required_outcome")),
-        "allowed_tools": _string_list(directive.get("allowed_tools"))[:16],
-        "forbidden": _string_list(directive.get("forbidden"))[:16],
+        "allowed_tools": _string_list(directive.get("allowed_tools"))[:PROVIDER_TOOL_LIST_LIMIT],
+        "forbidden": _string_list(directive.get("forbidden"))[:PROVIDER_TOOL_LIST_LIMIT],
         "tool_selection": _compact_list_for_provider(
-            directive.get("tool_selection"),
-            limit=2 if lightweight else 6,
+            tool_selection,
+            limit=PROVIDER_LIGHTWEIGHT_TOOL_SELECTION_LIMIT if lightweight else PROVIDER_TOOL_SELECTION_LIMIT,
         ),
+        "tool_selection_count": tool_selection_count,
         "allowed_non_tool_actions": _compact_list_for_provider(
             directive.get("allowed_non_tool_actions"),
             limit=2 if lightweight else 4,
@@ -659,6 +666,8 @@ def _compact_runtime_directive_for_provider(directive: JsonObject, *, lightweigh
         data["answer_profile"] = _compact_prompt_value(directive.get("answer_profile"))
         data["research_mission"] = _compact_prompt_value(directive.get("research_mission"))
         data["workmethod"] = _compact_prompt_value(directive.get("workmethod"))
+        data["toolchain_install_summary"] = _compact_simple_dict(directive.get("toolchain_install_summary"), limit=8)
+        data["llm_first_finance_template"] = _compact_prompt_value(directive.get("llm_first_finance_template"))
     return data
 
 
@@ -695,8 +704,8 @@ def _compact_capability_catalog_for_provider(catalog: JsonObject, *, lightweight
     return {
         "version": catalog.get("version"),
         "mode": catalog.get("mode"),
-        "allowed_tools": _string_list(catalog.get("allowed_tools"))[:16],
-        "executable_tools": _string_list(catalog.get("executable_tools"))[:16],
+        "allowed_tools": _string_list(catalog.get("allowed_tools"))[:PROVIDER_TOOL_LIST_LIMIT],
+        "executable_tools": _string_list(catalog.get("executable_tools"))[:PROVIDER_TOOL_LIST_LIMIT],
         "family_keys": list(_json_object(catalog.get("families")).keys())[:24],
         "capabilities": relevant,
         "capability_count": len(capabilities),

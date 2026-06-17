@@ -130,16 +130,19 @@ The 2026-06-17 follow-up tool-surface iteration is recorded in
 `kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return
 the complete model-callable finance tool surface, one-shot tool protocol,
 current install summary, and mature open-source component mapping. The lightweight
-core now pins and installs EdgarTools, LangGraph, LiteLLM, Trafilatura, Polars,
-DuckDB, SymPy, OpenTelemetry, Pandas, Pydantic, and Rich. Docling/OpenBB/browser
-components remain cataloged but isolated from the main UbuntuHolo venv because
-full Docling currently pulls Torch/CUDA dependencies on Linux. This is toolchain
-evidence, not a finance benchmark score.
+core now pins and installs EdgarTools, LangGraph, LangChain Core, LiteLLM,
+Trafilatura, Polars, DuckDB, SymPy, OpenTelemetry, Pandas, Pydantic, and Rich.
+Docling/OpenBB/browser components remain cataloged but isolated from the main
+UbuntuHolo venv because full Docling currently pulls Torch/CUDA dependencies on
+Linux. This is toolchain evidence, not a finance benchmark score.
 The same-day loop logic audit is recorded in
-`docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`: Kernel v3 does not currently
-run its core loop through LangChain/LangGraph; LangGraph is installed and
-cataloged as a candidate state-graph runtime, while `LoopControllerV3` still
-owns planner -> policy -> tool -> observation -> evaluator -> termination.
+`docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`: finance, web-research, and
+long-mission profiles now select a LangGraph-backed loop controller. LangGraph
+owns the active state graph; Holo keeps policy, tool execution, journal,
+budget, verifier, and gold-isolation boundaries inside graph nodes. The same
+audit also fixed the provider prompt compact path so finance planners see the
+full one-shot tool surface in the actual model packet, not only inside runtime
+metadata.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in

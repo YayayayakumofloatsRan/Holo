@@ -30,6 +30,7 @@ def test_finance_fact_fast_profile_is_short_lane() -> None:
     assert profile_processor_mode(profile, "semantic_intake", "model", online=True) == "fake"
     assert metadata["agent_loop"]["max_steps"] == 8
     assert metadata["agent_loop"]["max_tool_calls"] == 8
+    assert metadata["agent_loop"]["runtime_backend"] == "langgraph"
     assert metadata["retrieval"]["max_fetches"] == 8
     assert metadata["processor_budget"]["max_calls_per_task"] == 8
     assert metadata["composable_toolchain"]["enabled"] is True
@@ -48,6 +49,7 @@ def test_finance_capability_profile_is_high_budget_toolchain_lane() -> None:
     assert profile.max_agent_steps == 16
     assert profile.max_agent_tool_calls == 16
     assert profile.research_depth == "deep"
+    assert metadata["agent_loop"]["runtime_backend"] == "langgraph"
     assert metadata["composable_toolchain"]["workspace_read"] is True
     assert metadata["composable_toolchain"]["workspace_write"] is True
     assert metadata["composable_toolchain"]["script_exec"] is True

@@ -51,7 +51,7 @@ Kernel v3 不能变成 LangGraph、AutoGen、OpenBB、Docling 或 EdgarTools 的
 
 ## 3. 初始组件选择
 
-### 3.1 LangGraph：双层 agent loop 的主 runtime 候选
+### 3.1 LangGraph：双层 agent loop 的主 runtime
 
 官方文档把 LangGraph 定位为 low-level orchestration framework/runtime，用于 long-running、stateful agents，并强调 durable execution、streaming、human-in-the-loop、persistence、memory 和 fault tolerance。
 
@@ -70,9 +70,10 @@ Inner Finance Solver Loop
 
 LangGraph 负责可恢复的执行图；Holo 负责图状态的语义字段、工具边界、journal、评测隔离和 domain verifier。
 
-截至本记录后的 loop 审查，LangGraph 仍是已安装候选 runtime，不是 active
-execution loop。当前 active loop 仍是 Holo 自有 `LoopControllerV3 +
-WorkloopEvaluator + ToolRegistry + JournalStore`。同日逻辑审查见
+截至本记录后的 loop 换血，LangGraph 已经成为 finance/web/long profile 的
+active execution backend：`LangGraphLoopController` 用 `StateGraph` 承载
+prepare/execute/evaluate/route，Holo 的 `PolicyGate + ToolRegistry +
+JournalStore + WorkloopEvaluator` 保留为 graph node 内的硬边界。同日逻辑审查见
 `docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`。
 
 ### 3.2 EdgarTools：SEC/EDGAR/XBRL 主入口
@@ -298,6 +299,11 @@ scan，会影响 UbuntuHolo 稳定性，也会降低迭代效率。
 `one_shot_tool_protocol` 和 `install_summary`。LLM 可以先调用这个 read-only
 工具，然后自己 one-shot 地选择下一步具体工具；host 只做 schema、权限、
 资源、journal、redaction、citation、numeric 和 gold isolation 验证。
+
+同日 loop/interface 审查还验证了 actual provider packet：`ModelPlanner` 的
+provider compact 现在保留 24 项 `tool_selection`、48 项 tool allowlist，并携带
+`tool_selection_count`、安装摘要和标准 `planner.propose` 工具调用协议。也就是说，
+LLM 首次决策看到的是完整金融工具面，而不是只在 Holo 内部 metadata 中存在。
 
 轻量核心开源组件已经安装到主 venv：EdgarTools、LangGraph、LiteLLM、
 Trafilatura、Polars、DuckDB、SymPy、OpenTelemetry、Pandas、Pydantic 和

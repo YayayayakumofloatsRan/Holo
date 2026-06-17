@@ -71,6 +71,7 @@ from kernel_v3.finance import (
 from kernel_v3.interaction import guard_user_visible_text, interaction_preferences, normalize_response_language
 from kernel_v3.journal import JournalStore
 from kernel_v3.journal_redaction import redact_journal_data
+from kernel_v3.langgraph_loop import LangGraphLoopController, langgraph_loop_available
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.memory import MEMORY_RECALL_TOOL_NAME, MemoryPipeline, MemoryStore, register_memory_tools
 from kernel_v3.mission.thread_rag import ThreadWorkingMemoryProvider
@@ -442,7 +443,8 @@ class AgentRuntime:
             recipe=recipe,
             config=self.workloop_config,
         )
-        loop = LoopControllerV3(
+        loop_controller = _loop_controller_for_recipe(recipe)
+        loop = loop_controller(
             journal=self.journal,
             context_compiler=_AgentContextCompiler(
                 recipe=recipe,
@@ -6570,6 +6572,30 @@ def _composable_tool_timeout_seconds(recipe: TaskRecipe, *, key: str, default: i
     except (TypeError, ValueError):
         value = default
     return max(1, min(120, value))
+
+
+def _loop_controller_for_recipe(recipe: TaskRecipe):
+    return LangGraphLoopController if _recipe_requests_langgraph_loop(recipe) and langgraph_loop_available() else LoopControllerV3
+
+
+def _recipe_requests_langgraph_loop(recipe: TaskRecipe) -> bool:
+    for container in (recipe.metadata, _execution_metadata_from_metadata(recipe.metadata)):
+        if not isinstance(container, dict):
+            continue
+        loop_config = container.get("agent_loop")
+        if isinstance(loop_config, dict):
+            backend = str(loop_config.get("runtime_backend") or loop_config.get("backend") or "").strip().lower()
+            if backend in {"langgraph", "lang_graph"}:
+                return True
+        backend = str(container.get("loop_runtime") or container.get("runtime_backend") or "").strip().lower()
+        if backend in {"langgraph", "lang_graph"}:
+            return True
+    return False
+
+
+def _execution_metadata_from_metadata(metadata: JsonObject) -> JsonObject:
+    execution = metadata.get("execution_metadata")
+    return dict(execution) if isinstance(execution, dict) else {}
 
 
 def task_recipe(
