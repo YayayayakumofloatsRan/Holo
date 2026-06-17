@@ -638,3 +638,48 @@ interop 读取环境变量，`powershell.exe` 和 `cmd.exe` 都直接返回
 `UtilBindVsockAnyPort: socket failed 1`。因此本轮只记录结构修复和无效 live
 阻塞原因；下一次有效 finance live 必须先把 provider key 持久同步到 UbuntuHolo
 环境，再重跑该题和 debug50 类型簇。
+
+## 18. Live benchmark provider preflight checkpoint
+
+上一节的无效 live rerun 暴露出另一个 P0 稳定性问题：当
+`HOLO_V3_LIVE_MODEL=1` 但 provider key 对 UbuntuHolo 不可见时，旧 CLI 会放行
+`bench finance`，然后每个 processor request 才返回 `missing_api_key_env`。这会
+生成 `tokens=0` 的 benchmark row，容易被误读为金融做题失败或进入统计污染。
+
+本轮补齐 live benchmark 启动前的 provider preflight：
+
+- `bench finance` / chat / agent 的 live 入口会先检查 `DEEPSEEK_API_KEY`。
+- 如果当前进程没有 key，会尝试从 Windows User/Machine environment 安全读取一次；
+  成功时只注入当前 Python 进程环境，不打印、不写 journal。
+- 如果 Windows interop 失败或没有 key，并且 `HOLO_V3_LIVE_MODEL=1`，入口直接返回
+  `status=blocked, reason=missing_live_model_api_key`，包含 env 名和 sanitized
+  diagnostics，但不创建 benchmark results/summary。
+- 如果既没有 key 也没有 live gate，仍保持旧的 `live_model_not_enabled` 语义。
+- `--predictions` 离线评分路径不受影响；它仍可在无 provider key 时运行。
+
+结构和 CLI 验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_phase62_chat_runtime.py::test_phase62_live_gate_blocks_when_enabled_but_api_key_missing tests/test_kernel_v3_phase62_chat_runtime.py::test_phase62_live_gate_imports_windows_api_key_without_exposing_value tests/test_kernel_v3_phase62_chat_runtime.py::test_phase62_cli_chat_online_mode_uses_model_backed_processors tests/test_kernel_v3_phase62_chat_runtime.py::test_phase62_successful_semantic_response_is_not_converted_to_generic_pending_input -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py::test_finance_benchmark_live_blocks_before_writing_rows_when_api_key_missing tests/test_kernel_v3_finance_benchmark.py::test_finance_benchmark_cli_scores_prediction_file -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase62_chat_runtime.py tests/test_kernel_v3_finance_benchmark.py -q
+.venv/bin/python -m py_compile kernel_v3/cli.py tests/test_kernel_v3_phase62_chat_runtime.py tests/test_kernel_v3_finance_benchmark.py
+```
+
+结果：
+
+- `4 passed in 1.92s`
+- `2 passed in 26.86s`
+- `107 passed in 192.10s`
+- `py_compile` passed
+
+实际 CLI smoke：
+
+```text
+HOLO_V3_LIVE_MODEL=1 env -u DEEPSEEK_API_KEY .venv/bin/python -m kernel_v3.cli ... bench finance ...
+```
+
+结果为 `status=blocked, reason=missing_live_model_api_key`，退出码 `1`，且临时
+`results.jsonl` / `summary.json` 均未创建。当前 Windows interop diagnostic 仍是
+`UtilBindVsockAnyPort: socket failed 1`，所以真正恢复 live 刷分前仍需把 provider
+key 直接放进 UbuntuHolo 环境。

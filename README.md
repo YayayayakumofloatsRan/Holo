@@ -429,6 +429,16 @@ on `financebench_id_00499` produced `tokens=0` and `missing_api_key_env:7`
 because UbuntuHolo could not read the Windows provider key through broken
 Windows interop; that run is recorded only as environment blockage, not finance
 capability evidence.
+The following checkpoint adds a hard live-benchmark preflight for that failure
+mode. Live chat/agent/`bench finance` now verifies `DEEPSEEK_API_KEY` before
+starting model-backed work, attempts one safe Windows User/Machine environment
+import into the current process, and blocks with
+`missing_live_model_api_key` if the key is still unavailable while
+`HOLO_V3_LIVE_MODEL=1`. Blocked finance benchmark runs do not create
+`results.jsonl` or `summary.json`, preventing zero-token provider failures from
+polluting benchmark evidence. Targeted validation passed (`107` chat/finance
+benchmark CLI tests plus `py_compile`), and an actual temporary CLI smoke
+returned the expected blocked status without writing output files.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in

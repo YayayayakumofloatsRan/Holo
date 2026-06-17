@@ -1111,6 +1111,52 @@ def test_finance_benchmark_cli_scores_prediction_file(tmp_path: Path) -> None:
     assert output.exists()
 
 
+def test_finance_benchmark_live_blocks_before_writing_rows_when_api_key_missing(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    dataset = tmp_path / "dataset.jsonl"
+    output = tmp_path / "results.jsonl"
+    summary = tmp_path / "summary.json"
+    journal = tmp_path / "journal.jsonl"
+    index = tmp_path / "journal.sqlite"
+    dataset.write_text(json.dumps({"id": "Q1", "question": "Revenue?"}) + "\n", encoding="utf-8")
+    monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_read_windows_env_value",
+        lambda name: {"checked": True, "value": "", "error": "windows interop unavailable"},
+    )
+
+    code = cli.main(
+        [
+            "--journal",
+            str(journal),
+            "--index",
+            str(index),
+            "bench",
+            "finance",
+            "--dataset",
+            str(dataset),
+            "--output",
+            str(output),
+            "--summary-output",
+            str(summary),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert payload["status"] == "blocked"
+    assert payload["reason"] == "missing_live_model_api_key"
+    assert payload["api_key_env"] == "DEEPSEEK_API_KEY"
+    assert not output.exists()
+    assert not summary.exists()
+    assert not JournalStore(journal, index_path=index).records(kind="finance_benchmark_item_started")
+
+
 def test_finance_dev_annotation_scorer_keeps_gold_post_run(tmp_path: Path) -> None:
     annotation = tmp_path / "dev_gold.jsonl"
     annotation.write_text(

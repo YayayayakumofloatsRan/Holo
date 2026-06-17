@@ -1,5 +1,7 @@
+import argparse
 import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -917,6 +919,39 @@ def test_phase62_cli_chat_defaults_to_live_model(tmp_path: Path, capsys, monkeyp
     assert JournalStore(journal, index_path=index).records() == []
 
 
+def test_phase62_live_gate_blocks_when_enabled_but_api_key_missing(monkeypatch):
+    monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_read_windows_env_value",
+        lambda name: {"checked": True, "value": "", "error": "windows interop unavailable"},
+    )
+
+    block = cli._chat_live_model_block(argparse.Namespace(online=True))
+
+    assert block["status"] == "blocked"
+    assert block["reason"] == "missing_live_model_api_key"
+    assert block["api_key_env"] == "DEEPSEEK_API_KEY"
+    assert block["diagnostics"]["windows_env_checked"] is True
+    assert "DEEPSEEK_API_KEY" not in os.environ
+
+
+def test_phase62_live_gate_imports_windows_api_key_without_exposing_value(monkeypatch):
+    monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_read_windows_env_value",
+        lambda name: {"checked": True, "value": "secret-from-windows"},
+    )
+
+    block = cli._chat_live_model_block(argparse.Namespace(online=True))
+
+    assert block is None
+    assert os.environ["DEEPSEEK_API_KEY"] == "secret-from-windows"
+
+
 def test_phase62_cli_chat_online_mode_is_live_gated(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.delenv("HOLO_V3_LIVE_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -1116,6 +1151,7 @@ def test_phase62_cli_agent_deepseek_key_enables_online_without_holo_gate(tmp_pat
 
 def test_phase62_cli_chat_online_mode_uses_model_backed_processors(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-present")
     model_action_text = "online-model-smoke-response"
     monkeypatch.setattr(
         cli,
@@ -1207,6 +1243,7 @@ def test_phase62_cli_chat_online_mode_uses_model_backed_processors(tmp_path: Pat
 
 def test_phase62_successful_semantic_response_is_not_converted_to_generic_pending_input(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.setenv("HOLO_V3_LIVE_MODEL", "1")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key-present")
     response_text = "语言的边界确实会影响思想的边界，但这不等于沉默本身没有意义。"
     monkeypatch.setattr(
         cli,

@@ -102,6 +102,15 @@ reasoning: UbuntuHolo could not read the Windows provider key because
 `UtilBindVsockAnyPort: socket failed 1`. A valid rerun requires the provider key
 to be visible directly in the UbuntuHolo environment.
 
+Follow-up guard: Kernel v3 now preflights live model credentials before
+`bench finance` starts. If `DEEPSEEK_API_KEY` is absent, it attempts one safe
+Windows environment import into the current process; if the key remains absent
+while `HOLO_V3_LIVE_MODEL=1`, the command returns
+`missing_live_model_api_key` and does not create benchmark results or summary
+files. A temporary CLI smoke verified that this blocks before row execution.
+This prevents zero-token provider failures from being mistaken for finance
+capability evidence.
+
 ## 2026-06-17 Deep Loop Follow-Up Repair
 
 After the P0 architecture pass moved finance-capability onto the

@@ -5,6 +5,7 @@ import html
 import inspect
 import json
 import os
+import subprocess
 import sys
 import urllib.parse
 from dataclasses import replace
@@ -4823,11 +4824,65 @@ def _agent_uses_live_model(args) -> bool:
 def _chat_live_model_block(args) -> JsonObject | None:
     if not _agent_uses_live_model(args):
         return None
-    if str(os.environ.get("DEEPSEEK_API_KEY", "") or "").strip():
+    key_status = _ensure_live_model_api_key("DEEPSEEK_API_KEY")
+    if key_status["available"]:
         return None
     if os.environ.get("HOLO_V3_LIVE_MODEL") == "1":
-        return None
+        return {
+            "status": "blocked",
+            "reason": "missing_live_model_api_key",
+            "api_key_env": "DEEPSEEK_API_KEY",
+            "diagnostics": key_status["diagnostics"],
+        }
     return {"status": "blocked", "reason": "live_model_not_enabled"}
+
+
+def _ensure_live_model_api_key(env_name: str) -> JsonObject:
+    if str(os.environ.get(env_name, "") or "").strip():
+        return {"available": True, "source": "process_env", "diagnostics": {"api_key_env": env_name}}
+    imported = _read_windows_env_value(env_name)
+    if imported.get("value"):
+        os.environ[env_name] = str(imported["value"])
+        return {
+            "available": True,
+            "source": "windows_env",
+            "diagnostics": {"api_key_env": env_name, "windows_env_checked": True},
+        }
+    diagnostics: JsonObject = {
+        "api_key_env": env_name,
+        "process_env_present": False,
+        "windows_env_checked": bool(imported.get("checked")),
+    }
+    if imported.get("error"):
+        diagnostics["windows_env_error"] = str(imported["error"])[:240]
+    return {"available": False, "source": "missing", "diagnostics": diagnostics}
+
+
+def _read_windows_env_value(name: str) -> JsonObject:
+    powershell = Path("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+    if not powershell.exists():
+        return {"checked": False, "value": ""}
+    script = (
+        f"$v=[Environment]::GetEnvironmentVariable('{name}','User');"
+        f"if(-not $v){{$v=[Environment]::GetEnvironmentVariable('{name}','Machine')}};"
+        "if($v){[Console]::Out.Write($v)}"
+    )
+    try:
+        proc = subprocess.run(
+            [str(powershell), "-NoProfile", "-Command", script],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+            check=False,
+        )
+    except Exception as exc:
+        return {"checked": True, "value": "", "error": f"{type(exc).__name__}: {exc}"}
+    value = proc.stdout.strip()
+    if value:
+        return {"checked": True, "value": value}
+    error = (proc.stderr or "").strip()
+    return {"checked": True, "value": "", "error": error} if error else {"checked": True, "value": ""}
 
 
 def _processor_mode(args, name: str) -> str:
