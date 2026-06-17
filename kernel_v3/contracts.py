@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Self
 
 
@@ -24,7 +24,13 @@ class Contract:
             names = ", ".join(sorted(unknown_fields))
             raise ValueError(f"{cls.__name__}.from_dict got unknown fields: {names}")
 
-        missing_fields = field_names - set(data)
+        missing_fields = {
+            field.name
+            for field in fields(cls)
+            if field.name not in data
+            and field.default is MISSING
+            and field.default_factory is MISSING  # type: ignore[comparison-overlap]
+        }
         if missing_fields:
             names = ", ".join(sorted(missing_fields))
             raise ValueError(f"{cls.__name__}.from_dict missing fields: {names}")
@@ -127,6 +133,7 @@ class ToolManifest(Contract):
     enabled: bool
     description: str
     input_schema: JsonObject
+    runtime: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, kw_only=True)
