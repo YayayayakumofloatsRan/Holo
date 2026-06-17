@@ -252,6 +252,17 @@ separate live model runs with gold/reference kept out of model context. Live
 finance runs should use `.venv/bin/python`, because the project venv contains
 the installed SEC/document/table dependencies that the system Python may not
 have.
+The follow-up live streaming probe on `financebench_id_03029` showed that this
+toolchain path works but exposed a higher-level evidence contract break:
+`document.docling.convert` returned the exact PP&E purchase line in
+`focus_snippets`, yet the finalizer still failed with `missing_retrieval_report`
+because only `retrieval.run` observations were promoted into retrieval
+evidence/citation substrate. Kernel v3 now promotes finance open-component
+observations, including Docling focus snippets and SEC/OpenBB/DuckDB/SymPy
+payloads, through the existing synthetic `toolchain_grounding` report path. The
+LLM still chooses facts and conclusions; the host only makes model-called tool
+observations visible to the same evidence, citation, ledger, verifier, and
+synthesis contracts.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in

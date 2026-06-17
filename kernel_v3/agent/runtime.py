@@ -13921,6 +13921,32 @@ def _retrieval_and_toolchain_grounding(
 
 WORKSPACE_SYNTHESIS_EVIDENCE_CHARS = 12000
 WORKSPACE_SYNTHESIS_CITATION_CHARS = 2048
+TOOLCHAIN_GROUNDING_OBSERVATION_SOURCES = {
+    "tool:workspace.list",
+    "tool:workspace.search",
+    "tool:file.read",
+    "tool:workspace.write",
+    "tool:shell.exec",
+    "tool:script.exec",
+    f"tool:{SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME}",
+    f"tool:{SEC_EDGAR_FINANCIALS_TOOL_NAME}",
+    f"tool:{DOCUMENT_DOCLING_CONVERT_TOOL_NAME}",
+    f"tool:{DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME}",
+    f"tool:{MARKET_OPENBB_FETCH_TOOL_NAME}",
+    f"tool:{DATA_TABLE_QUERY_TOOL_NAME}",
+    f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}",
+}
+FINANCE_DOCUMENT_GROUNDING_OBSERVATION_SOURCES = {
+    f"tool:{DOCUMENT_DOCLING_CONVERT_TOOL_NAME}",
+    f"tool:{DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME}",
+}
+FINANCE_STRUCTURED_GROUNDING_OBSERVATION_SOURCES = {
+    f"tool:{SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME}",
+    f"tool:{SEC_EDGAR_FINANCIALS_TOOL_NAME}",
+    f"tool:{MARKET_OPENBB_FETCH_TOOL_NAME}",
+    f"tool:{DATA_TABLE_QUERY_TOOL_NAME}",
+    f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}",
+}
 
 
 def _workspace_grounding(
@@ -13943,7 +13969,7 @@ def _workspace_grounding(
     for index, record in enumerate(observations, start=1):
         data = record.data
         source = str(data.get("source") or "")
-        if source not in {"tool:workspace.list", "tool:workspace.search", "tool:file.read", "tool:workspace.write", "tool:shell.exec", "tool:script.exec"}:
+        if source not in TOOLCHAIN_GROUNDING_OBSERVATION_SOURCES:
             continue
         content = data.get("content", {})
         if not isinstance(content, dict):
@@ -13983,6 +14009,7 @@ def _workspace_grounding(
             source=source,
         )
         path = _workspace_observation_title(content, source=source)
+        uri = _workspace_observation_uri(content, source=source, title=path)
         artifact_id = record.artifact_refs[0] if record.artifact_refs else f"artifact-{record.observation_ref or 'workspace-evidence-' + str(index)}"
         emit_full_text_evidence = text.strip() and not (
             candidate_facts and source in {"tool:shell.exec", "tool:script.exec"}
@@ -13997,7 +14024,7 @@ def _workspace_grounding(
                 document_id=f"workspace-doc-{index}",
                 source_id=path,
                 artifact_id=artifact_id,
-                uri=f"workspace://{path}",
+                uri=uri,
                 title=path,
                 text=text,
                 score=1.0,
@@ -14011,7 +14038,7 @@ def _workspace_grounding(
                     goal_id="goal-workspace",
                     evidence_id=evidence_id,
                     artifact_id=artifact_id,
-                    uri=f"workspace://{path}",
+                    uri=uri,
                     title=path,
                     quote=text[:citation_char_limit],
                     span_start=0,
@@ -14033,7 +14060,7 @@ def _workspace_grounding(
                     document_id=f"workspace-doc-{index}",
                     source_id=path,
                     artifact_id=artifact_id,
-                    uri=f"workspace://{path}",
+                    uri=uri,
                     title=f"{path} candidate fact {fact_index}",
                     text=fact_text[:evidence_char_limit],
                     score=1.0,
@@ -14047,7 +14074,7 @@ def _workspace_grounding(
                     goal_id="goal-workspace",
                     evidence_id=evidence_id,
                     artifact_id=artifact_id,
-                    uri=f"workspace://{path}",
+                    uri=uri,
                     title=f"{path} candidate fact {fact_index}",
                     quote=fact_text[:citation_char_limit],
                     span_start=0,
@@ -14600,6 +14627,18 @@ def _workspace_observation_text(
     evidence_char_limit: int,
     source: str = "",
 ) -> str:
+    if source in FINANCE_DOCUMENT_GROUNDING_OBSERVATION_SOURCES:
+        return _finance_document_observation_text(
+            content,
+            artifact_store=artifact_store,
+            evidence_char_limit=evidence_char_limit,
+        )
+    if source in FINANCE_STRUCTURED_GROUNDING_OBSERVATION_SOURCES:
+        return _finance_structured_observation_text(
+            content,
+            artifact_store=artifact_store,
+            evidence_char_limit=evidence_char_limit,
+        )
     if source == "tool:workspace.list":
         return _workspace_listing_text(content)[:evidence_char_limit]
     if source == "tool:workspace.search":
@@ -14619,7 +14658,86 @@ def _workspace_observation_text(
     return text[:evidence_char_limit]
 
 
+def _finance_document_observation_text(
+    content: JsonObject,
+    *,
+    artifact_store: ArtifactStore,
+    evidence_char_limit: int,
+) -> str:
+    payload = _artifact_json_payload(content, artifact_store=artifact_store)
+    lines: list[str] = []
+    source_url = _string_value(payload.get("source") or content.get("source"))
+    if source_url:
+        lines.append(f"source_url={source_url}")
+    component = _string_value(payload.get("component") or content.get("component"))
+    execution = _string_value(payload.get("component_execution") or content.get("component_execution"))
+    if component or execution:
+        lines.append(" ".join(item for item in [f"component={component}" if component else "", f"component_execution={execution}" if execution else ""] if item))
+    snippets = payload.get("focus_snippets")
+    snippet_items = snippets if isinstance(snippets, list) else []
+    for index, item in enumerate(snippet_items[:16], start=1):
+        if not isinstance(item, dict):
+            continue
+        term = _string_value(item.get("term"))
+        snippet = _string_value(item.get("snippet"))
+        if not snippet:
+            continue
+        prefix = f"focus_snippet_{index}"
+        if term:
+            prefix += f" term={term}"
+        lines.append(f"{prefix}: {snippet}")
+    text = _string_value(payload.get("text") or content.get("text"))
+    if text:
+        lines.append("document_text_preview: " + text[: min(4000, evidence_char_limit)])
+    return "\n".join(lines)[:evidence_char_limit]
+
+
+def _finance_structured_observation_text(
+    content: JsonObject,
+    *,
+    artifact_store: ArtifactStore,
+    evidence_char_limit: int,
+) -> str:
+    payload = _artifact_json_payload(content, artifact_store=artifact_store)
+    try:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)[:evidence_char_limit]
+    except TypeError:
+        return str(payload)[:evidence_char_limit]
+
+
+def _artifact_json_payload(content: JsonObject, *, artifact_store: ArtifactStore) -> JsonObject:
+    artifact_id = content.get("artifact_id")
+    if isinstance(artifact_id, str) and artifact_store.has_blob(artifact_id):
+        payload = artifact_store.read_blob(artifact_id)
+        text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else str(payload)
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {**content, "artifact_text": text}
+        return parsed if isinstance(parsed, dict) else {**content, "artifact_payload": parsed}
+    return dict(content)
+
+
 def _workspace_observation_title(content: JsonObject, *, source: str) -> str:
+    if source in FINANCE_DOCUMENT_GROUNDING_OBSERVATION_SOURCES:
+        uri = _string_value(content.get("source") or content.get("source_url"))
+        if uri:
+            filename = Path(uri.rstrip("/").split("/")[-1]).name
+            return f"finance document: {filename or uri}"
+        return "finance document conversion"
+    if source == f"tool:{SEC_EDGAR_FINANCIALS_TOOL_NAME}":
+        identifier = _string_value(content.get("identifier"))
+        statement = _string_value(content.get("statement"))
+        return "SEC EDGAR financials" + (f": {identifier}" if identifier else "") + (f" {statement}" if statement else "")
+    if source == f"tool:{SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME}":
+        identifier = _string_value(content.get("identifier"))
+        form = _string_value(content.get("form"))
+        return "SEC EDGAR company filings" + (f": {identifier}" if identifier else "") + (f" {form}" if form else "")
+    if source == f"tool:{MARKET_OPENBB_FETCH_TOOL_NAME}":
+        route = _string_value(content.get("route"))
+        return f"OpenBB market data: {route}" if route else "OpenBB market data"
+    if source in {f"tool:{DATA_TABLE_QUERY_TOOL_NAME}", f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}"}:
+        return source.removeprefix("tool:")
     if source == "tool:workspace.search":
         query = content.get("query")
         return f"workspace search: {query}" if isinstance(query, str) and query else "workspace search"
@@ -14633,6 +14751,24 @@ def _workspace_observation_title(content: JsonObject, *, source: str) -> str:
         return f"script exec: {path}" if isinstance(path, str) and path else "script exec"
     path = content.get("path")
     return str(path) if isinstance(path, str) and path else "workspace"
+
+
+def _workspace_observation_uri(content: JsonObject, *, source: str, title: str) -> str:
+    if source in FINANCE_DOCUMENT_GROUNDING_OBSERVATION_SOURCES:
+        uri = _string_value(content.get("source") or content.get("source_url"))
+        return uri or f"holo-tool://{source.removeprefix('tool:')}/{_short_hash(title)}"
+    if source in {f"tool:{SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME}", f"tool:{SEC_EDGAR_FINANCIALS_TOOL_NAME}"}:
+        identifier = _string_value(content.get("identifier")) or "unknown"
+        form = _string_value(content.get("form")) or "filings"
+        statement = _string_value(content.get("statement"))
+        suffix = f"/{statement}" if statement else ""
+        return f"sec-edgar://{identifier}/{form}{suffix}"
+    if source == f"tool:{MARKET_OPENBB_FETCH_TOOL_NAME}":
+        route = _string_value(content.get("route")) or "route"
+        return f"openbb://{route}"
+    if source in {f"tool:{DATA_TABLE_QUERY_TOOL_NAME}", f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}"}:
+        return f"holo-tool://{source.removeprefix('tool:')}/{_short_hash(title)}"
+    return f"workspace://{title}"
 
 
 def _workspace_listing_text(content: JsonObject) -> str:

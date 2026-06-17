@@ -582,6 +582,41 @@ git diff --check
 
 结果：`25 passed`。这是工具接口稳定性证据，不是 FinanceBench / FinQA accuracy。
 
+### 2026-06-17 P0 续进：open-component evidence adapter
+
+随后使用 `.venv/bin/python`、clean journal、`finance-capability`、`--agent-loop-streaming` 对 `financebench_id_03029` 做了 live 单题探针：
+
+```text
+.state/kernel_v3/bench/finance/fb_debug50_stream_docfix_o000_l001_20260617.*
+```
+
+结果不是通过：`status=failed`，失败层是 `failure_report_not_final_answer` / `missing_retrieval_report`。这不是 provider 不可用，也不是 Docling/PDF 工具失败。journal 显示：
+
+- `document.docling.convert` 两次成功，`component_execution=light_pdf_reader_before_docling`；
+- 第一条 `focus_snippets` 已包含 `Purchases of property, plant and equipment (PP&E) $ (1,577) ...`；
+- `artifact.read` 成功，`sec.edgar.financials` 成功；
+- 但 retrieval metrics 仍是 `retrieval_runs=0`、`citation_present=false`、`claim_ledger_present=false`、`calculator=0`、`formula=0`。
+
+根因是 evidence contract 断裂：`_workspace_grounding(...)` 的 synthetic `toolchain_grounding` 机制已经存在，但只接收 workspace/shell/script observations；Finance open-component tools 虽然已经暴露给模型并成功执行，却没有进入 evidence/citation/claim/finance_fact substrate。因此 evaluator 仍认为缺少 `retrieval_evidence` / `citation_refs`，最后按 `repeated_missing_evidence` 停止。
+
+本轮修复把 finance open-component observations 纳入同一 grounding path：
+
+- `document.docling.convert` / `document.trafilatura.extract`：优先把 `focus_snippets`、source URL、component execution、text preview 转成 evidence/citation。
+- `sec.edgar.company_filings` / `sec.edgar.financials`、`market.openbb.fetch`、`data.table.query`、`math.sympy.compute`：把结构化 JSON payload 转成 bounded evidence text，URI 使用 `sec-edgar://`、`openbb://` 或 `holo-tool://` 形式。
+- synthetic report 仍是 `toolchain_grounding`；finalizer、fact ledger、claim ledger、numeric verifier 和 synthesizer 继续走旧合同。
+- 这不是 host 选择答案，也不是按 FinanceBench id 打表；它只是把模型已经调用并成功返回的工具观察纳入同一证据合同。
+
+结构验证：
+
+```bash
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_toolchain_grounding_promotes_docling_focus_snippets tests/test_kernel_v3_finance_engine.py::test_retrieval_extraction_grounding_promotes_sec_companyfacts_spans tests/test_kernel_v3_finance_engine.py::test_recipe_evaluator_journals_finance_ledger_after_retrieval_for_next_planner_turn -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_open_components.py -q
+git diff --check
+```
+
+结果：新增 Docling focus-snippet grounding 测试通过，相关定点测试通过。下一步必须重跑 live 单题；只有 live run 通过后才能把它记为 finance 做题能力进展。
+
 ### 与外部项目 agent loop 的剩余差距估计
 
 这个估计只描述 agent loop 技术 parity，不是 FinanceBench / FinQA 分数。

@@ -42,6 +42,7 @@ This document records the FB/FQA tool exposure and open-component readiness boun
 - Temporary workbench assembly: `workspace.list`, `workspace.search`, `file.read`, `workspace.write`, `shell.exec`, `script.exec`
 - Long-result artifact boundary: SEC/EDGAR, document extraction/conversion, OpenBB, and DuckDB table-query tools return bounded observations plus `artifact_id` / `artifact.read` hints while storing the full JSON tool payload in `ArtifactStore`.
 - Document evidence visibility: `document.docling.convert` now gives PDF URLs a lightweight PDF-reader path before heavy Docling, reports isolated worker failures as observations, and returns `focus_snippets` before truncated text. The snippets are only candidate evidence windows selected from model-provided/default finance terms; the LLM still chooses facts, line items, formulas, and conclusions.
+- Open-component evidence adapter: finance tool observations from Docling, Trafilatura, SEC EdgarTools, OpenBB, DuckDB, and SymPy can now enter the same synthetic `toolchain_grounding` evidence/citation path as workspace/script tools. This prevents successful model-called document tools from being discarded merely because no separate `retrieval.run` record exists.
 
 ## 隔离组件策略
 

@@ -9318,6 +9318,66 @@ def test_retrieval_extraction_grounding_promotes_sec_companyfacts_spans() -> Non
     assert any(fact.entity == "Seagen Inc." and fact.metric == "revenue" and fact.value == "1962412000" for fact in facts)
 
 
+def test_toolchain_grounding_promotes_docling_focus_snippets() -> None:
+    journal = JournalStore.in_memory()
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+    source_url = "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf"
+    snippet = (
+        "Cash Flows from Investing Activities: Years ended December 31 (Millions) 2018 2017 2016 "
+        "Purchases of property, plant and equipment (PP&E) $ (1,577) $ (1,373) $ (1,420)"
+    )
+    journal.append(
+        task_id="task-docling-grounding",
+        run_id="run-docling-grounding",
+        step_id="step-docling",
+        kind="observation",
+        data={
+            "observation_id": "obs-docling-1",
+            "run_id": "run-docling-grounding",
+            "kind": "docling_conversion",
+            "status": "ok",
+            "source": f"tool:{DOCUMENT_DOCLING_CONVERT_TOOL_NAME}",
+            "content": {
+                "component": "docling",
+                "component_execution": "light_pdf_reader_before_docling",
+                "source": source_url,
+                "focus_snippets": [
+                    {
+                        "term": "purchases of property, plant and equipment",
+                        "start_offset": 166675,
+                        "snippet": snippet,
+                    }
+                ],
+                "text": "front matter only",
+                "text_chars": 200000,
+                "truncated": True,
+            },
+        },
+        observation_ref="obs-docling-1",
+    )
+
+    evidence, citations, updated_report = _retrieval_and_toolchain_grounding(
+        journal,
+        "task-docling-grounding",
+        "run-docling-grounding",
+        recipe=recipe,
+        artifact_store=ArtifactStore.in_memory(),
+    )
+
+    assert updated_report is not None
+    assert updated_report.status == "sufficient"
+    assert updated_report.diagnostics["source"] == "toolchain_grounding"
+    assert evidence
+    assert citations
+    assert evidence[0].uri == source_url
+    assert citations[0].uri == source_url
+    assert "Purchases of property, plant and equipment" in evidence[0].text
+    assert "1,577" in citations[0].quote
+
+
 def test_html_table_fact_lines_feed_adjusted_ebitda_bridge_planner() -> None:
     text = (
         "The Kraft Heinz Company Reconciliation of Net Income/(Loss) to Adjusted EBITDA "
