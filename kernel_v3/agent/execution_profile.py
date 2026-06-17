@@ -333,6 +333,8 @@ def _composable_toolchain_defaults(profile_id: str) -> JsonObject:
 
 
 def _agent_loop_runtime_backend(profile_id: str) -> str:
+    if profile_id == "finance-capability":
+        return "deep_agent_loop"
     if profile_id.startswith("finance-"):
         return "langgraph"
     if profile_id in {"web-research", "long-mission"}:

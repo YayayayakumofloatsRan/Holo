@@ -440,6 +440,37 @@ def test_finance_benchmark_runner_does_not_need_gold_during_agent_run() -> None:
     assert journal.records(kind="finance_benchmark_item_result")
 
 
+def test_finance_benchmark_runner_records_item_start_before_receive() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _StaticChatRuntime(journal)
+    item = FinanceBenchmarkItem(
+        item_id="run-start",
+        question="What was ExampleCo revenue?",
+        gold_answer="$10 million",
+        category="fact_extraction",
+        workflow_type="defined_formula_numeric_calculation",
+    )
+    seen_starts: list[tuple[int, str, str]] = []
+
+    def on_receive(_text: str, thread_id: str) -> None:
+        starts = journal.records(kind="finance_benchmark_item_started")
+        assert len(starts) == 1
+        assert starts[0].data["item_id"] == "run-start"
+        assert starts[0].data["thread_id"] == thread_id
+        assert "gold_answer" not in starts[0].data
+
+    runtime.on_receive = on_receive
+
+    run_finance_benchmark(
+        items=[item],
+        runtime=runtime,
+        journal=journal,
+        start_callback=lambda index, started_item, thread_id: seen_starts.append((index, started_item.item_id, thread_id)),
+    )
+
+    assert seen_starts == [(1, "run-start", "finance-bench-0001-run-start")]
+
+
 def test_public_finance_agent_benchmark_import_keeps_gold_out_of_prompt(tmp_path: Path) -> None:
     source = tmp_path / "fab.csv"
     output = tmp_path / "normalized.jsonl"
@@ -2055,6 +2086,25 @@ def test_finance_benchmark_progress_prints_processor_breakdown(capsys) -> None:
     assert "trace_cite=50.0%" in stderr
     assert "proc_tasks=finance.slot_bind:1,task.compile:1" in stderr
     assert "proc_errors=json_invalid:1" in stderr
+
+
+def test_finance_benchmark_start_callback_prints_thread(capsys) -> None:
+    callback = cli._finance_benchmark_start_callback(enabled=True, total=2)
+    assert callback is not None
+    item = FinanceBenchmarkItem(
+        item_id="Q-start",
+        question="What was revenue?",
+        category="fact_extraction",
+        workflow_type="direct_line_item_or_disclosure_extraction",
+    )
+
+    callback(1, item, "finance-bench-0001-q-start")
+
+    stderr = capsys.readouterr().err
+    assert "[bench-start] 1/2 item=Q-start" in stderr
+    assert "thread=finance-bench-0001-q-start" in stderr
+    assert "category=fact_extraction" in stderr
+    assert "workflow=direct_line_item_or_disclosure_extraction" in stderr
 
 
 def test_finance_benchmark_cli_imports_public_dataset(tmp_path: Path) -> None:

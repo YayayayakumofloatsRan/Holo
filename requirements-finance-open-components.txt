@@ -25,13 +25,10 @@ opentelemetry-api==1.42.1
 opentelemetry-sdk==1.42.1
 
 # Heavy/optional components are cataloged but not installed by this core file.
-# Install in an isolated env/container when document AI, browser/crawler, full
-# market connector, or external trace export is needed. The full docling package
-# currently pulls Torch/CUDA dependencies on Linux, so it must not be installed
-# directly into the main UbuntuHolo venv.
-# docling==2.102.2
-# openbb==4.7.2
-# playwright
-# crawl4ai
+# Install them in isolated worker venvs and point Holo at the worker Python:
+# - requirements-finance-isolated-documents.txt -> HOLO_DOCLING_PYTHON
+# - requirements-finance-isolated-market.txt -> HOLO_OPENBB_PYTHON
+# The full docling package currently pulls Torch/CUDA dependencies on Linux, so
+# it must not be installed directly into the main UbuntuHolo venv.
 # langfuse
 # arize-phoenix

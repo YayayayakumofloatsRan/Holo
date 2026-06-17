@@ -33,6 +33,7 @@ from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile, merge_context_budget
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
+from kernel_v3.deep_loop import DeepAgentLoopController, ModelAssistantTurnPlanner
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
@@ -42,6 +43,7 @@ from kernel_v3.finance import (
     FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES,
     FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES,
     FINANCE_OPEN_COMPONENT_TOOL_NAMES,
+    FINANCE_SLOT_BIND_TOOL_NAME,
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     FinanceFact,
@@ -58,6 +60,7 @@ from kernel_v3.finance import (
     compute_formula,
     finance_facts_to_claims,
     finance_formula_plan_to_transform_plan,
+    finance_agent_loop_contract,
     finance_toolchain_install_summary,
     finance_numeric_repair_guidance,
     finance_slot_frame,
@@ -117,6 +120,7 @@ from kernel_v3.retrieval.url_utils import expanded_url_targets
 from kernel_v3.runtime_graph import is_terminal_record
 from kernel_v3.session import TaskState
 from kernel_v3.substrate import Claim, EvidencePolicy, SlotFill, SlotFrame, SlotSpec, TransformPlan
+from kernel_v3.tool_use import ARTIFACT_READ_NAME, TOOL_DISCOVERY_NAME, register_artifact_tools, register_tool_discovery
 from kernel_v3.tools import ToolManifest, ToolRegistry
 from kernel_v3.workmethod import WorkMethodState, WorkMethodSupervisor
 
@@ -196,6 +200,7 @@ DEFAULT_RETRIEVAL_MAX_ARTIFACT_BYTES = 4_000_000_000
 DEFAULT_MODEL_DYNAMIC_MAX_STEPS = 2048
 DEFAULT_MODEL_DYNAMIC_MAX_TOOL_CALLS = 1024
 DEFAULT_MODEL_DYNAMIC_MAX_ARTIFACT_BYTES = 4_000_000_000
+MAX_FINANCE_NUMERIC_REPAIR_ATTEMPTS_PER_RUN = 2
 LOOP_GUARD_STOP_REASONS = {
     "max_tool_calls",
     "max_network_fetches",
@@ -668,17 +673,23 @@ class AgentRuntime:
                 artifact_store=self.artifact_store,
             )
             if _finance_tools_needed(recipe):
-                register_finance_tools(registry)
-            return self._with_memory_tools(registry)
+                register_finance_tools(registry, artifact_store=self.artifact_store)
+            return self._with_foundational_tools(registry, recipe=recipe)
         if recipe.mode in {"workspace_answer", "workspace_write"}:
             if self.workspace_root is not None:
-                return self._with_memory_tools(ToolRegistry.with_permissioned_workspace(root=self.workspace_root, artifact_store=self.artifact_store))
+                return self._with_foundational_tools(
+                    ToolRegistry.with_permissioned_workspace(root=self.workspace_root, artifact_store=self.artifact_store),
+                    recipe=recipe,
+                )
             if self.workspace_files:
-                return self._with_memory_tools(ToolRegistry.with_fake_workspace_tools(files=self.workspace_files, artifact_store=self.artifact_store))
-            return self._with_memory_tools(ToolRegistry.with_builtin_respond())
+                return self._with_foundational_tools(
+                    ToolRegistry.with_fake_workspace_tools(files=self.workspace_files, artifact_store=self.artifact_store),
+                    recipe=recipe,
+                )
+            return self._with_foundational_tools(ToolRegistry.with_builtin_respond(), recipe=recipe)
         if recipe.mode == "system_answer":
-            return self._with_memory_tools(ToolRegistry.with_builtin_respond())
-        return self._with_memory_tools(ToolRegistry.with_builtin_respond())
+            return self._with_foundational_tools(ToolRegistry.with_builtin_respond(), recipe=recipe)
+        return self._with_foundational_tools(ToolRegistry.with_builtin_respond(), recipe=recipe)
 
     def _retrieval_base_registry(self, recipe: TaskRecipe) -> ToolRegistry:
         if not _composable_toolchain_enabled(recipe):
@@ -759,6 +770,16 @@ class AgentRuntime:
             journal=self.journal,
         )
 
+    def _with_foundational_tools(self, registry: ToolRegistry, *, recipe: TaskRecipe) -> ToolRegistry:
+        registry = self._with_memory_tools(registry)
+        if recipe.allowed_tools:
+            register_artifact_tools(registry, artifact_store=self.artifact_store)
+            register_tool_discovery(
+                registry,
+                allowed_tool_names={*recipe.allowed_tools, ARTIFACT_READ_NAME, TOOL_DISCOVERY_NAME},
+            )
+        return registry
+
     def _planner(
         self,
         goal: str,
@@ -769,6 +790,11 @@ class AgentRuntime:
         if planner_mode == "model":
             if self.processor_fabric is None:
                 raise ValueError("model planner requires processor_fabric")
+            if _recipe_requests_deep_agent_loop(recipe):
+                return ModelAssistantTurnPlanner(
+                    fabric=self.processor_fabric,
+                    allowed_tool_names=_planner_allowed_tool_names(recipe),
+                )
             planner = ModelPlanner(
                 fabric=self.processor_fabric,
                 allowed_tool_names=_planner_allowed_tool_names(recipe),
@@ -2161,6 +2187,51 @@ class AgentRuntime:
     ) -> FinalAnswer | None:
         if synthesizer_mode != "model" or self.processor_fabric is None:
             return None
+        prior_attempts = _finance_numeric_repair_attempt_count(self.journal, answer.task_id, answer.run_id)
+        if prior_attempts >= MAX_FINANCE_NUMERIC_REPAIR_ATTEMPTS_PER_RUN:
+            issues = [
+                *list(getattr(verification, "issues", []) or [])[:16],
+                {
+                    "code": "finance_numeric_repair_attempt_limit",
+                    "message": "Repeated finance numeric repair attempts reached the per-run stability limit.",
+                    "attempt_limit": MAX_FINANCE_NUMERIC_REPAIR_ATTEMPTS_PER_RUN,
+                },
+            ]
+            self.journal.append(
+                task_id=answer.task_id,
+                run_id=answer.run_id,
+                step_id=None,
+                kind="finance_numeric_repair_guard",
+                data=redact_journal_data(
+                    {
+                        "schema": "holo.kernel_v3.finance_numeric_repair_guard.v1",
+                        "status": "stopped",
+                        "attempt": attempt,
+                        "prior_attempt_count": prior_attempts,
+                        "attempt_limit": MAX_FINANCE_NUMERIC_REPAIR_ATTEMPTS_PER_RUN,
+                        "verifier_status": getattr(verification, "status", None),
+                        "missing_evidence": _finance_numeric_missing_evidence(verification),
+                    }
+                ),
+                state_delta={"finance_numeric_repair_guard": "stopped"},
+            )
+            self._append_synthesis_gate_result(
+                answer,
+                recipe=recipe,
+                status="failed",
+                issues=issues,
+                diagnostics={
+                    "gate_id": "finance_numeric_repair_attempt_limit_v1",
+                    "source": "finance_numeric_repair_guard",
+                    "attempt": attempt,
+                    "prior_attempt_count": prior_attempts,
+                    "attempt_limit": MAX_FINANCE_NUMERIC_REPAIR_ATTEMPTS_PER_RUN,
+                    "verifier_status": getattr(verification, "status", None),
+                    "answer_numeric_support_rate": _finance_answer_numeric_support_rate(verification),
+                    "policy": "do_not_repeat_identical_numeric_repair_loops_without_new_facts_or_formula_traces",
+                },
+            )
+            return None
         judge = self._run_finance_numeric_judge(
             answer,
             verification,
@@ -2485,12 +2556,19 @@ class AgentRuntime:
         if self.processor_fabric is None:
             return []
         question = _root_goal_from_recipe(recipe)
+        slot_bind_facts = _select_facts_for_slot_bind(
+            question=question,
+            facts=facts,
+            compiled_program=compiled_program,
+        )
         parameters = {
             "adapter": "FinanceSlotBinder",
             "processor_budget": _processor_budget_metadata(recipe),
             "semantic_decision_owner": "model",
             "host_role": "validate_fact_ids_and_execute_calculator_only",
-            "max_tokens": _finance_slot_bind_max_tokens(facts=facts, compiled_program=compiled_program),
+            "max_tokens": _finance_slot_bind_max_tokens(facts=slot_bind_facts, compiled_program=compiled_program),
+            "raw_fact_count": len(facts),
+            "visible_fact_count": len(slot_bind_facts),
         }
         outcome = self.processor_fabric.run_json(
             task_type="finance.slot_bind",
@@ -2499,7 +2577,7 @@ class AgentRuntime:
             context_id=f"ctx-{task_id}-{run_id}-finance-slot-bind",
             prompt=_finance_slot_bind_prompt(
                 question=question,
-                facts=facts,
+                facts=slot_bind_facts,
                 compiled_program=compiled_program,
             ),
             schema=FINANCE_SLOT_BIND_SCHEMA,
@@ -2526,7 +2604,7 @@ class AgentRuntime:
                 context_id=f"ctx-{task_id}-{run_id}-finance-slot-bind-repair",
                 prompt=_finance_slot_bind_repair_prompt(
                     question=question,
-                    facts=facts,
+                    facts=slot_bind_facts,
                     compiled_program=compiled_program,
                     previous_error=outcome.result.error or "finance_slot_bind_json_invalid",
                     previous_raw_output=outcome.raw_text,
@@ -2543,7 +2621,7 @@ class AgentRuntime:
                 parsed = repair_outcome.parsed
         plans, rejected = _finance_slot_bind_plans_from_model(
             parsed,
-            facts=facts,
+            facts=slot_bind_facts,
             ledger_ref=ledger_ref,
         )
         self.journal.append(
@@ -2568,6 +2646,8 @@ class AgentRuntime:
                     "line_item_basis": _finance_slot_bind_semantic_basis(parsed, key="line_item_basis") if parsed else [],
                     "formula_request_count": len(parsed.get("formula_requests", [])) if parsed else 0,
                     "accepted_formula_plan_count": len(plans),
+                    "raw_fact_count": len(facts),
+                    "visible_fact_count": len(slot_bind_facts),
                     "missing_slots": parsed.get("missing_slots") if parsed else [],
                     "next_action": parsed.get("next_action") if parsed else {},
                     "rejected_formula_requests": rejected,
@@ -3833,6 +3913,7 @@ class _AgentContextCompiler:
                     journal,
                     task_id=task.task_id,
                     run_id=task.run_id,
+                    recipe=self.recipe,
                 ),
                 "mission_context": mission_context,
                 "thread_working_context": _thread_working_context_metadata(self.recipe),
@@ -3944,6 +4025,7 @@ def _toolchain_state_for_prompt(journal: JournalStore, *, task_id: str, run_id: 
         "repeated_action_groups": repeated_action_groups[:8],
         "toolchain_presence": {
             "retrieval": bool(source_counts.get("tool:retrieval.run")),
+            "finance_slot_bind": bool(source_counts.get(f"tool:{FINANCE_SLOT_BIND_TOOL_NAME}")),
             "calculator": bool(source_counts.get(f"tool:{CALCULATOR_TOOL_NAME}")),
             "finance_verify_numeric": bool(source_counts.get(f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}")),
             "finance_toolchain_describe": bool(source_counts.get(f"tool:{FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME}")),
@@ -4048,6 +4130,11 @@ def _compact_tool_payload_summary(tool: str, payload: JsonObject) -> JsonObject:
         input_fact_ids = _string_list(payload.get("input_fact_ids"))[:16]
         if input_fact_ids:
             result["input_fact_ids"] = input_fact_ids
+    elif tool_name == FINANCE_SLOT_BIND_TOOL_NAME:
+        result["fact_count"] = len(payload.get("facts")) if isinstance(payload.get("facts"), list) else 0
+        result["slot_binding_count"] = len(payload.get("slot_bindings")) if isinstance(payload.get("slot_bindings"), list) else 0
+        result["formula_request_count"] = len(payload.get("formula_requests")) if isinstance(payload.get("formula_requests"), list) else 0
+        result["missing_slots"] = _string_list(payload.get("missing_slots"))[:8]
     elif tool_name == FINANCE_VERIFY_NUMERIC_TOOL_NAME:
         result["question_preview"] = _bounded_text(payload.get("question"), limit=180)
         for key, out_key in (
@@ -4146,28 +4233,48 @@ def _compact_tool_unit_mismatch_examples(values: object) -> list[JsonObject]:
     ]
 
 
-def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
+def _finance_working_state_for_prompt(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe | None = None,
+) -> JsonObject:
     records = [record for record in journal.records(task_id=task_id) if record.run_id == run_id]
+    compiled_program_records = [record for record in records if record.kind == "compiled_task_program"]
     ledger_records = [record for record in records if record.kind == "finance_fact_ledger"]
+    claim_records = _finance_claim_records_for_working_state(records, recipe=recipe)
     slot_records = [record for record in records if record.kind == "slot_frame"]
     transform_records = [record for record in records if record.kind == "transform_plan"]
-    slot_bind_records = [record for record in records if record.kind == "finance_slot_bind"]
+    slot_bind_payloads = _finance_slot_bind_payloads_for_working_state(records)
     verification_payloads = _finance_verification_payloads_for_working_state(records)
+    execution_program = _finance_execution_program_for_working_state(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+        compiled_program_records=compiled_program_records,
+    )
 
     latest_ledger = ledger_records[-1].data if ledger_records and isinstance(ledger_records[-1].data, dict) else {}
     facts = _finance_facts_from_ledger(latest_ledger)
     compact_facts = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
+    latest_claim_ledger = claim_records[-1].data if claim_records and isinstance(claim_records[-1].data, dict) else {}
+    compact_claims = _compact_claims_from_ledger(latest_claim_ledger)
 
     traces = _finance_formula_traces_for_synthesis(
         _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
     )
     if not _has_finance_working_state_anchor(
         ledger_records=ledger_records,
+        claim_records=claim_records,
         traces=traces,
         verification_records=verification_payloads,
         slot_records=slot_records,
         transform_records=transform_records,
-        slot_bind_records=slot_bind_records,
+        slot_bind_payloads=slot_bind_payloads,
+        compiled_program_records=compiled_program_records,
+        execution_program=execution_program,
     ):
         return {}
     compact_traces = [_compact_formula_trace_for_judge(trace) for trace in traces[:12]]
@@ -4175,7 +4282,7 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
 
     latest_slot_frame = _compact_slot_frame_state(slot_records[-1].data if slot_records else {})
     latest_transform_plan = _compact_transform_plan_state(transform_records[-1].data if transform_records else {})
-    latest_slot_bind = _compact_finance_slot_bind_state(slot_bind_records[-1].data if slot_bind_records else {})
+    latest_slot_bind = _compact_finance_slot_bind_state(slot_bind_payloads[-1] if slot_bind_payloads else {})
     latest_verification = _compact_finance_verification_state(
         verification_payloads[-1] if verification_payloads else {}
     )
@@ -4184,9 +4291,14 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
             *_string_list(latest_slot_frame.get("missing_slots")),
             *_string_list(latest_transform_plan.get("missing_slots")),
             *_string_list(latest_verification.get("missing_slots")),
+            *_string_list(execution_program.get("missing_slots")),
         ]
     )
     attention: list[str] = []
+    if execution_program and not compact_facts:
+        attention.append("execution program is available; acquire evidence for missing slots before synthesis")
+    if compact_claims and not compact_facts:
+        attention.append("source-grounded claims are available; bind them to the disclosure or context slots before synthesis")
     if missing_slots:
         attention.append("missing finance slots remain; decide whether retrieval, calculation, verification, or a limitation is the best next move")
     if compact_facts and not compact_traces:
@@ -4201,11 +4313,25 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
         attention.append("latest finance numeric verification passed; decide whether the answer can now be finalized")
     return {
         "schema": "holo.kernel_v3.finance_working_state.v1",
+        "execution_program": execution_program,
+        "workbench": _finance_workbench_state_for_prompt(
+            execution_program=execution_program,
+            compact_facts=compact_facts,
+            compact_claims=compact_claims,
+            compact_traces=compact_traces,
+            latest_slot_bind=latest_slot_bind,
+            latest_verification=latest_verification,
+            missing_slots=missing_slots,
+        ),
         "ledger_count": len(ledger_records),
         "fact_count": int(latest_ledger.get("fact_count") or len(facts) or 0),
         "facts": compact_facts,
+        "claim_ledger_count": len(claim_records),
+        "claim_count": int(latest_claim_ledger.get("claim_count") or len(compact_claims) or 0),
+        "claims": compact_claims,
         "slot_frame": latest_slot_frame,
         "slot_bind": latest_slot_bind,
+        "slot_bind_count": len(slot_bind_payloads),
         "transform_plan": latest_transform_plan,
         "formula_trace_count": len(traces),
         "formula_traces": compact_traces,
@@ -4213,6 +4339,8 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
         "numeric_verification": latest_verification,
         "presence": {
             "finance_facts": bool(compact_facts),
+            "claim_ledger": bool(compact_claims),
+            "execution_program": bool(execution_program),
             "slot_frame": bool(latest_slot_frame),
             "slot_bind": bool(latest_slot_bind),
             "missing_slots": bool(missing_slots),
@@ -4225,6 +4353,83 @@ def _finance_working_state_for_prompt(journal: JournalStore, *, task_id: str, ru
             "observational finance working state only; the model owns metric binding, period binding, "
             "formula intent, next action, and final finance judgment"
         ),
+    }
+
+
+def _finance_execution_program_for_working_state(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    recipe: TaskRecipe | None,
+    compiled_program_records: list[object],
+) -> JsonObject:
+    if recipe is not None:
+        program = _execution_program_hint_for_planner(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            recipe=recipe,
+        )
+        if program:
+            return program
+    if not compiled_program_records:
+        return {}
+    latest = compiled_program_records[-1]
+    data = getattr(latest, "data", None)
+    program = _compact_compiled_task_program_for_prompt(data)
+    if program:
+        program["source_record_ref"] = getattr(latest, "record_id", None)
+    return program
+
+
+def _finance_workbench_state_for_prompt(
+    *,
+    execution_program: JsonObject,
+    compact_facts: list[JsonObject],
+    compact_claims: list[JsonObject],
+    compact_traces: list[JsonObject],
+    latest_slot_bind: JsonObject,
+    latest_verification: JsonObject,
+    missing_slots: list[str],
+) -> JsonObject:
+    if not (execution_program or compact_facts or compact_claims or compact_traces or latest_slot_bind or latest_verification):
+        return {}
+    transform_specs = list(execution_program.get("transform_specs") or []) if isinstance(execution_program.get("transform_specs"), list) else []
+    if latest_verification.get("status") == "failed":
+        phase = "verify_or_replan"
+    elif compact_traces:
+        phase = "semantic_synthesis_or_verify"
+    elif compact_facts and transform_specs:
+        phase = "ledger_bind_or_transform_compute"
+    elif compact_facts or compact_claims:
+        phase = "ledger_bind"
+    elif execution_program:
+        phase = "evidence_acquire"
+    else:
+        phase = "task_compile"
+    next_action_options: list[str] = []
+    if phase == "evidence_acquire":
+        next_action_options.extend(["retrieval.run", "sec.edgar.financials", "document.docling.convert"])
+    if phase in {"ledger_bind", "ledger_bind_or_transform_compute"}:
+        next_action_options.extend(["bind candidate facts to missing slots", "retrieve remaining missing slots"])
+    if phase == "ledger_bind_or_transform_compute":
+        next_action_options.extend(["calculator.compute", "data.table.query"])
+    if phase == "semantic_synthesis_or_verify":
+        next_action_options.extend(["finance.verify_numeric", "respond if evidence and formulas are sufficient"])
+    if phase == "verify_or_replan":
+        next_action_options.extend(["repair unsupported answer claims", "retrieve missing support", "calculator.compute"])
+    return {
+        "schema": "holo.kernel_v3.finance_workbench_state.v1",
+        "current_phase": phase,
+        "missing_slots": missing_slots[:16],
+        "transform_spec_count": len(transform_specs),
+        "fact_count": len(compact_facts),
+        "claim_count": len(compact_claims),
+        "formula_trace_count": len(compact_traces),
+        "next_action_options": _ordered_unique(next_action_options)[:8],
+        "decision_owner": "model",
+        "host_boundary": "phase and options are state hints only; the model chooses the next tool and finance judgment",
     }
 
 
@@ -4275,16 +4480,85 @@ def _finance_facts_from_ledger(data: object) -> list[FinanceFact]:
     return facts
 
 
+def _finance_claim_records_for_working_state(records: list[object], *, recipe: TaskRecipe | None) -> list[object]:
+    if recipe is not None and not _finance_tools_needed(recipe) and _research_profile_id(recipe) != FINANCE_FUNDAMENTALS_PROFILE_ID:
+        return []
+    result: list[object] = []
+    for record in records:
+        if getattr(record, "kind", None) != "claim_ledger":
+            continue
+        data = getattr(record, "data", None)
+        payload = data if isinstance(data, dict) else {}
+        domain = str(payload.get("domain") or "").strip().casefold()
+        purpose = str(payload.get("purpose") or "").strip().casefold()
+        if domain in {"finance", "source_grounded_research"} or purpose == "loop_workbench":
+            result.append(record)
+    return result
+
+
+def _compact_claims_from_ledger(data: object) -> list[JsonObject]:
+    payload = data if isinstance(data, dict) else {}
+    claims = payload.get("claims")
+    if not isinstance(claims, list):
+        return []
+    result: list[JsonObject] = []
+    for item in claims[:24]:
+        if not isinstance(item, dict):
+            continue
+        result.append(
+            {
+                "claim_id": _bounded_text(item.get("claim_id"), limit=96),
+                "domain": _bounded_text(item.get("domain") or payload.get("domain"), limit=64),
+                "attribute": _bounded_text(item.get("attribute"), limit=96),
+                "value": _bounded_text(item.get("value"), limit=360),
+                "source_ref": _bounded_text(item.get("source_ref"), limit=180),
+                "evidence_ref": _bounded_text(item.get("evidence_ref"), limit=96),
+                "citation_ref": _bounded_text(item.get("citation_ref"), limit=96),
+                "extraction_method": _bounded_text(item.get("extraction_method"), limit=80),
+                "confidence": item.get("confidence") if isinstance(item.get("confidence"), (int, float)) else None,
+            }
+        )
+    return [{key: value for key, value in item.items() if value not in (None, "", [])} for item in result]
+
+
+def _finance_slot_bind_payloads_for_working_state(records: list[object]) -> list[JsonObject]:
+    payloads: list[JsonObject] = []
+    for record in records:
+        kind = str(getattr(record, "kind", "") or "")
+        data = getattr(record, "data", None)
+        payload = data if isinstance(data, dict) else {}
+        if kind == "finance_slot_bind":
+            payloads.append(dict(payload))
+            continue
+        if kind != "observation":
+            continue
+        if str(payload.get("source") or "") != f"tool:{FINANCE_SLOT_BIND_TOOL_NAME}":
+            continue
+        content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+        if not content:
+            continue
+        item = dict(content)
+        item.setdefault("tool_observation_status", payload.get("status"))
+        item.setdefault("tool_observation_id", payload.get("observation_id"))
+        payloads.append(item)
+    return payloads
+
+
 def _has_finance_working_state_anchor(
     *,
     ledger_records: list[object],
+    claim_records: list[object],
     traces: list[FormulaTrace],
     verification_records: list[object],
     slot_records: list[object],
     transform_records: list[object],
-    slot_bind_records: list[object],
+    slot_bind_payloads: list[JsonObject],
+    compiled_program_records: list[object],
+    execution_program: JsonObject,
 ) -> bool:
-    if ledger_records or traces or verification_records or slot_bind_records:
+    if ledger_records or claim_records or traces or verification_records or slot_bind_payloads or execution_program:
+        return True
+    if compiled_program_records:
         return True
     for record in [*slot_records[-2:], *transform_records[-2:]]:
         data = getattr(record, "data", None)
@@ -4512,6 +4786,9 @@ class _RecipeBoundPlanner:
         host_semantic_fallbacks = _host_semantic_fallbacks_enabled(self.recipe)
         tool_scaffold = _finance_tool_scaffold_enabled(self.recipe)
         action = self.inner.propose(context, feedback)
+        rescue = self._benchmark_doc_clarification_retrieval_action(context, action)
+        if rescue is not None:
+            action = rescue
         if host_semantic_fallbacks or tool_scaffold:
             rescue = self._host_planner_failure_retrieval_action(context, action)
             if rescue is not None:
@@ -4625,6 +4902,53 @@ class _RecipeBoundPlanner:
             reasons=_ordered_unique(
                 [
                     "finance_capability_clarification_rescue",
+                    "task_assumed_solvable",
+                    *action.reasons,
+                ]
+            ),
+            side_effect_class="network",
+        )
+
+    def _benchmark_doc_clarification_retrieval_action(
+        self,
+        context: ContextBundle,
+        action: CandidateAction,
+    ) -> CandidateAction | None:
+        if self.recipe.mode != "retrieval_answer" or "retrieval.run" not in self.recipe.allowed_tools:
+            return None
+        if not _llm_semantic_judgment_required(self.recipe):
+            return None
+        if action.kind != "ask_user":
+            return None
+        benchmark_payload = _benchmark_doc_retrieval_payload(self.goal)
+        if not benchmark_payload:
+            benchmark_payload = _benchmark_doc_retrieval_payload_from_recipe(self.recipe)
+        if not _benchmark_doc_retrieval_payload_is_executable(benchmark_payload):
+            return None
+        payload = _retrieval_payload(self.goal, self.recipe)
+        payload = _merge_retrieval_payload(payload, benchmark_payload)
+        metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+        metadata.setdefault("benchmark_doc_clarification_rescue", True)
+        metadata.setdefault("task_assumed_solvable_from_prompt_context", True)
+        metadata.setdefault(
+            "host_role",
+            "route_complete_benchmark_doc_task_to_retrieval_instead_of_user_clarification",
+        )
+        question = _string_value(action.payload.get("question")) or _string_value(action.payload.get("text")) or action.description
+        if question:
+            metadata.setdefault("rescued_ask_user_question", question)
+        payload["metadata"] = metadata
+        payload = _enforce_benchmark_doc_retrieval_binding(payload, goal=self.goal, recipe=self.recipe)
+        return CandidateAction(
+            action_id=f"act-benchmark-doc-clarification-retrieval-{self._calls}",
+            kind="tool",
+            name="retrieval.run",
+            description="Execute retrieval for a complete benchmark document task instead of asking for already supplied context",
+            score=max(float(action.score or 0.0), 0.88),
+            payload=payload,
+            reasons=_ordered_unique(
+                [
+                    "benchmark_doc_clarification_rescue",
                     "task_assumed_solvable",
                     *action.reasons,
                 ]
@@ -5858,6 +6182,27 @@ class _RecipeEvaluator:
         ):
             return _feedback(run_id, self.calls, "continue", None, None, ["remaining_plan_actions"])
         if self.recipe.mode == "retrieval_answer":
+            _append_finance_loop_workbench_state_after_retrieval(
+                self.journal,
+                context,
+                recipe=self.recipe,
+                artifact_store=self.artifact_store,
+                observation=observation,
+            )
+            workbench_missing = _finance_workbench_missing_slot_feedback(
+                context,
+                recipe=self.recipe,
+                observation=observation,
+            )
+            if workbench_missing:
+                return _feedback(
+                    run_id,
+                    self.calls,
+                    "continue",
+                    None,
+                    None,
+                    workbench_missing,
+                )
             report = _nested(observation.content, "report")
             if isinstance(report, dict) and _retrieval_report_workbench_followup_required(report, recipe=self.recipe):
                 return _feedback(
@@ -5883,6 +6228,21 @@ class _RecipeEvaluator:
                     None,
                     ["retrieval_workbench_followup"],
                 )
+            transform_work = _finance_execution_program_transform_feedback(
+                self.journal,
+                context,
+                recipe=self.recipe,
+                artifact_store=self.artifact_store,
+            )
+            if transform_work:
+                return _feedback(
+                    run_id,
+                    self.calls,
+                    "continue",
+                    None,
+                    None,
+                    transform_work,
+                )
             if _finance_formula_work_required_before_final(
                 self.journal,
                 recipe=self.recipe,
@@ -5901,6 +6261,222 @@ class _RecipeEvaluator:
         if isinstance(observation.content, dict):
             answer = observation.content.get("text")
         return _feedback(run_id, self.calls, "final_answer_ready", "completed", answer if isinstance(answer, str) else None, [])
+
+
+def _append_finance_loop_workbench_state_after_retrieval(
+    journal: JournalStore | None,
+    context: ContextBundle,
+    *,
+    recipe: TaskRecipe,
+    artifact_store: ArtifactStore | None,
+    observation: Observation,
+) -> None:
+    if journal is None or recipe.mode != "retrieval_answer" or not _finance_tools_needed(recipe):
+        return
+    if observation.status != "ok" or observation.source != "tool:retrieval.run":
+        return
+    task_id = str(context.state.get("task_id") or "")
+    run_id = str(context.state.get("run_id") or observation.run_id or "")
+    if not task_id or not run_id:
+        return
+    for kind in ("finance_fact_ledger", "claim_ledger"):
+        for record in journal.records(task_id=task_id, kind=kind):
+            if (
+                record.run_id == run_id
+                and isinstance(record.data, dict)
+                and record.data.get("source_observation_id") == observation.observation_id
+            ):
+                return
+    evidence, citations, _ = _retrieval_and_toolchain_grounding(
+        journal,
+        task_id,
+        run_id,
+        recipe=recipe,
+        artifact_store=artifact_store,
+    )
+    if not evidence:
+        return
+    question = _root_goal_from_recipe(recipe)
+    binding = target_document_binding_from_metadata(_target_document_binding_from_recipe(recipe), question=question)
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+    facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
+    facts = _rank_finance_facts_for_model(facts, question=question)
+    ledger_record = None
+    if facts:
+        binding_resolution = primary_source_numeric_binding_resolution(facts, binding, question=question) if binding else {}
+        ledger_record = journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=str(context.state.get("step_id") or ""),
+            kind="finance_fact_ledger",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.finance_fact_ledger.v1",
+                    "purpose": "loop_workbench",
+                    "source_observation_id": observation.observation_id,
+                    "fact_count": len(facts),
+                    "facts": [fact.to_dict() for fact in facts[:512]],
+                    "evidence_count": len(evidence),
+                    "citation_count": len(citations),
+                    **({"target_document_binding": binding} if binding else {}),
+                    **({"primary_source_numeric_binding": binding_resolution} if binding_resolution else {}),
+                    "semantic_decision_owner": "model",
+                    "host_role": "candidate_fact_ledger_for_next_planner_turn_only",
+                }
+            ),
+            observation_ref=observation.observation_id,
+            state_delta={"finance_fact_count": len(facts), "finance_workbench": "ledger_ready"},
+        )
+        claims = finance_facts_to_claims(facts)
+        claim_domain = "finance"
+        claim_host_role = "candidate_claim_ledger_for_next_planner_turn_only"
+    else:
+        claims = _source_grounded_claims_from_retrieval_evidence(
+            task_id,
+            evidence=evidence,
+            citations=citations,
+            recipe=recipe,
+        )
+        claim_domain = "source_grounded_research"
+        claim_host_role = "candidate_source_claim_ledger_for_next_planner_turn_only"
+    if not claims:
+        return
+    source_ledger_ref = ledger_record.record_id if ledger_record is not None else None
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=str(context.state.get("step_id") or ""),
+        kind="claim_ledger",
+        data=redact_journal_data(
+            {
+                "schema": "holo.kernel_v3.claim_ledger.v1",
+                "domain": claim_domain,
+                "purpose": "loop_workbench",
+                "claim_count": len(claims),
+                "claims": [claim.to_dict() for claim in claims[:512]],
+                "source_observation_id": observation.observation_id,
+                **({"source_ledger_ref": source_ledger_ref} if source_ledger_ref else {}),
+                "evidence_count": len(evidence),
+                "citation_count": len(citations),
+                "semantic_decision_owner": "model",
+                "host_role": claim_host_role,
+            }
+        ),
+        observation_ref=observation.observation_id,
+        feedback_ref=source_ledger_ref,
+        state_delta={"claim_count": len(claims)},
+    )
+
+
+def _source_grounded_claims_from_retrieval_evidence(
+    task_id: str,
+    *,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    recipe: TaskRecipe,
+) -> list[Claim]:
+    citation_by_evidence = {item.evidence_id: item for item in citations if item.evidence_id}
+    claims: list[Claim] = []
+    for index, item in enumerate(_source_grounded_ranked_evidence(evidence, recipe=recipe)[:128], start=1):
+        citation = citation_by_evidence.get(item.evidence_id)
+        claims.append(
+            Claim(
+                claim_id=f"claim-loop-source-{_short_hash(task_id, item.evidence_id, index)}",
+                domain="source_grounded_research",
+                entity=None,
+                attribute="source_evidence_claim",
+                value=_text_preview(item.text, limit=420),
+                source_ref=item.uri,
+                evidence_ref=item.evidence_id,
+                citation_ref=citation.citation_id if citation is not None else None,
+                extraction_method="retrieval_evidence",
+                confidence=float(item.score) if isinstance(item.score, (int, float)) else None,
+                metadata={
+                    "title": item.title,
+                    "source_id": item.source_id,
+                    "document_id": item.document_id,
+                    "goal_id": item.goal_id,
+                },
+            )
+        )
+    return claims
+
+
+def _finance_workbench_missing_slot_feedback(
+    context: ContextBundle,
+    *,
+    recipe: TaskRecipe,
+    observation: Observation,
+) -> list[str]:
+    if recipe.mode != "retrieval_answer" or observation.source != "respond":
+        return []
+    state = context.state.get("finance_working_state")
+    state = state if isinstance(state, dict) else {}
+    missing_slots = _string_list(state.get("missing_slots"))
+    if not missing_slots:
+        return []
+    presence = state.get("presence")
+    presence = presence if isinstance(presence, dict) else {}
+    if presence.get("finance_facts") is True or presence.get("formula_trace") is True:
+        return []
+    verification = state.get("numeric_verification")
+    verification = verification if isinstance(verification, dict) else {}
+    if verification.get("status") == "passed":
+        return []
+    workbench = state.get("workbench")
+    workbench = workbench if isinstance(workbench, dict) else {}
+    phase = _string_value(workbench.get("current_phase")) or "finance_workbench"
+    return _ordered_unique(
+        [
+            "finance_workbench_missing_slots",
+            f"finance_workbench_phase:{phase}",
+            *[f"missing_slot:{slot}" for slot in missing_slots[:8]],
+        ]
+        )
+
+
+def _finance_execution_program_transform_feedback(
+    journal: JournalStore | None,
+    context: ContextBundle,
+    *,
+    recipe: TaskRecipe,
+    artifact_store: ArtifactStore | None,
+) -> list[str]:
+    if journal is None or recipe.mode != "retrieval_answer" or CALCULATOR_TOOL_NAME not in recipe.allowed_tools:
+        return []
+    task_id = str(context.state.get("task_id") or "")
+    run_id = str(context.state.get("run_id") or "")
+    if not task_id or not run_id:
+        return []
+    program = _execution_program_hint_for_planner(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        recipe=recipe,
+    )
+    transform_specs = [item for item in list(program.get("transform_specs") or []) if isinstance(item, dict)]
+    if not transform_specs:
+        return []
+    if _calculator_formula_traces(journal, task_id=task_id, run_id=run_id):
+        return []
+    evidence, _, _ = _retrieval_and_toolchain_grounding(
+        journal,
+        task_id,
+        run_id,
+        recipe=recipe,
+        artifact_store=artifact_store,
+    )
+    if not evidence:
+        return []
+    missing_slots = _string_list(program.get("missing_slots"))
+    transform_names = [_string_value(item.get("name")) for item in transform_specs[:4]]
+    return _ordered_unique(
+        [
+            "finance_execution_program_transform_required",
+            *[f"transform:{name}" for name in transform_names if name],
+            *[f"missing_slot:{slot}" for slot in missing_slots[:8]],
+        ]
+    )
 
 
 def _finance_formula_work_required_before_final(
@@ -5947,6 +6523,9 @@ def _finance_formula_work_required_before_final(
 
 def _planner_allowed_tool_names(recipe: TaskRecipe) -> set[str]:
     allowed = set(recipe.allowed_tools)
+    if allowed:
+        allowed.add(TOOL_DISCOVERY_NAME)
+        allowed.add(ARTIFACT_READ_NAME)
     if recipe.mode == "retrieval_answer":
         allowed.add("respond")
     return allowed or {"__no_tools_allowed__"}
@@ -6575,7 +7154,24 @@ def _composable_tool_timeout_seconds(recipe: TaskRecipe, *, key: str, default: i
 
 
 def _loop_controller_for_recipe(recipe: TaskRecipe):
+    if _recipe_requests_deep_agent_loop(recipe):
+        return DeepAgentLoopController
     return LangGraphLoopController if _recipe_requests_langgraph_loop(recipe) and langgraph_loop_available() else LoopControllerV3
+
+
+def _recipe_requests_deep_agent_loop(recipe: TaskRecipe) -> bool:
+    for container in (recipe.metadata, _execution_metadata_from_metadata(recipe.metadata)):
+        if not isinstance(container, dict):
+            continue
+        loop_config = container.get("agent_loop")
+        if isinstance(loop_config, dict):
+            backend = str(loop_config.get("runtime_backend") or loop_config.get("backend") or "").strip().lower()
+            if backend in {"deep", "deep_agent_loop", "deep-agent-loop", "assistant_turn", "assistant-turn"}:
+                return True
+        backend = str(container.get("loop_runtime") or container.get("runtime_backend") or "").strip().lower()
+        if backend in {"deep", "deep_agent_loop", "deep-agent-loop", "assistant_turn", "assistant-turn"}:
+            return True
+    return False
 
 
 def _recipe_requests_langgraph_loop(recipe: TaskRecipe) -> bool:
@@ -6611,13 +7207,15 @@ def task_recipe(
         max_network_fetches = _retrieval_network_fetch_budget(recipe_metadata)
         if max_network_fetches > 0:
             recipe_metadata = _with_allowed_permission(recipe_metadata, "network:fetch")
-        allowed_tools = ["retrieval.run"]
+        allowed_tools = [TOOL_DISCOVERY_NAME, ARTIFACT_READ_NAME, "retrieval.run"]
         finance_toolchain = _metadata_requests_finance_toolchain(recipe_metadata)
         if _metadata_requires_finance_numeric_verifier(recipe_metadata):
+            allowed_tools.append(FINANCE_SLOT_BIND_TOOL_NAME)
             allowed_tools.append(CALCULATOR_TOOL_NAME)
             allowed_tools.append(FINANCE_VERIFY_NUMERIC_TOOL_NAME)
         if finance_toolchain:
             allowed_tools.append(FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME)
+            allowed_tools.append(FINANCE_SLOT_BIND_TOOL_NAME)
             allowed_tools.extend(FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES)
             if max_network_fetches > 0:
                 allowed_tools.extend(FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES)
@@ -6651,7 +7249,7 @@ def task_recipe(
     if normalized == "workspace_answer":
         return TaskRecipe(
             recipe_id="recipe-workspace-answer",
-            allowed_tools=["workspace.list", "workspace.search", "file.read"],
+            allowed_tools=[TOOL_DISCOVERY_NAME, ARTIFACT_READ_NAME, "workspace.list", "workspace.search", "file.read"],
             max_steps=4,
             max_tool_calls=3,
             max_network_fetches=0,
@@ -6667,7 +7265,7 @@ def task_recipe(
         recipe_metadata = _with_allowed_permission(recipe_metadata, "workspace:write")
         return TaskRecipe(
             recipe_id="recipe-workspace-write",
-            allowed_tools=["workspace.list", "workspace.search", "file.read", "workspace.write"],
+            allowed_tools=[TOOL_DISCOVERY_NAME, ARTIFACT_READ_NAME, "workspace.list", "workspace.search", "file.read", "workspace.write"],
             max_steps=8,
             max_tool_calls=6,
             max_network_fetches=0,
@@ -7343,6 +7941,22 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         tool_selection = [
             {
                 "kind": "tool",
+                "name": TOOL_DISCOVERY_NAME,
+                "side_effect_class": "read",
+                "use_when": "the model is unsure which currently allowed tool contract fits the next step, or needs an input schema before a concrete tool call",
+                "payload_requirements": ["query: optional tool need such as SEC filings, calculator, table, workspace, memory", "max_results: optional"],
+                "host_boundary": "returns allowed tool contracts only; model still chooses the next concrete tool call",
+            },
+            {
+                "kind": "tool",
+                "name": ARTIFACT_READ_NAME,
+                "side_effect_class": "read",
+                "use_when": "an artifact_ref from recent observations or artifact_references must be inspected because projection/preview is insufficient",
+                "payload_requirements": ["artifact_id: required", "mode: preview/read optional", "max_chars: optional bounded length"],
+                "host_boundary": "reads only host-exposed artifacts; use bounded mode=read sparingly to avoid context bloat",
+            },
+            {
+                "kind": "tool",
                 "name": "retrieval.run",
                 "side_effect_class": "read",
                 "use_when": "external or indexed evidence is needed, evidence coverage is incomplete, or citation support is missing",
@@ -7365,6 +7979,25 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                         "unit: optional percent/bps/USD/etc.",
                         "input_fact_ids: finance fact ids when available",
                     ],
+                }
+            )
+        if FINANCE_SLOT_BIND_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": FINANCE_SLOT_BIND_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": (
+                        "finance facts or source claims are visible and the model needs to bind slots, record period/line-item basis, "
+                        "or convert model-selected formula_requests into calculator-ready payloads before deterministic arithmetic"
+                    ),
+                    "payload_requirements": [
+                        "facts: FinanceFact dicts from finance_working_state.facts or current evidence ledger",
+                        "slot_bindings: model-selected slot_name/variable_name/fact_id bindings",
+                        "formula_requests: optional expression, variables, unit, formula_name",
+                        "period_basis and line_item_basis: model rationale for selected facts",
+                    ],
+                    "host_boundary": "host validates fact ids and payload shape only; model owns slot sufficiency and finance semantics",
                 }
             )
         if FINANCE_VERIFY_NUMERIC_TOOL_NAME in recipe.allowed_tools:
@@ -7574,6 +8207,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
         llm_first_finance = _llm_semantic_judgment_required(recipe)
         return {
             "mode": recipe.mode,
+            **({"finance_agent_loop_contract": finance_agent_loop_contract()} if llm_first_finance else {}),
             **(
                 {
                     "llm_first_finance_template": {
@@ -7584,6 +8218,8 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                         ),
                         "standard_tool_interface": {
                             "planner_action": "Return planner.propose JSON with kind=tool/respond/ask_user, name, payload, reasons, side_effect_class.",
+                            "tool.discovery": "Use when unsure which currently allowed tool contract or input schema fits the next step.",
+                            "artifact.read": "Use when a compact observation references an artifact and the bounded preview/body is needed for the next reasoning step.",
                             "retrieval.run": "Use payload.query plus metadata.retrieval_strategy for query plan, source family plan, evidence criteria, fallback moves, and stop_when.",
                             "sec.edgar.company_filings": "Use EdgarTools-backed filing discovery when official SEC issuer filings are the right source family.",
                             "sec.edgar.financials": "Use EdgarTools-backed SEC/XBRL statement candidates when line-item and period binding need structured filing facts.",
@@ -7591,6 +8227,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                             "document.trafilatura.extract": "Use Trafilatura-backed extraction for webpage/HTML main text when snippets are noisy or table-like text is embedded in pages.",
                             "market.openbb.fetch": "Use allowlisted OpenBB routes only when market/fundamental data outside filing text is semantically relevant.",
                             "data.table.query": "Use DuckDB/Pandas over evidence rows when the task needs table filtering, grouping, joining, ranking, or aggregation.",
+                            "finance.slot_bind": "Use after finance facts are visible to submit model-owned slot bindings, period/line-item basis, and formula_requests for host validation.",
                             "calculator.compute": "Use only after observed evidence supplies numeric inputs; put expression, variables, unit, formula_name, and input_fact_ids when available.",
                             "math.sympy.compute": "Use SymPy for symbolic or high-precision math beyond ordinary finance arithmetic.",
                             "finance.toolchain.describe": "Use first when unsure which finance tool family applies; it returns the full tool surface and one-shot tool-call protocol.",
@@ -9247,6 +9884,7 @@ def _finance_tools_needed(recipe: TaskRecipe) -> bool:
     return bool(
         allowed.intersection(
             {
+                FINANCE_SLOT_BIND_TOOL_NAME,
                 CALCULATOR_TOOL_NAME,
                 FINANCE_VERIFY_NUMERIC_TOOL_NAME,
                 *FINANCE_OPEN_COMPONENT_TOOL_NAMES,
@@ -9676,6 +10314,9 @@ def _compact_agent_runtime_directive_for_prompt(value: object) -> JsonObject:
         ],
         "tool_selection_count": len(list(value.get("tool_selection") or [])),
         "toolchain_install_summary": _compact_simple_dict(value.get("toolchain_install_summary"), limit=8),
+        "finance_agent_loop_contract": _compact_finance_agent_loop_contract_for_prompt(
+            value.get("finance_agent_loop_contract")
+        ),
         "allowed_non_tool_actions": [
             _compact_simple_dict(item, limit=8)
             for item in list(value.get("allowed_non_tool_actions") or [])[:4]
@@ -9690,6 +10331,43 @@ def _compact_agent_runtime_directive_for_prompt(value: object) -> JsonObject:
         "semantic_state_profile_summary": _compact_simple_dict(value.get("semantic_state_profile_summary"), limit=16),
         "state_space_rule": _text_preview(value.get("state_space_rule"), limit=360),
         "host_rule": "Do not ask the user unless critical permission or missing target cannot be inferred; tool failures are observations for replanning.",
+    }
+
+
+def _compact_finance_agent_loop_contract_for_prompt(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "schema": value.get("schema"),
+        "decision_owner": value.get("decision_owner"),
+        "host_role": value.get("host_role"),
+        "core_loop": [
+            {
+                "phase": item.get("phase"),
+                "model_decides": _string_list(item.get("model_decides"))[:4],
+                "host_records": _string_list(item.get("host_records"))[:4],
+            }
+            for item in list(value.get("core_loop") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "state_objects": [
+            {
+                "name": item.get("name"),
+                "purpose": _text_preview(item.get("purpose"), limit=140),
+            }
+            for item in list(value.get("state_objects") or [])[:8]
+            if isinstance(item, dict)
+        ],
+        "task_family_workflows": [
+            {
+                "family": item.get("family"),
+                "generic_steps": _string_list(item.get("generic_steps"))[:4],
+                "typical_tools": _string_list(item.get("typical_tools"))[:6],
+            }
+            for item in list(value.get("task_family_workflows") or [])[:6]
+            if isinstance(item, dict)
+        ],
+        "stop_invariants": _string_list(value.get("stop_invariants"))[:6],
     }
 
 
@@ -11007,6 +11685,20 @@ def _benchmark_doc_retrieval_payload(goal: str, *, include_compiled_hint: bool =
         "max_fetches": 12,
         "max_spans_per_document": 8,
     }
+
+
+def _benchmark_doc_retrieval_payload_is_executable(payload: JsonObject) -> bool:
+    if not payload:
+        return False
+    metadata = dict(payload.get("metadata")) if isinstance(payload.get("metadata"), dict) else {}
+    if metadata.get("benchmark_doc_retrieval") is not True:
+        return False
+    source_urls = _metadata_url_values(metadata, keys=("source_url", "source_urls", "url", "urls")) or _metadata_url_values(
+        payload,
+        keys=("source_url", "source_urls", "url", "urls"),
+    )
+    root_question = _string_value(metadata.get("root_goal"))
+    return bool(source_urls and root_question)
 
 
 def _enforce_benchmark_doc_retrieval_binding(
@@ -16175,6 +16867,14 @@ def _latest_finance_numeric_judge_data(journal: JournalStore, task_id: str, run_
     return {}
 
 
+def _finance_numeric_repair_attempt_count(journal: JournalStore, task_id: str, run_id: str) -> int:
+    return sum(
+        1
+        for record in journal.records(task_id=task_id, kind="finance_numeric_judge")
+        if record.run_id == run_id
+    )
+
+
 def _latest_model_compiled_program_for_preflight(journal: JournalStore, *, task_id: str, run_id: str) -> JsonObject:
     for record in reversed(journal.records(task_id=task_id, kind="compiled_task_program")):
         if record.run_id != run_id or not isinstance(record.data, dict):
@@ -16219,7 +16919,55 @@ def _model_compiled_program_authorizes_numeric_preflight(program: JsonObject) ->
     return False
 
 
-FINANCE_SLOT_BIND_FACT_LIMIT = 384
+FINANCE_SLOT_BIND_FACT_LIMIT = 64
+FINANCE_SLOT_BIND_PREFIX_PRESERVE_COUNT = 16
+FINANCE_SLOT_BIND_ATTENTION_TERM_LIMIT = 80
+FINANCE_SLOT_BIND_ATTENTION_STOPWORDS = {
+    "about",
+    "amount",
+    "answer",
+    "based",
+    "calculate",
+    "company",
+    "compare",
+    "data",
+    "details",
+    "does",
+    "evidence",
+    "fetch",
+    "fiscal",
+    "first",
+    "follows",
+    "from",
+    "give",
+    "have",
+    "into",
+    "live",
+    "million",
+    "millions",
+    "not",
+    "prefer",
+    "question",
+    "retrieval",
+    "search",
+    "shown",
+    "source",
+    "statement",
+    "table",
+    "target",
+    "that",
+    "their",
+    "the",
+    "this",
+    "url",
+    "use",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "year",
+}
 FINANCE_SLOT_BIND_CONTRACT = (
     "You are finance.slot_bind for Holo Kernel v3. Return only one JSON object. "
     "The model owns semantic fact-to-slot binding. The host provides raw finance facts and a model-compiled task program; "
@@ -16228,6 +16976,7 @@ FINANCE_SLOT_BIND_CONTRACT = (
     "Inspect raw SEC fields such as period, fiscal_year, form, fp, start, end, frame, accn, concept, label, and source_uri yourself. "
     "Treat extracted metric, period, and scale labels as noisy hints, not authority: inspect raw_fields.raw/context/row_marker/label/concept/source metadata and bind an imperfectly labeled fact when those raw fields clearly answer the slot. "
     "If slot_bind_packet.competing_fact_clusters is present, treat it as a host-built attention index only: candidate order is source order, not semantic ranking, and you must decide from raw fields yourself. "
+    "If slot_bind_packet.slot_candidate_groups is present, treat each group as a per-slot attention window only: the host is ensuring recall for each required slot, not selecting the answer. "
     "If slot_bind_packet.finance_metric_intent_hints is present, treat it as weak retrieval/extraction diagnostics only: it may help notice candidate line-item matches or demotions, but it is not a host-selected answer and never overrides raw_fields, citations, or your semantic judgment. "
     "If raw_fields include target_document_binding hints, treat them as provenance hints only; still inspect raw/context before selecting a fact_id. "
     "When the task names a specific target filing or source document, compare raw_fields.accn, filed, form, source_uri, target_document_binding_accepted, and target_document_binding_score. "
@@ -16392,20 +17141,345 @@ def _finance_slot_bind_repair_feedback(error: str) -> JsonObject:
     return feedback
 
 
+def _select_facts_for_slot_bind(
+    *,
+    question: str,
+    facts: list[FinanceFact],
+    compiled_program: JsonObject,
+    limit: int = FINANCE_SLOT_BIND_FACT_LIMIT,
+) -> list[FinanceFact]:
+    if len(facts) <= limit:
+        return list(facts)
+    attention = _finance_slot_bind_attention_profile(question=question, compiled_program=compiled_program)
+    prefix_count = min(FINANCE_SLOT_BIND_PREFIX_PRESERVE_COUNT, max(0, limit // 4), len(facts))
+    selected_indices: set[int] = set(range(prefix_count))
+    slot_profiles = _finance_slot_bind_slot_attention_profiles(compiled_program)
+    if slot_profiles and len(selected_indices) < limit:
+        slot_budget = max(0, limit - len(selected_indices))
+        per_slot_quota = max(2, min(8, max(1, slot_budget // max(1, len(slot_profiles)))))
+        for profile in slot_profiles:
+            if len(selected_indices) >= limit:
+                break
+            scored_for_slot = [
+                (_finance_slot_bind_fact_slot_attention_score(fact, profile=profile), index)
+                for index, fact in enumerate(facts)
+            ]
+            scored_for_slot.sort(key=lambda item: (-item[0], item[1]))
+            added_for_slot = 0
+            for score, index in scored_for_slot:
+                if len(selected_indices) >= limit or added_for_slot >= per_slot_quota:
+                    break
+                if score <= 0:
+                    break
+                if index not in selected_indices:
+                    selected_indices.add(index)
+                    added_for_slot += 1
+    scored = [
+        (_finance_slot_bind_fact_attention_score(fact, attention=attention), index)
+        for index, fact in enumerate(facts)
+    ]
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    for score, index in scored:
+        if len(selected_indices) >= limit:
+            break
+        if score <= 0 and len(selected_indices) >= max(prefix_count, limit // 2):
+            break
+        selected_indices.add(index)
+    if len(selected_indices) < limit:
+        for index in range(len(facts)):
+            selected_indices.add(index)
+            if len(selected_indices) >= limit:
+                break
+    return [facts[index] for index in sorted(selected_indices)]
+
+
+def _finance_slot_bind_slot_attention_profiles(compiled_program: JsonObject) -> list[JsonObject]:
+    profiles: list[JsonObject] = []
+    for requirement in _slot_requirements_for_slot_bind(compiled_program):
+        slot_name = str(requirement.get("slot_name") or "").strip()
+        if not slot_name:
+            continue
+        phrases, raw_text = _finance_slot_bind_slot_requirement_terms(requirement)
+        tokens = _finance_slot_bind_attention_tokens(raw_text)
+        profiles.append(
+            {
+                "slot_name": slot_name,
+                "phrases": phrases[:32],
+                "tokens": tokens[:48],
+            }
+        )
+    return profiles[:64]
+
+
+def _finance_slot_bind_slot_requirement_terms(requirement: JsonObject) -> tuple[list[str], str]:
+    raw_values: list[str] = []
+    slot_name = str(requirement.get("slot_name") or "").strip()
+    if slot_name:
+        raw_values.extend([slot_name, slot_name.replace("_", " ")])
+    slot_frame = requirement.get("slot_frame") if isinstance(requirement.get("slot_frame"), dict) else {}
+    for key in ("name", "slot_name", "description", "role", "unit", "period", "entity"):
+        value = slot_frame.get(key) if isinstance(slot_frame, dict) else None
+        if isinstance(value, str) and value.strip():
+            raw_values.append(value)
+    for spec in _dict_items(requirement.get("evidence_specs")):
+        for key in ("slot_name", "line_item", "metric", "statement", "target_period", "source_role", "unit", "entity", "company"):
+            value = spec.get(key)
+            if isinstance(value, str) and value.strip():
+                raw_values.append(value)
+        raw_values.extend(_string_list(spec.get("accepted_attributes")))
+    for spec in _dict_items(requirement.get("transform_consumers")):
+        for key in ("name", "formula_name", "objective", "output_unit", "unit"):
+            value = spec.get(key)
+            if isinstance(value, str) and value.strip():
+                raw_values.append(value)
+        for name in _transform_required_slot_names(spec):
+            if name == slot_name:
+                raw_values.extend([name, name.replace("_", " ")])
+    phrases = _finance_slot_bind_attention_phrases(raw_values)
+    return phrases, " ".join(raw_values)
+
+
+def _finance_slot_bind_fact_slot_attention_score(fact: FinanceFact, *, profile: JsonObject) -> float:
+    sections = _finance_slot_bind_fact_attention_sections(fact)
+    direct_text = sections["direct"]
+    raw_text = sections["raw"]
+    context_text = sections["context"]
+    direct_tokens = set(re.findall(r"[a-z0-9]+", direct_text))
+    raw_tokens = set(re.findall(r"[a-z0-9]+", raw_text))
+    context_tokens = set(re.findall(r"[a-z0-9]+", context_text))
+    score = 0.0
+    metric_norm = _finance_slot_bind_normalized_phrase(fact.metric)
+    for phrase in _string_list(profile.get("phrases")):
+        phrase_norm = _finance_slot_bind_normalized_phrase(phrase)
+        if not phrase_norm:
+            continue
+        phrase_tokens = set(re.findall(r"[a-z0-9]+", phrase_norm))
+        if phrase_norm == metric_norm:
+            score += 80.0
+        elif phrase_norm in direct_text:
+            score += 30.0
+        elif phrase_norm in raw_text:
+            score += 14.0
+        elif phrase_norm in context_text:
+            score += 2.0
+        if phrase_tokens and phrase_tokens.issubset(direct_tokens):
+            score += 16.0
+        elif len(phrase_tokens) >= 2 and phrase_tokens.issubset(raw_tokens):
+            score += 6.0
+        elif len(phrase_tokens) >= 3 and phrase_tokens.issubset(context_tokens):
+            score += 1.0
+    for token in _string_list(profile.get("tokens")):
+        token_norm = _finance_slot_bind_normalized_phrase(token)
+        if not token_norm:
+            continue
+        if token_norm in direct_tokens:
+            score += 4.0
+        elif token_norm in raw_tokens:
+            score += 1.5
+        elif token_norm in context_tokens:
+            score += 0.25
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    if metadata.get("target_document_binding_accepted") is True:
+        score += 8.0
+    if fact.citation_ref:
+        score += 1.0
+    return score
+
+
+def _finance_slot_bind_fact_attention_sections(fact: FinanceFact) -> dict[str, str]:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    direct_values = [
+        fact.metric,
+        fact.unit,
+        fact.scale,
+        metadata.get("concept"),
+        metadata.get("label"),
+        metadata.get("line_item"),
+        metadata.get("raw_metric"),
+        metadata.get("row_marker"),
+        metadata.get("statement"),
+        metadata.get("target_line_item"),
+        metadata.get("target_statement"),
+    ]
+    raw_values = [
+        metadata.get("raw"),
+        metadata.get("source_title"),
+        metadata.get("source_uri"),
+    ]
+    context_values = [
+        metadata.get("context"),
+        fact.entity,
+        fact.ticker,
+        fact.period,
+        fact.source_ref,
+        fact.evidence_ref,
+        fact.citation_ref,
+    ]
+    return {
+        "direct": _finance_slot_bind_normalized_text(direct_values),
+        "raw": _finance_slot_bind_normalized_text(raw_values),
+        "context": _finance_slot_bind_normalized_text(context_values),
+    }
+
+
+def _finance_slot_bind_normalized_text(values: list[object]) -> str:
+    return re.sub(r"\s+", " ", " ".join(str(value or "") for value in values)).casefold()
+
+
+def _finance_slot_bind_normalized_phrase(value: object) -> str:
+    text = str(value or "").replace("_", " ")
+    text = re.sub(r"[^A-Za-z0-9&]+", " ", text).casefold()
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _finance_slot_bind_attention_profile(*, question: str, compiled_program: JsonObject) -> JsonObject:
+    raw_phrases: list[str] = []
+    raw_texts: list[str] = [question]
+    task_spec = _json_object(compiled_program.get("task_spec"))
+    raw_texts.extend(str(task_spec.get(key) or "") for key in ("objective", "task_type"))
+    raw_texts.extend(str(item) for item in _string_list(task_spec.get("target_entities")))
+    raw_texts.extend(str(item) for item in _string_list(task_spec.get("target_periods")))
+    for spec in [*_dict_items(compiled_program.get("evidence_specs")), *_dict_items(compiled_program.get("transform_specs"))]:
+        for key in (
+            "slot_name",
+            "variable_name",
+            "name",
+            "formula_name",
+            "line_item",
+            "metric",
+            "statement",
+            "target_period",
+            "source_role",
+            "objective",
+        ):
+            value = spec.get(key)
+            if isinstance(value, str) and value.strip():
+                raw_phrases.append(value)
+                raw_texts.append(value)
+        for key in ("accepted_attributes", "aliases", "required_slots", "input_slots"):
+            values = _string_list(spec.get(key))
+            raw_phrases.extend(values)
+            raw_texts.extend(values)
+    phrase_terms = _finance_slot_bind_attention_phrases(raw_phrases)
+    token_terms = _finance_slot_bind_attention_tokens(" ".join(raw_texts))
+    years = _ordered_unique(re.findall(r"\b(?:19|20)\d{2}\b", " ".join(raw_texts)))[:12]
+    return {
+        "phrases": phrase_terms[:FINANCE_SLOT_BIND_ATTENTION_TERM_LIMIT],
+        "tokens": token_terms[:FINANCE_SLOT_BIND_ATTENTION_TERM_LIMIT],
+        "years": years,
+        "policy": {
+            "semantic_decision_owner": "model",
+            "host_role": "attention_filter_only_no_fact_selection",
+            "candidate_ordering": "original_source_order_after_attention_filter",
+        },
+    }
+
+
+def _finance_slot_bind_attention_phrases(values: list[str]) -> list[str]:
+    phrases: list[str] = []
+    for value in values:
+        text = re.sub(r"[_\-/]+", " ", str(value or "")).strip().casefold()
+        text = re.sub(r"\s+", " ", text)
+        if len(text) >= 4:
+            phrases.append(text)
+    return _ordered_unique(phrases)
+
+
+def _finance_slot_bind_attention_tokens(text: str) -> list[str]:
+    tokens: list[str] = []
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9&]{2,}|\b(?:19|20)\d{2}\b", str(text or "").casefold()):
+        if token in FINANCE_SLOT_BIND_ATTENTION_STOPWORDS:
+            continue
+        tokens.append(token)
+    return _ordered_unique(tokens)
+
+
+def _finance_slot_bind_fact_attention_score(fact: FinanceFact, *, attention: JsonObject) -> float:
+    text = _finance_slot_bind_fact_attention_text(fact)
+    score = 0.0
+    for phrase in _string_list(attention.get("phrases")):
+        if phrase and phrase in text:
+            score += 16.0
+    for token in _string_list(attention.get("tokens")):
+        if token and token in text:
+            score += 3.0
+    years = set(_string_list(attention.get("years")))
+    if fact.fiscal_year is not None and str(fact.fiscal_year) in years:
+        score += 8.0
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    if metadata.get("target_document_binding_accepted") is True:
+        score += 8.0
+    intent = metadata.get("finance_metric_intent") if isinstance(metadata.get("finance_metric_intent"), dict) else {}
+    intent_score = intent.get("score")
+    if isinstance(intent_score, (int, float)) and not isinstance(intent_score, bool):
+        score += min(8.0, max(0.0, float(intent_score) / 12.0))
+    if fact.citation_ref:
+        score += 1.0
+    return score
+
+
+def _finance_slot_bind_fact_attention_text(fact: FinanceFact) -> str:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    values = [
+        fact.entity,
+        fact.ticker,
+        fact.period,
+        fact.metric,
+        fact.unit,
+        fact.scale,
+        fact.source_ref,
+        fact.evidence_ref,
+        fact.citation_ref,
+    ]
+    for key in (
+        "concept",
+        "context",
+        "label",
+        "line_item",
+        "raw",
+        "raw_metric",
+        "row_marker",
+        "source_family",
+        "source_kind",
+        "source_title",
+        "source_uri",
+        "statement",
+        "target_line_item",
+        "target_statement",
+    ):
+        values.append(metadata.get(key))
+    return re.sub(r"\s+", " ", " ".join(str(value or "") for value in values)).casefold()
+
+
 def _finance_slot_bind_packet(
     *,
     question: str,
     facts: list[FinanceFact],
     compiled_program: JsonObject,
 ) -> JsonObject:
-    visible_facts = facts[:FINANCE_SLOT_BIND_FACT_LIMIT]
+    visible_facts = _select_facts_for_slot_bind(
+        question=question,
+        facts=facts,
+        compiled_program=compiled_program,
+    )
+    attention = _finance_slot_bind_attention_profile(question=question, compiled_program=compiled_program)
     packet: JsonObject = {
         "schema": "holo.kernel_v3.finance_slot_bind_input.v1",
         "raw_fact_count": len(facts),
+        "visible_fact_count": len(visible_facts),
+        "omitted_fact_count": max(0, len(facts) - len(visible_facts)),
+        "fact_selection_policy": attention.get("policy"),
+        "fact_selection_terms": {
+            "phrases": _string_list(attention.get("phrases"))[:24],
+            "tokens": _string_list(attention.get("tokens"))[:24],
+            "years": _string_list(attention.get("years"))[:12],
+        },
         "raw_facts": [
             _raw_fact_summary_for_slot_bind(fact)
             for fact in visible_facts
         ],
+        "slot_candidate_groups": _finance_slot_candidate_groups_for_model(visible_facts, compiled_program),
+        "slot_candidate_group_policy": _finance_slot_candidate_group_policy(),
         "competing_fact_clusters": _finance_competing_fact_clusters_for_model(visible_facts),
         "question": question,
         "slot_requirements": _slot_requirements_for_slot_bind(compiled_program),
@@ -16424,6 +17498,62 @@ def _finance_slot_bind_packet(
         packet["finance_metric_intent_hints"] = metric_intent_hints
         packet["finance_metric_intent_hint_policy"] = _finance_metric_intent_hint_policy()
     return packet
+
+
+def _finance_slot_candidate_group_policy() -> JsonObject:
+    return {
+        "semantic_decision_owner": "model",
+        "host_role": "per_slot_attention_window_only_no_semantic_preference",
+        "candidate_ordering": "source_order_from_visible_raw_facts",
+        "instruction": (
+            "Each group lists visible fact_ids that weakly match a required slot so the model can inspect candidates for every slot. "
+            "The group does not bind, rank, validate, or choose a fact; decide from raw_fields, citations, periods, and line items."
+        ),
+    }
+
+
+def _finance_slot_candidate_groups_for_model(
+    facts: list[FinanceFact],
+    compiled_program: JsonObject,
+    *,
+    limit_per_slot: int = 10,
+) -> list[JsonObject]:
+    groups: list[JsonObject] = []
+    for profile in _finance_slot_bind_slot_attention_profiles(compiled_program):
+        scored: list[tuple[float, int, FinanceFact]] = []
+        for index, fact in enumerate(facts):
+            score = _finance_slot_bind_fact_slot_attention_score(fact, profile=profile)
+            if score > 0:
+                scored.append((score, index, fact))
+        if not scored:
+            continue
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        chosen_indices = sorted(index for _score, index, _fact in scored[:limit_per_slot])
+        candidates: list[JsonObject] = []
+        for index in chosen_indices:
+            fact = facts[index]
+            candidates.append(
+                {
+                    "fact_id": _text_preview(fact.fact_id, limit=120),
+                    "metric": _text_preview(fact.metric, limit=140),
+                    "value": _text_preview(fact.value, limit=80),
+                    "period": _text_preview(fact.period, limit=80),
+                    "fiscal_year": fact.fiscal_year,
+                    "citation_ref": _text_preview(fact.citation_ref, limit=120),
+                }
+            )
+        if candidates:
+            groups.append(
+                {
+                    "slot_name": profile.get("slot_name"),
+                    "candidate_count": len(candidates),
+                    "candidate_fact_ids": [item["fact_id"] for item in candidates],
+                    "candidates": candidates,
+                    "host_role": "attention_window_only_no_semantic_preference",
+                    "candidate_ordering": "source_order_from_visible_raw_facts",
+                }
+            )
+    return groups[:64]
 
 
 def _finance_competing_fact_cluster_policy() -> JsonObject:
@@ -17390,10 +18520,10 @@ def _compact_model_dict(value: object, *, limit: int) -> JsonObject:
 
 def _slot_bind_raw_value(value: object) -> object:
     if isinstance(value, str):
-        return _text_preview(value, limit=360)
+        return _text_preview(value, limit=220)
     if isinstance(value, (int, float, bool)) or value is None:
         return value
-    return _text_preview(value, limit=360)
+    return _text_preview(value, limit=220)
 
 
 def _slot_bind_raw_field_value(key: str, value: object) -> object:
@@ -17401,9 +18531,9 @@ def _slot_bind_raw_field_value(key: str, value: object) -> object:
         return _slot_bind_raw_value(value)
     normalized_key = str(key or "").strip().lower()
     if normalized_key == "context":
-        return _text_preview(value, limit=220)
+        return _text_preview(value, limit=180)
     if normalized_key == "raw":
-        return _text_preview(value, limit=260)
+        return _text_preview(value, limit=220)
     if normalized_key in {"source_uri", "source_title"}:
         return _text_preview(value, limit=180)
     if normalized_key in {"target_document_binding_reasons"}:

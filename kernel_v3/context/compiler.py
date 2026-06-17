@@ -519,11 +519,62 @@ def _compact_observation(data: JsonObject) -> JsonObject:
         "status": data.get("status"),
         "source": data.get("source"),
     }
+    if data.get("action_id") is not None:
+        compacted["action_id"] = data.get("action_id")
+    if data.get("tool_call_id") is not None:
+        compacted["tool_call_id"] = data.get("tool_call_id")
     if isinstance(content, dict):
-        compacted["content"] = _compact_content(content)
+        if data.get("kind") == "tool_batch_result":
+            compacted["content"] = _compact_tool_batch_content(content)
+        else:
+            compacted["content"] = _compact_content(content)
     else:
         compacted["content"] = content
     return compacted
+
+
+def _compact_tool_batch_content(content: JsonObject) -> JsonObject:
+    raw_results = content.get("results")
+    results = raw_results if isinstance(raw_results, list) else []
+    return {
+        "schema": content.get("schema"),
+        "turn_id": content.get("turn_id"),
+        "tool_call_count": content.get("tool_call_count"),
+        "results": [
+            _compact_tool_batch_result(item)
+            for item in results[:16]
+            if isinstance(item, dict)
+        ],
+        "result_truncated": len(results) > 16,
+    }
+
+
+def _compact_tool_batch_result(item: JsonObject) -> JsonObject:
+    projection = item.get("content_projection") if isinstance(item.get("content_projection"), dict) else {}
+    compact_projection = _compact_content_projection(projection)
+    return {
+        "tool_call_id": item.get("tool_call_id"),
+        "action_id": item.get("action_id"),
+        "tool": item.get("tool"),
+        "status": item.get("status"),
+        "source": item.get("source"),
+        "kind": item.get("kind"),
+        "observation_id": item.get("observation_id"),
+        "policy": item.get("policy"),
+        "artifact_refs": [str(ref) for ref in item.get("artifact_refs", [])[:8]] if isinstance(item.get("artifact_refs"), list) else [],
+        "content_projection": compact_projection,
+    }
+
+
+def _compact_content_projection(projection: JsonObject) -> JsonObject:
+    shape = projection.get("shape") if isinstance(projection.get("shape"), dict) else {}
+    return {
+        "preview": _compact_text(str(projection.get("preview") or ""), limit=360),
+        "preview_chars": projection.get("preview_chars"),
+        "truncated": projection.get("truncated"),
+        "estimated_chars": projection.get("estimated_chars"),
+        "shape": _compact_nested_content(shape),
+    }
 
 
 def _compact_content(content: JsonObject) -> JsonObject:
@@ -936,7 +987,9 @@ def _event_budget_view(data: JsonObject) -> JsonObject:
 
 def _observation_budget_view(data: JsonObject) -> JsonObject:
     content = data.get("content")
-    if isinstance(content, dict):
+    if data.get("kind") == "tool_batch_result" and isinstance(content, dict):
+        content_view = _tool_batch_budget_view(content)
+    elif isinstance(content, dict):
         content_view = {key: value for key, value in content.items() if isinstance(value, str)}
     elif isinstance(content, str):
         content_view = {"text": content}
@@ -945,6 +998,27 @@ def _observation_budget_view(data: JsonObject) -> JsonObject:
     return {
         "observation_id": data.get("observation_id"),
         "content": content_view,
+    }
+
+
+def _tool_batch_budget_view(content: JsonObject) -> JsonObject:
+    raw_results = content.get("results")
+    results = raw_results if isinstance(raw_results, list) else []
+    return {
+        "schema": content.get("schema"),
+        "tool_call_count": content.get("tool_call_count"),
+        "results": [
+            {
+                "tool": item.get("tool"),
+                "status": item.get("status"),
+                "kind": item.get("kind"),
+                "projection": _compact_content_projection(
+                    item.get("content_projection") if isinstance(item.get("content_projection"), dict) else {}
+                ),
+            }
+            for item in results[:16]
+            if isinstance(item, dict)
+        ],
     }
 
 

@@ -187,6 +187,87 @@ def test_context_pack_compacts_retrieval_report_observation_content():
     assert "x" * 200 not in encoded
 
 
+def test_context_pack_compacts_tool_batch_results_with_projection_not_raw_preview():
+    journal = JournalStore.in_memory()
+    task = SessionEngine.from_journal(journal).start("inspect tool batch", thread_id="thread-a", journal=journal)
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-0",
+        kind="event",
+        data={"event_id": "evt-1", "payload": {"text": "inspect tool batch"}},
+        event_ref="evt-1",
+    )
+    journal.append(
+        task_id=task.task_id,
+        run_id=task.run_id,
+        step_id="step-1",
+        kind="observation",
+        data={
+            "observation_id": "obs-tool-batch",
+            "kind": "tool_batch_result",
+            "status": "ok",
+            "source": "deep_agent_loop",
+            "content": {
+                "schema": "holo.kernel_v3.deep_tool_batch_result.v1",
+                "turn_id": "turn-1",
+                "tool_call_count": 1,
+                "results": [
+                    {
+                        "tool_call_id": "call-sec",
+                        "action_id": "act-sec",
+                        "tool": "sec.edgar.financials",
+                        "status": "ok",
+                        "source": "tool:sec.edgar.financials",
+                        "kind": "sec_edgar_result",
+                        "observation_id": "obs-sec",
+                        "policy": "allowed",
+                        "artifact_refs": ["artifact-sec"],
+                        "content_preview": "RAW-LONG-" + "x" * 5000,
+                        "content_projection": {
+                            "preview": "projected SEC rows",
+                            "preview_chars": 18,
+                            "truncated": True,
+                            "estimated_chars": 5009,
+                            "shape": {"type": "object", "keys": ["records"], "key_count": 1},
+                        },
+                    }
+                ],
+            },
+        },
+        observation_ref="obs-tool-batch",
+        artifact_refs=["artifact-sec"],
+    )
+
+    artifacts = ArtifactStore.in_memory(
+        [
+            ArtifactRef(
+                artifact_id="artifact-sec",
+                kind="observation_payload",
+                uri="journal://observations/obs-sec",
+                payload_hash="hash-sec",
+                metadata={"observation_id": "obs-sec", "preview": "artifact preview", "size_bytes": 5009},
+            )
+        ]
+    )
+    pack = ContextPackCompiler(
+        artifact_store=artifacts,
+        memory_read=MemoryRead(journal=journal, artifact_store=artifacts),
+        token_budget=1000000,
+        section_budget=200000,
+    ).compile(task, journal, step_id="step-1")
+
+    encoded = json.dumps(pack.to_dict(), ensure_ascii=False)
+    recent = next(section for section in pack.sections if section["name"] == "recent_observations")
+    result = recent["records"][-1]["content"]["results"][0]
+    assert result["tool_call_id"] == "call-sec"
+    assert result["content_projection"]["preview"] == "projected SEC rows"
+    assert result["content_projection"]["shape"]["keys"] == ["records"]
+    assert result["artifact_refs"] == ["artifact-sec"]
+    assert "RAW-LONG-" not in encoded
+    assert "x" * 200 not in encoded
+
+
 def test_context_pack_recent_observations_memory_refs_and_citations_use_same_window():
     journal = JournalStore.in_memory()
     task = SessionEngine.from_journal(journal).start("inspect sequence", thread_id="thread-a", journal=journal)

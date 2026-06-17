@@ -1429,12 +1429,16 @@ def _goal_from_payload(action: CandidateAction) -> SearchGoal:
     ):
         if key in data and key not in metadata:
             metadata[key] = data[key]
+    max_fetches = _positive_int(data.get("max_fetches"), default=3)
+    max_network_fetches = _positive_int(data.get("max_network_fetches"), default=0)
+    if max_network_fetches > 0:
+        max_fetches = min(max_fetches, max_network_fetches)
     return SearchGoal(
         goal_id=goal_id,
         query=query,
         max_queries=_positive_int(data.get("max_queries"), default=_default_query_count(metadata, data=data)),
         max_sources=_positive_int(data.get("max_sources"), default=5),
-        max_fetches=_positive_int(data.get("max_fetches"), default=3),
+        max_fetches=max_fetches,
         max_spans_per_document=_positive_int(data.get("max_spans_per_document"), default=2),
         metadata=metadata,
     )

@@ -28,6 +28,9 @@ SEC_COMPLETE_SUBMISSION_TEXT_LIMIT = SEC_FILING_TEXT_LIMIT
 SPAN_BEFORE_CHARS = 120
 SPAN_AFTER_CHARS = 780
 FINANCE_TABLE_SPAN_AFTER_CHARS = 2_400
+RANKED_SPAN_TERM_LIMIT = 40
+RANKED_SPAN_POSITIONS_PER_TERM_LIMIT = 240
+RANKED_SPAN_CANDIDATE_LIMIT = 1_600
 HTML_MIME_MARKERS = ("html", "xhtml")
 PDF_MIME_MARKERS = ("pdf", "application/pdf")
 JSON_MIME_MARKERS = ("json", "application/json")
@@ -505,8 +508,10 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
     lower = text.lower()
     candidates: list[dict] = []
     seen_windows: set[tuple[int, int]] = set()
-    for term in terms:
-        for index in _term_positions(lower, term):
+    search_terms = _ranked_span_search_terms(terms)
+    transaction_intent = _terms_have_transaction_intent(terms)
+    for term in search_terms:
+        for index in _term_positions(lower, term)[:RANKED_SPAN_POSITIONS_PER_TERM_LIMIT]:
             window_start = max(0, index - SPAN_BEFORE_CHARS)
             window_after_chars = _span_after_chars_for_anchor(text, index=index, term=term)
             window_end = min(len(text), index + len(term) + window_after_chars)
@@ -516,7 +521,7 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
                 snippet = _normalize_span(text[window_start:window_end])
                 matched = [candidate for candidate in terms if _term_in_text(snippet.lower(), candidate)]
                 if snippet and matched:
-                    bonus = _transaction_amount_span_bonus(snippet, terms)
+                    bonus = _transaction_amount_span_bonus(snippet, transaction_intent=transaction_intent)
                     structured_finance_bonus = _structured_finance_span_bonus(snippet)
                     candidates.append(
                         {
@@ -528,6 +533,10 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
                             "structured_finance_bonus": structured_finance_bonus,
                         }
                     )
+                    if len(candidates) >= RANKED_SPAN_CANDIDATE_LIMIT:
+                        break
+        if len(candidates) >= RANKED_SPAN_CANDIDATE_LIMIT:
+            break
     return sorted(
         candidates,
         key=lambda item: (
@@ -537,6 +546,57 @@ def _ranked_span_candidates(text: str, terms: list[str]) -> list[dict]:
             int(item["start_offset"]),
         ),
     )
+
+
+def _ranked_span_search_terms(terms: list[str]) -> list[str]:
+    return sorted(
+        _ordered_unique(terms),
+        key=lambda term: (
+            _ranked_span_term_priority(term),
+            len(term),
+            term,
+        ),
+        reverse=True,
+    )[:RANKED_SPAN_TERM_LIMIT]
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "")
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _ranked_span_term_priority(term: str) -> int:
+    normalized = str(term or "").strip().lower()
+    priority = 0
+    if " " in normalized:
+        priority += 6
+    if any(char.isdigit() for char in normalized):
+        priority += 3
+    if any(
+        marker in normalized
+        for marker in (
+            "capital expenditure",
+            "property plant",
+            "equipment",
+            "revenue",
+            "net sales",
+            "operating cash",
+            "total assets",
+            "net income",
+            "cash flow",
+        )
+    ):
+        priority += 5
+    if len(normalized) >= 8:
+        priority += 2
+    return priority
 
 
 def _span_after_chars_for_anchor(text: str, *, index: int, term: str) -> int:
@@ -1015,12 +1075,15 @@ def _nearest_preceding_marker(lower: str, markers: list[str], index: int) -> int
     return best
 
 
-def _transaction_amount_span_bonus(snippet: str, terms: list[str]) -> float:
-    query_has_transaction_intent = any(
+def _terms_have_transaction_intent(terms: list[str]) -> bool:
+    return any(
         term in {"acquisition", "acquire", "merger", "transaction", "deal", "consideration", "purchase"}
         for term in terms
     )
-    if not query_has_transaction_intent:
+
+
+def _transaction_amount_span_bonus(snippet: str, *, transaction_intent: bool) -> float:
+    if not transaction_intent:
         return 0.0
     text = snippet.lower()
     if not re.search(r"[$€£¥]\s*\d|\b\d+(?:\.\d+)?\s*(?:million|billion|trillion|mn|bn)\b", text):

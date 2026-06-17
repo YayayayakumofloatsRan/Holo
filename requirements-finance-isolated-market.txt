@@ -1,0 +1,8 @@
+# Heavy market/fundamental data components for an isolated finance worker venv.
+#
+# Do not install this into the main UbuntuHolo venv. Configure the worker with:
+#   HOLO_OPENBB_PYTHON=/path/to/market-worker/.venv/bin/python
+#
+# Holo main process calls market.openbb.fetch through a bounded JSON subprocess
+# protocol when this worker is configured.
+openbb==4.7.2

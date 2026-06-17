@@ -11,9 +11,10 @@ from kernel_v3.agent.execution_profile import (
     profile_mission_enabled,
     profile_processor_mode,
 )
-from kernel_v3.agent.runtime import _disabled_workmethod_state, _with_runtime_loop_budget
+from kernel_v3.agent.runtime import _disabled_workmethod_state, _with_runtime_loop_budget, task_recipe
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import ProcessorRequest, ProcessorResult
+from kernel_v3.finance import SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME
 from kernel_v3.journal import JournalStore
 from kernel_v3.mission import MissionRuntime
 from kernel_v3.processors import PLANNER_SCHEMA, FakeJsonProvider, ProcessorFabric, ProcessorRouter
@@ -49,7 +50,7 @@ def test_finance_capability_profile_is_high_budget_toolchain_lane() -> None:
     assert profile.max_agent_steps == 16
     assert profile.max_agent_tool_calls == 16
     assert profile.research_depth == "deep"
-    assert metadata["agent_loop"]["runtime_backend"] == "langgraph"
+    assert metadata["agent_loop"]["runtime_backend"] == "deep_agent_loop"
     assert metadata["composable_toolchain"]["workspace_read"] is True
     assert metadata["composable_toolchain"]["workspace_write"] is True
     assert metadata["composable_toolchain"]["script_exec"] is True
@@ -100,6 +101,40 @@ def test_benchmark_runtime_metadata_keeps_explicit_loop_overrides() -> None:
     assert metadata["agent_loop"]["max_steps"] == 9
     assert metadata["agent_loop"]["max_tool_calls"] == 7
     assert metadata["agent_loop"]["source"] == "explicit_cli"
+
+
+def test_finance_benchmark_online_metadata_auto_enables_live_retrieval_tools() -> None:
+    args = _benchmark_args(
+        execution_profile="finance-capability",
+        bench_command="finance",
+        online=True,
+    )
+
+    metadata = cli._runtime_execution_metadata(args)
+    recipe = task_recipe("retrieval_answer", metadata=metadata)
+
+    assert metadata is not None
+    assert metadata["retrieval"]["allow_network"] is True
+    assert metadata["retrieval"]["max_network_fetches"] == cli.DEFAULT_LIVE_NETWORK_FETCH_BUDGET
+    assert "network:fetch" in recipe.metadata["allowed_permissions"]
+    assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME in recipe.allowed_tools
+
+
+def test_finance_benchmark_can_explicitly_disable_live_retrieval_tools() -> None:
+    args = _benchmark_args(
+        execution_profile="finance-capability",
+        bench_command="finance",
+        online=True,
+        live_retrieval=False,
+    )
+
+    metadata = cli._runtime_execution_metadata(args)
+    recipe = task_recipe("retrieval_answer", metadata=metadata)
+
+    assert metadata is not None
+    assert not metadata["retrieval"].get("allow_network")
+    assert "network:fetch" not in recipe.metadata.get("allowed_permissions", [])
+    assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME not in recipe.allowed_tools
 
 
 def test_fast_execution_profile_loop_budget_is_hard_cap_for_model_planner() -> None:

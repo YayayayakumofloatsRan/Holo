@@ -7,6 +7,179 @@ from kernel_v3.contracts import JsonObject
 
 
 FINANCE_TOOL_SURFACE_SCHEMA = "holo.kernel_v3.finance_tool_surface.v1"
+FINANCE_AGENT_LOOP_CONTRACT_SCHEMA = "holo.kernel_v3.finance_agent_loop_contract.v1"
+
+
+def finance_agent_loop_contract() -> JsonObject:
+    """Return the generic finance task loop contract exposed to the model.
+
+    This is intentionally benchmark-agnostic. It describes how a finance task
+    should be decomposed into state, evidence, transforms, and gates without
+    carrying dev-set row identifiers, gold answers, thresholds, or per-question
+    answer rules.
+    """
+
+    return {
+        "schema": FINANCE_AGENT_LOOP_CONTRACT_SCHEMA,
+        "decision_owner": "model",
+        "host_role": "schema_policy_execution_journal_verifier_only",
+        "core_loop": [
+            {
+                "phase": "task_compile",
+                "model_decides": [
+                    "target entity/security aliases",
+                    "target period and fiscal basis",
+                    "required evidence slots",
+                    "required deterministic transforms",
+                    "source families likely to contain authoritative evidence",
+                ],
+                "host_records": ["TaskSpec", "EvidenceSpec", "TransformSpec", "SlotFrame"],
+            },
+            {
+                "phase": "evidence_acquire",
+                "model_decides": [
+                    "retrieval/search/source tool",
+                    "document or filing target",
+                    "table/text extraction strategy",
+                    "whether returned evidence is sufficient",
+                ],
+                "host_records": ["EvidenceItem", "CitationItem", "ArtifactRef"],
+            },
+            {
+                "phase": "ledger_bind",
+                "model_decides": [
+                    "which candidate facts fill which slots",
+                    "line-item basis",
+                    "period basis",
+                    "whether a disclosure answers the qualitative slot",
+                ],
+                "host_records": ["ClaimLedger", "FinanceFactLedger", "SlotFill", "finance_slot_bind"],
+            },
+            {
+                "phase": "transform_compute",
+                "model_decides": [
+                    "formula expression",
+                    "input fact ids or explicit assumptions",
+                    "unit and rounding basis",
+                    "whether a table query or calculator is required",
+                ],
+                "host_records": ["FormulaTrace", "TransformPlan"],
+            },
+            {
+                "phase": "semantic_synthesis",
+                "model_decides": [
+                    "answer judgment",
+                    "comparison or trend conclusion",
+                    "business-context explanation",
+                    "limitations when evidence is genuinely missing",
+                ],
+                "host_records": ["FinalAnswer candidate"],
+            },
+            {
+                "phase": "verify_or_replan",
+                "model_decides": [
+                    "repair unsupported claims",
+                    "request more evidence",
+                    "call another tool family",
+                    "finalize only after evidence/formula support is adequate",
+                ],
+                "host_records": ["NumericVerification", "VerificationGateResult", "synthesis_gate"],
+            },
+        ],
+        "state_objects": [
+            {
+                "name": "TaskSpec",
+                "purpose": "root objective, entities, periods, and success criteria",
+                "model_visibility": "compact each planner turn",
+            },
+            {
+                "name": "EvidenceSpec",
+                "purpose": "slots to acquire, accepted aliases, statements, source families, periods",
+                "model_visibility": "compact each planner turn",
+            },
+            {
+                "name": "TransformSpec",
+                "purpose": "deterministic calculations required by the model-owned task plan",
+                "model_visibility": "compact each planner turn",
+            },
+            {
+                "name": "ClaimLedger/FinanceFactLedger",
+                "purpose": "candidate source-backed facts and disclosures with provenance",
+                "model_visibility": "ranked and compacted each planner turn",
+            },
+            {
+                "name": "FormulaTrace",
+                "purpose": "auditable calculator output from model-proposed formulas",
+                "model_visibility": "compact each planner turn",
+            },
+            {
+                "name": "VerificationGateResult",
+                "purpose": "host provenance and arithmetic diagnostics, not final semantic judgment",
+                "model_visibility": "compact repair/replan signal",
+            },
+        ],
+        "task_family_workflows": [
+            {
+                "family": "direct_line_item_or_disclosure_extraction",
+                "generic_steps": [
+                    "target authoritative document or provided context",
+                    "extract candidate statement/section/table evidence",
+                    "bind one or more facts/disclosures to slots",
+                    "answer with citation and unit/period basis",
+                ],
+                "typical_tools": ["retrieval.run", "sec.edgar.financials", "document.docling.convert", "document.trafilatura.extract"],
+            },
+            {
+                "family": "defined_formula_numeric_calculation",
+                "generic_steps": [
+                    "compile all formula input slots",
+                    "retrieve and bind source-backed inputs",
+                    "call finance.slot_bind to record model-selected fact ids, period basis, and line-item basis",
+                    "call calculator.compute or data.table.query for deterministic arithmetic",
+                    "verify numeric claims before synthesis",
+                ],
+                "typical_tools": ["retrieval.run", "sec.edgar.financials", "finance.slot_bind", "data.table.query", "calculator.compute", "finance.verify_numeric"],
+            },
+            {
+                "family": "computed_business_judgment",
+                "generic_steps": [
+                    "compile quantitative evidence slots and qualitative context slots",
+                    "bind the model-selected numeric facts with finance.slot_bind when multiple candidate line items or periods compete",
+                    "compute relevant ratios without hard-coded thresholds",
+                    "use LLM business judgment to decide relevance/health/profile",
+                    "cite both numeric support and business-context evidence",
+                ],
+                "typical_tools": ["retrieval.run", "sec.edgar.financials", "finance.slot_bind", "calculator.compute", "finance.verify_numeric"],
+            },
+            {
+                "family": "driver_attribution_or_bridge_adjustment",
+                "generic_steps": [
+                    "extract management discussion or reconciliation/bridge table",
+                    "bind driver components and exclusions",
+                    "query/rank table rows if needed",
+                    "synthesize the driver conclusion from cited components",
+                ],
+                "typical_tools": ["retrieval.run", "document.docling.convert", "data.table.query", "calculator.compute"],
+            },
+            {
+                "family": "table_ranking_or_comparison",
+                "generic_steps": [
+                    "extract the complete comparison table",
+                    "normalize categories and periods",
+                    "query/rank/aggregate rows with data.table.query or calculator.compute",
+                    "map the extreme or comparison result back to cited row evidence",
+                ],
+                "typical_tools": ["document.docling.convert", "data.table.query", "script.exec", "calculator.compute"],
+            },
+        ],
+        "stop_invariants": [
+            "do not finalize numeric answers without source-backed facts or explicit assumptions",
+            "do not finalize formula questions without FormulaTrace unless the answer is a justified non-applicability judgment",
+            "do not ask the user for benchmark details already present in prompt metadata",
+            "treat parser/provider failures as observations for replanning unless policy, safety, or budget blocks apply",
+            "gold/reference material is never model-visible and cannot be used for runtime planning",
+        ],
+    }
 
 
 def finance_tool_surface_catalog() -> list[JsonObject]:

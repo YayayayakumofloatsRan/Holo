@@ -3,7 +3,7 @@ import json
 from kernel_v3.context import ArtifactStore
 from kernel_v3.journal import JournalStore
 from kernel_v3.processors.json_repair import parse_json_object
-from kernel_v3.processors.testing import fake_fabric
+from kernel_v3.processors.testing import fake_fabric, timeout_fabric
 from kernel_v3.retrieval import FakeFetchProvider, FakeSearchProvider, RetrievalOperator, SearchGoal, SearchSource
 from kernel_v3.retrieval.extract import extract_spans
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, ExtractedSpan, FetchedDocument
@@ -158,6 +158,46 @@ def test_retrieval_workbench_host_validation_drops_invented_ids() -> None:
         "invented-evidence",
         "invented-rescue",
     ]
+
+
+def test_retrieval_workbench_timeout_is_non_blocking_unavailable() -> None:
+    journal = JournalStore.in_memory()
+    goal = SearchGoal(
+        goal_id="goal-workbench-timeout",
+        query="Find ExampleCo FY2024 revenue from the annual report",
+        max_sources=2,
+        max_fetches=1,
+        max_spans_per_document=2,
+    )
+    source = SearchSource(
+        source_id="source-annual-report",
+        provider="fake",
+        uri="https://example.com/exampleco-2024-annual-report",
+        title="ExampleCo 2024 Annual Report",
+        snippet="Annual report with revenue.",
+        metadata={"source_family": "company_ir", "authority_level": "primary"},
+    )
+    operator = RetrievalOperator(
+        search_provider=FakeSearchProvider({goal.query: [source]}),
+        fetch_provider=FakeFetchProvider({source.uri: "ExampleCo FY2024 revenue was $10 million in the annual report."}),
+        processor_fabric=timeout_fabric(journal=journal),
+    )
+
+    report = operator.run(
+        goal,
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+        task_id="task-workbench-timeout",
+        run_id="run-workbench-timeout",
+    )
+
+    workbench = journal.records(task_id="task-workbench-timeout", kind="retrieval_workbench_decision")[0].data
+    assert workbench["status"] == "disabled"
+    assert workbench["decision"] == "continue"
+    assert workbench["diagnostics"]["reason"] == "TimeoutError"
+    processor_requests = journal.records(task_id="task-workbench-timeout", kind="processor_request")
+    assert [record.data["task_type"] for record in processor_requests] == ["retrieval.workbench"]
+    assert report.diagnostics["retrieval_workbench"]["status"] == "disabled"
 
 
 def test_retrieval_workbench_rescues_citable_evidence_from_threshold_rejection() -> None:

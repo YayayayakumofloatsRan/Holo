@@ -39,6 +39,7 @@ from kernel_v3.agent.runtime import (
     _finance_capability_execute_clarification_as_retrieval,
     _finance_numeric_judge_accepts_answer,
     _finance_numeric_judge_prompt,
+    _finance_numeric_repair_attempt_count,
     _planner_directive,
     _planner_allowed_tool_names,
     _candidate_fact_evidence_text,
@@ -59,6 +60,8 @@ from kernel_v3.finance import (
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
+    FINANCE_AGENT_LOOP_CONTRACT_SCHEMA,
+    FINANCE_SLOT_BIND_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     FinanceFact,
@@ -77,12 +80,12 @@ from kernel_v3.finance import (
     finance_slot_frame,
     finance_verification_to_gate_result,
     primary_source_numeric_binding_resolution,
+    register_finance_tools,
     target_document_binding_from_metadata,
     plan_finance_formula,
     verify_finance_answer,
 )
-from kernel_v3.finance.calculator import register_finance_tools
-from kernel_v3.processors.adapters import _compact_runtime_directive_for_provider
+from kernel_v3.processors.adapters import _compact_runtime_directive_for_provider, _planner_prompt
 from kernel_v3.finance.task_compiler import TASK_COMPILE_FACT_LIMIT, _model_task_compile_prompt
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -1915,6 +1918,7 @@ def test_finance_working_state_for_prompt_summarizes_facts_traces_and_verifier_w
     assert "inspect missing numeric values" in state["numeric_verification"]["repair_options"][0]
     assert state["presence"] == {
         "finance_facts": True,
+        "execution_program": False,
         "slot_frame": True,
         "slot_bind": True,
         "missing_slots": True,
@@ -2102,6 +2106,54 @@ def test_finance_working_state_includes_slot_bind_basis_without_fact_ledger() ->
     assert "model owns metric binding" in state["host_boundary"]
 
 
+def test_finance_working_state_reads_model_callable_slot_bind_tool_observation() -> None:
+    journal = JournalStore.in_memory()
+    journal.append(
+        task_id="task-finance-slot-bind-tool",
+        run_id="run-1",
+        step_id="step-slot-bind-tool",
+        kind="observation",
+        data={
+            "observation_id": "obs-slot-bind-tool",
+            "run_id": "run-1",
+            "kind": "finance_slot_bind",
+            "status": "ok",
+            "source": f"tool:{FINANCE_SLOT_BIND_TOOL_NAME}",
+            "content": {
+                "schema": "holo.kernel_v3.finance_slot_bind_tool_result.v1",
+                "status": "ready",
+                "decision": "ready",
+                "accepted_slot_binding_count": 2,
+                "accepted_formula_plan_count": 1,
+                "slot_bindings": [
+                    {"slot_name": "revenue", "variable_name": "revenue", "fact_id": "fact-revenue"},
+                    {"slot_name": "gross_profit", "variable_name": "gross_profit", "fact_id": "fact-gross-profit"},
+                ],
+                "period_basis": [{"slot_name": "revenue", "selected_period": "FY2024"}],
+                "line_item_basis": [{"slot_name": "gross_profit", "selected_line_item": "Gross profit"}],
+                "calculator_payloads": [
+                    {
+                        "formula_name": "gross_margin",
+                        "expression": "gross_profit / revenue",
+                        "variables": {"gross_profit": "80", "revenue": "200"},
+                    }
+                ],
+                "reason_summary": "Model submitted slot bindings before calculator.",
+            },
+            "observed_at_ms": 1,
+            "action_id": "act-slot-bind-tool",
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-slot-bind-tool", run_id="run-1")
+
+    assert state["presence"]["slot_bind"] is True
+    assert state["slot_bind_count"] == 1
+    assert state["slot_bind"]["decision"] == "ready"
+    assert state["slot_bind"]["accepted_formula_plan_count"] == 1
+    assert state["slot_bind"]["period_basis"][0]["selected_period"] == "FY2024"
+
+
 def test_finance_working_state_for_prompt_is_absent_without_finance_anchor() -> None:
     journal = JournalStore.in_memory()
     journal.append(
@@ -2135,6 +2187,154 @@ def test_finance_working_state_for_prompt_is_absent_without_finance_anchor() -> 
     state = _finance_working_state_for_prompt(journal, task_id="task-generic-state", run_id="run-1")
 
     assert state == {}
+
+
+def test_finance_working_state_includes_recipe_execution_program_before_evidence() -> None:
+    journal = JournalStore.in_memory()
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "execution_program": {
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "source": "task_compile_model",
+                "program_id": "program-capital-intensity",
+                "domain": "finance",
+                "task_spec": {
+                    "task_type": "compute",
+                    "objective": "Assess FY2022 capital intensity from filing evidence.",
+                    "target_entities": ["3M"],
+                    "target_periods": ["FY2022"],
+                    "success_criteria": ["computed ratios and business context support the judgment"],
+                },
+                "evidence_specs": [
+                    {
+                        "slot_name": "capital_expenditures",
+                        "accepted_attributes": ["capex", "purchases of property, plant and equipment"],
+                        "source_role": "primary_filing",
+                        "required_source_families": ["sec_filings"],
+                        "target_period": "FY2022",
+                        "statement": "cash_flow_statement",
+                        "line_item": "purchases of property, plant and equipment",
+                        "required": True,
+                    }
+                ],
+                "transform_specs": [
+                    {
+                        "name": "capex_to_revenue",
+                        "required_slots": ["capital_expenditures", "revenue"],
+                        "expression": "capital_expenditures / revenue",
+                        "output_unit": "percent",
+                        "output_attribute": "capex_to_revenue",
+                    }
+                ],
+                "slot_frame": {
+                    "task_type": "compute",
+                    "domain": "finance",
+                    "missing_slots": ["capital_expenditures", "revenue"],
+                },
+                "diagnostics": {"tool_chain_plan": {"decision_owner": "model"}},
+            },
+        },
+    )
+
+    state = _finance_working_state_for_prompt(
+        journal,
+        task_id="task-program-before-evidence",
+        run_id="run-1",
+        recipe=recipe,
+    )
+
+    assert state["presence"]["execution_program"] is True
+    assert state["presence"]["finance_facts"] is False
+    assert state["execution_program"]["task_spec"]["task_type"] == "compute"
+    assert state["execution_program"]["missing_slots"] == ["capital_expenditures", "revenue"]
+    assert state["missing_slots"] == ["capital_expenditures", "revenue"]
+    assert state["workbench"]["current_phase"] == "evidence_acquire"
+    assert "retrieval.run" in state["workbench"]["next_action_options"]
+    assert "execution program is available" in state["model_attention"][0]
+    assert "model owns metric binding" in state["host_boundary"]
+
+
+def test_retrieval_evaluator_replans_when_finance_workbench_missing_slots_before_response() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+    evaluator = _RecipeEvaluator(recipe, journal=JournalStore.in_memory())
+    context = ContextBundle(
+        context_id="ctx-finance-workbench-missing-response",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "run_id": "run-1",
+            "finance_working_state": {
+                "schema": "holo.kernel_v3.finance_working_state.v1",
+                "missing_slots": ["capital_expenditures", "revenue"],
+                "workbench": {"current_phase": "evidence_acquire"},
+                "numeric_verification": {},
+            },
+        },
+        token_budget={},
+    )
+    observation = Observation(
+        observation_id="obs-premature-response",
+        run_id="run-1",
+        kind="respond_result",
+        status="ok",
+        source="respond",
+        content={"text": "Premature answer without evidence."},
+        observed_at_ms=0,
+        action_id="act-premature-response",
+        tool_call_id=None,
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "continue"
+    assert "finance_workbench_missing_slots" in feedback.missing_evidence
+    assert "finance_workbench_phase:evidence_acquire" in feedback.missing_evidence
+    assert "missing_slot:capital_expenditures" in feedback.missing_evidence
+
+
+def test_agent_context_compiler_exposes_execution_program_workbench_before_evidence() -> None:
+    journal = JournalStore.in_memory()
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "execution_program": {
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "source": "task_compile_model",
+                "task_spec": {"task_type": "compute", "objective": "Compute a filing-backed ratio."},
+                "evidence_specs": [{"slot_name": "revenue", "required": True}],
+                "transform_specs": [{"name": "margin", "required_slots": ["gross_profit", "revenue"]}],
+                "slot_frame": {"task_type": "compute", "domain": "finance", "missing_slots": ["gross_profit", "revenue"]},
+            },
+        },
+    )
+    registry = register_finance_tools(ToolRegistry())
+    compiler = _AgentContextCompiler(recipe=recipe, tool_manifests=registry.manifests())
+
+    context = compiler.compile(
+        TaskState(
+            task_id="task-program-workbench-context",
+            run_id="run-1",
+            thread_id="thread-program-workbench-context",
+            input_text="Compute a filing-backed ratio.",
+            status="running",
+            step_id="step-1",
+        ),
+        journal,
+    )
+
+    finance_state = context.state["finance_working_state"]
+    assert finance_state["presence"]["execution_program"] is True
+    assert finance_state["presence"]["finance_facts"] is False
+    assert finance_state["workbench"]["current_phase"] == "evidence_acquire"
+    assert finance_state["missing_slots"] == ["gross_profit", "revenue"]
+    assert "retrieval.run" in finance_state["workbench"]["next_action_options"]
 
 
 def test_agent_context_compiler_injects_compact_finance_working_state_for_model_planner() -> None:
@@ -2784,6 +2984,59 @@ def test_finance_capability_preserves_model_ask_user_without_host_rewrite() -> N
     assert action.name is None
     assert action.payload["question"] == "请提供上市公司名称或股票代码。"
     assert "finance_capability_clarification_rescue" not in action.reasons
+
+
+def test_finance_capability_routes_complete_benchmark_doc_ask_user_to_retrieval() -> None:
+    class ClarifyingPlanner:
+        def propose(self, context, feedback=None):
+            return CandidateAction(
+                action_id="act-ask-for-benchmark-target",
+                kind="ask_user",
+                name=None,
+                description="Need benchmark target",
+                score=0.22,
+                payload={"question": "请提供完整 benchmark target text，包括 Source URL 和 question。"},
+                reasons=["missing_benchmark_target_text"],
+                side_effect_class="none",
+            )
+
+    goal = (
+        "Benchmark target source follows. Acquire evidence from Source URL first; it is not answer evidence by itself. "
+        "Prefer direct URL fetch before broad search.\n\n"
+        "Source URL: https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/mmm-20221231.htm\n"
+        "Company: 3M\n"
+        "Document: 3M_2022_10K\n"
+        "Document type: 10k\n"
+        "Document period: 2022\n\n"
+        "Is 3M a capital-intensive business based on FY2022 data?"
+    )
+    profile_metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    recipe = task_recipe("retrieval_answer", metadata=profile_metadata)
+    planner = _RecipeBoundPlanner(
+        inner=ClarifyingPlanner(),
+        goal=goal,
+        recipe=recipe,
+        journal=JournalStore.in_memory(),
+    )
+    context = ContextBundle(
+        context_id="ctx-benchmark-ask-user-rescue",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-3m-2022", "run_id": "run-3m-2022"},
+        token_budget={},
+    )
+
+    action = planner.propose(context)
+
+    assert action.kind == "tool"
+    assert action.name == "retrieval.run"
+    assert "benchmark_doc_clarification_rescue" in action.reasons
+    assert action.payload["metadata"]["benchmark_doc_retrieval"] is True
+    assert action.payload["metadata"]["company"] == "3M"
+    assert action.payload["metadata"]["root_goal"] == "Is 3M a capital-intensive business based on FY2022 data?"
+    assert action.payload["metadata"]["rescued_ask_user_question"].startswith("请提供完整 benchmark target text")
+    assert "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/mmm-20221231.htm" in action.payload["metadata"]["source_urls"]
 
 
 def test_non_llm_first_ask_user_is_not_rewritten_to_retrieval() -> None:
@@ -6132,12 +6385,23 @@ def test_finance_capability_planner_directive_preserves_full_open_tool_surface()
 
     assert compact["tool_selection_count"] >= len(tool_names)
     assert DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME in tool_names
+    assert FINANCE_SLOT_BIND_TOOL_NAME in tool_names
     assert DATA_TABLE_QUERY_TOOL_NAME in tool_names
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in tool_names
     install_summary = compact["toolchain_install_summary"]
     assert "installed_components" in install_summary
     assert "missing_components" in install_summary
     assert install_summary["host_rule"].startswith("Prefer installed components")
+    loop_contract = compact["finance_agent_loop_contract"]
+    assert loop_contract["schema"] == FINANCE_AGENT_LOOP_CONTRACT_SCHEMA
+    assert [item["phase"] for item in loop_contract["core_loop"]][:3] == [
+        "task_compile",
+        "evidence_acquire",
+        "ledger_bind",
+    ]
+    families = {item["family"] for item in loop_contract["task_family_workflows"]}
+    assert "computed_business_judgment" in families
+    assert "defined_formula_numeric_calculation" in families
 
 
 def test_finance_capability_provider_compact_preserves_one_shot_tool_surface() -> None:
@@ -6163,13 +6427,65 @@ def test_finance_capability_provider_compact_preserves_one_shot_tool_surface() -
     assert DOCUMENT_DOCLING_CONVERT_TOOL_NAME in tool_names
     assert DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME in tool_names
     assert MARKET_OPENBB_FETCH_TOOL_NAME in tool_names
+    assert FINANCE_SLOT_BIND_TOOL_NAME in tool_names
     assert DATA_TABLE_QUERY_TOOL_NAME in tool_names
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in tool_names
+    assert "workspace.write" in tool_names
+    assert "shell.exec" in tool_names
+    assert "script.exec" in tool_names
     assert "toolchain_install_summary" in compact
     assert compact["toolchain_install_summary"]["host_rule"].startswith("Prefer installed components")
+    assert compact["finance_agent_loop_contract"]["schema"] == FINANCE_AGENT_LOOP_CONTRACT_SCHEMA
+    assert "debug50" not in json.dumps(compact["finance_agent_loop_contract"]).lower()
     assert compact["llm_first_finance_template"]["standard_tool_interface"]["planner_action"].startswith(
         "Return planner.propose JSON"
     )
+
+
+def test_finance_capability_planner_prompt_exposes_temporary_workbench_tools_to_model() -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    metadata["retrieval"] = {
+        **metadata["retrieval"],
+        "allow_network": True,
+        "max_network_fetches": 3,
+    }
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=metadata,
+    )
+    directive = _planner_directive(recipe)
+    context = ContextBundle(
+        context_id="ctx-finance-capability-workbench-prompt",
+        thread_key="thread-finance-capability-workbench-prompt",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-finance-capability-workbench-prompt",
+            "run_id": "run-finance-capability-workbench-prompt",
+            "input_text": "Analyze a filing table, create a temporary parser if needed, and compute the answer.",
+            "host_situation": {},
+            "agent_recipe": recipe.to_dict(),
+            "agent_runtime_directive": directive,
+            "capability_catalog": {},
+        },
+        token_budget=4096,
+    )
+
+    prompt_payload = json.loads(_planner_prompt(context, None))
+    visible_directive = prompt_payload["context"]["state"]["agent_runtime_directive"]
+    tool_names = [item["name"] for item in visible_directive["tool_selection"]]
+
+    assert visible_directive["tool_selection_count"] == len(directive["tool_selection"])
+    assert "workspace.write" in tool_names
+    assert "shell.exec" in tool_names
+    assert "script.exec" in tool_names
+    assert FINANCE_SLOT_BIND_TOOL_NAME in tool_names
+    slot_bind_entry = next(item for item in visible_directive["tool_selection"] if item["name"] == FINANCE_SLOT_BIND_TOOL_NAME)
+    assert "slot_bindings: model-selected slot_name/variable_name/fact_id bindings" in slot_bind_entry["payload_requirements"]
+    script_entry = next(item for item in visible_directive["tool_selection"] if item["name"] == "script.exec")
+    assert "expected_output: json when emitting structured facts" in script_entry["payload_requirements"]
+    assert "workspace.write" in visible_directive["allowed_tools"]
+    assert "script.exec" in visible_directive["allowed_tools"]
 
 
 def test_finance_fast_model_planner_can_select_verify_numeric_tool() -> None:
@@ -8358,7 +8674,211 @@ def test_recipe_evaluator_continues_until_finance_formula_trace_exists() -> None
     feedback = evaluator.evaluate(context, observation)
 
     assert feedback.status == "continue"
-    assert "finance_formula_trace_required" in feedback.missing_evidence
+    assert "finance_execution_program_transform_required" in feedback.missing_evidence
+    assert "transform:ev_ebitda" in feedback.missing_evidence
+
+
+def test_recipe_evaluator_journals_finance_ledger_after_retrieval_for_next_planner_turn() -> None:
+    profile = execution_profile("finance-fact-fast")
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "Calculate FY2024 gross margin for TestCo.",
+            "execution_metadata": execution_profile_runtime_metadata(profile),
+            "execution_program": {
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "source": "task_compile_model",
+                "task_spec": {"task_type": "compute", "objective": "Calculate FY2024 gross margin for TestCo."},
+                "evidence_specs": [{"slot_name": "revenue"}, {"slot_name": "gross_profit"}],
+                "transform_specs": [
+                    {
+                        "name": "gross_margin",
+                        "required_slots": ["gross_profit", "revenue"],
+                        "expression": "gross_profit / revenue",
+                        "output_unit": "percent",
+                    }
+                ],
+                "slot_frame": {"task_type": "compute", "domain": "finance", "missing_slots": ["gross_profit", "revenue"]},
+            },
+        },
+    )
+    journal = JournalStore.in_memory()
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-revenue-profit",
+            title="TestCo 2024 10-K",
+            uri="https://www.sec.gov/Archives/testco-2024.htm",
+            text=(
+                "entityName=TestCo facts=metric=revenue label=Revenue unit=USD fy=2024 form=10-K value=200 ; "
+                "metric=gross profit label=Gross profit unit=USD fy=2024 form=10-K value=80"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-revenue-profit")]
+    for item in evidence:
+        journal.append(
+            task_id="task-ledger-after-retrieval",
+            run_id="run-1",
+            step_id=None,
+            kind="retrieval_evidence",
+            data=item.to_dict(),
+        )
+    for item in citations:
+        journal.append(
+            task_id="task-ledger-after-retrieval",
+            run_id="run-1",
+            step_id=None,
+            kind="retrieval_citation",
+            data=item.to_dict(),
+        )
+    evaluator = _RecipeEvaluator(recipe, journal=journal)
+    context = ContextBundle(
+        context_id="ctx-ledger-after-retrieval",
+        thread_key="thread-ledger-after-retrieval",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-ledger-after-retrieval", "run_id": "run-1", "step_id": "step-1"},
+        token_budget=4096,
+    )
+    observation = Observation(
+        observation_id="obs-ledger-after-retrieval",
+        run_id="run-1",
+        kind="tool_result",
+        status="ok",
+        source="tool:retrieval.run",
+        content={"report": _retrieval_report(evidence=evidence, citations=citations).to_dict()},
+        observed_at_ms=1,
+        action_id="act-ledger-after-retrieval",
+        tool_call_id="tool-ledger-after-retrieval",
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "continue"
+    assert "finance_execution_program_transform_required" in feedback.missing_evidence
+    assert "transform:gross_margin" in feedback.missing_evidence
+    ledgers = journal.records(task_id="task-ledger-after-retrieval", kind="finance_fact_ledger")
+    assert ledgers
+    assert ledgers[-1].data["purpose"] == "loop_workbench"
+    assert ledgers[-1].data["source_observation_id"] == "obs-ledger-after-retrieval"
+    assert {fact["metric"] for fact in ledgers[-1].data["facts"]} >= {"revenue", "gross profit"}
+    assert journal.records(task_id="task-ledger-after-retrieval", kind="claim_ledger")
+
+    compiler = _AgentContextCompiler(recipe=recipe, tool_manifests=register_finance_tools(ToolRegistry()).manifests())
+    refreshed = compiler.compile(
+        TaskState(
+            task_id="task-ledger-after-retrieval",
+            run_id="run-1",
+            thread_id="thread-ledger-after-retrieval",
+            input_text="Calculate FY2024 gross margin for TestCo.",
+            status="running",
+            step_id="step-2",
+        ),
+        journal,
+    )
+    finance_state = refreshed.state["finance_working_state"]
+    assert finance_state["presence"]["finance_facts"] is True
+    assert finance_state["fact_count"] >= 2
+    assert {fact["metric"] for fact in finance_state["facts"]} >= {"revenue", "gross profit"}
+
+
+def test_recipe_evaluator_journals_source_claims_after_non_numeric_retrieval_for_workbench() -> None:
+    profile = execution_profile("finance-fact-fast")
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "Explain which segment drove TestCo FY2024 margin pressure.",
+            "execution_metadata": execution_profile_runtime_metadata(profile),
+            "execution_program": {
+                "schema": "holo.kernel_v3.compiled_task_program.v1",
+                "source": "task_compile_model",
+                "task_spec": {
+                    "task_type": "disclosure_analysis",
+                    "objective": "Identify the segment driver from filing discussion.",
+                },
+                "evidence_specs": [{"slot_name": "segment_discussion"}],
+                "transform_specs": [],
+                "slot_frame": {"task_type": "disclosure_analysis", "domain": "finance", "missing_slots": ["segment_discussion"]},
+            },
+        },
+    )
+    journal = JournalStore.in_memory()
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-segment-discussion",
+            title="TestCo 2024 10-K MD&A",
+            uri="https://www.sec.gov/Archives/testco-2024.htm",
+            text=(
+                "Management discussion states that margin pressure was driven by the Industrial segment, "
+                "where input costs and logistics expenses increased while demand softened."
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-segment-discussion")]
+    for item in evidence:
+        journal.append(
+            task_id="task-claim-after-retrieval",
+            run_id="run-1",
+            step_id=None,
+            kind="retrieval_evidence",
+            data=item.to_dict(),
+        )
+    for item in citations:
+        journal.append(
+            task_id="task-claim-after-retrieval",
+            run_id="run-1",
+            step_id=None,
+            kind="retrieval_citation",
+            data=item.to_dict(),
+        )
+    evaluator = _RecipeEvaluator(recipe, journal=journal)
+    context = ContextBundle(
+        context_id="ctx-claim-after-retrieval",
+        thread_key="thread-claim-after-retrieval",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-claim-after-retrieval", "run_id": "run-1", "step_id": "step-1"},
+        token_budget=4096,
+    )
+    observation = Observation(
+        observation_id="obs-claim-after-retrieval",
+        run_id="run-1",
+        kind="tool_result",
+        status="ok",
+        source="tool:retrieval.run",
+        content={"report": _retrieval_report(evidence=evidence, citations=citations).to_dict()},
+        observed_at_ms=1,
+        action_id="act-claim-after-retrieval",
+        tool_call_id="tool-claim-after-retrieval",
+    )
+
+    evaluator.evaluate(context, observation)
+
+    assert not journal.records(task_id="task-claim-after-retrieval", kind="finance_fact_ledger")
+    claim_ledgers = journal.records(task_id="task-claim-after-retrieval", kind="claim_ledger")
+    assert claim_ledgers
+    assert claim_ledgers[-1].data["domain"] == "source_grounded_research"
+    assert claim_ledgers[-1].data["purpose"] == "loop_workbench"
+    assert claim_ledgers[-1].data["source_observation_id"] == "obs-claim-after-retrieval"
+    assert claim_ledgers[-1].data["claims"][0]["citation_ref"] == "cite-segment-discussion"
+
+    compiler = _AgentContextCompiler(recipe=recipe, tool_manifests=register_finance_tools(ToolRegistry()).manifests())
+    refreshed = compiler.compile(
+        TaskState(
+            task_id="task-claim-after-retrieval",
+            run_id="run-1",
+            thread_id="thread-claim-after-retrieval",
+            input_text="Explain which segment drove TestCo FY2024 margin pressure.",
+            status="running",
+            step_id="step-2",
+        ),
+        journal,
+    )
+    finance_state = refreshed.state["finance_working_state"]
+    assert finance_state["presence"]["claim_ledger"] is True
+    assert finance_state["claim_count"] == 1
+    assert finance_state["workbench"]["current_phase"] == "ledger_bind"
+    assert "Industrial segment" in finance_state["claims"][0]["value"]
 
 
 def test_recipe_evaluator_continues_on_report_workbench_semantic_missing_slots() -> None:
@@ -12148,6 +12668,174 @@ def test_finance_slot_bind_prompt_keeps_late_large_ledger_candidates_visible() -
     assert late["value"] == "-1577"
     assert "Purchases of property" in late["raw_fields"]["context"]
     assert late["raw_fields"]["target_document_binding_accepted"] is True
+
+
+def test_finance_slot_bind_prompt_covers_each_required_slot_in_noisy_large_ledger() -> None:
+    facts: list[FinanceFact] = []
+    for index in range(120):
+        facts.append(
+            FinanceFact(
+                fact_id=f"noise-{index}",
+                entity="3M",
+                ticker="MMM",
+                period="FY2022",
+                fiscal_year=2022,
+                metric="other — net",
+                value=str(index),
+                unit="USD",
+                scale="actual",
+                source_ref=f"source-noise-{index}",
+                evidence_ref=f"evidence-noise-{index}",
+                citation_ref=f"cite-noise-{index}",
+                metadata={
+                    "context": (
+                        "Nearby filing text mentions revenue, assets, property plant and equipment, "
+                        "net income, operating cash flow, and capital expenditures."
+                    ),
+                    "raw": f"Other — net {index}",
+                    "source_uri": "https://www.sec.gov/Archives/edgar/data/66740/noisy.txt",
+                },
+            )
+        )
+    facts.extend(
+        [
+            _year_fact(
+                "property plant and equipment net",
+                "9178000000",
+                2022,
+                fact_id="fact-ppe-net",
+                metadata={"concept": "PropertyPlantAndEquipmentNet", "label": "Property, Plant and Equipment, Net"},
+            ),
+            _year_fact(
+                "assets",
+                "46455000000",
+                2022,
+                fact_id="fact-assets",
+                metadata={"concept": "Assets", "label": "Assets"},
+            ),
+            _year_fact(
+                "net income",
+                "5777000000",
+                2022,
+                fact_id="fact-net-income",
+                metadata={"concept": "NetIncomeLoss", "label": "Net Income (Loss) Attributable to Parent"},
+            ),
+            _year_fact(
+                "revenue",
+                "34229000000",
+                2022,
+                fact_id="fact-revenue",
+                metadata={
+                    "concept": "Revenues",
+                    "label": "Revenues",
+                    "target_document_binding_accepted": True,
+                },
+            ),
+            _year_fact(
+                "operating cash flow",
+                "5591000000",
+                2022,
+                fact_id="fact-ocf",
+                metadata={
+                    "concept": "NetCashProvidedByUsedInOperatingActivities",
+                    "label": "Net Cash Provided by Operating Activities",
+                },
+            ),
+            _year_fact(
+                "capital expenditures",
+                "1749000000",
+                2022,
+                fact_id="fact-capex",
+                metadata={
+                    "concept": "PaymentsToAcquirePropertyPlantAndEquipment",
+                    "label": "Payments to Acquire Property, Plant, and Equipment",
+                },
+            ),
+        ]
+    )
+
+    prompt = _finance_slot_bind_prompt(
+        question="Is 3M a capital-intensive business based on FY2022 data?",
+        facts=facts,
+        compiled_program={
+            "program_id": "program-capital-intensity",
+            "task_spec": {"domain": "finance", "task_type": "compute", "target_periods": ["FY2022"]},
+            "evidence_specs": [
+                {"slot_name": "capital_expenditures", "line_item": "capital expenditures", "accepted_attributes": ["capex"]},
+                {"slot_name": "revenue", "line_item": "revenue", "accepted_attributes": ["net sales", "revenues"]},
+                {
+                    "slot_name": "operating_cash_flow",
+                    "line_item": "operating cash flow",
+                    "accepted_attributes": ["net cash provided by operating activities"],
+                },
+                {
+                    "slot_name": "property_plant_and_equipment_net",
+                    "line_item": "property plant and equipment net",
+                    "accepted_attributes": ["pp&e net"],
+                },
+                {"slot_name": "assets", "line_item": "assets", "accepted_attributes": ["total assets"]},
+                {"slot_name": "net_income", "line_item": "net income", "accepted_attributes": ["net earnings"]},
+            ],
+            "transform_specs": [
+                {
+                    "name": "capex_to_revenue",
+                    "expression": "capital_expenditures / revenue",
+                    "required_slots": ["capital_expenditures", "revenue"],
+                },
+                {
+                    "name": "ppe_to_assets",
+                    "expression": "property_plant_and_equipment_net / assets",
+                    "required_slots": ["property_plant_and_equipment_net", "assets"],
+                },
+                {"name": "roa", "expression": "net_income / assets", "required_slots": ["net_income", "assets"]},
+            ],
+            "slot_frame": {
+                "required_slots": [
+                    {"name": "capital_expenditures"},
+                    {"name": "revenue"},
+                    {"name": "operating_cash_flow"},
+                    {"name": "property_plant_and_equipment_net"},
+                    {"name": "assets"},
+                    {"name": "net_income"},
+                ]
+            },
+        },
+    )
+    packet = json.loads(prompt)["slot_bind_packet"]
+    visible_ids = {item["fact_id"] for item in packet["raw_facts"]}
+
+    assert packet["raw_fact_count"] == 126
+    assert packet["visible_fact_count"] <= 64
+    for fact_id in {"fact-ppe-net", "fact-assets", "fact-net-income", "fact-revenue", "fact-ocf", "fact-capex"}:
+        assert fact_id in visible_ids
+    groups = {item["slot_name"]: item for item in packet["slot_candidate_groups"]}
+    assert groups["revenue"]["host_role"] == "attention_window_only_no_semantic_preference"
+    assert "fact-revenue" in groups["revenue"]["candidate_fact_ids"]
+    assert "fact-assets" in groups["assets"]["candidate_fact_ids"]
+    assert "fact-ppe-net" in groups["property_plant_and_equipment_net"]["candidate_fact_ids"]
+    assert packet["slot_candidate_group_policy"]["semantic_decision_owner"] == "model"
+
+
+def test_finance_numeric_repair_attempt_count_is_scoped_to_task_run() -> None:
+    journal = JournalStore.in_memory()
+    for task_id, run_id in [
+        ("task-a", "run-1"),
+        ("task-a", "run-1"),
+        ("task-a", "run-2"),
+        ("task-b", "run-1"),
+    ]:
+        journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="finance_numeric_judge",
+            data={"schema": "holo.kernel_v3.finance_numeric_judge.v1", "status": "ok"},
+        )
+
+    assert _finance_numeric_repair_attempt_count(journal, "task-a", "run-1") == 2
+    assert _finance_numeric_repair_attempt_count(journal, "task-a", "run-2") == 1
+    assert _finance_numeric_repair_attempt_count(journal, "task-b", "run-1") == 1
+    assert _finance_numeric_repair_attempt_count(journal, "task-missing", "run-1") == 0
 
 
 def test_finance_slot_bind_plans_use_model_selected_fact_ids_only() -> None:

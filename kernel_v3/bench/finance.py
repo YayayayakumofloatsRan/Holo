@@ -226,6 +226,7 @@ class FinanceBenchmarkSummary(Contract):
     benchmark_split: JsonObject = field(default_factory=dict)
 
 
+FinanceBenchmarkStartCallback = Callable[[int, FinanceBenchmarkItem, str], None]
 FinanceBenchmarkResultCallback = Callable[[int, FinanceBenchmarkItem, FinanceBenchmarkResult], None]
 
 
@@ -402,6 +403,7 @@ def run_finance_benchmark(
     thread_prefix: str = "finance-bench",
     question_prefix: str = "",
     journal: JournalStore | None = None,
+    start_callback: FinanceBenchmarkStartCallback | None = None,
     result_callback: FinanceBenchmarkResultCallback | None = None,
 ) -> list[FinanceBenchmarkResult]:
     journal = journal or getattr(runtime, "journal", None)
@@ -409,6 +411,31 @@ def run_finance_benchmark(
     for index, item in enumerate(items, start=1):
         thread_id = f"{safe_storage_id(thread_prefix)}-{index:04d}-{safe_storage_id(item.item_id)}"
         prompt = _benchmark_prompt(item, question_prefix=question_prefix)
+        if journal is not None:
+            journal.append(
+                task_id=None,
+                run_id="finance-benchmark",
+                step_id=None,
+                kind="finance_benchmark_item_started",
+                data={
+                    "schema": "holo.kernel_v3.finance_benchmark_item_started.v1",
+                    "index": index,
+                    "item_id": item.item_id,
+                    "thread_id": thread_id,
+                    "category": item.category,
+                    "source": item.source,
+                    "workflow_type": item.workflow_type,
+                    "required_tools": list(item.required_tools),
+                    "question_preview": _preview(item.question, 240),
+                },
+                state_delta={
+                    "thread_id": thread_id,
+                    "finance_benchmark_item_id": item.item_id,
+                    "finance_benchmark_item_status": "started",
+                },
+            )
+        if start_callback is not None:
+            start_callback(index, item, thread_id)
         payload = runtime.receive(prompt, thread_id=thread_id)
         answer = _answer_from_chat_result(payload)
         _append_benchmark_provided_context_trace(journal, item=item, task_id=payload.task_id, run_id=payload.run_id)
@@ -468,6 +495,7 @@ def run_finance_benchmark_parallel(
     max_workers: int,
     thread_prefix: str = "finance-bench",
     question_prefix: str = "",
+    start_callback: FinanceBenchmarkStartCallback | None = None,
     result_callback: FinanceBenchmarkResultCallback | None = None,
 ) -> list[FinanceBenchmarkResult]:
     if max_workers <= 1:
@@ -481,6 +509,7 @@ def run_finance_benchmark_parallel(
                     thread_prefix=thread_prefix,
                     question_prefix=question_prefix,
                     journal=getattr(runtime, "journal", None),
+                    start_callback=start_callback,
                     result_callback=result_callback,
                 )
             )
@@ -496,6 +525,7 @@ def run_finance_benchmark_parallel(
                 runtime_factory,
                 thread_prefix,
                 question_prefix,
+                start_callback,
             ): index
             for index, item in enumerate(items, start=1)
         }
@@ -2409,11 +2439,37 @@ def _run_one_finance_benchmark_item(
     runtime_factory: Callable[[int, FinanceBenchmarkItem], ChatRuntimeLike],
     thread_prefix: str,
     question_prefix: str,
+    start_callback: FinanceBenchmarkStartCallback | None,
 ) -> FinanceBenchmarkResult:
     runtime = runtime_factory(index, item)
     journal = getattr(runtime, "journal", None)
     thread_id = f"{safe_storage_id(thread_prefix)}-{index:04d}-{safe_storage_id(item.item_id)}"
     prompt = _benchmark_prompt(item, question_prefix=question_prefix)
+    if journal is not None:
+        journal.append(
+            task_id=None,
+            run_id="finance-benchmark",
+            step_id=None,
+            kind="finance_benchmark_item_started",
+            data={
+                "schema": "holo.kernel_v3.finance_benchmark_item_started.v1",
+                "index": index,
+                "item_id": item.item_id,
+                "thread_id": thread_id,
+                "category": item.category,
+                "source": item.source,
+                "workflow_type": item.workflow_type,
+                "required_tools": list(item.required_tools),
+                "question_preview": _preview(item.question, 240),
+            },
+            state_delta={
+                "thread_id": thread_id,
+                "finance_benchmark_item_id": item.item_id,
+                "finance_benchmark_item_status": "started",
+            },
+        )
+    if start_callback is not None:
+        start_callback(index, item, thread_id)
     payload = runtime.receive(prompt, thread_id=thread_id)
     answer = _answer_from_chat_result(payload)
     _append_benchmark_provided_context_trace(journal, item=item, task_id=payload.task_id, run_id=payload.run_id)

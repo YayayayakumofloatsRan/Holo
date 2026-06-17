@@ -13,6 +13,7 @@ from kernel_v3.retrieval.url_utils import unwrap_url_candidates, url_equivalent_
 
 
 RETRIEVAL_WORKBENCH_TASK = "retrieval.workbench"
+WORKBENCH_TIMEOUT_SECONDS = 45
 
 WORKBENCH_DECISIONS = {"sufficient", "continue", "fail_with_limitations"}
 SOURCE_ROLES = {
@@ -147,10 +148,23 @@ def run_retrieval_workbench(
         schema=RETRIEVAL_WORKBENCH_SCHEMA,
         task_id=task_id,
         step_id=step_id,
-        timeout_seconds=90,
+        timeout_seconds=WORKBENCH_TIMEOUT_SECONDS,
         parameters={"temperature": 0.0},
     )
     if outcome.result.status != "ok" or not isinstance(outcome.parsed, dict):
+        if _workbench_processor_unavailable(outcome.result.error, outcome.result.output):
+            return RetrievalWorkbenchResult(
+                status="disabled",
+                decision="continue",
+                reason_summary="retrieval workbench model processor unavailable; host continues with retrieved evidence",
+                diagnostics={
+                    "reason": outcome.result.error or "processor_unavailable",
+                    "output": _processor_failure_output(outcome.result.output),
+                    "semantic_decision_owner": "model",
+                    "host_role": "tool_execution_provenance_policy_and_budget_validation",
+                    "packet": _packet_diagnostics(packet),
+                },
+            )
         retry_packet = _workbench_retry_packet(packet)
         retry = fabric.run_json(
             task_type=RETRIEVAL_WORKBENCH_TASK,
@@ -160,7 +174,7 @@ def run_retrieval_workbench(
             schema=RETRIEVAL_WORKBENCH_SCHEMA,
             task_id=task_id,
             step_id=f"{step_id}-json-retry",
-            timeout_seconds=90,
+            timeout_seconds=WORKBENCH_TIMEOUT_SECONDS,
             parameters={"temperature": 0.0},
         )
         if retry.result.status == "ok" and isinstance(retry.parsed, dict):
@@ -195,6 +209,36 @@ def run_retrieval_workbench(
             },
         )
     return validate_workbench_output(outcome.parsed, packet=packet)
+
+
+def _workbench_processor_unavailable(error: object, output: object) -> bool:
+    text = " ".join(
+        str(part or "")
+        for part in (
+            error,
+            output.get("error_type") if isinstance(output, dict) else None,
+            output.get("error_message_preview") if isinstance(output, dict) else None,
+            output.get("reason") if isinstance(output, dict) else None,
+        )
+    ).lower()
+    return any(
+        marker in text
+        for marker in (
+            "timeout",
+            "timed out",
+            "provider_circuit_open",
+            "network error",
+            "cannot read from timed out object",
+            "temporary failure",
+        )
+    )
+
+
+def _processor_failure_output(output: object) -> JsonObject:
+    if not isinstance(output, dict):
+        return {}
+    allowed = ("provider", "model", "error_type", "error_message_preview", "reason")
+    return {key: output[key] for key in allowed if key in output}
 
 
 def retrieval_workbench_packet(

@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.swp
 .venv/
+.holo_components/
 kernel_v3/.holo-v3-journal.*
 kernel_v3/.holo-v3-artifacts.*
 .holo_host.toml

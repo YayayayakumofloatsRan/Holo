@@ -135,14 +135,52 @@ Trafilatura, Polars, DuckDB, SymPy, OpenTelemetry, Pandas, Pydantic, and Rich.
 Docling/OpenBB/browser components remain cataloged but isolated from the main
 UbuntuHolo venv because full Docling currently pulls Torch/CUDA dependencies on
 Linux. This is toolchain evidence, not a finance benchmark score.
+The finance preflight boundary is recorded in
+`docs/KERNEL_V3_FINANCE_TOOLCHAIN_READINESS_2026-06-17_ZH.md`. Use
+`bench finance-tool-audit` for narrow tool-interface checks and
+`bench finance-tool-workers` for Docling/OpenBB isolated worker status. These
+commands verify whether FB/FQA-relevant tools are visible to the model and
+allowed by host policy; they are not long regressions and must not be reported
+as benchmark accuracy. Repo-local workers under `.holo_components/` are
+auto-discovered when present, with environment variables still taking
+precedence for custom paths.
 The same-day loop logic audit is recorded in
-`docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`: finance, web-research, and
-long-mission profiles now select a LangGraph-backed loop controller. LangGraph
-owns the active state graph; Holo keeps policy, tool execution, journal,
-budget, verifier, and gold-isolation boundaries inside graph nodes. The same
-audit also fixed the provider prompt compact path so finance planners see the
-full one-shot tool surface in the actual model packet, not only inside runtime
-metadata.
+`docs/KERNEL_V3_AGENT_LOOP_AUDIT_2026-06-17_ZH.md`; its first checkpoint moved
+finance/web/long profiles onto a LangGraph-backed controller. The later
+reimplementation checkpoint is
+`docs/KERNEL_V3_DEEP_AGENT_LOOP_REIMPLEMENTATION_2026-06-17_ZH.md`: after
+reviewing the local TypeScript agent-loop snapshot under
+`D:\COURSES\人工智能算法实践\code-main\code-main`, Holo now has its own Python
+`DeepAgentLoopController`. `finance-capability` defaults to
+`agent_loop.runtime_backend = deep_agent_loop`, where a single model turn can
+emit multiple tool calls, host policy validates each call, read-only/network
+tools can run as an ordered batch and only explicitly concurrency-safe tools
+execute in parallel, and all tool results re-enter the journal as model-visible
+observations. The single-agent loop now preserves stable `tool_call_id` bindings
+through individual observations and batch results, and malformed model tool
+calls are returned as synthetic failed observations for replanning instead of
+being silently dropped. The tool-calling substrate now includes a generic
+`tool.discovery` contract, standard `ToolUseContext` injection for each executed
+tool, and an evented `StreamingToolExecutor` that journals queued / started /
+completed tool events. Tool batch observations now include budgeted
+`content_projection` metadata so long SEC/table/tool results expose shape,
+truncation state, and a short preview without flooding the model packet; the
+context compiler preserves those projections and `artifact.read` lets the model
+inspect bounded artifact previews or bodies only when needed. Finance open
+component tools now write long SEC/EDGAR, document, market, and DuckDB table
+payloads into `ArtifactStore` blobs when the runtime provides a store; the model
+gets a short observation, `artifact_id`, and `artifact.read` hint instead of the
+full payload. The executor is ready for provider-streaming integration, but
+current validation still feeds it completed assistant turns. `finance-fact-fast`
+remains on the LangGraph fast lane for now. This is a structural loop
+milestone, not a finance benchmark score.
+The debug50 architecture reset is recorded in
+`docs/KERNEL_V3_DEBUG50_REQUIREMENTS_AND_GENERIC_FINANCE_LOOP_2026-06-17_ZH.md`.
+It stops per-question patching, groups the first 50 FinanceBench debug prompts
+by reusable task families, and promotes a benchmark-agnostic finance agent loop
+contract into `finance.toolchain.describe`, the planner directive, and the
+provider compact packet. This is an interface/architecture milestone, not a
+benchmark score.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in
@@ -966,6 +1004,11 @@ code-regression, schema, compile, and safety guards. They must never be reported
 as FinanceBench, FAB/FinAgent, FinQA, or finance problem-solving accuracy.
 Any score or ability claim needs a real provider/live retrieval run, with
 gold/reference material used only for post-run scoring.
+Default validation should stay narrow. For ordinary toolchain or loop changes,
+prefer targeted unit tests plus `bench finance-tool-audit --execute-local-smoke`
+when relevant. Do not run broad regressions by habit; use long or multi-item live
+benchmark runs only when the objective is explicitly to measure finance problem
+solving on a debug or held-out slice.
 
 Interactive `holo-v3 chat` uses a human-readable terminal view when attached to
 a TTY: colored status headers, compact task/run refs, and the current

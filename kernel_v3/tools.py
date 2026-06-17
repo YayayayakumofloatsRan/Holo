@@ -32,6 +32,27 @@ WORKSPACE_SEARCH_SKIP_DIRS = {
 }
 WORKSPACE_INTERNAL_FILE_PREFIXES = (".holo-v3-",)
 WORKSPACE_INTERNAL_FILE_SUFFIXES = (".sqlite", ".sqlite3")
+WORKSPACE_BENCHMARK_LEAK_DIR_PREFIXES = (
+    ("data", "bench"),
+)
+WORKSPACE_BENCHMARK_LEAK_FILE_MARKERS = (
+    "fb_debug_",
+    "financebench",
+    "finance_bench",
+    "financeqa",
+    "finqa",
+    "fabv2",
+    "finance_agent_benchmark",
+)
+WORKSPACE_BENCHMARK_LEAK_FILE_SUFFIXES = (
+    ".json",
+    ".jsonl",
+    ".ndjson",
+    ".csv",
+    ".parquet",
+    ".summary.json",
+    ".gold.jsonl",
+)
 WORKSPACE_LIST_MAX_ENTRIES = 200
 
 
@@ -585,7 +606,7 @@ def _canonical_payload(payload: JsonObject, schema: JsonObject) -> tuple[JsonObj
         return dict(payload), None
     canonical = dict(payload)
     for key, raw_spec in schema.items():
-        if str(key).startswith("_") or key in {"network_fetch_cost_field", "default_network_fetch_cost"}:
+        if str(key).startswith("_") or key in {"concurrency_safe", "network_fetch_cost_field", "default_network_fetch_cost"}:
             continue
         spec = _schema_spec(raw_spec)
         value = canonical.get(key)
@@ -1240,7 +1261,16 @@ def _skip_workspace_path(path: Path) -> bool:
     parts = path.parts
     if any(part in WORKSPACE_SEARCH_SKIP_DIRS for part in parts):
         return True
+    lowered_parts = tuple(part.lower() for part in parts)
+    for prefix in WORKSPACE_BENCHMARK_LEAK_DIR_PREFIXES:
+        if lowered_parts[: len(prefix)] == prefix:
+            return True
     name = parts[-1] if parts else ""
+    lowered_name = name.lower()
+    if lowered_name.endswith(WORKSPACE_BENCHMARK_LEAK_FILE_SUFFIXES) and any(
+        marker in lowered_name for marker in WORKSPACE_BENCHMARK_LEAK_FILE_MARKERS
+    ):
+        return True
     if any(name.startswith(prefix) for prefix in WORKSPACE_INTERNAL_FILE_PREFIXES):
         return True
     if any(name.endswith(suffix) for suffix in WORKSPACE_INTERNAL_FILE_SUFFIXES):

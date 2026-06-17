@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import http.client
+import time
 import urllib.error
 import urllib.request
 import hashlib
@@ -188,6 +189,7 @@ class OpenAICompatibleProvider:
                 {"role": "user", "content": request.prompt},
             ],
             "response_format": {"type": "json_object"},
+            "stream": False,
         }
         if thinking is not None:
             payload["thinking"] = thinking
@@ -257,12 +259,14 @@ class OpenAICompatibleProvider:
         )
         try:
             with urllib.request.urlopen(request, timeout=max(1, int(timeout_seconds))) as response:
-                raw = response.read().decode("utf-8", errors="replace")
+                raw = _read_response_text_with_deadline(response, timeout_seconds, provider_name=self.name)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"{self.name} HTTP {exc.code}: {detail[:240]}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"{self.name} network error: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise RuntimeError(f"{self.name} timeout after {max(1, int(timeout_seconds))}s while reading response") from exc
         except (http.client.IncompleteRead, http.client.RemoteDisconnected) as exc:
             raise RuntimeError(f"{self.name} network error: {type(exc).__name__}: {exc}") from exc
         try:
@@ -307,6 +311,41 @@ def _timeout(request: ProcessorRequest, default: int) -> int:
         return max(1, int(request.parameters.get("timeout_seconds", default)))
     except (TypeError, ValueError):
         return default
+
+
+def _read_response_text_with_deadline(response: object, timeout_seconds: int, *, provider_name: str) -> str:
+    timeout = max(1, int(timeout_seconds))
+    deadline = time.monotonic() + timeout
+    chunks = bytearray()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"{provider_name} response read exceeded {timeout}s")
+        _set_response_socket_timeout(response, max(0.001, remaining))
+        try:
+            chunk = response.read(1)  # type: ignore[attr-defined]
+        except (TimeoutError, OSError) as exc:
+            raise TimeoutError(f"{provider_name} response read exceeded {timeout}s") from exc
+        if not chunk:
+            break
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        chunks.extend(chunk)
+    return bytes(chunks).decode("utf-8", errors="replace")
+
+
+def _set_response_socket_timeout(response: object, timeout_seconds: float) -> None:
+    fp = getattr(response, "fp", None)
+    raw = getattr(fp, "raw", None)
+    sock = getattr(raw, "_sock", None)
+    if sock is None:
+        sock = getattr(fp, "sock", None)
+    if sock is None or not hasattr(sock, "settimeout"):
+        return
+    try:
+        sock.settimeout(timeout_seconds)
+    except OSError:
+        return
 
 
 def _optional_positive_int(value: object) -> int | None:

@@ -9,6 +9,7 @@ from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observ
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
 from kernel_v3.policy import PolicyGate
+from kernel_v3.retrieval.operator import _goal_from_payload
 from kernel_v3.session import SessionEngine
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
@@ -434,6 +435,90 @@ def test_loop_max_network_fetches_guard_blocks_projected_budget_overrun_before_e
     assert guard.data["requested_network_fetches"] == 2
     assert guard.data["projected_network_fetches"] == 2
     assert guard.data["max_network_fetches"] == 1
+
+
+def test_loop_network_budget_caps_action_cost_by_payload_network_limit():
+    action = CandidateAction(
+        action_id="act-network-capped",
+        kind="tool",
+        name="network.capped",
+        description="network action with per-action cap",
+        score=1.0,
+        payload={"max_fetches": 12, "max_network_fetches": 8},
+        reasons=[],
+        side_effect_class="network",
+    )
+    registry = ToolRegistry()
+    registry.register(
+        "network.capped",
+        lambda candidate: Observation(
+            observation_id=f"obs-{candidate.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source="tool:network.capped",
+            content={"max_fetches": candidate.payload["max_fetches"]},
+            observed_at_ms=0,
+            action_id=candidate.action_id,
+            tool_call_id=None,
+        ),
+        manifest=ToolManifest(
+            name="network.capped",
+            version="1",
+            resource_kind="network",
+            operator_kind="capped",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="network.capped",
+            input_schema={
+                "max_fetches": {"type": "int", "required": True, "min": 1, "max": 20},
+                "max_network_fetches": {"type": "int", "required": False, "min": 1, "max": 20},
+                "network_fetch_cost_field": "max_fetches",
+                "default_network_fetch_cost": 1,
+            },
+        ),
+    )
+    journal = JournalStore.in_memory()
+    loop = LoopControllerV3(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=FakePlanner([action]),
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=registry,
+        evaluator=FakeEvaluator([{"status": "final_answer_ready", "answer": "done"}]),
+        max_network_fetches=8,
+    )
+
+    result = loop.run("fetch within capped budget")
+
+    assert result.status == "completed"
+    assert [item.action_id for item in registry.executed_actions] == ["act-network-capped"]
+    assert not journal.records(task_id=result.task_id, kind="guard")
+
+
+def test_retrieval_goal_caps_max_fetches_by_payload_network_limit():
+    action = CandidateAction(
+        action_id="act-retrieval-capped",
+        kind="tool",
+        name="retrieval.run",
+        description="retrieval with payload cap",
+        score=1.0,
+        payload={
+            "query": "3M 2018 10-K capex",
+            "max_queries": 8,
+            "max_sources": 24,
+            "max_fetches": 12,
+            "max_network_fetches": 8,
+        },
+        reasons=[],
+        side_effect_class="network",
+    )
+
+    goal = _goal_from_payload(action)
+
+    assert goal.max_fetches == 8
+    assert goal.max_sources == 24
 
 
 def test_loop_max_total_artifact_bytes_guard_stops_after_oversized_artifact_is_recorded():

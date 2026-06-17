@@ -57,6 +57,8 @@ from kernel_v3.chat.console import (
 from kernel_v3.chat.thread_store import ThreadTranscriptStore
 from kernel_v3.context import ArtifactStore, ContextCompiler, ContextPackCompiler, merge_context_budget
 from kernel_v3.contracts import JsonObject, LedgerRecord, ProcessorRequest
+from kernel_v3.finance.tool_readiness import build_finance_tool_readiness_audit, render_finance_tool_readiness_audit
+from kernel_v3.finance.tool_workers import build_finance_tool_worker_status, render_finance_tool_worker_status
 from kernel_v3.interaction import DEFAULT_RESPONSE_LANGUAGE, normalize_response_language
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -763,6 +765,33 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional benchmark run directory containing results.jsonl, summary.json, http-cache, and worker state.",
     )
+    finance_tool_audit = bench_sub.add_parser("finance-tool-audit")
+    finance_tool_audit.add_argument(
+        "--execution-profile",
+        choices=EXECUTION_PROFILE_IDS,
+        default="finance-capability",
+        help="Execution profile to audit. finance-capability should expose the full FB/FQA workbench surface.",
+    )
+    finance_tool_audit.add_argument(
+        "--no-live-network",
+        action="store_true",
+        help="Audit the offline/context-only tool surface. The default audits the live FB/FQA network-capable surface without making network calls.",
+    )
+    finance_tool_audit.add_argument(
+        "--execute-local-smoke",
+        action="store_true",
+        help="Also execute no-internet local tool smoke checks, including calculator, DuckDB/SymPy, Trafilatura HTML, and script.exec.",
+    )
+    finance_tool_audit.add_argument("--workspace-root", default=None)
+    finance_tool_audit.add_argument("--format", choices=["json", "text"], default="json")
+    finance_tool_workers = bench_sub.add_parser("finance-tool-workers")
+    finance_tool_workers.add_argument("--root", default=".state/kernel_v3/finance-workers")
+    finance_tool_workers.add_argument(
+        "--write-setup",
+        action="store_true",
+        help="Write isolated worker setup script and env file under --root. Does not install packages.",
+    )
+    finance_tool_workers.add_argument("--format", choices=["json", "text"], default="json")
     finance_bench = bench_sub.add_parser("finance")
     finance_bench.add_argument("--dataset", required=True)
     finance_bench.add_argument(
@@ -802,6 +831,11 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=1,
         help="Run live benchmark questions concurrently. Each worker uses an isolated journal/state directory.",
+    )
+    finance_bench.add_argument(
+        "--progress-events",
+        action="store_true",
+        help="Print benchmark item start events to stderr so long live runs expose their current item/thread before completion.",
     )
     finance_bench.add_argument(
         "--worker-state-root",
@@ -1699,6 +1733,8 @@ def _live_retrieval_auto_enabled(args) -> bool:
         return _agent_uses_live_model(args)
     if command == "resident" and str(getattr(args, "resident_command", "") or "") in {"run", "run-once"}:
         return _agent_uses_live_model(args)
+    if command == "bench" and str(getattr(args, "bench_command", "") or "") == "finance":
+        return _agent_uses_live_model(args)
     return False
 
 
@@ -2398,6 +2434,40 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
         if progress_format == "text":
             return {**payload, "_stdout": _render_finance_progress(payload)}
         return payload
+    if command == "finance-tool-audit":
+        audit = build_finance_tool_readiness_audit(
+            execution_profile_id=args.execution_profile,
+            live_network=not bool(getattr(args, "no_live_network", False)),
+            workspace_root=getattr(args, "workspace_root", None),
+            execute_local_smoke=bool(getattr(args, "execute_local_smoke", False)),
+        )
+        journal.append(
+            task_id=None,
+            run_id="finance-tool-readiness-audit",
+            step_id=None,
+            kind="finance_tool_readiness_audit",
+            data=audit,
+            state_delta={"finance_tool_readiness_status": audit.get("status")},
+        )
+        if getattr(args, "format", "json") == "text":
+            return {**audit, "_stdout": render_finance_tool_readiness_audit(audit)}
+        return audit
+    if command == "finance-tool-workers":
+        payload = build_finance_tool_worker_status(
+            root=getattr(args, "root", ".state/kernel_v3/finance-workers"),
+            write_setup=bool(getattr(args, "write_setup", False)),
+        )
+        journal.append(
+            task_id=None,
+            run_id="finance-tool-workers",
+            step_id=None,
+            kind="finance_tool_worker_status",
+            data=payload,
+            state_delta={"finance_tool_worker_status": payload.get("status")},
+        )
+        if getattr(args, "format", "json") == "text":
+            return {**payload, "_stdout": render_finance_tool_worker_status(payload)}
+        return payload
     if command != "finance":
         return {"status": "failed", "reason": "unknown_benchmark", "benchmark": command}
     output_path = Path(args.output) if args.output else None
@@ -2457,6 +2527,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
     items = load_finance_benchmark_items(args.dataset, limit=effective_limit, offset=effective_offset)
     execution = _execution_profile_for_args(args)
     mission_enabled = _mission_enabled_for_args(args, execution)
+    start_callback = _finance_benchmark_start_callback(enabled=bool(getattr(args, "progress_events", False)), total=len(items))
     progress_callback = _finance_benchmark_progress_callback(output_path=output_path, total=len(items))
     if int(getattr(args, "parallel", 1) or 1) > 1:
         worker_root = _finance_benchmark_worker_root(args, output_path=output_path)
@@ -2472,6 +2543,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             max_workers=args.parallel,
             thread_prefix=args.thread_prefix,
             question_prefix=args.question_prefix,
+            start_callback=start_callback,
             result_callback=progress_callback,
         )
         worker_state_root = str(worker_root)
@@ -2514,6 +2586,7 @@ def _bench_command(args, journal: JournalStore) -> dict[str, object]:
             thread_prefix=args.thread_prefix,
             question_prefix=args.question_prefix,
             journal=journal,
+            start_callback=start_callback,
             result_callback=progress_callback,
         )
         worker_state_root = None
@@ -4169,6 +4242,28 @@ def _compact_progress_processor_tasks(value: object, *, limit: int = 5) -> str:
         except (TypeError, ValueError):
             counts[str(task_type)] = 0
     return _compact_progress_dict_counts(counts, limit=limit)
+
+
+def _finance_benchmark_start_callback(
+    *,
+    enabled: bool,
+    total: int,
+) -> Callable[[int, FinanceBenchmarkItem, str], None] | None:
+    if not enabled or total <= 0:
+        return None
+
+    def on_start(index: int, item: FinanceBenchmarkItem, thread_id: str) -> None:
+        print(
+            "[bench-start] "
+            f"{index}/{total} item={item.item_id} "
+            f"thread={thread_id} "
+            f"category={item.category or '-'} "
+            f"workflow={item.workflow_type or '-'}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return on_start
 
 
 def _finance_benchmark_progress_callback(

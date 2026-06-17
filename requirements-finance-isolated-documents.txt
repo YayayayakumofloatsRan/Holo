@@ -1,0 +1,16 @@
+# Heavy document/browser components for an isolated finance worker venv.
+#
+# Do not install these into the main UbuntuHolo venv. Configure the worker with:
+#   HOLO_DOCLING_PYTHON=/path/to/document-worker/.venv/bin/python
+#
+# Holo main process calls document.docling.convert through a bounded JSON
+# subprocess protocol when this worker is configured.
+docling==2.102.2
+
+# Optional browser/crawler expansion is intentionally not installed by this
+# score-critical document worker by default. FinanceBench/FinQA filing tasks
+# need robust document/table conversion first; dynamic browser/crawler packages
+# can be installed separately when a live task proves that static SEC/fetch
+# acquisition is insufficient.
+# playwright
+# crawl4ai

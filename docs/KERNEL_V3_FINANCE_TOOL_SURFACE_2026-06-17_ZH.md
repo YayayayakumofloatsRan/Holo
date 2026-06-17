@@ -106,6 +106,7 @@ missing: autogen, crawl4ai, crewai, docling, langfuse, openbb, phoenix,
 
 - `tool_surface_schema`
 - `one_shot_tool_protocol`
+- `agent_loop_contract`
 - `tool_surface`
 - `install_summary`
 - legacy `components`
@@ -118,9 +119,15 @@ one-shot 选择工具前知道哪些成熟组件已经可用、哪些重组件�
 
 同日 agent loop 审查已把 provider prompt compact 路径一并收紧：真实发给
 模型的 `agent_runtime_directive.tool_selection` 非轻量路径保留 24 项，并携带
-`tool_selection_count`、`toolchain_install_summary` 和 compact
-`llm_first_finance_template.standard_tool_interface`。这保证模型看到的是完整
-one-shot 工具接口，而不是只看到 runtime 内部的工具目录。
+`tool_selection_count`、`toolchain_install_summary`、`finance_agent_loop_contract`
+和 compact `llm_first_finance_template.standard_tool_interface`。这保证模型看到
+的是完整 one-shot 工具接口和通用做题 loop，而不是只看到 runtime 内部的工具目录。
+
+`finance_agent_loop_contract` 是 benchmark-agnostic 的：它只描述
+`task_compile -> evidence_acquire -> ledger_bind -> transform_compute ->
+semantic_synthesis -> verify_or_replan` 六阶段通用工作台，以及直接抽取、公式
+计算、计算后业务判断、driver/bridge、table ranking/comparison 等任务族。它不包含
+debug50 行号、FinanceBench id、gold/reference 或答案规则。
 
 Planner directive 已同步更新：当数据路径不确定时，LLM 应先调用 `finance.toolchain.describe`，然后自己选择下一步具体工具，比如：
 
@@ -161,6 +168,7 @@ Planner directive 已同步更新：当数据路径不确定时，LLM 应先调�
 
 - 新增 `kernel_v3/finance/tool_catalog.py`，作为机器可读完整工具目录。
 - `finance.toolchain.describe` 扩展为完整工具面板，而不是仅报告 EdgarTools/Docling/OpenBB/LangGraph 四个组件。
+- `finance.toolchain.describe` 和 planner/provider compact 现在暴露 benchmark-agnostic `finance_agent_loop_contract`，让模型首轮即可按通用工作台 loop 组织任务，而不是把所有工作塞进一次 `retrieval.run`。
 - 新增可调用成熟组件 wrapper：`document.trafilatura.extract` 用于 HTML/main text 抽取，`data.table.query` 用 DuckDB/Pandas 对证据表执行只读 SQL，`math.sympy.compute` 用 SymPy 执行模型提出的符号/高精度计算。
 - Runtime planner directive 和 finance task compiler 都暴露 `finance.toolchain.describe` 与 one-shot follow-up；finance profile 不再只有 `require_numeric_verifier` 时才看到工具链。
 - Runtime planner directive 和 provider prompt compact 都保留完整 finance open tool surface，不再因为前 6 个工具截断而让模型看不到 SEC/Docling/Trafilatura/OpenBB/DuckDB/SymPy 等工具。

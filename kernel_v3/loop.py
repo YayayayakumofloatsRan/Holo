@@ -483,6 +483,9 @@ class LoopControllerV3:
                     source_limit = _network_cost_from_payload_field(action.payload, "max_sources")
                     if source_limit is not None:
                         payload_cost = min(payload_cost, source_limit)
+                    network_limit = _network_cost_from_payload_field(action.payload, "max_network_fetches")
+                    if network_limit is not None:
+                        payload_cost = min(payload_cost, network_limit)
                     return max(1, payload_cost)
             default_cost = _positive_int(manifest_schema.get("default_network_fetch_cost"))
             if default_cost is not None:

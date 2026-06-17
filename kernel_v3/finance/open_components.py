@@ -3,21 +3,25 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import io
+import json
 import math
 import os
 import re
+import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import CandidateAction, JsonObject, JsonValue, Observation, ToolManifest
 from kernel_v3.finance.tool_catalog import (
     FINANCE_TOOL_SURFACE_SCHEMA,
+    finance_agent_loop_contract,
     finance_one_shot_tool_protocol,
     finance_tool_surface_catalog,
     finance_toolchain_install_summary,
 )
-from kernel_v3.tools import ToolRegistry
+from kernel_v3.tools import ToolRegistry, ToolResult
 
 
 FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME = "finance.toolchain.describe"
@@ -65,8 +69,184 @@ _OPENBB_ALLOWED_ROUTES = {
     "economy.fred_series",
 }
 
+_ISOLATED_COMPONENT_ENV_VARS = {
+    "docling": ("HOLO_DOCLING_PYTHON", "HOLO_FINANCE_COMPONENT_PYTHON"),
+    "openbb": ("HOLO_OPENBB_PYTHON", "HOLO_FINANCE_COMPONENT_PYTHON"),
+}
+_ISOLATED_COMPONENT_IMPORT_NAMES = {
+    "docling": "docling",
+    "openbb": "openbb",
+}
+_ISOLATED_COMPONENT_TIMEOUT_SECONDS = 120
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_LOCAL_ISOLATED_COMPONENT_PYTHONS = {
+    "docling": _REPO_ROOT / ".holo_components" / "docling-worker" / "bin" / "python",
+    "openbb": _REPO_ROOT / ".holo_components" / "openbb-worker" / "bin" / "python",
+}
+_LOCAL_OPENBB_HOME = _REPO_ROOT / ".holo_components" / "openbb-home"
 
-def register_finance_open_component_tools(registry: ToolRegistry) -> ToolRegistry:
+_DOCLING_WORKER_SCRIPT = r"""
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+    from docling.document_converter import DocumentConverter
+
+    def export_document(document, output_format):
+        if output_format in {"json", "dict"}:
+            if hasattr(document, "export_to_dict"):
+                return str(document.export_to_dict())
+            if hasattr(document, "model_dump"):
+                return str(document.model_dump())
+        if output_format == "html" and hasattr(document, "export_to_html"):
+            return str(document.export_to_html())
+        if hasattr(document, "export_to_markdown"):
+            return str(document.export_to_markdown())
+        return str(document)
+
+    source = str(payload.get("source") or "")
+    output_format = str(payload.get("output_format") or "markdown").lower()
+    max_chars = max(1, min(int(payload.get("max_chars") or 8000), 20000))
+    result = DocumentConverter().convert(source)
+    exported = export_document(result.document, output_format)
+    print(json.dumps({
+        "status": "ok",
+        "content": {
+            "component": "docling",
+            "source": source,
+            "output_format": output_format,
+            "text": exported[:max_chars - 3] + "..." if len(exported) > max_chars else exported,
+            "text_chars": len(exported),
+            "truncated": len(exported) > max_chars,
+            "semantic_decision_owner": "model",
+        },
+    }, ensure_ascii=False))
+except Exception as exc:
+    print(json.dumps({
+        "status": "failed",
+        "content": {
+            "error": "component_call_failed",
+            "component": "docling",
+            "error_type": type(exc).__name__,
+            "message": str(exc)[:1000],
+            "host_boundary": "isolated worker failure is an observation; no answer is inferred by host fallback",
+        },
+    }, ensure_ascii=False))
+"""
+
+_OPENBB_WORKER_SCRIPT = r"""
+import json
+import math
+import sys
+from collections.abc import Mapping, Sequence
+
+try:
+    payload = json.load(sys.stdin)
+    import openbb
+
+    def sanitize(value, depth=0):
+        if depth > 8:
+            return str(value)[:1000]
+        if value is None or isinstance(value, (bool, int, str)):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if isinstance(value, Mapping):
+            return {str(k): sanitize(v, depth + 1) for k, v in list(value.items())[:200]}
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [sanitize(item, depth + 1) for item in list(value)[:500]]
+        return str(value)[:2000]
+
+    def object_to_records_source(value):
+        for method_name in ("to_dataframe", "to_pandas", "to_df"):
+            method = getattr(value, method_name, None)
+            if callable(method):
+                try:
+                    value = method()
+                    break
+                except TypeError:
+                    pass
+        if hasattr(value, "results"):
+            return object_to_records_source(getattr(value, "results"))
+        if hasattr(value, "data"):
+            return object_to_records_source(getattr(value, "data"))
+        if hasattr(value, "to_dict"):
+            try:
+                return value.to_dict()
+            except TypeError:
+                pass
+        return value
+
+    def dataframe_to_records(dataframe):
+        to_dict = getattr(dataframe, "to_dict", None)
+        if not callable(to_dict):
+            return [{"value": str(dataframe)[:2000]}]
+        try:
+            records = to_dict(orient="records")
+        except TypeError:
+            records = to_dict()
+        if isinstance(records, list):
+            return [record(item) for item in records]
+        if isinstance(records, dict):
+            if all(isinstance(item, dict) for item in records.values()):
+                return [record(item) for item in records.values()]
+            return [record(records)]
+        return [{"value": str(records)[:2000]}]
+
+    def record(value):
+        value = sanitize(value)
+        return value if isinstance(value, dict) else {"value": value}
+
+    def records_from_object(value, limit):
+        value = object_to_records_source(value)
+        if hasattr(value, "to_dict"):
+            return dataframe_to_records(value)[:limit]
+        if isinstance(value, list):
+            return [record(item) for item in value[:limit]]
+        if isinstance(value, Mapping):
+            return [record(value)]
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [record(item) for item in list(value)[:limit]]
+        return [{"value": str(value)[:2000]}]
+
+    route = str(payload.get("route") or "").lower()
+    kwargs = payload.get("kwargs") if isinstance(payload.get("kwargs"), dict) else {}
+    limit = max(1, min(int(payload.get("limit") or 100), 500))
+    endpoint = getattr(openbb, "obb")
+    for part in route.split("."):
+        endpoint = getattr(endpoint, part)
+    result = endpoint(**kwargs)
+    print(json.dumps({
+        "status": "ok",
+        "content": {
+            "component": "openbb",
+            "route": route,
+            "kwargs": sanitize(kwargs),
+            "limit": limit,
+            "records": records_from_object(result, limit),
+            "semantic_decision_owner": "model",
+        },
+    }, ensure_ascii=False))
+except Exception as exc:
+    print(json.dumps({
+        "status": "failed",
+        "content": {
+            "error": "component_call_failed",
+            "component": "openbb",
+            "error_type": type(exc).__name__,
+            "message": str(exc)[:1000],
+            "host_boundary": "isolated worker failure is an observation; no answer is inferred by host fallback",
+        },
+    }, ensure_ascii=False))
+"""
+
+
+def register_finance_open_component_tools(
+    registry: ToolRegistry,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> ToolRegistry:
     registry.register(
         FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
         _execute_toolchain_describe,
@@ -87,7 +267,7 @@ def register_finance_open_component_tools(registry: ToolRegistry) -> ToolRegistr
     )
     registry.register(
         SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
-        _execute_sec_company_filings,
+        lambda action: _execute_sec_company_filings(action, artifact_store=artifact_store),
         manifest=ToolManifest(
             name=SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
             version="1",
@@ -106,7 +286,7 @@ def register_finance_open_component_tools(registry: ToolRegistry) -> ToolRegistr
     )
     registry.register(
         SEC_EDGAR_FINANCIALS_TOOL_NAME,
-        _execute_sec_financials,
+        lambda action: _execute_sec_financials(action, artifact_store=artifact_store),
         manifest=ToolManifest(
             name=SEC_EDGAR_FINANCIALS_TOOL_NAME,
             version="1",
@@ -129,7 +309,7 @@ def register_finance_open_component_tools(registry: ToolRegistry) -> ToolRegistr
     )
     registry.register(
         DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
-        _execute_docling_convert,
+        lambda action: _execute_docling_convert(action, artifact_store=artifact_store),
         manifest=ToolManifest(
             name=DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
             version="1",
@@ -151,7 +331,7 @@ def register_finance_open_component_tools(registry: ToolRegistry) -> ToolRegistr
     )
     registry.register(
         DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
-        _execute_trafilatura_extract,
+        lambda action: _execute_trafilatura_extract(action, artifact_store=artifact_store),
         manifest=ToolManifest(
             name=DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
             version="1",
@@ -174,7 +354,7 @@ def register_finance_open_component_tools(registry: ToolRegistry) -> ToolRegistr
     )
     registry.register(
         MARKET_OPENBB_FETCH_TOOL_NAME,
-        _execute_openbb_fetch,
+        lambda action: _execute_openbb_fetch(action, artifact_store=artifact_store),
         manifest=ToolManifest(
             name=MARKET_OPENBB_FETCH_TOOL_NAME,
             version="1",
@@ -196,7 +376,7 @@ def register_finance_open_component_tools(registry: ToolRegistry) -> ToolRegistr
     )
     registry.register(
         DATA_TABLE_QUERY_TOOL_NAME,
-        _execute_data_table_query,
+        lambda action: _execute_data_table_query(action, artifact_store=artifact_store),
         manifest=ToolManifest(
             name=DATA_TABLE_QUERY_TOOL_NAME,
             version="1",
@@ -254,6 +434,7 @@ def _execute_toolchain_describe(action: CandidateAction) -> Observation:
             "records observations, preserves gold isolation, and leaves finance judgment to the LLM."
         ),
         "one_shot_tool_protocol": finance_one_shot_tool_protocol(),
+        "agent_loop_contract": finance_agent_loop_contract(),
         "tool_surface": finance_tool_surface_catalog(),
         "install_summary": finance_toolchain_install_summary(),
         "components": [
@@ -315,7 +496,11 @@ def _execute_toolchain_describe(action: CandidateAction) -> Observation:
     return _observation(action, "ok", content, kind="finance_toolchain_status")
 
 
-def _execute_sec_company_filings(action: CandidateAction) -> Observation:
+def _execute_sec_company_filings(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> Observation | ToolResult:
     edgar, error = _import_component("edgar", package="edgartools")
     if error is not None:
         return _observation(action, "failed", error, kind="sec_edgar_result")
@@ -332,7 +517,7 @@ def _execute_sec_company_filings(action: CandidateAction) -> Observation:
         records = _records_from_object(limited, limit=limit)
     except Exception as exc:
         return _observation(action, "failed", _component_exception("edgartools", exc), kind="sec_edgar_result")
-    return _observation(
+    return _artifact_tool_result(
         action,
         "ok",
         {
@@ -344,10 +529,16 @@ def _execute_sec_company_filings(action: CandidateAction) -> Observation:
             "semantic_decision_owner": "model",
         },
         kind="sec_edgar_result",
+        artifact_store=artifact_store,
+        artifact_kind="sec_edgar_company_filings_payload",
     )
 
 
-def _execute_sec_financials(action: CandidateAction) -> Observation:
+def _execute_sec_financials(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> Observation | ToolResult:
     edgar, error = _import_component("edgar", package="edgartools")
     if error is not None:
         return _observation(action, "failed", error, kind="sec_edgar_result")
@@ -365,7 +556,7 @@ def _execute_sec_financials(action: CandidateAction) -> Observation:
         records = _records_from_object(statement_obj, limit=limit)
     except Exception as exc:
         return _observation(action, "failed", _component_exception("edgartools", exc), kind="sec_edgar_result")
-    return _observation(
+    return _artifact_tool_result(
         action,
         "ok",
         {
@@ -378,10 +569,16 @@ def _execute_sec_financials(action: CandidateAction) -> Observation:
             "semantic_decision_owner": "model",
         },
         kind="sec_edgar_result",
+        artifact_store=artifact_store,
+        artifact_kind="sec_edgar_financials_payload",
     )
 
 
-def _execute_docling_convert(action: CandidateAction) -> Observation:
+def _execute_docling_convert(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> Observation | ToolResult:
     source = str(action.payload.get("source") or "").strip()
     if not source.lower().startswith(("https://", "http://")):
         return _observation(
@@ -394,11 +591,24 @@ def _execute_docling_convert(action: CandidateAction) -> Observation:
             },
             kind="docling_conversion",
         )
-    docling_converter, error = _import_component("docling.document_converter", package="docling")
-    if error is not None:
-        return _observation(action, "failed", error, kind="docling_conversion")
     output_format = str(action.payload.get("output_format") or "markdown").strip().lower()
     max_chars = _positive_int(action.payload.get("max_chars"), default=8000, maximum=20000)
+    docling_converter, error = _import_component("docling.document_converter", package="docling")
+    if error is not None:
+        isolated = _run_isolated_docling_convert(
+            action,
+            source=source,
+            output_format=output_format,
+            max_chars=max_chars,
+            import_error=error,
+        )
+        if isolated is not None:
+            return _artifact_result_from_observation(
+                isolated,
+                artifact_store=artifact_store,
+                artifact_kind="docling_conversion_payload",
+            )
+        return _observation(action, "failed", _with_isolated_component_hint(error, "docling"), kind="docling_conversion")
     try:
         converter = docling_converter.DocumentConverter()
         result = converter.convert(source)
@@ -406,7 +616,7 @@ def _execute_docling_convert(action: CandidateAction) -> Observation:
         exported = _docling_export(document, output_format=output_format)
     except Exception as exc:
         return _observation(action, "failed", _component_exception("docling", exc), kind="docling_conversion")
-    return _observation(
+    return _artifact_tool_result(
         action,
         "ok",
         {
@@ -419,10 +629,16 @@ def _execute_docling_convert(action: CandidateAction) -> Observation:
             "semantic_decision_owner": "model",
         },
         kind="docling_conversion",
+        artifact_store=artifact_store,
+        artifact_kind="docling_conversion_payload",
     )
 
 
-def _execute_trafilatura_extract(action: CandidateAction) -> Observation:
+def _execute_trafilatura_extract(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> Observation | ToolResult:
     trafilatura, error = _import_component("trafilatura", package="trafilatura")
     if error is not None:
         return _observation(action, "failed", error, kind="trafilatura_extract")
@@ -472,7 +688,7 @@ def _execute_trafilatura_extract(action: CandidateAction) -> Observation:
     except Exception as exc:
         return _observation(action, "failed", _component_exception("trafilatura", exc), kind="trafilatura_extract")
     text = str(text or "")
-    return _observation(
+    return _artifact_tool_result(
         action,
         "ok",
         {
@@ -486,10 +702,16 @@ def _execute_trafilatura_extract(action: CandidateAction) -> Observation:
             "semantic_decision_owner": "model",
         },
         kind="trafilatura_extract",
+        artifact_store=artifact_store,
+        artifact_kind="trafilatura_extract_payload",
     )
 
 
-def _execute_openbb_fetch(action: CandidateAction) -> Observation:
+def _execute_openbb_fetch(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> Observation | ToolResult:
     route = str(action.payload.get("route") or "").strip().lower()
     if route not in _OPENBB_ALLOWED_ROUTES:
         return _observation(
@@ -503,11 +725,24 @@ def _execute_openbb_fetch(action: CandidateAction) -> Observation:
             },
             kind="openbb_result",
         )
-    openbb, error = _import_component("openbb", package="openbb")
-    if error is not None:
-        return _observation(action, "failed", error, kind="openbb_result")
     kwargs = action.payload.get("kwargs") if isinstance(action.payload.get("kwargs"), dict) else {}
     limit = _positive_int(action.payload.get("limit"), default=100, maximum=500)
+    openbb, error = _import_component("openbb", package="openbb")
+    if error is not None:
+        isolated = _run_isolated_openbb_fetch(
+            action,
+            route=route,
+            kwargs=kwargs,
+            limit=limit,
+            import_error=error,
+        )
+        if isolated is not None:
+            return _artifact_result_from_observation(
+                isolated,
+                artifact_store=artifact_store,
+                artifact_kind="openbb_result_payload",
+            )
+        return _observation(action, "failed", _with_isolated_component_hint(error, "openbb"), kind="openbb_result")
     try:
         obb = getattr(openbb, "obb", None)
         if obb is None:
@@ -519,7 +754,7 @@ def _execute_openbb_fetch(action: CandidateAction) -> Observation:
         records = _records_from_object(result, limit=limit)
     except Exception as exc:
         return _observation(action, "failed", _component_exception("openbb", exc), kind="openbb_result")
-    return _observation(
+    return _artifact_tool_result(
         action,
         "ok",
         {
@@ -531,10 +766,16 @@ def _execute_openbb_fetch(action: CandidateAction) -> Observation:
             "semantic_decision_owner": "model",
         },
         kind="openbb_result",
+        artifact_store=artifact_store,
+        artifact_kind="openbb_result_payload",
     )
 
 
-def _execute_data_table_query(action: CandidateAction) -> Observation:
+def _execute_data_table_query(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> Observation | ToolResult:
     duckdb, error = _import_component("duckdb", package="duckdb")
     if error is not None:
         return _observation(action, "failed", error, kind="data_table_query")
@@ -579,7 +820,7 @@ def _execute_data_table_query(action: CandidateAction) -> Observation:
             connection.close()  # type: ignore[name-defined]
         except Exception:
             pass
-    return _observation(
+    return _artifact_tool_result(
         action,
         "ok",
         {
@@ -592,6 +833,8 @@ def _execute_data_table_query(action: CandidateAction) -> Observation:
             "semantic_decision_owner": "model",
         },
         kind="data_table_query",
+        artifact_store=artifact_store,
+        artifact_kind="data_table_query_payload",
     )
 
 
@@ -650,6 +893,210 @@ def _execute_sympy_compute(action: CandidateAction) -> Observation:
     )
 
 
+def isolated_component_status(component: str) -> JsonObject:
+    normalized = str(component or "").strip().lower()
+    env_vars = list(_ISOLATED_COMPONENT_ENV_VARS.get(normalized, ()))
+    python = _isolated_component_python(normalized)
+    package_available = _isolated_component_package_available(normalized, python) if python else None
+    return {
+        "component": normalized,
+        "configured": bool(python),
+        "package_available": package_available.get("available") if isinstance(package_available, dict) else None,
+        "package_probe_error": package_available.get("error") if isinstance(package_available, dict) else None,
+        "python": python,
+        "env_vars": env_vars,
+        "timeout_seconds": _isolated_component_timeout_seconds(),
+        "host_boundary": "isolated worker is optional; main Holo remains stable and reports worker failures as observations",
+    }
+
+
+def _run_isolated_docling_convert(
+    action: CandidateAction,
+    *,
+    source: str,
+    output_format: str,
+    max_chars: int,
+    import_error: JsonObject,
+) -> Observation | None:
+    worker = _run_isolated_component(
+        "docling",
+        payload={"source": source, "output_format": output_format, "max_chars": max_chars},
+        script=_DOCLING_WORKER_SCRIPT,
+    )
+    if worker is None:
+        return None
+    content = dict(worker.get("content")) if isinstance(worker.get("content"), dict) else {}
+    content.setdefault("component", "docling")
+    content["component_execution"] = "isolated_worker"
+    content["main_process_import_error"] = import_error
+    return _observation(action, str(worker.get("status") or "failed"), _record(content), kind="docling_conversion")
+
+
+def _run_isolated_openbb_fetch(
+    action: CandidateAction,
+    *,
+    route: str,
+    kwargs: JsonObject,
+    limit: int,
+    import_error: JsonObject,
+) -> Observation | None:
+    worker = _run_isolated_component(
+        "openbb",
+        payload={"route": route, "kwargs": kwargs, "limit": limit},
+        script=_OPENBB_WORKER_SCRIPT,
+    )
+    if worker is None:
+        return None
+    content = dict(worker.get("content")) if isinstance(worker.get("content"), dict) else {}
+    content.setdefault("component", "openbb")
+    content["component_execution"] = "isolated_worker"
+    content["main_process_import_error"] = import_error
+    return _observation(action, str(worker.get("status") or "failed"), _record(content), kind="openbb_result")
+
+
+def _run_isolated_component(component: str, *, payload: JsonObject, script: str) -> JsonObject | None:
+    python = _isolated_component_python(component)
+    if not python:
+        return None
+    env = _isolated_component_env(component)
+    try:
+        completed = subprocess.run(
+            [python, "-c", script],
+            input=json.dumps(payload, ensure_ascii=False),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=_isolated_component_timeout_seconds(),
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "status": "failed",
+            "content": {
+                "error": "isolated_component_timeout",
+                "component": component,
+                "timeout_seconds": _isolated_component_timeout_seconds(),
+                "stderr": str(exc.stderr or "")[:1_000],
+                "isolated_worker": isolated_component_status(component),
+            },
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "content": {
+                "error": "isolated_component_launch_failed",
+                "component": component,
+                "error_type": type(exc).__name__,
+                "message": str(exc)[:1_000],
+                "isolated_worker": isolated_component_status(component),
+            },
+        }
+    if completed.returncode != 0:
+        return {
+            "status": "failed",
+            "content": {
+                "error": "isolated_component_process_failed",
+                "component": component,
+                "returncode": completed.returncode,
+                "stderr": completed.stderr[:2_000],
+                "stdout_preview": completed.stdout[:1_000],
+                "isolated_worker": isolated_component_status(component),
+            },
+        }
+    try:
+        parsed = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        return {
+            "status": "failed",
+            "content": {
+                "error": "isolated_component_invalid_json",
+                "component": component,
+                "error_type": type(exc).__name__,
+                "stdout_preview": completed.stdout[:2_000],
+                "stderr": completed.stderr[:1_000],
+                "isolated_worker": isolated_component_status(component),
+            },
+        }
+    content = parsed.get("content") if isinstance(parsed, dict) and isinstance(parsed.get("content"), dict) else {}
+    content["isolated_worker"] = isolated_component_status(component)
+    if completed.stderr:
+        content["stderr_preview"] = completed.stderr[:1_000]
+    return {
+        "status": str(parsed.get("status") or "failed") if isinstance(parsed, dict) else "failed",
+        "content": _record(content),
+    }
+
+
+def _isolated_component_python(component: str) -> str | None:
+    normalized = str(component or "").strip().lower()
+    for env_var in _ISOLATED_COMPONENT_ENV_VARS.get(normalized, ()):
+        value = str(os.environ.get(env_var) or "").strip()
+        if value:
+            return value
+    local_python = _LOCAL_ISOLATED_COMPONENT_PYTHONS.get(normalized)
+    if local_python and local_python.exists():
+        return str(local_python)
+    return None
+
+
+def _isolated_component_env(component: str) -> dict[str, str]:
+    env = os.environ.copy()
+    normalized = str(component or "").strip().lower()
+    if normalized == "openbb":
+        home = str(os.environ.get("HOLO_OPENBB_HOME") or "").strip()
+        if not home:
+            home = str(_LOCAL_OPENBB_HOME)
+        env["HOME"] = home
+    return env
+
+
+def _isolated_component_package_available(component: str, python: str | None) -> JsonObject:
+    if not python:
+        return {"available": False, "error": "isolated_python_not_configured"}
+    import_name = _ISOLATED_COMPONENT_IMPORT_NAMES.get(component)
+    if not import_name:
+        return {"available": None, "error": "unknown_component"}
+    script = (
+        "import importlib.util,json,sys;"
+        "name=sys.argv[1];"
+        "print(json.dumps({'available': importlib.util.find_spec(name) is not None}))"
+    )
+    try:
+        completed = subprocess.run(
+            [python, "-c", script, import_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+            env=_isolated_component_env(component),
+        )
+    except Exception as exc:
+        return {"available": False, "error": f"{type(exc).__name__}:{str(exc)[:200]}"}
+    if completed.returncode != 0:
+        return {"available": False, "error": completed.stderr[:200] or f"returncode:{completed.returncode}"}
+    try:
+        parsed = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        return {"available": False, "error": f"{type(exc).__name__}:{completed.stdout[:200]}"}
+    return {"available": bool(parsed.get("available")), "error": None}
+
+
+def _isolated_component_timeout_seconds() -> int:
+    return _positive_int(
+        os.environ.get("HOLO_FINANCE_COMPONENT_TIMEOUT_SECONDS"),
+        default=_ISOLATED_COMPONENT_TIMEOUT_SECONDS,
+        maximum=600,
+    )
+
+
+def _with_isolated_component_hint(error: JsonObject, component: str) -> JsonObject:
+    updated = dict(error)
+    updated["isolated_worker"] = isolated_component_status(component)
+    return updated
+
+
 def _component_status(
     *,
     component: str,
@@ -672,6 +1119,9 @@ def _component_status(
         status["role"] = role
     if not installed:
         status["install_hint"] = f"pip install {package}"
+    isolated = isolated_component_status(component)
+    if isolated["env_vars"]:
+        status["isolated_worker"] = isolated
     return status
 
 
@@ -950,6 +1400,118 @@ def _json_sanitize(value: Any, *, depth: int = 0) -> JsonValue:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_json_sanitize(item, depth=depth + 1) for item in list(value)[:500]]
     return str(value)[:2_000]
+
+
+def _artifact_tool_result(
+    action: CandidateAction,
+    status: str,
+    content: JsonObject,
+    *,
+    kind: str,
+    artifact_store: ArtifactStore | None,
+    artifact_kind: str,
+) -> Observation | ToolResult:
+    observation = _observation(action, status, content, kind=kind)
+    return _artifact_result_from_observation(
+        observation,
+        artifact_store=artifact_store,
+        artifact_kind=artifact_kind,
+    )
+
+
+def _artifact_result_from_observation(
+    observation: Observation,
+    *,
+    artifact_store: ArtifactStore | None,
+    artifact_kind: str,
+) -> Observation | ToolResult:
+    if artifact_store is None or observation.status != "ok" or not isinstance(observation.content, dict):
+        return observation
+    content = _record(observation.content)
+    payload_text = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    artifact = artifact_store.write_blob(
+        kind=artifact_kind,
+        payload=payload_text,
+        mime_type="application/json",
+        metadata={
+            "tool": observation.source.removeprefix("tool:"),
+            "action_id": observation.action_id or "",
+            "observation_id": observation.observation_id,
+            "observation_kind": observation.kind,
+            "content_chars": len(payload_text),
+        },
+        redaction_status="unredacted_finance_tool_payload",
+    )
+    summary = _artifact_summary_content(
+        content,
+        artifact_id=artifact.artifact_id,
+        artifact_uri=artifact.uri,
+        artifact_kind=artifact.kind,
+        payload_chars=len(payload_text),
+    )
+    return ToolResult(
+        observation=Observation(
+            observation_id=observation.observation_id,
+            run_id=observation.run_id,
+            kind=observation.kind,
+            status=observation.status,
+            source=observation.source,
+            content=summary,
+            observed_at_ms=observation.observed_at_ms,
+            action_id=observation.action_id,
+            tool_call_id=observation.tool_call_id,
+        ),
+        artifact_refs=[artifact],
+    )
+
+
+def _artifact_summary_content(
+    content: JsonObject,
+    *,
+    artifact_id: str,
+    artifact_uri: str,
+    artifact_kind: str,
+    payload_chars: int,
+) -> JsonObject:
+    summary: JsonObject = {}
+    for key, value in content.items():
+        if key == "records" and isinstance(value, list):
+            preview_records = value[:20]
+            summary["records"] = [_record(record) for record in preview_records]
+            summary["records_preview_count"] = len(preview_records)
+            summary["record_count"] = int(content.get("record_count") or len(value))
+            if len(value) > len(preview_records):
+                summary["records_truncated"] = True
+            continue
+        if key == "text" and isinstance(value, str):
+            summary["text"] = _truncate(value, 4_000)
+            summary["text_chars"] = int(content.get("text_chars") or len(value))
+            summary["truncated"] = bool(content.get("truncated")) or len(value) > 4_000
+            continue
+        if key in {"record_count", "text_chars", "truncated"} and key in summary:
+            continue
+        if isinstance(value, str):
+            summary[key] = _truncate(value, 1_000)
+            continue
+        if isinstance(value, list):
+            summary[key] = [_json_sanitize(item) for item in value[:20]]
+            if len(value) > 20:
+                summary[f"{key}_truncated"] = True
+            continue
+        if isinstance(value, Mapping):
+            summary[key] = _json_sanitize(value)
+            continue
+        summary[key] = _json_sanitize(value)
+    summary["artifact_id"] = artifact_id
+    summary["artifact_uri"] = artifact_uri
+    summary["artifact_kind"] = artifact_kind
+    summary["full_payload_artifact_id"] = artifact_id
+    summary["full_payload_chars"] = payload_chars
+    summary["artifact_read_hint"] = {
+        "tool": "artifact.read",
+        "payload": {"artifact_id": artifact_id, "mode": "read"},
+    }
+    return summary
 
 
 def _component_exception(component: str, exc: Exception) -> JsonObject:

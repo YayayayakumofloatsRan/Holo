@@ -278,6 +278,65 @@ def test_loop_passes_policy_decision_before_tool_side_effect_executes():
         _remove_dir(root)
 
 
+def test_workspace_tools_skip_benchmark_reference_and_result_files() -> None:
+    root = Path("kernel_v3/.test-phase2-benchmark-leak-guard")
+    _reset_dir(root)
+    try:
+        (root / "notes").mkdir(parents=True)
+        (root / "notes" / "public.txt").write_text("1577 allowed public note", encoding="utf-8")
+        (root / "data" / "bench" / "finance").mkdir(parents=True)
+        (root / "data" / "bench" / "finance" / "financebench_doc_retrieval.jsonl").write_text(
+            '{"gold_answer":"$1577.00","evidence_excerpt":"reference only"}\n',
+            encoding="utf-8",
+        )
+        (root / "fb_debug_o000_l003_strict_20260615_v15.jsonl").write_text(
+            '{"answer":"3M capex was 1577"}\n',
+            encoding="utf-8",
+        )
+        registry = ToolRegistry.with_permissioned_workspace(root=root)
+        search = CandidateAction(
+            action_id="act-search-benchmark-leak",
+            kind="tool",
+            name="workspace.search",
+            description="search benchmark leak",
+            score=1.0,
+            payload={"query": "1577", "max_matches": 20},
+            reasons=[],
+            side_effect_class="read",
+        )
+        read_reference = CandidateAction(
+            action_id="act-read-reference",
+            kind="tool",
+            name="file.read",
+            description="read benchmark reference",
+            score=1.0,
+            payload={"path": "data/bench/finance/financebench_doc_retrieval.jsonl"},
+            reasons=[],
+            side_effect_class="read",
+        )
+        read_result = CandidateAction(
+            action_id="act-read-result",
+            kind="tool",
+            name="file.read",
+            description="read benchmark result",
+            score=1.0,
+            payload={"path": "fb_debug_o000_l003_strict_20260615_v15.jsonl"},
+            reasons=[],
+            side_effect_class="read",
+        )
+
+        search_result = registry.execute_with_artifacts(search, policy_decision=_allowed_decision(search))
+        reference_result = registry.execute_with_artifacts(read_reference, policy_decision=_allowed_decision(read_reference))
+        result_read = registry.execute_with_artifacts(read_result, policy_decision=_allowed_decision(read_result))
+
+        paths = [match["path"] for match in search_result.observation.content["matches"]]
+        assert paths == ["notes/public.txt"]
+        assert reference_result.observation.status == "failed"
+        assert result_read.observation.status == "failed"
+    finally:
+        _remove_dir(root)
+
+
 def test_registry_refuses_tool_execution_without_policy_decision():
     root = Path("kernel_v3/.test-phase2-policy-required")
     _reset_dir(root)

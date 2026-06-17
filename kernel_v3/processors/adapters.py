@@ -667,6 +667,7 @@ def _compact_runtime_directive_for_provider(directive: JsonObject, *, lightweigh
         data["research_mission"] = _compact_prompt_value(directive.get("research_mission"))
         data["workmethod"] = _compact_prompt_value(directive.get("workmethod"))
         data["toolchain_install_summary"] = _compact_simple_dict(directive.get("toolchain_install_summary"), limit=8)
+        data["finance_agent_loop_contract"] = _compact_prompt_value(directive.get("finance_agent_loop_contract"))
         data["llm_first_finance_template"] = _compact_prompt_value(directive.get("llm_first_finance_template"))
     return data
 

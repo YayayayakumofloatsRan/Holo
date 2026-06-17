@@ -1,4 +1,5 @@
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from kernel_v3.processors import (
     scenario_report_payload,
 )
 from kernel_v3.processors.testing import fake_fabric, timeout_fabric
+from kernel_v3.processors.providers import _read_response_text_with_deadline
 from kernel_v3.retrieval.contracts import CitationItem, EvidenceItem, RetrievalReport
 from kernel_v3.testing.fakes import FakeEvaluator, FakePlanner
 from kernel_v3.tools import ToolRegistry
@@ -1885,6 +1887,7 @@ def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets
     assert packet["headers"]["Authorization"] == "Bearer [set]"
     assert packet["body"]["model"] == DEEPSEEK_V4_FLASH
     assert packet["body"]["response_format"] == {"type": "json_object"}
+    assert packet["body"]["stream"] is False
     assert packet["body"]["thinking"] == {"type": "disabled"}
     assert "reasoning_effort" not in packet["body"]
     assert packet["body"]["temperature"] == 0.0
@@ -1899,6 +1902,37 @@ def test_phase5_deepseek_provider_packet_preview_shows_http_body_without_secrets
     assert user_message["content"]["chars"] == len(request.prompt)
     assert secret not in encoded
     assert request.prompt not in encoded
+
+
+def test_phase5_provider_response_read_has_wall_clock_deadline():
+    class SlowStreamingResponse:
+        def read(self, size=-1):
+            time.sleep(0.2)
+            return b"x"
+
+    started = time.monotonic()
+
+    try:
+        _read_response_text_with_deadline(SlowStreamingResponse(), 1, provider_name="deepseek")
+    except TimeoutError as exc:
+        elapsed = time.monotonic() - started
+        assert "deepseek response read exceeded 1s" in str(exc)
+        assert elapsed < 2.5
+    else:
+        raise AssertionError("expected response read timeout")
+
+
+def test_phase5_provider_response_read_wraps_timed_out_object_oserror():
+    class TimedOutResponse:
+        def read(self, size=-1):
+            raise OSError("cannot read from timed out object")
+
+    try:
+        _read_response_text_with_deadline(TimedOutResponse(), 30, provider_name="deepseek")
+    except TimeoutError as exc:
+        assert "deepseek response read exceeded 30s" in str(exc)
+    else:
+        raise AssertionError("expected response read timeout")
 
 
 def test_phase5_cli_providers_reports_flash_balanced_defaults():

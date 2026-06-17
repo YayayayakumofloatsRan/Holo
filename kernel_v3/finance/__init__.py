@@ -22,6 +22,7 @@ from kernel_v3.finance.open_components import (
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
     register_finance_open_component_tools,
 )
+from kernel_v3.finance.slot_bind_tool import FINANCE_SLOT_BIND_TOOL_NAME, register_finance_slot_bind_tool
 from kernel_v3.finance.substrate_adapter import (
     finance_evidence_policy_for_question,
     finance_facts_to_claims,
@@ -37,17 +38,25 @@ from kernel_v3.finance.target_binding import (
     target_document_binding_from_metadata,
 )
 from kernel_v3.finance.tool_catalog import (
+    FINANCE_AGENT_LOOP_CONTRACT_SCHEMA,
     FINANCE_TOOL_SURFACE_SCHEMA,
+    finance_agent_loop_contract,
     finance_one_shot_tool_protocol,
     finance_tool_surface_catalog,
     finance_toolchain_install_summary,
 )
+from kernel_v3.context import ArtifactStore
 from kernel_v3.tools import ToolRegistry
 
 
-def register_finance_tools(registry: ToolRegistry) -> ToolRegistry:
+def register_finance_tools(
+    registry: ToolRegistry,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> ToolRegistry:
     register_finance_calculator_tools(registry)
-    register_finance_open_component_tools(registry)
+    register_finance_slot_bind_tool(registry)
+    register_finance_open_component_tools(registry, artifact_store=artifact_store)
     return registry
 
 __all__ = [
@@ -60,10 +69,12 @@ __all__ = [
     "DOCUMENT_DOCLING_CONVERT_TOOL_NAME",
     "DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME",
     "FINANCE_VERIFY_NUMERIC_TOOL_NAME",
+    "FINANCE_SLOT_BIND_TOOL_NAME",
     "FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES",
     "FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES",
     "FINANCE_OPEN_COMPONENT_TOOL_NAMES",
     "FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME",
+    "FINANCE_AGENT_LOOP_CONTRACT_SCHEMA",
     "FINANCE_TOOL_SURFACE_SCHEMA",
     "MARKET_OPENBB_FETCH_TOOL_NAME",
     "MATH_SYMPY_COMPUTE_TOOL_NAME",
@@ -78,6 +89,7 @@ __all__ = [
     "finance_formula_plan_to_transform_plan",
     "finance_slot_frame",
     "finance_verification_to_gate_result",
+    "finance_agent_loop_contract",
     "finance_one_shot_tool_protocol",
     "finance_tool_surface_catalog",
     "finance_toolchain_install_summary",
@@ -87,6 +99,7 @@ __all__ = [
     "primary_source_numeric_binding_resolution",
     "plan_finance_formula",
     "register_finance_calculator_tools",
+    "register_finance_slot_bind_tool",
     "register_finance_open_component_tools",
     "register_finance_tools",
     "target_document_binding_from_metadata",
