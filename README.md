@@ -231,6 +231,16 @@ level convergence issue: wrong-source evidence could still enter fact/claim
 ledgers and make final numeric repair trigger another task compile instead of
 compressing rejected evidence into a clean replanning state. This is live loop
 diagnostic evidence, not a benchmark accuracy result.
+The next P0 continuation implements that rejected-evidence workbench boundary:
+primary-source binding failures now produce `finance_rejected_evidence_ledger`
+and compact `finance_working_state.rejected_evidence`; when
+`primary_source_required=true` and no target binding matches, rejected
+candidates are withheld from usable working-state facts, excluded from semantic
+task-compile inputs and ordinary finance claims, and surfaced through an
+`evidence_replan` workbench phase plus evaluator feedback. Market-data tasks
+without an explicit primary-source target binding remain on the normal formula
+trace path. Targeted structure tests pass (`372` finance/processor tests). This
+is agent-loop/workbench maturity evidence, not a FinanceBench or FinQA score.
 The latest P0 continuation extends provider-message replacement beyond prompt
 strings: deep-loop assistant prompts, `ProcessorFabric` JSON prompts, request
 parameters, OpenAI-compatible `provider_messages`, and structured provider

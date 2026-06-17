@@ -3008,6 +3008,11 @@ class AgentRuntime:
         facts = attach_target_binding_to_facts(facts, binding, question=question) if binding else facts
         facts = _rank_finance_facts_for_model(facts, question=question)
         binding_resolution = primary_source_numeric_binding_resolution(facts, binding, question=question) if binding else {}
+        facts_for_compile = _finance_facts_allowed_for_semantic_compile(
+            facts,
+            binding=binding,
+            binding_resolution=binding_resolution,
+        )
         ledger_record = self.journal.append(
             task_id=task_id,
             run_id=run_id,
@@ -3027,7 +3032,15 @@ class AgentRuntime:
             ),
             state_delta={"finance_fact_count": len(facts)},
         )
-        claims = finance_facts_to_claims(facts)
+        _append_finance_rejected_evidence_ledger(
+            self.journal,
+            task_id=task_id,
+            run_id=run_id,
+            purpose=purpose,
+            source_ledger_ref=ledger_record.record_id,
+            binding_resolution=binding_resolution,
+        )
+        claims = finance_facts_to_claims(facts_for_compile)
         claim_record = self.journal.append(
             task_id=task_id,
             run_id=run_id,
@@ -3045,11 +3058,11 @@ class AgentRuntime:
             ),
             state_delta={"claim_count": len(claims)},
         )
-        if question:
-            plan = plan_finance_formula(question=question, facts=facts, existing_traces=[])
+        if question and facts_for_compile:
+            plan = plan_finance_formula(question=question, facts=facts_for_compile, existing_traces=[])
             compiled = compile_finance_task_program_model_first(
                 question=question,
-                facts=facts,
+                facts=facts_for_compile,
                 target_binding=binding,
                 plan=plan,
                 processor_fabric=self.processor_fabric,
@@ -3092,7 +3105,7 @@ class AgentRuntime:
                 program=compiled.to_dict(),
                 source=str(compiled.diagnostics.get("source") or "task_compile_model"),
             )
-            frame = compiled.slot_frame or finance_slot_frame(question=question, facts=facts, plan=plan)
+            frame = compiled.slot_frame or finance_slot_frame(question=question, facts=facts_for_compile, plan=plan)
             self.journal.append(
                 task_id=task_id,
                 run_id=run_id,
@@ -3111,6 +3124,26 @@ class AgentRuntime:
                     "slot_frame_task_type": frame.task_type,
                     "missing_slot_count": len(frame.missing_slots),
                 },
+            )
+        elif question and binding_resolution and _primary_source_binding_requires_replan(binding_resolution):
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="finance_evidence_replan_gate",
+                data=redact_journal_data(
+                    {
+                        "schema": "holo.kernel_v3.finance_evidence_replan_gate.v1",
+                        "status": "needs_replan",
+                        "reason": "primary_source_numeric_binding_no_match",
+                        "source_ledger_ref": ledger_record.record_id,
+                        "claim_ledger_ref": claim_record.record_id,
+                        "primary_source_numeric_binding": _compact_primary_source_numeric_binding_state(binding_resolution),
+                        "host_role": "prevent_rejected_candidates_from_becoming_semantic_compile_inputs",
+                        "decision_owner": "model_replans_next_tool_or_limitation",
+                    }
+                ),
+                state_delta={"finance_evidence_replan_gate": "primary_source_numeric_binding_no_match"},
             )
         return facts, ledger_record
 
@@ -4262,7 +4295,15 @@ def _finance_working_state_for_prompt(
 
     latest_ledger = ledger_records[-1].data if ledger_records and isinstance(ledger_records[-1].data, dict) else {}
     facts = _finance_facts_from_ledger(latest_ledger)
-    compact_facts = [_finance_fact_judge_summary(fact) for fact in facts[:24]]
+    primary_source_binding = _compact_primary_source_numeric_binding_state(
+        _json_object(latest_ledger.get("primary_source_numeric_binding"))
+    )
+    rejected_evidence = _finance_rejected_evidence_state_for_prompt(records, latest_ledger=latest_ledger)
+    usable_facts = _finance_usable_facts_for_working_state(
+        facts,
+        primary_source_binding=primary_source_binding,
+    )
+    compact_facts = [_finance_fact_judge_summary(fact) for fact in usable_facts[:24]]
     latest_claim_ledger = claim_records[-1].data if claim_records and isinstance(claim_records[-1].data, dict) else {}
     compact_claims = _compact_claims_from_ledger(latest_claim_ledger)
 
@@ -4318,6 +4359,10 @@ def _finance_working_state_for_prompt(
         attention.append("latest finance numeric verification failed; inspect issue codes before finalizing")
     if latest_verification.get("status") == "passed":
         attention.append("latest finance numeric verification passed; decide whether the answer can now be finalized")
+    if rejected_evidence:
+        attention.append("some finance evidence was rejected by target-source binding; do not use rejected candidates as answer facts without new model justification and supporting evidence")
+    if _primary_source_binding_state_requires_replan(primary_source_binding):
+        attention.append("primary-source numeric binding found no usable target facts; replan toward the target filing/source/period/line item before synthesis")
     return {
         "schema": "holo.kernel_v3.finance_working_state.v1",
         "execution_program": execution_program,
@@ -4328,11 +4373,16 @@ def _finance_working_state_for_prompt(
             compact_traces=compact_traces,
             latest_slot_bind=latest_slot_bind,
             latest_verification=latest_verification,
+            primary_source_binding=primary_source_binding,
+            rejected_evidence=rejected_evidence,
             missing_slots=missing_slots,
         ),
         "ledger_count": len(ledger_records),
         "fact_count": int(latest_ledger.get("fact_count") or len(facts) or 0),
+        "usable_fact_count": len(usable_facts),
         "facts": compact_facts,
+        "primary_source_numeric_binding": primary_source_binding,
+        "rejected_evidence": rejected_evidence,
         "claim_ledger_count": len(claim_records),
         "claim_count": int(latest_claim_ledger.get("claim_count") or len(compact_claims) or 0),
         "claims": compact_claims,
@@ -4350,6 +4400,7 @@ def _finance_working_state_for_prompt(
             "execution_program": bool(execution_program),
             "slot_frame": bool(latest_slot_frame),
             "slot_bind": bool(latest_slot_bind),
+            "rejected_evidence": bool(rejected_evidence),
             "missing_slots": bool(missing_slots),
             "formula_trace": bool(compact_traces),
             "numeric_verification": bool(latest_verification),
@@ -4398,12 +4449,25 @@ def _finance_workbench_state_for_prompt(
     compact_traces: list[JsonObject],
     latest_slot_bind: JsonObject,
     latest_verification: JsonObject,
+    primary_source_binding: JsonObject,
+    rejected_evidence: JsonObject,
     missing_slots: list[str],
 ) -> JsonObject:
-    if not (execution_program or compact_facts or compact_claims or compact_traces or latest_slot_bind or latest_verification):
+    if not (
+        execution_program
+        or compact_facts
+        or compact_claims
+        or compact_traces
+        or latest_slot_bind
+        or latest_verification
+        or primary_source_binding
+        or rejected_evidence
+    ):
         return {}
     transform_specs = list(execution_program.get("transform_specs") or []) if isinstance(execution_program.get("transform_specs"), list) else []
-    if latest_verification.get("status") == "failed":
+    if _primary_source_binding_state_requires_replan(primary_source_binding):
+        phase = "evidence_replan"
+    elif latest_verification.get("status") == "failed":
         phase = "verify_or_replan"
     elif compact_traces:
         phase = "semantic_synthesis_or_verify"
@@ -4416,7 +4480,7 @@ def _finance_workbench_state_for_prompt(
     else:
         phase = "task_compile"
     next_action_options: list[str] = []
-    if phase == "evidence_acquire":
+    if phase in {"evidence_acquire", "evidence_replan"}:
         next_action_options.extend(["retrieval.run", "sec.edgar.financials", "document.docling.convert"])
     if phase in {"ledger_bind", "ledger_bind_or_transform_compute"}:
         next_action_options.extend(["bind candidate facts to missing slots", "retrieve remaining missing slots"])
@@ -4435,6 +4499,8 @@ def _finance_workbench_state_for_prompt(
         "fact_count": len(compact_facts),
         "claim_count": len(compact_claims),
         "formula_trace_count": len(compact_traces),
+        "primary_source_binding_status": primary_source_binding.get("status"),
+        "rejected_evidence_count": rejected_evidence.get("rejected_count"),
         "next_action_options": _ordered_unique(next_action_options)[:8],
         "decision_owner": "model",
         "host_boundary": "phase and options are state hints only; the model chooses the next tool and finance judgment",
@@ -4486,6 +4552,164 @@ def _finance_facts_from_ledger(data: object) -> list[FinanceFact]:
         except Exception:
             continue
     return facts
+
+
+def _finance_facts_allowed_for_semantic_compile(
+    facts: list[FinanceFact],
+    *,
+    binding: JsonObject,
+    binding_resolution: JsonObject,
+) -> list[FinanceFact]:
+    if not binding or not binding.get("primary_source_required"):
+        return list(facts)
+    selected_ids = set(_string_list(binding_resolution.get("selected_fact_ids")))
+    if selected_ids:
+        selected = [fact for fact in facts if fact.fact_id in selected_ids]
+        return selected if selected else []
+    if _primary_source_binding_requires_replan(binding_resolution):
+        return []
+    return list(facts)
+
+
+def _primary_source_binding_requires_replan(binding_resolution: JsonObject) -> bool:
+    if not binding_resolution:
+        return False
+    return (
+        str(binding_resolution.get("status") or "") == "no_binding_match"
+        and (_int_or_none(binding_resolution.get("rejected_count")) or 0) > 0
+    )
+
+
+def _append_finance_rejected_evidence_ledger(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    purpose: str,
+    source_ledger_ref: str,
+    binding_resolution: JsonObject,
+) -> None:
+    compact = _compact_primary_source_numeric_binding_state(binding_resolution)
+    if not compact or (_int_or_none(compact.get("rejected_count")) or 0) <= 0:
+        return
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id=None,
+        kind="finance_rejected_evidence_ledger",
+        data=redact_journal_data(
+            {
+                "schema": "holo.kernel_v3.finance_rejected_evidence_ledger.v1",
+                "purpose": purpose,
+                "source_ledger_ref": source_ledger_ref,
+                "primary_source_numeric_binding": compact,
+                "status": compact.get("status"),
+                "rejected_count": compact.get("rejected_count"),
+                "rejected_candidates": compact.get("rejected_candidates", []),
+                "selected_fact_ids": compact.get("selected_fact_ids", []),
+                "host_role": "evidence_isolation_only_not_answer_selection",
+                "decision_owner": "model_replans_or_justifies_next_evidence_step",
+            }
+        ),
+        state_delta={"finance_rejected_evidence_count": compact.get("rejected_count")},
+    )
+
+
+def _finance_usable_facts_for_working_state(
+    facts: list[FinanceFact],
+    *,
+    primary_source_binding: JsonObject,
+) -> list[FinanceFact]:
+    if not primary_source_binding:
+        return list(facts)
+    selected_ids = set(_string_list(primary_source_binding.get("selected_fact_ids")))
+    if selected_ids:
+        selected = [fact for fact in facts if fact.fact_id in selected_ids]
+        return selected if selected else []
+    if _primary_source_binding_state_requires_replan(primary_source_binding):
+        return []
+    return list(facts)
+
+
+def _primary_source_binding_state_requires_replan(primary_source_binding: JsonObject) -> bool:
+    if primary_source_binding.get("status") != "no_binding_match":
+        return False
+    binding = _json_object(primary_source_binding.get("binding"))
+    if binding.get("primary_source_required") is not True:
+        return False
+    return (_int_or_none(primary_source_binding.get("rejected_count")) or 0) > 0
+
+
+def _finance_rejected_evidence_state_for_prompt(records: list[object], *, latest_ledger: JsonObject) -> JsonObject:
+    rejected_records = [record for record in records if getattr(record, "kind", None) == "finance_rejected_evidence_ledger"]
+    if rejected_records:
+        data = rejected_records[-1].data if isinstance(rejected_records[-1].data, dict) else {}
+        binding = _compact_primary_source_numeric_binding_state(
+            _json_object(data.get("primary_source_numeric_binding"))
+        )
+        if not binding:
+            return {}
+        return {
+            "schema": "holo.kernel_v3.finance_rejected_evidence_state.v1",
+            "source_record_ref": getattr(rejected_records[-1], "record_id", None),
+            "source_ledger_ref": _bounded_text(data.get("source_ledger_ref"), limit=96),
+            "status": binding.get("status"),
+            "rejected_count": binding.get("rejected_count"),
+            "rejected_candidates": binding.get("rejected_candidates", []),
+            "selected_fact_ids": binding.get("selected_fact_ids", []),
+            "binding": binding.get("binding", {}),
+            "host_boundary": "rejected candidates are isolated from usable facts; the model decides the next retrieval or limitation",
+        }
+    binding = _compact_primary_source_numeric_binding_state(
+        _json_object(latest_ledger.get("primary_source_numeric_binding"))
+    )
+    if not binding or (_int_or_none(binding.get("rejected_count")) or 0) <= 0:
+        return {}
+    return {
+        "schema": "holo.kernel_v3.finance_rejected_evidence_state.v1",
+        "source_ledger_ref": _bounded_text(latest_ledger.get("source_ledger_ref"), limit=96),
+        "status": binding.get("status"),
+        "rejected_count": binding.get("rejected_count"),
+        "rejected_candidates": binding.get("rejected_candidates", []),
+        "selected_fact_ids": binding.get("selected_fact_ids", []),
+        "binding": binding.get("binding", {}),
+        "host_boundary": "rejected candidates are isolated from usable facts; the model decides the next retrieval or limitation",
+    }
+
+
+def _compact_primary_source_numeric_binding_state(value: JsonObject) -> JsonObject:
+    payload = _json_object(value)
+    if not payload:
+        return {}
+    status = str(payload.get("status") or "")
+    rejected_candidates = [
+        _compact_primary_source_rejected_candidate(item)
+        for item in (payload.get("rejected_candidates") if isinstance(payload.get("rejected_candidates"), list) else [])
+        if isinstance(item, dict)
+    ]
+    result: JsonObject = {
+        "schema": "holo.kernel_v3.finance.primary_source_numeric_binding.compact.v1",
+        "status": status,
+        "selected_count": _int_or_none(payload.get("selected_count")) or len(_string_list(payload.get("selected_fact_ids"))),
+        "selected_fact_ids": _string_list(payload.get("selected_fact_ids"))[:16],
+        "rejected_count": _int_or_none(payload.get("rejected_count")) or len(rejected_candidates),
+        "rejected_candidates": rejected_candidates[:16],
+        "binding": _compact_target_document_binding_for_judge(_json_object(payload.get("binding"))),
+    }
+    return {key: item for key, item in result.items() if item not in (None, "", [], {})}
+
+
+def _compact_primary_source_rejected_candidate(item: JsonObject) -> JsonObject:
+    result: JsonObject = {
+        "fact_id": _bounded_text(item.get("fact_id"), limit=120),
+        "metric": _bounded_text(item.get("metric"), limit=120),
+        "value": _bounded_text(item.get("value"), limit=80),
+        "source_uri": _bounded_text(item.get("source_uri"), limit=180),
+        "source_title": _bounded_text(item.get("source_title"), limit=120),
+        "score": item.get("score") if isinstance(item.get("score"), (int, float)) else None,
+        "reasons": _string_list(item.get("reasons"))[:8],
+    }
+    return {key: value for key, value in result.items() if value not in (None, "", [], {})}
 
 
 def _finance_claim_records_for_working_state(records: list[object], *, recipe: TaskRecipe | None) -> list[object]:
@@ -6204,6 +6428,20 @@ class _RecipeEvaluator:
                 artifact_store=self.artifact_store,
                 observation=observation,
             )
+            rejected_evidence_followup = _finance_rejected_evidence_followup_feedback(
+                self.journal,
+                context,
+                recipe=self.recipe,
+            )
+            if rejected_evidence_followup:
+                return _feedback(
+                    run_id,
+                    self.calls,
+                    "continue",
+                    None,
+                    None,
+                    rejected_evidence_followup,
+                )
             slot_bind_followup = _finance_slot_bind_followup_feedback(
                 context,
                 recipe=self.recipe,
@@ -6332,6 +6570,11 @@ def _append_finance_loop_workbench_state_after_retrieval(
     ledger_record = None
     if facts:
         binding_resolution = primary_source_numeric_binding_resolution(facts, binding, question=question) if binding else {}
+        facts_for_context = _finance_facts_allowed_for_semantic_compile(
+            facts,
+            binding=binding,
+            binding_resolution=binding_resolution,
+        )
         ledger_record = journal.append(
             task_id=task_id,
             run_id=run_id,
@@ -6355,7 +6598,15 @@ def _append_finance_loop_workbench_state_after_retrieval(
             observation_ref=observation.observation_id,
             state_delta={"finance_fact_count": len(facts), "finance_workbench": "ledger_ready"},
         )
-        claims = finance_facts_to_claims(facts)
+        _append_finance_rejected_evidence_ledger(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            purpose="loop_workbench",
+            source_ledger_ref=ledger_record.record_id,
+            binding_resolution=binding_resolution,
+        )
+        claims = finance_facts_to_claims(facts_for_context)
         claim_domain = "finance"
         claim_host_role = "candidate_claim_ledger_for_next_planner_turn_only"
     else:
@@ -6461,6 +6712,40 @@ def _finance_workbench_missing_slot_feedback(
             *[f"missing_slot:{slot}" for slot in missing_slots[:8]],
         ]
         )
+
+
+def _finance_rejected_evidence_followup_feedback(
+    journal: JournalStore | None,
+    context: ContextBundle,
+    *,
+    recipe: TaskRecipe,
+) -> list[str]:
+    if journal is None or recipe.mode != "retrieval_answer" or not _finance_tools_needed(recipe):
+        return []
+    task_id = str(context.state.get("task_id") or "")
+    run_id = str(context.state.get("run_id") or "")
+    if not task_id or not run_id:
+        return []
+    records = [record for record in journal.records(task_id=task_id) if record.run_id == run_id]
+    rejected_records = [record for record in records if getattr(record, "kind", None) == "finance_rejected_evidence_ledger"]
+    if not rejected_records:
+        return []
+    data = rejected_records[-1].data if isinstance(rejected_records[-1].data, dict) else {}
+    binding_state = _compact_primary_source_numeric_binding_state(_json_object(data.get("primary_source_numeric_binding")))
+    if not _primary_source_binding_state_requires_replan(binding_state):
+        return []
+    rejected_count = _int_or_none(binding_state.get("rejected_count")) or 0
+    binding = _json_object(binding_state.get("binding"))
+    missing: list[str] = [
+        "finance_rejected_evidence_replan",
+        "primary_source_numeric_binding:no_match",
+        f"rejected_candidate_count:{min(rejected_count, 999)}",
+    ]
+    for key in ("company", "doc_period", "required_statement", "required_line_item", "doc_type"):
+        value = _string_value(binding.get(key))
+        if value:
+            missing.append(f"target_{key}:{value}")
+    return _ordered_unique(missing)
 
 
 def _finance_slot_bind_followup_feedback(

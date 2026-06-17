@@ -481,8 +481,12 @@ include repair_options and missing_value_examples derived from host verifier
 issues; treat them as diagnostic hints, not as an answer selector. This packet
 only summarizes already observed finance facts, calculator FormulaTrace
 outputs, and verifier feedback; it does not select the metric, period, formula,
-or final answer for you. The model still owns finance semantic binding and
-final judgment.
+or final answer for you. If primary_source_numeric_binding or
+rejected_evidence is present, treat rejected candidates as unusable for final
+numeric claims unless you obtain new supporting evidence or explicitly re-bind
+with model-owned justification. Use evidence_replan workbench phase to target
+the required filing/source/period/line item instead of repeating the rejected
+source. The model still owns finance semantic binding and final judgment.
 When context.state.mission_context is present, treat mission_context.mission_state.root_goal as the global objective for the whole task, not merely as commentary. Use mission_context.directive and context.state.thread_rag_context to understand previous attempts, evidence, failures, and conversation continuity. If the previous run failed but the mission directive says continue, propose a materially different safe action instead of giving up or asking the user by default.
 When context.state.thread_rag_context.task_continuity is present, treat it as
 the host-compiled working note for this task: preserve current_objective, cover
@@ -623,9 +627,13 @@ and numeric_verification to judge whether the latest observation closed a
 finance gap, introduced usable calculator/verifier support, or still leaves
 source/metric/period/unit evidence missing. numeric_verification repair_options
 are verifier-derived diagnostic hints only; do not treat them as host-selected
-answers. Treat this packet as observational: the evaluator judges progress, but
-the model remains responsible for semantic finance binding and whether more
-work or a final answer is appropriate.
+answers. If rejected_evidence or primary_source_numeric_binding.status=
+no_binding_match is present, do not count the rejected candidates as usable
+evidence; prefer continue when a materially different retrieval/SEC/document
+action can still locate the target filing/source/period/line item. Treat this
+packet as observational: the evaluator judges progress, but the model remains
+responsible for semantic finance binding and whether more work or a final
+answer is appropriate.
 For open-ended research, judge whether remaining gaps are hard blockers or soft
 limitations. If the available citations/evidence cover the user's root objective
 and the remaining gaps are language, source-breadth, or auxiliary-angle gaps,

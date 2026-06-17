@@ -330,3 +330,46 @@ scaffold 同一 follow-up，而是把控制权交回模型重规划。这个修�
 - partial/corrupt JSONL row 不再阻断 journal store 初始化；
 - incremental executor 在 streaming/non-streaming 路径共享并发和独占语义；
 - workbench follow-up 在同一 network budget guard 后停止自动重复 scaffold。
+
+## 12. Rejected-evidence workbench checkpoint
+
+上一节 live probe 暴露的核心不是“3M 这道题怎么写规则”，而是成熟 agent loop 的
+上下文管理缺口：错源证据被 target-document binding 打低分或拒绝后，仍然能作为
+普通 `finance_fact_ledger` / `claim_ledger` 内容进入后续 task compile、repair 和
+synthesis 上下文。成熟 TypeScript loop 的对应思想是：tool result 先经过
+tool-result budget、microcompact、context collapse，再以可替换/可恢复的状态进入
+下一轮，而不是把所有失败输出永久堆进模型窗口。
+
+本轮把这个思想落到金融工作台：
+
+- `finance_fact_ledger.primary_source_numeric_binding.rejected_candidates` 现在会被提升为
+  一等 `finance_rejected_evidence_ledger`，并进入 `finance_working_state.rejected_evidence`。
+- 当目标绑定明确 `primary_source_required=true` 且
+  `primary_source_numeric_binding.status=no_binding_match` 时，working state 不再把这些
+  rejected candidates 暴露为可用 `facts`；它们只出现在 rejected-evidence 状态中。
+- 同一条件下，host 不再用 rejected candidates 生成后续 semantic task compile 输入，
+  也不再从这些错源 facts 生成普通 finance claim ledger；而是写入
+  `finance_evidence_replan_gate`，让下一轮模型重规划目标 filing/source/period/line item。
+- `finance_working_state.workbench.current_phase` 增加 `evidence_replan`，并把
+  `retrieval.run`、`sec.edgar.financials`、`document.docling.convert` 作为候选动作提示。
+- `_RecipeEvaluator` 在看到最新 `finance_rejected_evidence_ledger` 且 primary-source
+  no-match 时返回 `finance_rejected_evidence_replan` feedback，阻止 premature final。
+- 市场估值类题不受该 gate 影响：只有显式 primary-source-required target binding 才会
+  触发错源隔离；Yahoo/market-data EV/EBITDA 这类题仍可继续进入 formula trace 链路。
+
+边界仍保持不变：host 只隔离已被 source contract 验证为不匹配的候选，不替模型选择
+正确事实、公式或最终判断。模型仍然可以决定下一步检索、重新绑定、说明限制或最终回答。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py -q
+```
+
+结果：
+
+- `372 passed in 10.02s`
+
+说明：这是 P0 agent-loop/workbench 成熟度修复，不是 FinanceBench/FinQA 新分数。
+下一步应做小规模 live probe 验证：同类 primary-source 错源是否能从
+`evidence_replan` 转向正确 filing/document 工具，而不是继续污染 fact/claim ledger。

@@ -29,11 +29,13 @@ from kernel_v3.agent.runtime import (
     _finance_formula_trace_synthesis_policy,
     _finance_formula_traces_for_synthesis,
     _finance_formula_name_from_program_like,
+    _finance_facts_allowed_for_semantic_compile,
     _finance_working_state_for_prompt,
     _model_compiled_program_authorizes_numeric_preflight,
     _finance_slot_bind_plans_from_model,
     _finance_slot_bind_prompt,
     _finance_slot_bind_followup_feedback,
+    _finance_rejected_evidence_followup_feedback,
     _report_with_finance_formula_traces,
     _host_semantic_fallbacks_enabled,
     _rank_finance_facts_for_model,
@@ -1923,6 +1925,7 @@ def test_finance_working_state_for_prompt_summarizes_facts_traces_and_verifier_w
         "execution_program": False,
         "slot_frame": True,
         "slot_bind": True,
+        "rejected_evidence": False,
         "missing_slots": True,
         "formula_trace": True,
         "numeric_verification": True,
@@ -1931,6 +1934,92 @@ def test_finance_working_state_for_prompt_summarizes_facts_traces_and_verifier_w
     assert "gross profit / revenue" in encoded
     assert "RAW_PROVIDER_BODY_SHOULD_NOT_LEAK" not in encoded
     assert "model owns metric binding" in state["host_boundary"]
+
+
+def test_finance_working_state_isolates_rejected_primary_source_candidates_for_replan() -> None:
+    journal = JournalStore.in_memory()
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_period": "2022",
+            "doc_type": "10-K",
+            "required_line_item": "net sales",
+            "required_statement": "income_statement",
+            "primary_source_required": True,
+        },
+        question="3M FY2022 net sales",
+    )
+    wrong_fact = FinanceFact(
+        fact_id="finfact-wiki-2025-sales",
+        entity="3M - Wikipedia",
+        ticker=None,
+        period="2025",
+        fiscal_year=2025,
+        metric="net sales",
+        value="24900000000",
+        unit="USD",
+        scale="actual",
+        source_ref="cite-wiki",
+        evidence_ref="ev-wiki",
+        citation_ref="cite-wiki",
+        metadata={
+            "source_uri": "https://en.wikipedia.org/wiki/3M",
+            "source_title": "3M - Wikipedia",
+            "target_document_binding_accepted": False,
+            "target_document_binding_score": -40,
+            "target_document_binding_reasons": ["target_period_missing_or_mismatch", "secondary_market_source_rejected_for_primary_binding"],
+        },
+    )
+    binding_resolution = {
+        "schema": "holo.kernel_v3.finance.primary_source_numeric_binding.v1",
+        "status": "no_binding_match",
+        "binding": binding,
+        "selected_fact_ids": [],
+        "selected_count": 0,
+        "rejected_count": 1,
+        "rejected_candidates": [
+            {
+                "fact_id": wrong_fact.fact_id,
+                "metric": wrong_fact.metric,
+                "value": wrong_fact.value,
+                "source_uri": wrong_fact.metadata["source_uri"],
+                "source_title": wrong_fact.metadata["source_title"],
+                "score": -40,
+                "reasons": wrong_fact.metadata["target_document_binding_reasons"],
+            }
+        ],
+    }
+    journal.append(
+        task_id="task-finance-rejected-evidence",
+        run_id="run-1",
+        step_id="step-ledger",
+        kind="finance_fact_ledger",
+        data={
+            "schema": "holo.kernel_v3.finance_fact_ledger.v1",
+            "fact_count": 1,
+            "facts": [wrong_fact.to_dict()],
+            "target_document_binding": binding,
+            "primary_source_numeric_binding": binding_resolution,
+        },
+    )
+
+    state = _finance_working_state_for_prompt(journal, task_id="task-finance-rejected-evidence", run_id="run-1")
+
+    assert state["fact_count"] == 1
+    assert state["usable_fact_count"] == 0
+    assert state["facts"] == []
+    assert state["primary_source_numeric_binding"]["status"] == "no_binding_match"
+    assert state["rejected_evidence"]["rejected_candidates"][0]["fact_id"] == wrong_fact.fact_id
+    assert state["presence"]["finance_facts"] is False
+    assert state["presence"]["rejected_evidence"] is True
+    assert state["workbench"]["current_phase"] == "evidence_replan"
+    assert "retrieval.run" in state["workbench"]["next_action_options"]
+    assert any("replan toward the target filing" in item for item in state["model_attention"])
+    assert _finance_facts_allowed_for_semantic_compile(
+        [wrong_fact],
+        binding=binding,
+        binding_resolution=binding_resolution,
+    ) == []
 
 
 def test_finance_working_state_verifier_repair_options_are_model_visible_without_deciding_answer() -> None:
@@ -2228,6 +2317,66 @@ def test_recipe_evaluator_turns_slot_bind_missing_next_action_into_continue_feed
     assert "finance_slot_bind_followup" in feedback
     assert "next_tool:retrieval.run" in feedback
     assert "missing_slot:net_ppne" in feedback
+
+
+def test_recipe_evaluator_turns_rejected_primary_source_binding_into_replan_feedback() -> None:
+    journal = JournalStore.in_memory()
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_period": "2022",
+            "doc_type": "10-K",
+            "required_line_item": "net sales",
+            "primary_source_required": True,
+        }
+    )
+    journal.append(
+        task_id="task-rejected-binding-followup",
+        run_id="run-1",
+        step_id="step-ledger",
+        kind="finance_rejected_evidence_ledger",
+        data={
+            "schema": "holo.kernel_v3.finance_rejected_evidence_ledger.v1",
+            "source_ledger_ref": "ledger-facts",
+            "primary_source_numeric_binding": {
+                "schema": "holo.kernel_v3.finance.primary_source_numeric_binding.v1",
+                "status": "no_binding_match",
+                "binding": binding,
+                "selected_fact_ids": [],
+                "selected_count": 0,
+                "rejected_count": 1,
+                "rejected_candidates": [
+                    {
+                        "fact_id": "finfact-wiki-2025-sales",
+                        "metric": "net sales",
+                        "value": "24900000000",
+                        "source_uri": "https://en.wikipedia.org/wiki/3M",
+                        "score": -40,
+                        "reasons": ["target_period_missing_or_mismatch"],
+                    }
+                ],
+            },
+        },
+    )
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+    context = ContextBundle(
+        context_id="ctx-rejected-binding-followup",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-rejected-binding-followup", "run_id": "run-1"},
+        token_budget={},
+    )
+
+    feedback = _finance_rejected_evidence_followup_feedback(journal, context, recipe=recipe)
+
+    assert "finance_rejected_evidence_replan" in feedback
+    assert "primary_source_numeric_binding:no_match" in feedback
+    assert "target_doc_period:2022" in feedback
+    assert "target_required_line_item:net sales" in feedback
 
 
 def test_finance_working_state_for_prompt_is_absent_without_finance_anchor() -> None:
