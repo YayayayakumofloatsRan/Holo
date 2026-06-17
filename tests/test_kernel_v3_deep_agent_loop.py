@@ -482,6 +482,75 @@ def test_streaming_tool_timeout_requests_cooperative_abort() -> None:
     assert batch.data["content"]["results"][0]["status"] == "failed"
 
 
+def test_batch_tool_timeout_returns_failed_observation_without_waiting_for_tool_completion() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "slow.read",
+        _slow_noncooperative_read_tool(),
+        manifest=ToolManifest(
+            name="slow.read",
+            version="1",
+            resource_kind="slow",
+            operator_kind="read",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Slow non-cooperative read.",
+            input_schema={"query": {"type": "str", "required": True, "min_length": 1}},
+            runtime={"interrupt_behavior": "cancel", "timeout_seconds": 1},
+        ),
+    )
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-slow",
+                message="read slow source",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-slow",
+                        name="slow.read",
+                        arguments={"query": "slow"},
+                        reason="need slow evidence",
+                        side_effect_class="read",
+                    )
+                ],
+            )
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("read slow source")
+
+    assert result.status == "completed"
+    events = journal.records(task_id=result.task_id, kind="tool_execution_event")
+    assert any(record.data["event_type"] == "abort_requested" for record in events)
+    batch = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_batch_result"
+    ][0]
+    item = batch.data["content"]["results"][0]
+    assert item["status"] == "failed"
+    assert item["kind"] == "tool_call_timeout"
+    assert set(item["content_projection"]["shape"]["keys"]) == {
+        "abort_signal_id",
+        "host_boundary",
+        "interrupt_behavior",
+        "reason",
+        "timeout_seconds",
+    }
+
+
 def test_assistant_turn_prompt_applies_provider_message_replacement_view() -> None:
     context = ContextBundle(
         context_id="ctx-replacement",
@@ -757,6 +826,24 @@ def _large_read_tool():
             status="ok",
             source=f"tool:{action.name}",
             content={"blob": "RAW-LARGE-" + "z" * 60000},
+            observed_at_ms=0,
+            action_id=action.action_id,
+            tool_call_id=None,
+        )
+
+    return execute
+
+
+def _slow_noncooperative_read_tool():
+    def execute(action: CandidateAction) -> Observation:
+        time.sleep(1.5)
+        return Observation(
+            observation_id=f"obs-{action.action_id}",
+            run_id="",
+            kind="tool_result",
+            status="ok",
+            source=f"tool:{action.name}",
+            content={"done": True},
             observed_at_ms=0,
             action_id=action.action_id,
             tool_call_id=None,

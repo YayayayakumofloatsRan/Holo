@@ -756,7 +756,7 @@ class DeepAgentLoopController(LoopControllerV3):
         )
         batch_items = executor.execute_batches(
             prepared,
-            execute_one=lambda item: self._execute_prepared_tool(task, step_id, item),
+            execute_one=lambda item: self._execute_prepared_tool_with_timeout(task, step_id, item),
             is_concurrency_safe=lambda item: _is_concurrency_safe(item.action, item.manifest),
             cancel_pending_on_failure=True,
             is_failed=_execution_item_failed,
@@ -773,6 +773,40 @@ class DeepAgentLoopController(LoopControllerV3):
             total_artifact_bytes += self._estimate_artifact_bytes(item.observation, item.artifact_refs)
             self._append_tool_execution_observation(task, step_id=step_id, item=item)
         return execution_items, tool_calls, network_fetches, total_artifact_bytes
+
+    def _execute_prepared_tool_with_timeout(
+        self,
+        task: TaskState,
+        step_id: str,
+        prepared: _PreparedToolCall,
+    ) -> _ToolExecutionItem:
+        timeout = prepared.control.timeout_seconds
+        if timeout is None:
+            return self._execute_prepared_tool(task, step_id, prepared)
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(self._execute_prepared_tool, task, step_id, prepared)
+        timed_out = False
+        try:
+            return future.result(timeout=timeout)
+        except FutureTimeoutError:
+            timed_out = True
+            prepared.control.abort_signal.request("tool_timeout")
+            self._append_tool_execution_event(
+                task,
+                step_id=step_id,
+                event=_prepared_tool_execution_event(
+                    "abort_requested",
+                    prepared,
+                    detail={"reason": "tool_timeout", "timeout_seconds": timeout},
+                ),
+            )
+            try:
+                return future.result(timeout=0.25)
+            except FutureTimeoutError:
+                future.cancel()
+                return self._timeout_execution_item(task, step_id=step_id, prepared=prepared, reason="tool_timeout")
+        finally:
+            pool.shutdown(wait=not timed_out, cancel_futures=True)
 
     def _prepare_tool_call(
         self,

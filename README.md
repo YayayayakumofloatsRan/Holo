@@ -207,12 +207,15 @@ previews before provider dispatch. Deep loop batch observations also persist
 full tool results as `tool_result_full` artifacts and expose those artifact ids
 through replacement `artifact_refs`, while context budget views compact large
 individual `tool_result` observations and omit host-only execution context. This
-moves the generic single-agent loop parity estimate to roughly the 95% P0
-architecture threshold. Remaining gaps are non-cooperative subprocess/network
-cancellation, runtime progress/result injection into the same provider
-conversation, dynamic token-aware tool-set expansion, and type-family live
-debug50 evidence. This estimate is architectural only, not a FinanceBench or
-FinQA score.
+moves the generic single-agent loop parity estimate beyond the 95% P0
+architecture threshold. The next P0 continuation gives completed JSON-turn tool
+batches the same runtime timeout/abort boundary as streaming tool execution:
+over-time tools now produce `tool_call_timeout` observations and journal
+`abort_requested` events instead of blocking the loop. Remaining gaps are
+process/network-level signal propagation for already-running non-cooperative
+tools, runtime progress/result injection into the same provider conversation,
+dynamic token-aware tool-set expansion, and type-family live debug50 evidence.
+This estimate is architectural only, not a FinanceBench or FinQA score.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in
