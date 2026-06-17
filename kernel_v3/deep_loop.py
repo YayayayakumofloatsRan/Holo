@@ -321,6 +321,16 @@ class DeepAgentLoopController(LoopControllerV3):
             else:
                 turn = self._propose_turn(context, current_feedback)
                 preexecuted_items = None
+                scaffold_turn = _workbench_followup_scaffold_turn(
+                    self.journal,
+                    task_id=task.task_id,
+                    run_id=task.run_id,
+                    input_text=task.input_text,
+                    feedback=current_feedback,
+                    proposed_turn=turn,
+                )
+                if scaffold_turn is not None:
+                    turn = scaffold_turn
             self._append_assistant_turn(task, turn, step_id=step_id)
 
             if not turn.tool_calls and not turn.parse_errors:
@@ -1459,6 +1469,166 @@ def _assistant_turn_from_stream_events(
     )
 
 
+def _workbench_followup_scaffold_turn(
+    journal: Any,
+    *,
+    task_id: str,
+    run_id: str,
+    input_text: str,
+    feedback: Feedback | None,
+    proposed_turn: AssistantTurn,
+) -> AssistantTurn | None:
+    if not _feedback_requires_retrieval_workbench_followup(feedback):
+        return None
+    if any(call.name == "retrieval.run" for call in proposed_turn.tool_calls):
+        return None
+    record = _latest_workbench_decision_record(journal, task_id=task_id, run_id=run_id)
+    if record is None:
+        return None
+    data = record.data if isinstance(record.data, dict) else {}
+    decision = str(data.get("decision") or "")
+    if data.get("status") != "ok" or decision not in {"continue", "fail_with_limitations"}:
+        return None
+    next_queries = _ordered_unique_strings(
+        [
+            *_json_string_list(data.get("next_queries")),
+            *_json_string_list(data.get("next_document_targets")),
+        ]
+    )
+    source_families = _json_string_list(data.get("next_source_families"))
+    missing_slots = _ordered_unique_strings(
+        [
+            *_json_string_list(data.get("missing_slots")),
+            *_json_string_list(data.get("semantic_missing_slots")),
+            *_json_string_list(feedback.missing_evidence if feedback is not None else []),
+        ]
+    )
+    if not next_queries and not source_families:
+        return None
+    attempted = _attempted_retrieval_queries(journal, task_id=task_id, run_id=run_id)
+    selected_query = next((query for query in next_queries if query.casefold() not in attempted), "")
+    if not selected_query:
+        selected_query = _source_family_followup_query(
+            input_text,
+            source_families=source_families,
+            missing_slots=missing_slots,
+        )
+        if not selected_query or selected_query.casefold() in attempted:
+            return None
+    source_urls = [item for item in next_queries if _looks_like_http_url(item)]
+    queries = _ordered_unique_strings([selected_query, *next_queries])[:8]
+    metadata: JsonObject = {
+        "host_scaffold": "model_workbench_followup",
+        "host_scaffold_role": "execute_model_workbench_route_without_selecting_answer_facts",
+        "workbench_followup": True,
+        "workbench_decision_ref": getattr(record, "record_id", None),
+        "workbench_source_decision": decision,
+        "semantic_missing_slots": missing_slots[:24],
+        "preferred_source_families": source_families[:16],
+        "next_document_targets": _json_string_list(data.get("next_document_targets"))[:16],
+        "research_profile": "finance_fundamentals",
+        "source_authority_requirement": "primary",
+    }
+    if source_urls:
+        metadata["source_urls"] = source_urls[:16]
+    return AssistantTurn(
+        turn_id=f"turn-workbench-followup-{_safe_action_id(str(getattr(record, 'record_id', 'decision')))}",
+        message="Executing retrieval workbench follow-up.",
+        tool_calls=[
+            ToolCallRequest(
+                tool_call_id="tc-workbench-followup-retrieval",
+                name="retrieval.run",
+                arguments={
+                    "query": selected_query,
+                    "queries": queries,
+                    "search_strategy": "structured",
+                    "max_queries": max(3, min(8, len(queries))),
+                    "max_sources": 24,
+                    "max_fetches": 12,
+                    "max_spans_per_document": 8,
+                    "metadata": metadata,
+                },
+                reason="retrieval_workbench_followup",
+                side_effect_class="network",
+            )
+        ],
+        final_answer=None,
+        stop_reason=None,
+        reasons=[
+            "host_scaffold_model_workbench_followup",
+            "retrieval_workbench_followup",
+            f"source_turn:{proposed_turn.turn_id}",
+        ],
+    )
+
+
+def _feedback_requires_retrieval_workbench_followup(feedback: Feedback | None) -> bool:
+    if feedback is None or feedback.status != "continue":
+        return False
+    normalized = {str(item).strip().lower().replace("-", "_") for item in feedback.missing_evidence}
+    return "retrieval_workbench_followup" in normalized
+
+
+def _latest_workbench_decision_record(journal: Any, *, task_id: str, run_id: str) -> Any | None:
+    records = getattr(journal, "records", None)
+    if not callable(records):
+        return None
+    for record in reversed(records(task_id=task_id, kind="retrieval_workbench_decision")):
+        if getattr(record, "run_id", None) == run_id:
+            return record
+    return None
+
+
+def _attempted_retrieval_queries(journal: Any, *, task_id: str, run_id: str) -> set[str]:
+    records = getattr(journal, "records", None)
+    if not callable(records):
+        return set()
+    attempted: set[str] = set()
+    for record in records(task_id=task_id, kind="action"):
+        if getattr(record, "run_id", None) != run_id:
+            continue
+        data = record.data if isinstance(record.data, dict) else {}
+        if data.get("name") != "retrieval.run":
+            continue
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        for value in [payload.get("query"), *_json_string_list(payload.get("queries"))]:
+            if isinstance(value, str) and value.strip():
+                attempted.add(value.strip().casefold())
+    return attempted
+
+
+def _source_family_followup_query(input_text: str, *, source_families: list[str], missing_slots: list[str]) -> str:
+    text = " ".join(str(input_text or "").split())
+    if len(text) > 260:
+        text = text[:260].rsplit(" ", 1)[0]
+    families = " ".join(source_families[:6])
+    missing = " ".join(missing_slots[:6])
+    query = " ".join(part for part in [text, missing, families] if part).strip()
+    return query[:500]
+
+
+def _json_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _ordered_unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        key = value.casefold()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
+
+
+def _looks_like_http_url(value: str) -> bool:
+    return value.startswith("https://") or value.startswith("http://")
+
+
 def _assistant_turn_prompt(
     context: ContextBundle,
     feedback: Feedback | None,
@@ -1469,6 +1639,7 @@ def _assistant_turn_prompt(
         "contract": ASSISTANT_TURN_PROMPT_CONTRACT,
         "context": _compact_context_for_turn(context),
         "feedback": feedback.to_dict() if feedback is not None else None,
+        "continuation_contract": _feedback_continuation_contract(feedback),
         "allowed_tool_names": sorted(allowed_tool_names),
         "tool_call_protocol": {
             "tool_call_shape": {
@@ -1483,6 +1654,36 @@ def _assistant_turn_prompt(
     }
     sanitized = apply_provider_message_replacement_view(payload)
     return json.dumps(sanitized, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _feedback_continuation_contract(feedback: Feedback | None) -> JsonObject:
+    if feedback is None or feedback.status != "continue":
+        return {}
+    missing = [str(item) for item in feedback.missing_evidence if str(item)]
+    normalized = {item.lower().replace("_", " ").replace("-", " ") for item in missing}
+    requires_tool = any(
+        marker in normalized
+        for marker in (
+            "retrieval workbench followup",
+            "retrieval workbench follow up",
+            "finance workbench missing slots",
+            "finance formula trace required",
+            "formula trace required",
+            "calculator trace required",
+            "calculator required before final",
+            "transform work required",
+        )
+    )
+    return {
+        "feedback_status": "continue",
+        "must_not_finalize_without_new_tool_observation": requires_tool,
+        "missing_evidence": missing[:24],
+        "instruction": (
+            "Choose one or more allowed tool_calls now. Do not return final_answer until the missing work is resolved by new observations."
+            if requires_tool
+            else "Continue reasoning from feedback; prefer tool_calls when evidence, computation, or verification is still missing."
+        ),
+    }
 
 
 def _stream_tool_call_items(value: object) -> list[JsonObject]:

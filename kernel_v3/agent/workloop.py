@@ -726,6 +726,7 @@ def decide_termination(
         repetition.repeated
         and not evidence.sufficient
         and not _allows_repeated_signal_to_continue(feedback=feedback, repetition=repetition)
+        and not _missing_evidence_requires_transform_work(evidence.missing)
         and not _network_budget_guard_with_evidence(observation=observation, evidence=evidence)
     ):
         decision = "failure_report"
@@ -767,9 +768,11 @@ def decide_termination(
 
 
 def _allows_repeated_signal_to_continue(*, feedback: Feedback, repetition: RepetitionSignal) -> bool:
+    if _feedback_requires_transform_work(feedback):
+        return True
     if not str(repetition.repeat_type or "").startswith("same_missing"):
         return False
-    return "remaining_plan_actions" in feedback.missing_evidence or _feedback_requires_transform_work(feedback)
+    return "remaining_plan_actions" in feedback.missing_evidence
 
 
 def _network_budget_guard_with_evidence(*, observation: Observation | None, evidence: EvidenceSufficiency) -> bool:
@@ -787,7 +790,11 @@ def _feedback_requires_workspace_file_read(feedback: Feedback) -> bool:
 
 
 def _feedback_requires_transform_work(feedback: Feedback) -> bool:
-    normalized = {str(item).lower().replace("_", " ") for item in feedback.missing_evidence}
+    return _missing_evidence_requires_transform_work(feedback.missing_evidence)
+
+
+def _missing_evidence_requires_transform_work(missing_evidence: list[str]) -> bool:
+    normalized = {str(item).lower().replace("_", " ") for item in missing_evidence}
     return any(
         marker in normalized
         for marker in (
@@ -1063,7 +1070,8 @@ def _retrieval_workbench_continue(report: JsonObject) -> JsonObject:
         workbench = _dict_or_empty(diagnostics.get("retrieval_workbench"))
     if not workbench:
         return {}
-    if workbench.get("status") != "ok" or workbench.get("decision") != "continue":
+    decision = str(workbench.get("decision") or "")
+    if workbench.get("status") != "ok" or decision not in {"continue", "fail_with_limitations"}:
         return {}
     next_queries = _ordered_unique(
         [
@@ -1071,11 +1079,15 @@ def _retrieval_workbench_continue(report: JsonObject) -> JsonObject:
             *_string_list(workbench.get("next_document_targets")),
         ]
     )
+    missing_slots = _workbench_missing_slots(workbench)
+    if decision == "fail_with_limitations" and not (missing_slots or next_queries):
+        return {}
     if str(report.get("status") or "") == "sufficient" and not next_queries:
         return {}
     return {
         "decision": "continue",
-        "missing_slots": _workbench_missing_slots(workbench),
+        "source_decision": decision,
+        "missing_slots": missing_slots,
         "next_queries": next_queries,
         "next_source_families": _string_list(workbench.get("next_source_families")),
         "reason_summary": str(workbench.get("reason_summary") or ""),

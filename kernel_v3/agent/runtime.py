@@ -5294,7 +5294,8 @@ def _retrieval_workbench_followup_required(
     if record is None:
         return False
     data = record.data if isinstance(record.data, dict) else {}
-    if data.get("status") != "ok" or data.get("decision") != "continue":
+    decision = str(data.get("decision") or "")
+    if data.get("status") != "ok" or decision not in {"continue", "fail_with_limitations"}:
         return False
     attempted = {query.casefold() for query in _action_retrieval_queries(journal, task_id=task_id, run_id=run_id)}
     next_queries = _ordered_unique(
@@ -5303,7 +5304,10 @@ def _retrieval_workbench_followup_required(
             *[target for target in _string_list(data.get("next_document_targets")) if _looks_like_url(target)],
         ]
     )
-    if _workbench_missing_slots(data):
+    missing_slots = _workbench_missing_slots(data)
+    if decision == "fail_with_limitations" and not (missing_slots or next_queries):
+        return False
+    if missing_slots:
         return True
     if _llm_semantic_judgment_required(recipe) and not next_queries:
         return False
@@ -5317,7 +5321,8 @@ def _retrieval_report_workbench_followup_required(report: JsonObject, *, recipe:
         workbench = diagnostics.get("retrieval_workbench") if isinstance(diagnostics.get("retrieval_workbench"), dict) else {}
     if not workbench:
         return False
-    if workbench.get("status") != "ok" or workbench.get("decision") != "continue":
+    decision = str(workbench.get("decision") or "")
+    if workbench.get("status") != "ok" or decision not in {"continue", "fail_with_limitations"}:
         return False
     next_queries = _ordered_unique(
         [
@@ -5328,6 +5333,8 @@ def _retrieval_report_workbench_followup_required(report: JsonObject, *, recipe:
     if _string_list(workbench.get("semantic_missing_slots")):
         return True
     missing_slots = _workbench_missing_slots(workbench)
+    if decision == "fail_with_limitations" and not (missing_slots or next_queries):
+        return False
     if missing_slots:
         return bool(next_queries) or str(report.get("status") or "") != "sufficient"
     if _llm_semantic_judgment_required(recipe) and not next_queries:

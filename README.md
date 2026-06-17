@@ -93,7 +93,14 @@ rescored, from FinanceBench held-out results that still require a fresh
 FinanceBench debug rerun on `financebench_id_03029` passed `1/1`
 (`numeric_within_tolerance`) with live retrieval, calculator trace, formula
 trace, claim ledger, numeric verifier, and synthesis gate active. This is a
-single debug-row capability result, not a held-out `test100` score.
+single debug-row capability result, not a held-out `test100` score. A later
+same-day deep-loop regression was repaired by wiring workbench follow-up
+targets into `deep_agent_loop`; the current live rerun
+`.state/kernel_v3/bench/finance/fb_debug50_p0gt95_o000_l001_after_evidence_guard_20260617.jsonl`
+also passed `1/1`, matching `1577.0` with `retrieval_runs=7`,
+`calculator=1`, `formula=1`, verifier `passed`, and `851,272` tokens. This is
+a correctness result; efficiency and broader debug50/test100 accuracy are still
+open.
 The 2026-06-16 framework review is consolidated in
 `docs/KERNEL_V3_FRAMEWORK_LESSONS_FINAL_2026-06-16_ZH.md`; use it as the primary
 report and talk reference for what Holo should absorb from LangChain,

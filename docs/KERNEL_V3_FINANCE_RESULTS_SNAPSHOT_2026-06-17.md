@@ -38,6 +38,46 @@ Earlier same-day provider/environment failures, including a zero-token
 non-escalated WSL environment failure and prior `HTTP_402_INSUFFICIENT_BALANCE`
 checks, are not capability scores.
 
+## 2026-06-17 Deep Loop Follow-Up Repair
+
+After the P0 architecture pass moved finance-capability onto the
+`deep_agent_loop`, the same `financebench_id_03029` row regressed: the model
+tried `document.docling.convert`, `sec.edgar.financials`, `retrieval.run`, and
+`artifact.read`, but stopped with the `capital_expenditures` slot still missing.
+The live failures showed that the old `_RecipeBoundPlanner` workbench follow-up
+logic was not active on the new deep-loop path.
+
+The current repair is loop-generic:
+
+- workbench `fail_with_limitations` with open `next_queries`,
+  `next_document_targets`, or source families is treated as follow-up work, not
+  as terminal evidence;
+- `assistant.turn` prompts now include a continuation contract when feedback
+  requires retrieval, formula, calculator, or transform work;
+- the deep loop can scaffold a `retrieval.run` call from model/workbench
+  follow-up targets when the next model turn chooses a non-retrieval tool such
+  as stale `artifact.read`;
+- repetition termination now checks both `feedback.missing_evidence` and
+  `evidence.missing`, so `retrieval_workbench_followup` is not killed before
+  the next tool turn.
+
+Live validation after these changes:
+
+| Field | Value |
+| --- | --- |
+| Output | `.state/kernel_v3/bench/finance/fb_debug50_p0gt95_o000_l001_after_evidence_guard_20260617.jsonl` |
+| Journal | `.state/kernel_v3/bench/finance/fb_debug50_p0gt95_o000_l001_after_evidence_guard_20260617.journal.jsonl` |
+| Status | `1/1`, `passed`, `numeric_within_tolerance` |
+| Target numeric | expected `1577.0`, matched `1577.0` |
+| Loop depth | `assistant.turn:7`, `retrieval_runs:7`, `fetches:39` |
+| Toolchain | `calculator.compute:1`, formula trace `1`, verifier `passed`, gate `passed` |
+| Evidence substrate | `74` facts, `74` claims, missing slots `0` |
+| Cost warning | `851,272` tokens for one debug row; this is a correctness breakthrough, not an efficiency result |
+
+This is still a single debug-row live result. It does not establish debug50 or
+test100 accuracy. The next engineering target is to keep the deeper loop
+capability while cutting redundant retrieval and processor context cost.
+
 ## 2026-06-17 Live Target-Line Evidence Fix
 
 The failed live trace before this pass was not missing documents. Retrieval had

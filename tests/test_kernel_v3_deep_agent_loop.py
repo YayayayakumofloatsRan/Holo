@@ -7,6 +7,9 @@ from collections.abc import Iterable
 
 from kernel_v3.context import ContextCompiler
 
+from kernel_v3.agent.execution_profile import execution_profile, execution_profile_runtime_metadata
+from kernel_v3.agent.runtime import task_recipe
+from kernel_v3.agent.workloop import WorkloopEvaluator
 from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observation, ProcessorRequest, ToolManifest
 from kernel_v3.deep_loop import (
     AssistantTurn,
@@ -15,6 +18,7 @@ from kernel_v3.deep_loop import (
     ToolCallParseError,
     ToolCallRequest,
     _assistant_turn_prompt,
+    _workbench_followup_scaffold_turn,
 )
 from kernel_v3.journal import JournalStore
 from kernel_v3.policy import PolicyGate
@@ -148,6 +152,167 @@ def test_deep_agent_loop_terminal_turn_uses_final_answer_path() -> None:
     assert result.answer == "direct final"
     assert journal.records(task_id=result.task_id, kind="assistant_turn")[0].data["turn_id"] == "turn-final"
     assert journal.records(task_id=result.task_id, kind="observation")[0].data["source"] == "respond"
+
+
+def test_deep_agent_loop_prompt_blocks_final_when_feedback_requires_tool_work() -> None:
+    context = ContextBundle(
+        context_id="ctx-feedback-tool-work",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-feedback-tool-work", "run_id": "run-1"},
+        token_budget={},
+    )
+    feedback = Feedback(
+        feedback_id="fb-retrieval-followup",
+        run_id="run-1",
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=["retrieval_workbench_followup", "workbench_missing:capital_expenditures"],
+    )
+
+    prompt = json.loads(_assistant_turn_prompt(context, feedback, allowed_tool_names={"retrieval.run", "respond"}))
+
+    contract = prompt["continuation_contract"]
+    assert contract["feedback_status"] == "continue"
+    assert contract["must_not_finalize_without_new_tool_observation"] is True
+    assert "retrieval_workbench_followup" in contract["missing_evidence"]
+
+
+def test_finance_workloop_does_not_finalize_on_workbench_fail_with_missing_slots() -> None:
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=execution_profile_runtime_metadata(execution_profile("finance-capability")),
+    )
+    journal = JournalStore.in_memory()
+    task_id = "task-finance-workbench-fail-open"
+    run_id = "run-1"
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-1",
+        kind="retrieval_evidence",
+        data={"evidence_id": "ev-1", "text": "Target filing was fetched but capex was not extracted."},
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-1",
+        kind="retrieval_citation",
+        data={"citation_id": "cite-1", "evidence_id": "ev-1"},
+    )
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-1",
+        kind="retrieval_report",
+        data={
+            "status": "failed",
+            "diagnostics": {
+                "retrieval_workbench": {
+                    "status": "ok",
+                    "decision": "fail_with_limitations",
+                    "missing_slots": ["capital_expenditures"],
+                    "next_queries": ["3M 2018 10-K purchases of property plant and equipment"],
+                    "next_source_families": ["sec_edgar", "structured_companyfacts"],
+                }
+            },
+        },
+    )
+    observation = Observation(
+        observation_id="obs-premature-final",
+        run_id=run_id,
+        kind="respond_result",
+        status="ok",
+        source="respond",
+        content={"text": "Not available from the current PDF parse."},
+        observed_at_ms=1,
+        action_id="act-premature-final",
+        tool_call_id=None,
+    )
+    evaluator = WorkloopEvaluator(
+        inner=FakeEvaluator.final_answer("Not available from the current PDF parse."),
+        journal=journal,
+        recipe=recipe,
+    )
+    context = ContextBundle(
+        context_id="ctx-finance-workbench-fail-open",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": task_id, "run_id": run_id},
+        token_budget={},
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "continue"
+    assert "retrieval_workbench_followup" in feedback.missing_evidence
+    assert "workbench_missing:capital_expenditures" in feedback.missing_evidence
+
+
+def test_deep_agent_loop_scaffolds_workbench_source_family_followup() -> None:
+    journal = JournalStore.in_memory()
+    task_id = "task-workbench-source-family"
+    run_id = "run-1"
+    journal.append(
+        task_id=task_id,
+        run_id=run_id,
+        step_id="step-3",
+        kind="retrieval_workbench_decision",
+        data={
+            "status": "ok",
+            "decision": "fail_with_limitations",
+            "missing_slots": [],
+            "next_queries": [],
+            "next_document_targets": [
+                "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000066740&type=10-K",
+                "https://investors.3m.com/financials/sec-filings",
+            ],
+            "next_source_families": ["sec_edgar_filing", "sec_companyfacts", "company_ir_html"],
+        },
+    )
+    proposed = AssistantTurn(
+        turn_id="turn-read-stale-artifact",
+        message="Read the failed PDF artifact.",
+        tool_calls=[
+            ToolCallRequest(
+                tool_call_id="tc-artifact",
+                name="artifact.read",
+                arguments={"artifact_id": "artifact-pdf"},
+                reason="inspect current artifact",
+            )
+        ],
+    )
+    feedback = Feedback(
+        feedback_id="fb-workbench-followup",
+        run_id=run_id,
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=["retrieval_workbench_followup"],
+    )
+
+    scaffold = _workbench_followup_scaffold_turn(
+        journal,
+        task_id=task_id,
+        run_id=run_id,
+        input_text="What is the FY2018 capital expenditure amount in USD millions for 3M?",
+        feedback=feedback,
+        proposed_turn=proposed,
+    )
+
+    assert scaffold is not None
+    assert scaffold.tool_calls[0].name == "retrieval.run"
+    args = scaffold.tool_calls[0].arguments
+    assert args["query"].startswith("https://www.sec.gov/cgi-bin/browse-edgar")
+    assert args["metadata"]["workbench_followup"] is True
+    assert args["metadata"]["preferred_source_families"] == [
+        "sec_edgar_filing",
+        "sec_companyfacts",
+        "company_ir_html",
+    ]
 
 
 def test_deep_agent_loop_returns_parse_errors_as_observations_for_replanning() -> None:
