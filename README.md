@@ -392,6 +392,17 @@ assistant/tool messages inside the provider conversation. Valid executed tool
 results still continue through provider-native tool-result messages. Targeted
 deep-loop structure tests pass (`36` tests). This is protocol integrity work,
 not a finance benchmark score.
+The next same-day mature-loop checkpoint closes provider-visible full
+tool-result artifacts. Each executed tool result now gets a stable
+`tool_result_full` artifact as soon as execution completes, so the same
+provider continuation tool message can include `tool_result_artifact_id` and an
+`artifact_read_hint` for `artifact.read` instead of waiting for the later batch
+observation. Batch observations reuse the same artifact id, while next-turn
+context only surfaces the full-result artifact hint for truncated long results
+to avoid context-budget inflation on small tool outputs. Targeted structural
+tests pass (`36` deep-loop tests, `16` tool/provider tests, `61` finance
+benchmark harness tests). This is agent-loop/tool-result contract readiness,
+not a live FinanceBench or FinQA score.
 The next finance tool-runtime P0 checkpoint makes those tool contracts executable
 rather than merely descriptive. `retrieval.run`, SEC/EDGAR, Trafilatura, OpenBB,
 DuckDB, SymPy, `calculator.compute`, `finance.slot_bind`, and

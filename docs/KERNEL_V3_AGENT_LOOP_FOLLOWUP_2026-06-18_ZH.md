@@ -984,3 +984,59 @@ assistant/tool messages 回灌给同一个 provider conversation。
 结果：`36 passed in 3.42s`。
 
 这一步修的是 provider/tool 协议完整性，不是 FinanceBench/FQA accuracy。
+
+## 25. Provider-visible full tool-result artifact checkpoint
+
+用户再次强调：优先照搬成熟 agent loop 的成熟实现，不要在旧 loop 上零散自研。
+本轮继续对照本地 TypeScript 项目的 `StreamingToolExecutor`、`toolExecution` 和
+tool-result storage 思想，补齐一个通用合同：工具结果进入 provider continuation
+时，模型必须拿到可读回完整结果的稳定句柄，而不是只能看到短 projection。
+
+此前 Holo 已有 `tool_result_full` artifact 和 batch-level replacement，但
+streaming provider continuation 发生在 `_tool_batch_observation` 写 full artifact
+之前。因此同一 provider conversation 里回灌的 tool message 只能看到工具自身
+artifact refs，不一定包含完整 tool-result JSON 的 artifact id。这会影响所有长结果
+任务：SEC filing、PDF/table extraction、网页正文、计算日志、检索报告都可能需要
+模型先看 bounded projection，再自主决定是否 `artifact.read` 完整结果。
+
+本轮补齐：
+
+- `_ToolExecutionItem` 新增 `tool_result_artifact_ref`，工具执行完成时立即写入
+  stable `tool_result_full` artifact，而不是等 batch observation 才写。
+- provider continuation 的 tool-result payload 现在包含
+  `tool_result_artifact_id` 和 `artifact_read_hint`，明确提示模型可以用
+  `artifact.read` 读取完整工具结果 JSON。
+- batch observation 复用同一个 artifact ref，不重复写 full payload；replacement
+  的 `artifact_refs` 仍指向同一 artifact。
+- journal observation 的 artifact refs 和 `tool_context_update` 做预算边界：
+  小结果不把 full artifact hint 投入下一轮 context，避免上下文膨胀；只有 projection
+  被截断的长结果才进入外层 context 的 artifact-read hint。
+- artifact hint 在 context update 的 8 条上限中保留优先级，防止长结果读回路径被
+  其他低价值 update 挤掉。
+
+结构验证：
+
+```bash
+.venv/bin/python -m py_compile kernel_v3/deep_loop.py
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+```
+
+结果：
+
+- `deep_agent_loop`: `36 passed in 3.47s`
+- `tool_use + provider_native_tools`: `16 passed in 0.49s`
+- `finance_benchmark`: `61 passed in 177.12s`
+
+新增覆盖：
+
+- provider continuation 中的 tool message 含有 `tool_result_artifact_id`、
+  `artifact_read_hint.tool == "artifact.read"`，且 artifact store 能读回
+  `holo.kernel_v3.tool_result_full.v1` payload。
+- 长结果 batch replacement 仍持久化完整 artifact，并通过 `tool_context_update`
+  暴露 artifact-read hint。
+
+说明：这是通用 agent loop/tool-result contract 成熟度修复，不是
+FinanceBench/FinQA accuracy。当前 UbuntuHolo 环境里 live key/model 变量仍未暴露，
+因此本轮没有新增 live 金融分数。

@@ -323,11 +323,13 @@ class _ToolExecutionItem:
     context_updates: list[JsonObject]
     policy_allowed: bool
     policy_reason: str
+    tool_result_artifact_ref: Any | None = None
 
 
 @dataclass(frozen=True)
 class _PreparedToolCall:
     call: ToolCallRequest
+    turn_id: str
     action: CandidateAction
     manifest: Any
     decision: Any
@@ -596,7 +598,10 @@ class DeepAgentLoopController(LoopControllerV3):
                             manifest=item.manifest,
                             observation=item.observation,
                         ) - self._network_action_cost(item.action, manifest=item.manifest)
-                    total_artifact_bytes += self._estimate_artifact_bytes(item.observation, item.artifact_refs)
+                    total_artifact_bytes += self._estimate_artifact_bytes(
+                        item.observation,
+                        _execution_item_artifact_refs(item),
+                    )
                     self._append_tool_execution_observation(task, step_id=step_id, item=item)
 
             def drain_ready_streaming_tools() -> None:
@@ -991,7 +996,10 @@ class DeepAgentLoopController(LoopControllerV3):
                     manifest=item.manifest,
                     observation=item.observation,
                 ) - self._network_action_cost(item.action, manifest=item.manifest)
-            total_artifact_bytes += self._estimate_artifact_bytes(item.observation, item.artifact_refs)
+            total_artifact_bytes += self._estimate_artifact_bytes(
+                item.observation,
+                _execution_item_artifact_refs(item),
+            )
             self._append_tool_execution_observation(task, step_id=step_id, item=item)
         return execution_items, tool_calls, network_fetches, total_artifact_bytes
 
@@ -1072,6 +1080,7 @@ class DeepAgentLoopController(LoopControllerV3):
         return (
             _PreparedToolCall(
                 call=call,
+                turn_id=turn_id,
                 action=action,
                 manifest=manifest,
                 decision=decision,
@@ -1098,6 +1107,14 @@ class DeepAgentLoopController(LoopControllerV3):
         pre_exec_guard = prepared.pre_exec_guard
         if not decision.allowed:
             observation = _with_tool_call_id(self._blocked_observation(task.run_id, action, decision.reason), prepared.call.tool_call_id)
+            tool_result_artifact_ref = self._write_tool_result_artifact_for_observation(
+                task,
+                turn_id=prepared.turn_id,
+                step_id=step_id,
+                tool_call_id=prepared.call.tool_call_id,
+                action=action,
+                observation=observation,
+            )
             return _ToolExecutionItem(
                 tool_call_id=prepared.call.tool_call_id,
                 action=action,
@@ -1107,9 +1124,18 @@ class DeepAgentLoopController(LoopControllerV3):
                 context_updates=[],
                 policy_allowed=False,
                 policy_reason=decision.reason,
+                tool_result_artifact_ref=tool_result_artifact_ref,
             )
         if pre_exec_guard is not None:
             observation = _with_tool_call_id(self._guard_observation(task.run_id, action, pre_exec_guard), prepared.call.tool_call_id)
+            tool_result_artifact_ref = self._write_tool_result_artifact_for_observation(
+                task,
+                turn_id=prepared.turn_id,
+                step_id=step_id,
+                tool_call_id=prepared.call.tool_call_id,
+                action=action,
+                observation=observation,
+            )
             return _ToolExecutionItem(
                 tool_call_id=prepared.call.tool_call_id,
                 action=action,
@@ -1119,6 +1145,7 @@ class DeepAgentLoopController(LoopControllerV3):
                 context_updates=[],
                 policy_allowed=False,
                 policy_reason=pre_exec_guard,
+                tool_result_artifact_ref=tool_result_artifact_ref,
             )
         tool_context = tool_use_context_for_action(
             task_id=task.task_id,
@@ -1149,6 +1176,14 @@ class DeepAgentLoopController(LoopControllerV3):
             self._bind_observation(task.run_id, action, tool_result.observation),
             prepared.call.tool_call_id,
         )
+        tool_result_artifact_ref = self._write_tool_result_artifact_for_observation(
+            task,
+            turn_id=prepared.turn_id,
+            step_id=step_id,
+            tool_call_id=prepared.call.tool_call_id,
+            action=action,
+            observation=observation,
+        )
         return _ToolExecutionItem(
             tool_call_id=prepared.call.tool_call_id,
             action=action,
@@ -1160,9 +1195,11 @@ class DeepAgentLoopController(LoopControllerV3):
                 observation=observation,
                 action=action,
                 manifest=manifest,
+                tool_result_artifact_ref=tool_result_artifact_ref,
             ),
             policy_allowed=True,
             policy_reason=decision.reason,
+            tool_result_artifact_ref=tool_result_artifact_ref,
         )
 
     def _parse_error_execution_item(
@@ -1231,6 +1268,14 @@ class DeepAgentLoopController(LoopControllerV3):
             action_id=action.action_id,
             tool_call_id=prepared.call.tool_call_id,
         )
+        tool_result_artifact_ref = self._write_tool_result_artifact_for_observation(
+            task,
+            turn_id=prepared.turn_id,
+            step_id=step_id,
+            tool_call_id=prepared.call.tool_call_id,
+            action=action,
+            observation=observation,
+        )
         return _ToolExecutionItem(
             tool_call_id=prepared.call.tool_call_id,
             action=action,
@@ -1240,6 +1285,7 @@ class DeepAgentLoopController(LoopControllerV3):
             context_updates=[],
             policy_allowed=False,
             policy_reason=reason,
+            tool_result_artifact_ref=tool_result_artifact_ref,
         )
 
     def _timeout_execution_item(
@@ -1271,6 +1317,14 @@ class DeepAgentLoopController(LoopControllerV3):
             action_id=action.action_id,
             tool_call_id=prepared.call.tool_call_id,
         )
+        tool_result_artifact_ref = self._write_tool_result_artifact_for_observation(
+            task,
+            turn_id=prepared.turn_id,
+            step_id=step_id,
+            tool_call_id=prepared.call.tool_call_id,
+            action=action,
+            observation=observation,
+        )
         return _ToolExecutionItem(
             tool_call_id=prepared.call.tool_call_id,
             action=action,
@@ -1280,6 +1334,7 @@ class DeepAgentLoopController(LoopControllerV3):
             context_updates=[],
             policy_allowed=False,
             policy_reason=reason,
+            tool_result_artifact_ref=tool_result_artifact_ref,
         )
 
     def _append_tool_execution_event(self, task: TaskState, *, step_id: str, event: ToolExecutionEvent) -> None:
@@ -1314,7 +1369,7 @@ class DeepAgentLoopController(LoopControllerV3):
                 "observation_status": item.observation.status,
                 "tool_call_id": item.tool_call_id,
             },
-            artifact_refs=[artifact.artifact_id for artifact in item.artifact_refs if hasattr(artifact, "artifact_id")],
+            artifact_refs=_artifact_ref_ids(_visible_execution_item_artifact_refs(item)),
         )
         for update in item.context_updates:
             update_id = str(update.get("update_id") or f"tool-context-{item.observation.observation_id}")
@@ -1348,12 +1403,8 @@ class DeepAgentLoopController(LoopControllerV3):
         status = "ok" if statuses == {"ok"} else "failed" if statuses == {"failed"} else "partial"
         results: list[JsonObject] = []
         for item in execution_items:
-            artifact_refs = [
-                artifact.artifact_id
-                for artifact in item.artifact_refs
-                if hasattr(artifact, "artifact_id")
-            ]
-            tool_result_artifact = self._write_tool_result_artifact(task, turn=turn, step_id=step_id, item=item)
+            artifact_refs = _artifact_ref_ids(_execution_item_artifact_refs(item))
+            tool_result_artifact = item.tool_result_artifact_ref or self._write_tool_result_artifact(task, turn=turn, step_id=step_id, item=item)
             result: JsonObject = {
                 "tool_call_id": item.tool_call_id,
                 "action_id": item.action.action_id,
@@ -1375,7 +1426,7 @@ class DeepAgentLoopController(LoopControllerV3):
             if tool_result_artifact is not None:
                 artifact_id = str(tool_result_artifact.artifact_id)
                 result["tool_result_artifact_id"] = artifact_id
-                result["artifact_refs"] = [*artifact_refs, artifact_id]
+                result["artifact_refs"] = _ordered_unique_strings([*artifact_refs, artifact_id])
             results.append(result)
         results, new_replacements = apply_tool_result_replacement_budget(
             results,
@@ -1409,6 +1460,25 @@ class DeepAgentLoopController(LoopControllerV3):
         step_id: str,
         item: _ToolExecutionItem,
     ) -> object | None:
+        return self._write_tool_result_artifact_for_observation(
+            task,
+            turn_id=turn.turn_id,
+            step_id=step_id,
+            tool_call_id=item.tool_call_id,
+            action=item.action,
+            observation=item.observation,
+        )
+
+    def _write_tool_result_artifact_for_observation(
+        self,
+        task: TaskState,
+        *,
+        turn_id: str,
+        step_id: str,
+        tool_call_id: str,
+        action: CandidateAction,
+        observation: Observation,
+    ) -> object | None:
         artifact_store = getattr(self.context_compiler, "artifact_store", None)
         if artifact_store is None or not hasattr(artifact_store, "write_blob"):
             return None
@@ -1417,11 +1487,11 @@ class DeepAgentLoopController(LoopControllerV3):
             "task_id": task.task_id,
             "run_id": task.run_id,
             "step_id": step_id,
-            "turn_id": turn.turn_id,
-            "tool_call_id": item.tool_call_id,
-            "action_id": item.action.action_id,
-            "tool": item.action.name,
-            "observation": item.observation.to_dict(),
+            "turn_id": turn_id,
+            "tool_call_id": tool_call_id,
+            "action_id": action.action_id,
+            "tool": action.name,
+            "observation": observation.to_dict(),
         }
         return artifact_store.write_blob(
             kind="tool_result_full",
@@ -1431,10 +1501,10 @@ class DeepAgentLoopController(LoopControllerV3):
                 "task_id": task.task_id,
                 "run_id": task.run_id,
                 "step_id": step_id,
-                "turn_id": turn.turn_id,
-                "tool_call_id": item.tool_call_id,
-                "tool": str(item.action.name or ""),
-                "observation_id": item.observation.observation_id,
+                "turn_id": turn_id,
+                "tool_call_id": tool_call_id,
+                "tool": str(action.name or ""),
+                "observation_id": observation.observation_id,
             },
         )
 
@@ -2677,6 +2747,36 @@ def _is_concurrency_safe(action: CandidateAction, manifest: Any) -> bool:
     return tool_runtime_spec_for_action(action, manifest).concurrency_safe
 
 
+def _execution_item_artifact_refs(item: _ToolExecutionItem) -> list[Any]:
+    refs = list(item.artifact_refs)
+    if item.tool_result_artifact_ref is not None:
+        refs.append(item.tool_result_artifact_ref)
+    return refs
+
+
+def _visible_execution_item_artifact_refs(item: _ToolExecutionItem) -> list[Any]:
+    refs = list(item.artifact_refs)
+    if _should_surface_tool_result_artifact(item.observation, item.tool_result_artifact_ref):
+        refs.append(item.tool_result_artifact_ref)
+    return refs
+
+
+def _should_surface_tool_result_artifact(observation: Observation, artifact_ref: Any | None) -> bool:
+    if artifact_ref is None or not hasattr(artifact_ref, "artifact_id"):
+        return False
+    return project_tool_result_content(observation.content).truncated
+
+
+def _artifact_ref_ids(artifact_refs: list[Any]) -> list[str]:
+    return _ordered_unique_strings(
+        [
+            str(artifact.artifact_id)
+            for artifact in artifact_refs
+            if hasattr(artifact, "artifact_id") and str(artifact.artifact_id)
+        ]
+    )
+
+
 def _execution_item_failed(item: _ToolExecutionItem) -> bool:
     return item.observation.status not in {"ok"}
 
@@ -2779,11 +2879,14 @@ def _provider_terminal_text(text: str, *, index: int) -> str:
 
 
 def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
-    artifact_refs = [
-        str(artifact.artifact_id)
-        for artifact in item.artifact_refs
-        if hasattr(artifact, "artifact_id")
-    ]
+    artifact_refs = _artifact_ref_ids(_execution_item_artifact_refs(item))
+    tool_result_artifact_id = (
+        str(item.tool_result_artifact_ref.artifact_id)
+        if item.tool_result_artifact_ref is not None and hasattr(item.tool_result_artifact_ref, "artifact_id")
+        else ""
+    )
+    if tool_result_artifact_id:
+        artifact_refs = _ordered_unique_strings([tool_result_artifact_id, *artifact_refs])
     projection = project_tool_result_content(item.observation.content, limit=1600).to_dict()
     payload: JsonObject = {
         "schema": "holo.kernel_v3.provider_tool_result_message.v1",
@@ -2797,6 +2900,14 @@ def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
         "artifact_refs": artifact_refs[:8],
         "host_boundary": "bounded tool result for provider continuation; full payload remains in Holo artifacts/journal",
     }
+    if tool_result_artifact_id:
+        payload["tool_result_artifact_id"] = tool_result_artifact_id
+        payload["artifact_read_hint"] = {
+            "tool": "artifact.read",
+            "artifact_id": tool_result_artifact_id,
+            "mode": "read",
+            "purpose": "read the full tool result JSON when the bounded content_projection is insufficient",
+        }
     if item.action.name == TOOL_DISCOVERY_NAME or item.observation.kind == "tool_discovery_result":
         content = item.observation.content if isinstance(item.observation.content, dict) else {}
         tools = content.get("tools")
@@ -2864,6 +2975,7 @@ def _tool_context_updates_for_result(
     observation: Observation,
     action: CandidateAction,
     manifest: ToolManifest | None,
+    tool_result_artifact_ref: Any | None = None,
 ) -> list[JsonObject]:
     updates: list[JsonObject] = []
     updates.extend(
@@ -2877,6 +2989,16 @@ def _tool_context_updates_for_result(
     derived = _derived_tool_context_update(observation, action=action, manifest=manifest)
     if derived:
         updates.append(derived)
+    artifact_update = _tool_result_artifact_context_update(
+        observation,
+        action=action,
+        manifest=manifest,
+        tool_result_artifact_ref=tool_result_artifact_ref,
+    ) if _should_surface_tool_result_artifact(observation, tool_result_artifact_ref) else {}
+    if artifact_update:
+        updates.append(artifact_update)
+    if artifact_update and len(updates) > 8:
+        return [*updates[:7], artifact_update]
     return updates[:8]
 
 
@@ -2903,6 +3025,41 @@ def _normalize_explicit_context_updates(
         update.setdefault("host_boundary", _TOOL_CONTEXT_UPDATE_BOUNDARY)
         updates.append(update)
     return updates
+
+
+def _tool_result_artifact_context_update(
+    observation: Observation,
+    *,
+    action: CandidateAction,
+    manifest: ToolManifest | None,
+    tool_result_artifact_ref: Any | None,
+) -> JsonObject:
+    if tool_result_artifact_ref is None or not hasattr(tool_result_artifact_ref, "artifact_id"):
+        return {}
+    artifact_id = str(tool_result_artifact_ref.artifact_id)
+    if not artifact_id:
+        return {}
+    return {
+        "schema": "holo.kernel_v3.tool_context_update.v1",
+        "update_id": f"tool-context-{observation.observation_id}-tool-result-artifact",
+        "update_type": "artifact_read_hint",
+        "tool": action.name or getattr(manifest, "name", ""),
+        "source_observation_id": observation.observation_id,
+        "source_observation_kind": observation.kind,
+        "source": observation.source,
+        "status": observation.status,
+        "hints": {
+            "artifact_read_hint": {
+                "tool": "artifact.read",
+                "artifact_id": artifact_id,
+                "mode": "read",
+                "purpose": "read the full tool result JSON when projection or preview is insufficient",
+            },
+            "tool_result_artifact_id": artifact_id,
+        },
+        "artifact_refs": [artifact_id],
+        "host_boundary": _TOOL_CONTEXT_UPDATE_BOUNDARY,
+    }
 
 
 def _derived_tool_context_update(
