@@ -1607,18 +1607,34 @@ To make long live runs inspectable before benchmark JSONL rows are written,
 journal. It can select by `--task-id`, `--thread-id`, or `--thread-prefix`, and
 shows task compile, retrieval, workbench, toolchain, claim/slot, transform,
 calculator, verifier, synthesis, latest error, open processor calls, and recent
-events. The command uses a light JSONL scan rather than rebuilding the journal
-SQLite index, so it is usable while a run is still in progress. The diagnostic
-block now exposes DocumentReader parser counts / latest parser / target-span
-counts, Workbench decision and semantic missing slots, SlotFrame missing slots,
-formula status and missing facts, fact-ledger metric/source coverage, and the
-latest benchmark status/reason. On the old item9 v2 trace it exposes the real
-failure shape: four retrieval/workbench rounds, 48 fetch attempts, 44
-extractions, a toolchain plan, but zero
+events. The command now defaults to a tail-bounded journal scan
+(`--tail-bytes 67108864`; use `--tail-bytes 0` for historical full scans), so
+checking progress does not repeatedly read a GB-scale global journal. It also
+accepts `--run-root` to summarize the isolated benchmark directory:
+`results.jsonl` line count, `summary.json` pass/fail/token fields, HTTP cache
+file/byte counts, worker-state files, and matching live `bench finance`
+processes from `/proc`.
+
+The diagnostic block exposes DocumentReader parser counts / latest parser /
+target-span counts, Workbench decision and semantic missing slots, SlotFrame
+missing slots, formula status and missing facts, fact-ledger metric/source
+coverage, and the latest benchmark status/reason. On the old item9 v2 trace it
+exposes the real failure shape: four retrieval/workbench rounds, 48 fetch
+attempts, 44 extractions, a toolchain plan, but zero
 claim-ledger/slot-frame/transform/calculator records. On the passing item9 v8
 trace it instead shows formula `ready`, `facts=369`, no missing slots, and
 benchmark status `passed`, so users can tell whether a long live run is stuck,
 still acquiring evidence, or already through the verifier/synthesis gates.
+
+The first post-EdgarTools live debug rerun using this monitor was
+`financebench_id_01226` at FinanceBench offset 3, run under
+`finance-capability` with DeepSeek live model and SEC live retrieval. It passed
+1/1 with `numeric_within_tolerance`; `summary.json` reports
+`average_total_tokens=448778`. Gold/reference material was used only through
+`--dev-gold` for post-run scoring and was not placed in runtime prompt/tool
+context/retrieval context/memory. This is a debug-row live result, not a
+test100 held-out score claim. Details are recorded in
+`docs/KERNEL_V3_PROGRESS_2026-06-17_FINANCE_PROCESS_VISIBILITY.md`.
 
 A post-change no-network rescore of the existing stable4 live outputs
 (`run_stable4_event_resolver_v1_rescore_after_reader_packet`) confirms the

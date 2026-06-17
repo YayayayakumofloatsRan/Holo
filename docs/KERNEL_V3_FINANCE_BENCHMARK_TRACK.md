@@ -1295,11 +1295,15 @@ assumption-ledger display, and citation-preserving limitation answers.
   `tests/test_kernel_v3_execution_profile.py` is `13 passed`.
 - Workflow visibility is now available through
   `bench finance-progress --task-id <task>` or
-  `bench finance-progress --thread-prefix <prefix>`. The command reads the
-  journal with a light JSONL scan and reports task compiler, retrieval,
-  workbench, toolchain, claim/slot, transform/calculator, verifier/synthesis,
-  latest error, counters, and recent events. The latest renderer also includes
-  a diagnostics block for DocumentReader parser counts / latest parser /
+  `bench finance-progress --thread-prefix <prefix>`. The command reports task
+  compiler, retrieval, workbench, toolchain, claim/slot,
+  transform/calculator, verifier/synthesis, latest error, counters, and recent
+  events. On 2026-06-17 it was upgraded for long live runs: the default path now
+  reads only the journal tail (`--tail-bytes 67108864`; use `--tail-bytes 0`
+  for full historical scans), and `--run-root <dir>` summarizes
+  `results.jsonl`, `summary.json`, HTTP cache, worker state, and matching
+  `bench finance` processes from `/proc`. The latest renderer also includes a
+  diagnostics block for DocumentReader parser counts / latest parser /
   target-span counts, Workbench decision and semantic missing slots, SlotFrame
   missing slots, formula status and missing facts, fact-ledger metric/source
   coverage, and benchmark status/reason. On the item9 v2 trace it shows the run
@@ -1307,6 +1311,23 @@ assumption-ledger display, and citation-preserving limitation answers.
   extractions, but never reached claim ledger, slot frame, transform plan, or
   calculator records. This makes the old 0-byte benchmark output diagnosable as
   a workflow-stage failure instead of an opaque hang.
+
+2026-06-17 FinanceBench offset 3 live debug rerun after EdgarTools wiring:
+
+- Row: `financebench_id_01226`, question asks what drove 3M FY2022 operating
+  margin change.
+- Run root:
+  `/tmp/holo-kv3-live-debug/fb-o003-l001-edgartools-20260617`.
+- Live setup: DeepSeek `deepseek-v4-flash`, `finance-capability`,
+  `--live-retrieval`, SEC hosts allowlisted.
+- Result: `passed_count=1`, `failed_count=0`, `pass_rate=1.0`,
+  score reason `numeric_within_tolerance`, `average_total_tokens=448778`,
+  `processor_calls=17`, `fetch_attempts=12`, synthesis gate `passed`.
+- Gold/reference policy: `--dev-gold` was used only for post-run scoring;
+  benchmark gold/reference did not enter runtime prompt, retrieval/tool context,
+  or memory. This is a debug-row live validation, not a held-out test100 score.
+- Full note:
+  `docs/KERNEL_V3_PROGRESS_2026-06-17_FINANCE_PROCESS_VISIBILITY.md`.
 
 2026-06-12 FinanceBench item9 document/fact closure:
 

@@ -6185,7 +6185,9 @@ def _finance_formula_name_from_program_like(value: object) -> str:
         if formula_name:
             return formula_name
     for spec in _dict_items(data.get("evidence_specs")):
-        formula_name = _canonical_finance_formula_name(" ".join([_string_value(spec.get("slot_name")), _string_value(spec.get("line_item"))]))
+        formula_name = _canonical_finance_formula_name(
+            " ".join(part for part in (_string_value(spec.get("slot_name")), _string_value(spec.get("line_item"))) if part)
+        )
         if formula_name:
             return formula_name
     return ""

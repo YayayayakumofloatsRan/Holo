@@ -27,6 +27,7 @@ from kernel_v3.agent.runtime import (
     _finance_fact_judge_summary,
     _finance_formula_trace_synthesis_policy,
     _finance_formula_traces_for_synthesis,
+    _finance_formula_name_from_program_like,
     _finance_working_state_for_prompt,
     _model_compiled_program_authorizes_numeric_preflight,
     _finance_slot_bind_plans_from_model,
@@ -225,6 +226,19 @@ def test_finance_formula_trace_policy_labels_model_outputs_and_assumptions() -> 
     assert model_context["model_outputs"]["enterprise_value"] == "123000000000"
     assert model_context["model_outputs"]["projection_summary"]["row_count"] == 4
     assert model_context["model_outputs"]["projection_summary"]["last_row"]["year"] == 4
+
+
+def test_finance_formula_name_from_program_like_tolerates_missing_line_item() -> None:
+    hint = {
+        "evidence_specs": [
+            {
+                "slot_name": "operating_margin",
+                "line_item": None,
+            }
+        ]
+    }
+
+    assert _finance_formula_name_from_program_like(hint) == ""
 
 
 def test_finance_formula_trace_support_links_traces_to_fact_citations_in_synthesizer_prompt() -> None:

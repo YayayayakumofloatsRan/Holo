@@ -157,6 +157,7 @@ DEFAULT_RESEARCH_DEPTH = "deep"
 DEFAULT_LIVE_CONTEXT_PROFILE = "provider"
 DEFAULT_LIVE_WEB_SEARCH_PROVIDERS = "bing_html,duckduckgo_html"
 DEFAULT_LIVE_SEARCH_STRATEGY = "aggregate"
+FINANCE_PROGRESS_DEFAULT_TAIL_BYTES = 64 * 1024 * 1024
 
 
 def _add_live_retrieval_args(command_parser: argparse.ArgumentParser) -> None:
@@ -634,6 +635,12 @@ def main(argv: list[str] | None = None) -> int:
     workflow_view.add_argument("--format", choices=["html", "json"], default="html")
     workflow_view.add_argument("--output", default=None, help="Output file path. HTML is written to stdout when omitted.")
     workflow_view.add_argument("--limit-events", type=int, default=240)
+    workflow_view.add_argument(
+        "--tail-bytes",
+        type=int,
+        default=FINANCE_PROGRESS_DEFAULT_TAIL_BYTES,
+        help="Read only the last N journal bytes by default; use 0 for a full historical scan.",
+    )
 
     bench_parser = sub.add_parser("bench")
     bench_sub = bench_parser.add_subparsers(dest="bench_command", required=True)
@@ -745,6 +752,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Render a human workflow snapshot or raw JSON.",
     )
     finance_progress.add_argument("--limit-events", type=int, default=24)
+    finance_progress.add_argument(
+        "--tail-bytes",
+        type=int,
+        default=FINANCE_PROGRESS_DEFAULT_TAIL_BYTES,
+        help="Read only the last N journal bytes by default; use 0 for a full historical scan.",
+    )
+    finance_progress.add_argument(
+        "--run-root",
+        default=None,
+        help="Optional benchmark run directory containing results.jsonl, summary.json, http-cache, and worker state.",
+    )
     finance_bench = bench_sub.add_parser("finance")
     finance_bench.add_argument("--dataset", required=True)
     finance_bench.add_argument(
@@ -2569,30 +2587,43 @@ def _finance_progress_command(args, journal: JournalStore) -> dict[str, object]:
 
 def _finance_progress_command_from_path(args) -> dict[str, object]:
     path = Path(getattr(args, "journal", default_journal_path()))
+    tail_bytes = _finance_progress_tail_bytes(args)
     if not path.exists():
-        return {"status": "missing", "mode": "finance_progress", "reason": "journal_not_found", "journal": str(path)}
+        return _finance_progress_attach_run_status(
+            {"status": "missing", "mode": "finance_progress", "reason": "journal_not_found", "journal": str(path)},
+            args,
+        )
     task_id = str(getattr(args, "task_id", "") or "").strip()
     if not task_id:
         task_id = _finance_progress_latest_task_id_from_path(
             path,
             thread_id=str(getattr(args, "thread_id", "") or "").strip() or None,
             thread_prefix=str(getattr(args, "thread_prefix", "") or "").strip() or None,
+            tail_bytes=tail_bytes,
         )
     if not task_id:
-        return {
-            "status": "missing",
-            "mode": "finance_progress",
-            "reason": "no_matching_task",
-            "journal": str(path),
-            "thread_id": getattr(args, "thread_id", None),
-            "thread_prefix": getattr(args, "thread_prefix", None),
-        }
-    records = _finance_progress_records_from_path(path, task_id=task_id)
-    return _finance_progress_payload_from_records(args, task_id=task_id, records=records)
+        return _finance_progress_attach_run_status(
+            {
+                "status": "missing",
+                "mode": "finance_progress",
+                "reason": "no_matching_task",
+                "journal": str(path),
+                "tail_scan": _finance_progress_tail_scan(path, tail_bytes),
+                "thread_id": getattr(args, "thread_id", None),
+                "thread_prefix": getattr(args, "thread_prefix", None),
+            },
+            args,
+        )
+    records = _finance_progress_records_from_path(path, task_id=task_id, tail_bytes=tail_bytes)
+    payload = _finance_progress_payload_from_records(args, task_id=task_id, records=records)
+    payload["journal"] = str(path)
+    payload["tail_scan"] = _finance_progress_tail_scan(path, tail_bytes)
+    return _finance_progress_attach_run_status(payload, args)
 
 
 def _workflow_view_command_from_path(args) -> dict[str, object]:
     path = Path(getattr(args, "journal", default_journal_path()))
+    tail_bytes = _finance_progress_tail_bytes(args)
     if not path.exists():
         return {"status": "missing", "mode": "workflow_view", "reason": "journal_not_found", "journal": str(path)}
     task_id = str(getattr(args, "task_id", "") or "").strip()
@@ -2601,6 +2632,7 @@ def _workflow_view_command_from_path(args) -> dict[str, object]:
             path,
             thread_id=str(getattr(args, "thread_id", "") or "").strip() or None,
             thread_prefix=str(getattr(args, "thread_prefix", "") or "").strip() or None,
+            tail_bytes=tail_bytes,
         )
     if not task_id:
         return {
@@ -2611,7 +2643,7 @@ def _workflow_view_command_from_path(args) -> dict[str, object]:
             "thread_id": getattr(args, "thread_id", None),
             "thread_prefix": getattr(args, "thread_prefix", None),
         }
-    records = _finance_progress_records_from_path(path, task_id=task_id)
+    records = _finance_progress_records_from_path(path, task_id=task_id, tail_bytes=tail_bytes)
     if not records:
         return {"status": "missing", "mode": "workflow_view", "reason": "unknown_task", "task_id": task_id, "journal": str(path)}
     progress = _finance_progress_payload_from_records(args, task_id=task_id, records=records)
@@ -2626,6 +2658,7 @@ def _workflow_view_command_from_path(args) -> dict[str, object]:
         "mode": "workflow_view",
         "schema": "holo.kernel_v3.workflow_view.v1",
         "journal": str(path),
+        "tail_scan": _finance_progress_tail_scan(path, tail_bytes),
         "task_id": task_id,
         "run_id": progress.get("run_id"),
         "thread_ids": progress.get("thread_ids"),
@@ -2917,53 +2950,291 @@ def _workflow_packet_card(packet: JsonObject) -> str:
 """
 
 
+def _finance_progress_tail_bytes(args) -> int:
+    raw = getattr(args, "tail_bytes", FINANCE_PROGRESS_DEFAULT_TAIL_BYTES)
+    if raw is None:
+        return FINANCE_PROGRESS_DEFAULT_TAIL_BYTES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return FINANCE_PROGRESS_DEFAULT_TAIL_BYTES
+    return max(0, value)
+
+
+def _finance_progress_tail_scan(path: Path, tail_bytes: int) -> JsonObject:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    return {
+        "journal": str(path),
+        "journal_bytes": size,
+        "tail_bytes": tail_bytes,
+        "tail_truncated": bool(tail_bytes and size > tail_bytes),
+    }
+
+
+def _iter_finance_progress_journal_lines(path: Path, *, tail_bytes: int):
+    if tail_bytes <= 0:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                yield line
+        return
+    size = path.stat().st_size
+    start = max(0, size - tail_bytes)
+    with path.open("rb") as handle:
+        handle.seek(start)
+        if start > 0:
+            handle.readline()
+        for raw in handle:
+            yield raw.decode("utf-8", errors="replace")
+
+
+def _finance_progress_attach_run_status(payload: dict[str, object], args) -> dict[str, object]:
+    run_root = str(getattr(args, "run_root", "") or "").strip()
+    if run_root:
+        payload["run_status"] = _finance_progress_run_root_status(Path(run_root))
+    return payload
+
+
+def _finance_progress_run_root_status(root: Path) -> JsonObject:
+    status: JsonObject = {
+        "run_root": str(root),
+        "exists": root.exists(),
+        "processes": _finance_progress_matching_processes(run_root=root),
+    }
+    if not root.exists():
+        return status
+    files: JsonObject = {
+        "results_jsonl": _finance_progress_file_status(root / "results.jsonl", line_count=True),
+        "summary_json": _finance_progress_summary_status(root / "summary.json"),
+        "http_cache": _finance_progress_tree_status(root / "http-cache"),
+        "worker_state_root": _finance_progress_tree_status(root / "workers-rerun"),
+    }
+    status["files"] = files
+    return status
+
+
+def _finance_progress_file_status(path: Path, *, line_count: bool = False) -> JsonObject:
+    payload: JsonObject = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return payload
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        payload["error"] = str(exc)
+        return payload
+    payload.update(
+        {
+            "size_bytes": stat.st_size,
+            "mtime_ms": int(stat.st_mtime * 1000),
+        }
+    )
+    if line_count:
+        payload["line_count"] = _finance_progress_line_count(path, max_bytes=64 * 1024 * 1024)
+    return payload
+
+
+def _finance_progress_summary_status(path: Path) -> JsonObject:
+    payload = _finance_progress_file_status(path)
+    if not payload.get("exists"):
+        return payload
+    size = payload.get("size_bytes")
+    if not isinstance(size, int) or size > 16 * 1024 * 1024:
+        payload["summary"] = {"status": "skipped", "reason": "too_large"}
+        return payload
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        payload["summary"] = {"status": "unreadable", "error": str(exc)}
+        return payload
+    if not isinstance(data, dict):
+        payload["summary"] = {"status": "unrecognized"}
+        return payload
+    keys = (
+        "item_count",
+        "passed_count",
+        "failed_count",
+        "pass_rate",
+        "numeric_accuracy",
+        "average_total_tokens",
+        "average_duration_ms",
+        "output_path",
+    )
+    payload["summary"] = {key: data.get(key) for key in keys if data.get(key) is not None}
+    return payload
+
+
+def _finance_progress_line_count(path: Path, *, max_bytes: int) -> int | None:
+    try:
+        if path.stat().st_size > max_bytes:
+            return None
+        count = 0
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                count += chunk.count(b"\n")
+        return count
+    except OSError:
+        return None
+
+
+def _finance_progress_tree_status(path: Path, *, max_files: int = 20_000) -> JsonObject:
+    payload: JsonObject = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return payload
+    file_count = 0
+    total_bytes = 0
+    latest_mtime_ms = 0
+    truncated = False
+    try:
+        for item in path.rglob("*"):
+            if not item.is_file():
+                continue
+            file_count += 1
+            if file_count > max_files:
+                truncated = True
+                break
+            try:
+                stat = item.stat()
+            except OSError:
+                continue
+            total_bytes += stat.st_size
+            latest_mtime_ms = max(latest_mtime_ms, int(stat.st_mtime * 1000))
+    except OSError as exc:
+        payload["error"] = str(exc)
+        return payload
+    payload.update(
+        {
+            "file_count": min(file_count, max_files),
+            "total_bytes": total_bytes,
+            "latest_mtime_ms": latest_mtime_ms or None,
+            "truncated": truncated,
+        }
+    )
+    return payload
+
+
+def _finance_progress_matching_processes(*, run_root: Path | None = None) -> list[JsonObject]:
+    proc = Path("/proc")
+    if not proc.exists():
+        return []
+    root_text = str(run_root) if run_root is not None else ""
+    processes: list[JsonObject] = []
+    for pid_dir in proc.iterdir():
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            raw = (pid_dir / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if not raw:
+            continue
+        argv = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
+        if not argv:
+            continue
+        if "finance-progress" in argv or "workflow-view" in argv:
+            continue
+        cmd = " ".join(argv)
+        if "finance-progress" in cmd or "workflow-view" in cmd:
+            continue
+        is_finance_bench = _finance_progress_cmd_has_bench_finance(argv, cmd)
+        if root_text:
+            if root_text not in cmd:
+                continue
+            if not is_finance_bench:
+                continue
+        elif not is_finance_bench:
+            continue
+        status = _finance_progress_proc_status(pid_dir)
+        processes.append(
+            {
+                "pid": int(pid_dir.name),
+                "ppid": status.get("PPid"),
+                "state": status.get("State"),
+                "rss_kb": status.get("VmRSS"),
+                "vmsize_kb": status.get("VmSize"),
+                "threads": status.get("Threads"),
+                "cmd": _workflow_preview(cmd, 360),
+            }
+        )
+    return sorted(processes, key=lambda item: int(item.get("pid") or 0))
+
+
+def _finance_progress_cmd_has_bench_finance(argv: list[str], cmd: str) -> bool:
+    for index, item in enumerate(argv[:-1]):
+        if item == "bench" and argv[index + 1] == "finance":
+            return True
+    return " bench finance " in f" {cmd} "
+
+
+def _finance_progress_proc_status(pid_dir: Path) -> dict[str, int | str]:
+    result: dict[str, int | str] = {}
+    try:
+        lines = (pid_dir / "status").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return result
+    for line in lines:
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        value = raw_value.strip()
+        if key in {"PPid", "VmRSS", "VmSize", "Threads"}:
+            first = value.split()[0] if value.split() else ""
+            try:
+                result[key] = int(first)
+            except ValueError:
+                result[key] = value
+        elif key == "State":
+            result[key] = value
+    return result
+
+
 def _finance_progress_latest_task_id_from_path(
     path: Path,
     *,
     thread_id: str | None,
     thread_prefix: str | None,
+    tail_bytes: int = 0,
 ) -> str | None:
     latest: str | None = None
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if thread_id and thread_id not in line:
+    for line in _iter_finance_progress_journal_lines(path, tail_bytes=tail_bytes):
+        if thread_id and thread_id not in line:
+            continue
+        if thread_prefix and thread_prefix not in line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        task_id = payload.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        if thread_id or thread_prefix:
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            thread_ids: set[str] = set()
+            _collect_thread_ids(data, thread_ids, depth=0)
+            if thread_id and thread_id not in thread_ids:
                 continue
-            if thread_prefix and thread_prefix not in line:
+            if thread_prefix and not any(item.startswith(thread_prefix) for item in thread_ids):
                 continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            task_id = payload.get("task_id")
-            if not isinstance(task_id, str) or not task_id:
-                continue
-            if thread_id or thread_prefix:
-                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-                thread_ids: set[str] = set()
-                _collect_thread_ids(data, thread_ids, depth=0)
-                if thread_id and thread_id not in thread_ids:
-                    continue
-                if thread_prefix and not any(item.startswith(thread_prefix) for item in thread_ids):
-                    continue
-            latest = task_id
+        latest = task_id
     return latest
 
 
-def _finance_progress_records_from_path(path: Path, *, task_id: str) -> list[LedgerRecord]:
+def _finance_progress_records_from_path(path: Path, *, task_id: str, tail_bytes: int = 0) -> list[LedgerRecord]:
     records: list[LedgerRecord] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if task_id not in line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if payload.get("task_id") != task_id:
-                continue
-            record = _ledger_record_from_loose_payload(payload)
-            if record is not None:
-                records.append(record)
+    for line in _iter_finance_progress_journal_lines(path, tail_bytes=tail_bytes):
+        if task_id not in line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("task_id") != task_id:
+            continue
+        record = _ledger_record_from_loose_payload(payload)
+        if record is not None:
+            records.append(record)
     return records
 
 
@@ -3402,6 +3673,57 @@ def _render_finance_progress(payload: JsonObject) -> str:
     thread_ids = payload.get("thread_ids")
     if isinstance(thread_ids, list) and thread_ids:
         lines.append("threads=" + ", ".join(str(item) for item in thread_ids[:4]))
+    tail_scan = payload.get("tail_scan") if isinstance(payload.get("tail_scan"), dict) else {}
+    if tail_scan:
+        lines.append(
+            "journal="
+            + f"{tail_scan.get('journal') or '-'} bytes={tail_scan.get('journal_bytes') or 0} "
+            + f"tail_bytes={tail_scan.get('tail_bytes') or 0} truncated={tail_scan.get('tail_truncated')}"
+        )
+    run_status = payload.get("run_status") if isinstance(payload.get("run_status"), dict) else {}
+    if run_status:
+        processes = run_status.get("processes") if isinstance(run_status.get("processes"), list) else []
+        lines.append(
+            "run_root="
+            + f"{run_status.get('run_root') or '-'} exists={run_status.get('exists')} processes={len(processes)}"
+        )
+        for process in processes[:4]:
+            if not isinstance(process, dict):
+                continue
+            lines.append(
+                "  pid="
+                + f"{process.get('pid')} state={process.get('state') or '-'} "
+                + f"rss_kb={process.get('rss_kb') or '-'} cmd={process.get('cmd') or '-'}"
+            )
+        run_files = run_status.get("files") if isinstance(run_status.get("files"), dict) else {}
+        if run_files:
+            results = run_files.get("results_jsonl") if isinstance(run_files.get("results_jsonl"), dict) else {}
+            summary = run_files.get("summary_json") if isinstance(run_files.get("summary_json"), dict) else {}
+            summary_data = summary.get("summary") if isinstance(summary.get("summary"), dict) else {}
+            http_cache = run_files.get("http_cache") if isinstance(run_files.get("http_cache"), dict) else {}
+            worker_state = run_files.get("worker_state_root") if isinstance(run_files.get("worker_state_root"), dict) else {}
+            lines.append(
+                "  results="
+                + f"exists={results.get('exists')} lines={results.get('line_count') or 0} "
+                + f"bytes={results.get('size_bytes') or 0} mtime_ms={results.get('mtime_ms') or '-'}"
+            )
+            lines.append(
+                "  summary="
+                + f"exists={summary.get('exists')} passed={_progress_display(summary_data.get('passed_count'))} "
+                + f"failed={_progress_display(summary_data.get('failed_count'))} "
+                + f"pass_rate={_progress_display(summary_data.get('pass_rate'))} "
+                + f"avg_tokens={_progress_display(summary_data.get('average_total_tokens'))}"
+            )
+            lines.append(
+                "  cache="
+                + f"files={http_cache.get('file_count') or 0} bytes={http_cache.get('total_bytes') or 0} "
+                + f"latest_mtime_ms={http_cache.get('latest_mtime_ms') or '-'}"
+            )
+            lines.append(
+                "  workers="
+                + f"exists={worker_state.get('exists')} files={worker_state.get('file_count') or 0} "
+                + f"bytes={worker_state.get('total_bytes') or 0}"
+            )
     open_processor = payload.get("open_processor")
     if isinstance(open_processor, dict):
         lines.append(
@@ -3524,6 +3846,12 @@ def _compact_progress_list(value: object, *, limit: int = 4) -> str:
     if len(value) > limit:
         items.append(f"+{len(value) - limit}")
     return ",".join(items)
+
+
+def _progress_display(value: object, default: str = "-") -> str:
+    if value is None or value == "":
+        return default
+    return str(value)
 
 
 def _compact_progress_counts(value: object, *, limit: int = 5) -> str:

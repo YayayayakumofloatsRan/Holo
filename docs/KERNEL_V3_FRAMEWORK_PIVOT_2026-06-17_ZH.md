@@ -259,7 +259,36 @@ strict_json_check: json.dumps(observation, allow_nan=False) passed
 
 这说明 Holo 的 SEC 成熟组件路径已经从 `dependency_missing` 进入可执行状态：模型可以在 planner 中选择 EdgarTools-backed filing discovery 或 SEC/XBRL financial statement candidates；host 仍只返回候选 facts/records，最终 metric、period、line item、unit、formula 和解释仍由 LLM 决定。
 
-## 8. 来源
+## 8. 2026-06-17 进程可视化检查点
+
+成熟组件接通之后，长跑 live benchmark 的控制面必须跟上。FinanceBench
+debug row offset 3 重新跑通时，单题消耗约 `448,778` tokens，全局 journal
+已经超过 `1.3GB`。如果进度观察继续依赖手动 `ps`、`tail` 或全量 JSONL
+scan，会影响 UbuntuHolo 稳定性，也会降低迭代效率。
+
+因此 `bench finance-progress` 已升级为正式的轻量监控入口：
+
+```bash
+.venv/bin/python -m kernel_v3.cli bench finance-progress \
+  --thread-prefix finance-bench-0001 \
+  --run-root /tmp/holo-kv3-live-debug/fb-o003-l001-edgartools-20260617 \
+  --tail-bytes 64000000 \
+  --limit-events 8
+```
+
+能力边界：
+
+- 默认尾部扫描 journal，避免每次监控都读完整 GB 级 global ledger；
+- `--run-root` 聚合 `results.jsonl`、`summary.json`、HTTP cache、worker
+  state 和匹配的 live `bench finance` 进程；
+- renderer 同时显示 agent loop 阶段、open processor、latest error、
+  gates、diagnostics 和 recent events；
+- 这属于 live run 控制面，不属于金融分数捷径，不改变 LLM 负责核心金融判断的边界。
+
+本检查点对应文档：
+`docs/KERNEL_V3_PROGRESS_2026-06-17_FINANCE_PROCESS_VISIBILITY.md`。
+
+## 9. 来源
 
 - LangGraph overview: <https://docs.langchain.com/oss/python/langgraph/overview>
 - AutoGen documentation: <https://microsoft.github.io/autogen/stable/>
