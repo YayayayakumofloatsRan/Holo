@@ -235,10 +235,12 @@ when possible, explicitly concurrency-safe tools may run together, and exclusive
 tools block later tools until completion. The CLI exposes this path via
 `--agent-loop-streaming` / `--no-agent-loop-streaming`, which writes
 `agent_loop.provider_streaming` into execution metadata instead of requiring
-internal recipe edits. Finance final numeric preflight task compilation is
-bounded and non-retrying so provider stalls cannot hang an already-completed
-live run at ledger-writing time. These are loop-stability contracts, not
-benchmark score claims.
+internal recipe edits. Streamed tool-call chunks are keyed by provider `index`
+while preserving the real `tool_call_id`, and tools are not executed until a
+non-empty JSON argument object has arrived. Finance final numeric preflight task
+compilation is bounded and non-retrying so provider stalls cannot hang an
+already-completed live run at ledger-writing time. These are loop-stability
+contracts, not benchmark score claims.
 `finance-fact-fast` remains on the LangGraph fast lane for now. This is a
 structural loop milestone, not a finance benchmark score.
 The debug50 architecture reset is recorded in

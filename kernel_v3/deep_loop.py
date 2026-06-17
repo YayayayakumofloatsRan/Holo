@@ -559,6 +559,11 @@ class DeepAgentLoopController(LoopControllerV3):
                 for raw_call in _stream_tool_call_items(delta.get("tool_calls")):
                     key = _stream_tool_call_key(raw_call, fallback=f"stream-tool-{len(tool_chunks) + 1}")
                     current = tool_chunks.setdefault(key, {"id": key, "name": "", "arguments": "", "raw": []})
+                    call_id = raw_call.get("id")
+                    if not isinstance(call_id, str):
+                        call_id = raw_call.get("tool_call_id")
+                    if isinstance(call_id, str) and call_id:
+                        current["id"] = call_id
                     raw_items = current.get("raw")
                     if isinstance(raw_items, list):
                         raw_items.append(raw_call)
@@ -1411,6 +1416,11 @@ def _assistant_turn_from_stream_events(
             for raw_call in _stream_tool_call_items(delta.get("tool_calls")):
                 key = _stream_tool_call_key(raw_call, fallback=f"stream-tool-{len(tool_chunks) + 1}")
                 current = tool_chunks.setdefault(key, {"id": key, "name": "", "arguments": "", "raw": []})
+                call_id = raw_call.get("id")
+                if not isinstance(call_id, str):
+                    call_id = raw_call.get("tool_call_id")
+                if isinstance(call_id, str) and call_id:
+                    current["id"] = call_id
                 raw_items = current.get("raw")
                 if isinstance(raw_items, list):
                     raw_items.append(raw_call)
@@ -1471,7 +1481,16 @@ def _assistant_turn_from_stream_events(
                 )
             )
             continue
-        arguments = _try_parse_json_object(raw_arguments or "{}")
+        if not raw_arguments:
+            parse_errors.append(
+                ToolCallParseError(
+                    tool_call_id=tool_call_id,
+                    error="missing_tool_arguments",
+                    raw_preview=_preview_json_value(chunk, limit=400),
+                )
+            )
+            continue
+        arguments = _try_parse_json_object(raw_arguments)
         if arguments is None:
             parse_errors.append(
                 ToolCallParseError(
@@ -1742,13 +1761,13 @@ def _stream_tool_call_items(value: object) -> list[JsonObject]:
 
 
 def _stream_tool_call_key(raw_call: JsonObject, *, fallback: str) -> str:
+    index = raw_call.get("index")
+    if isinstance(index, int):
+        return f"index-{index}"
     for key in ("id", "tool_call_id"):
         value = raw_call.get(key)
         if isinstance(value, str) and value:
             return value
-    index = raw_call.get("index")
-    if isinstance(index, int):
-        return f"index-{index}"
     return fallback
 
 
@@ -1763,7 +1782,10 @@ def _stream_chunk_ready_tool_call(
     name = resolve_native_tool_name(str(chunk.get("name") or "").strip(), tool_name_map)
     if not name:
         return None
-    arguments = _try_parse_json_object(str(chunk.get("arguments") or "").strip() or "{}")
+    raw_arguments = str(chunk.get("arguments") or "").strip()
+    if not raw_arguments:
+        return None
+    arguments = _try_parse_json_object(raw_arguments)
     if arguments is None:
         return None
     return ToolCallRequest(
@@ -1790,7 +1812,14 @@ def _stream_chunk_final_parse_error(
             error="missing_tool_name",
             raw_preview=_preview_json_value(chunk, limit=400),
         )
-    arguments = _try_parse_json_object(str(chunk.get("arguments") or "").strip() or "{}")
+    raw_arguments = str(chunk.get("arguments") or "").strip()
+    if not raw_arguments:
+        return ToolCallParseError(
+            tool_call_id=tool_call_id,
+            error="missing_tool_arguments",
+            raw_preview=_preview_json_value(chunk, limit=400),
+        )
+    arguments = _try_parse_json_object(raw_arguments)
     if arguments is None:
         return ToolCallParseError(
             tool_call_id=tool_call_id,

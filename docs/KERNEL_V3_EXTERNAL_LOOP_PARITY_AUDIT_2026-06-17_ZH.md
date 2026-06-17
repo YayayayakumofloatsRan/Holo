@@ -554,6 +554,7 @@ Holo 的工具执行事件在 `kernel_v3/tool_use.py`。这里的 `StreamingTool
 - 已完成工具会在继续 drain provider stream 的过程中被及时收割，写入单项 `tool_result` observation 和 `queued` / `started` / `completed` tool execution events。
 - 结构测试覆盖了参考项目同款关键不变量：provider 连续吐出一个非并发安全写工具和一个并发安全读工具时，读工具必须等写工具 completed 后才 started。
 - CLI 新增 `--agent-loop-streaming` / `--no-agent-loop-streaming`，会把 `agent_loop.provider_streaming` 写入 execution metadata；因此 live bench/chat/run 可以显式进入 provider streaming deep loop，不再只依赖内部 recipe metadata。
+- live 单题探针暴露出 DeepSeek/OpenAI-style tool-call delta 的真实分片问题：第一片可能带 `id` / `index` / `function.name`，后续参数片只有 `index`。Holo 已修正为按 `index` 聚合同一 tool call，同时保留真实 `id` 作为 `tool_call_id`；没有收到非空 arguments 时不会把 `{}` 当作已完成参数执行工具。
 
 这一步把 eager streaming execution 从“边 stream 边 submit future”推进到“边 stream 边按成熟 executor 语义调度”。它是通用 agent loop 能力，不是 FinanceBench 打表。
 

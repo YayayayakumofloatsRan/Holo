@@ -669,6 +669,43 @@ def test_streaming_planner_maps_native_provider_tool_name_back_to_holo_tool() ->
     assert registry.executed_actions[0].payload["query"] == "A"
 
 
+def test_streaming_planner_waits_for_split_tool_arguments_before_execution() -> None:
+    registry = ToolRegistry()
+    registry.register("alpha.read", _read_tool("alpha"))
+    journal = JournalStore.in_memory()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": _SplitArgumentStreamingToolCallProvider()}, journal=journal),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"alpha.read"},
+        use_streaming=True,
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("done"),
+        max_steps=3,
+        max_tool_calls=3,
+    )
+
+    result = loop.run("read alpha through split streamed tool arguments")
+
+    assert result.status == "completed"
+    assert [action.name for action in registry.executed_actions] == ["alpha.read"]
+    assert registry.executed_actions[0].payload["query"] == "A"
+    parse_records = [
+        record
+        for record in journal.records(task_id=result.task_id, kind="observation")
+        if record.data.get("kind") == "tool_call_parse_error"
+    ]
+    assert parse_records == []
+    turn_record = journal.records(task_id=result.task_id, kind="assistant_turn")[0]
+    assert turn_record.data["tool_calls"][0]["tool_call_id"] == "tc-split-alpha"
+
+
 def test_streaming_planner_starts_tool_before_provider_stream_is_drained() -> None:
     tool_started = threading.Event()
     provider = _BlockingAfterToolDeltaProvider(tool_started)
@@ -1147,6 +1184,71 @@ class _NativeNameStreamingToolCallProvider:
             event_type="stream_end",
             request_id=request.request_id,
             sequence=2,
+            delta={"status": "ok"},
+        )
+
+
+class _SplitArgumentStreamingToolCallProvider:
+    name = "streaming"
+    model = "stream-model"
+
+    def stream(self, request: ProcessorRequest) -> Iterable[ProcessorStreamEvent]:
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=1,
+            delta={
+                "tool_calls": [
+                    {
+                        "id": "tc-split-alpha",
+                        "index": 0,
+                        "function": {
+                            "name": "alpha.read",
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=2,
+            delta={
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "function": {
+                            "arguments": '{"query"',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="tool_call_delta",
+            request_id=request.request_id,
+            sequence=3,
+            delta={
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "function": {
+                            "arguments": ':"A"}',
+                        },
+                    }
+                ]
+            },
+        )
+        yield ProcessorStreamEvent(
+            event_type="finish_delta",
+            request_id=request.request_id,
+            sequence=4,
+            delta={"finish_reason": "tool_calls"},
+        )
+        yield ProcessorStreamEvent(
+            event_type="stream_end",
+            request_id=request.request_id,
+            sequence=5,
             delta={"status": "ok"},
         )
 
