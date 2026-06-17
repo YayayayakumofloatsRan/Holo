@@ -38,6 +38,14 @@ def register_finance_slot_bind_tool(registry: ToolRegistry) -> ToolRegistry:
                 "compiled_program": {"type": "object", "required": False},
                 "ledger_ref": {"type": "str", "required": False},
             },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "max_result_size_chars": 50000,
+                "result_persistence_policy": "auto",
+                "idempotent": True,
+            },
         ),
     )
     return registry

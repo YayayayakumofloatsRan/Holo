@@ -181,3 +181,44 @@ FAB/FinAgent 或 FinQA 准确率。下一步应在 live debug50 类型簇上验�
 是否能利用显式 `tool_surface` 一次性构造更正确的 `sec.edgar.financials`、
 `retrieval.run`、`document.*`、`calculator.compute` 和 `finance.slot_bind`
 调用链。
+
+## 9. Finance tool runtime/spec P0 checkpoint
+
+继续审查后发现一个实际 P0 缺口：executor 已经具备成熟并发/取消语义，但
+finance open-component manifest 基本没有 `ToolRuntimeSpec` hints，导致 SEC、
+Docling、Trafilatura、OpenBB、DuckDB、SymPy、slot_bind、calculator、verifier
+这些 read/network 工具在调度层仍可能被当成默认非并发工具。
+
+本轮补齐：
+
+- `calculator.compute`、`finance.verify_numeric`、`finance.slot_bind` 标记为
+  `always_load`、read-only、concurrency-safe，并设置结果大小策略。
+- `retrieval.run` 标记为 `always_load`、read-only、concurrency-safe、可取消，
+  并保留 operator 是否真的 network-open 的 `open_world` 差异。
+- SEC/EDGAR、Trafilatura、OpenBB、DuckDB、SymPy 工具补齐 read-only、
+  concurrency-safe、timeout、result persistence 和 `always_load` hints。
+- `document.docling.convert` 保持 read-only/always-load，但因 PDF/Docling 转换
+  可能占用较高内存，显式标为非 concurrency-safe，并给出 120s timeout 与
+  cancel hint，优先保护 UbuntuHolo 稳定性。
+- `sec.edgar.financials` schema 新增 `fiscal_year` 和 `period/target_period`
+  参数；工具只按请求期间过滤/投影 SEC 候选记录或列，不替模型选择 line item、
+  formula 或最终结论。
+
+这直接对应 live trace 中暴露的问题：FY2022/FY2024 类问题如果工具接口没有
+期间参数，模型只能凭 statement 最近列猜，容易把 2023-2025 候选错当目标期间。
+现在模型可以 one-shot 传入 `fiscal_year=2022` 或 `period=FY2024`，host 返回
+更干净的候选集，但语义判断仍由 LLM 完成。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_tool_readiness.py tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_phase3_context_compiler.py tests/test_kernel_v3_phase1_context_trace.py -q
+```
+
+结果：
+
+- `79 passed in 7.76s`
+
+说明：这是金融工具接口和 loop 调度成熟度修复，不是 FinanceBench/FQA/FAB 分数。
+下一步仍需要 live debug50 类型簇验证这些 runtime/schema hints 是否让模型更少
+走错期间、更稳定地组合 retrieval/SEC/document/calculator/slot_bind。

@@ -277,6 +277,17 @@ input schemas and runtime metadata, while deferred tools expose only briefs and
 route schema lookup through `tool.discovery`. Targeted structural tests pass
 (`25` deep-loop tests, `9` tool-use tests, `15` provider/context tests). This is
 agent-loop/tool-interface evidence, not a FinanceBench/FAB/FinQA score claim.
+The next finance tool-runtime P0 checkpoint makes those tool contracts executable
+rather than merely descriptive. `retrieval.run`, SEC/EDGAR, Trafilatura, OpenBB,
+DuckDB, SymPy, `calculator.compute`, `finance.slot_bind`, and
+`finance.verify_numeric` now expose runtime hints for `always_load`, read-only
+status, concurrency, timeout, result persistence, and open-world access. Heavy
+`document.docling.convert` remains read-only but explicitly non-concurrency-safe
+with a cancel/timeout boundary to protect UbuntuHolo stability. `sec.edgar.financials`
+also accepts `fiscal_year` and `period`/`target_period`, projecting SEC candidate
+records or period columns to the requested fiscal period without choosing the
+financial line item or answer. Targeted structural tests pass (`79` related
+tests). This is tool-interface readiness, not a new finance benchmark score.
 The streaming path now also mirrors the inspected TypeScript
 `StreamingToolExecutor` scheduling rule: a streamed tool starts immediately
 when possible, explicitly concurrency-safe tools may run together, and exclusive

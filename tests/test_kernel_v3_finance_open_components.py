@@ -29,6 +29,7 @@ from kernel_v3.finance import (
 )
 from kernel_v3.finance import open_components
 from kernel_v3.policy import PolicyGate
+from kernel_v3.tool_runtime import tool_runtime_spec_for_manifest
 from kernel_v3.tools import ToolRegistry
 
 
@@ -50,6 +51,30 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
     for tool_name in FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES:
         assert manifests[tool_name].side_effect_class == "read"
         assert manifests[tool_name].permissions_required == []
+
+    always_loaded = {
+        FINANCE_SLOT_BIND_TOOL_NAME,
+        FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
+        SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
+        SEC_EDGAR_FINANCIALS_TOOL_NAME,
+        DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+        DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
+        MARKET_OPENBB_FETCH_TOOL_NAME,
+        DATA_TABLE_QUERY_TOOL_NAME,
+        MATH_SYMPY_COMPUTE_TOOL_NAME,
+    }
+    for tool_name in always_loaded:
+        runtime = tool_runtime_spec_for_manifest(manifests[tool_name])
+        assert runtime.read_only is True
+        assert runtime.always_load is True
+        assert runtime.max_result_size_chars is not None
+    assert tool_runtime_spec_for_manifest(manifests[SEC_EDGAR_FINANCIALS_TOOL_NAME]).concurrency_safe is True
+    assert tool_runtime_spec_for_manifest(manifests[DATA_TABLE_QUERY_TOOL_NAME]).concurrency_safe is True
+    assert tool_runtime_spec_for_manifest(manifests[DOCUMENT_DOCLING_CONVERT_TOOL_NAME]).concurrency_safe is False
+    assert tool_runtime_spec_for_manifest(manifests[DOCUMENT_DOCLING_CONVERT_TOOL_NAME]).timeout_seconds == 120
+    sec_schema = manifests[SEC_EDGAR_FINANCIALS_TOOL_NAME].input_schema
+    assert sec_schema["fiscal_year"]["required"] is False
+    assert sec_schema["period"]["aliases"] == ["target_period"]
 
 
 def test_finance_slot_bind_tool_validates_model_selected_facts_and_returns_calculator_payload() -> None:
@@ -828,6 +853,39 @@ def test_open_component_json_sanitizer_removes_non_finite_float() -> None:
     assert open_components._json_sanitize({"value": math.nan, "ok": 1.25}) == {"value": None, "ok": 1.25}
 
 
+def test_sec_financials_period_filter_projects_requested_year_columns() -> None:
+    records = [
+        {
+            "line_item": "Net sales",
+            "2021": 100,
+            "FY2022": 200,
+            "2023": 300,
+            "unit": "USD millions",
+        },
+        {
+            "line_item": "Total assets",
+            "period": "FY2023",
+            "value": 500,
+        },
+    ]
+
+    filtered, diagnostics = open_components._filter_financial_records_by_period(
+        records,
+        fiscal_year=2022,
+        period="",
+        limit=10,
+    )
+
+    assert diagnostics["filter_applied"] is True
+    assert diagnostics["strict_no_match"] is False
+    assert len(filtered) == 1
+    assert filtered[0]["line_item"] == "Net sales"
+    assert filtered[0]["FY2022"] == 200
+    assert "2021" not in filtered[0]
+    assert "2023" not in filtered[0]
+    assert filtered[0]["_period_projection"]["matched"] is True
+
+
 def test_finance_retrieval_recipe_exposes_mature_component_tools_only_with_network_budget() -> None:
     offline_recipe = task_recipe(
         "retrieval_answer",
@@ -879,7 +937,15 @@ def test_finance_research_profile_exposes_tool_surface_without_numeric_verifier(
     assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME in recipe.allowed_tools
     assert DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME in recipe.allowed_tools
     runtime = AgentRuntime(workspace_root=tmp_path)
-    manifests = {manifest.name for manifest in runtime._registry(recipe, "Explain a finance disclosure.").manifests()}
+    manifests = {
+        manifest.name: manifest
+        for manifest in runtime._registry(recipe, "Explain a finance disclosure.").manifests()
+    }
     assert FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in manifests
     assert DATA_TABLE_QUERY_TOOL_NAME in manifests
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in manifests
+    retrieval_runtime = tool_runtime_spec_for_manifest(manifests["retrieval.run"])
+    assert retrieval_runtime.always_load is True
+    assert retrieval_runtime.concurrency_safe is True
+    assert retrieval_runtime.open_world is ("network:fetch" in manifests["retrieval.run"].permissions_required)
+    assert retrieval_runtime.timeout_seconds == 90

@@ -393,6 +393,14 @@ def register_finance_open_component_tools(
                 "callable tools, mature open-source components, install status, and one-shot model call contracts."
             ),
             input_schema={},
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "max_result_size_chars": 20000,
+                "result_persistence_policy": "never",
+                "idempotent": True,
+            },
         ),
     )
     registry.register(
@@ -411,6 +419,16 @@ def register_finance_open_component_tools(
                 "identifier": {"type": "str", "required": True, "min_length": 1},
                 "form": {"type": "str", "required": False, "min_length": 1},
                 "limit": {"type": "int", "required": False, "min": 1, "max": 25},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "open_world": True,
+                "always_load": True,
+                "timeout_seconds": 45,
+                "max_result_size_chars": 40000,
+                "result_persistence_policy": "auto",
+                "idempotent": False,
             },
         ),
     )
@@ -433,7 +451,31 @@ def register_finance_open_component_tools(
                 "identifier": {"type": "str", "required": True, "min_length": 1},
                 "form": {"type": "str", "required": False, "min_length": 1},
                 "statement": {"type": "str", "required": False, "min_length": 1},
+                "fiscal_year": {
+                    "type": "int",
+                    "required": False,
+                    "min": 1900,
+                    "max": 2100,
+                    "description": "Optional requested fiscal year, e.g. 2022 for FY2022.",
+                },
+                "period": {
+                    "type": "str",
+                    "required": False,
+                    "min_length": 1,
+                    "aliases": ["target_period"],
+                    "description": "Optional requested period label such as FY2022 or fiscal 2024.",
+                },
                 "limit": {"type": "int", "required": False, "min": 1, "max": 200},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "open_world": True,
+                "always_load": True,
+                "timeout_seconds": 60,
+                "max_result_size_chars": 50000,
+                "result_persistence_policy": "auto",
+                "idempotent": False,
             },
         ),
     )
@@ -462,6 +504,17 @@ def register_finance_open_component_tools(
                     "description": "Optional model-selected terms to index in the converted document.",
                 },
             },
+            runtime={
+                "concurrency_safe": False,
+                "read_only": True,
+                "open_world": True,
+                "always_load": True,
+                "interrupt_behavior": "cancel",
+                "timeout_seconds": 120,
+                "max_result_size_chars": 30000,
+                "result_persistence_policy": "auto",
+                "idempotent": False,
+            },
         ),
     )
     registry.register(
@@ -485,6 +538,16 @@ def register_finance_open_component_tools(
                 "include_tables": {"type": "bool", "required": False},
                 "max_chars": {"type": "int", "required": False, "min": 500, "max": 20000},
             },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "open_world": True,
+                "always_load": True,
+                "timeout_seconds": 45,
+                "max_result_size_chars": 30000,
+                "result_persistence_policy": "auto",
+                "idempotent": False,
+            },
         ),
     )
     registry.register(
@@ -506,6 +569,16 @@ def register_finance_open_component_tools(
                 "route": {"type": "str", "required": True, "min_length": 1},
                 "kwargs": {"type": "object", "required": False},
                 "limit": {"type": "int", "required": False, "min": 1, "max": 500},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "open_world": True,
+                "always_load": True,
+                "timeout_seconds": 45,
+                "max_result_size_chars": 50000,
+                "result_persistence_policy": "auto",
+                "idempotent": False,
             },
         ),
     )
@@ -532,6 +605,15 @@ def register_finance_open_component_tools(
                 "table_name": {"type": "str", "required": False},
                 "limit": {"type": "int", "required": False, "min": 1, "max": 500},
             },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "timeout_seconds": 30,
+                "max_result_size_chars": 50000,
+                "result_persistence_policy": "auto",
+                "idempotent": True,
+            },
         ),
     )
     registry.register(
@@ -554,6 +636,15 @@ def register_finance_open_component_tools(
                 "variables": {"type": "object", "required": False},
                 "operation": {"type": "str", "required": False},
                 "precision": {"type": "int", "required": False, "min": 8, "max": 80},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "timeout_seconds": 15,
+                "max_result_size_chars": 20000,
+                "result_persistence_policy": "never",
+                "idempotent": True,
             },
         ),
     )
@@ -683,12 +774,20 @@ def _execute_sec_financials(
     identifier = str(action.payload.get("identifier") or "").strip()
     form = str(action.payload.get("form") or "10-K").strip() or "10-K"
     statement = _normalize_statement(str(action.payload.get("statement") or ""))
+    fiscal_year = _optional_int(action.payload.get("fiscal_year"))
+    period = str(action.payload.get("period") or action.payload.get("target_period") or "").strip()
     limit = _positive_int(action.payload.get("limit"), default=80, maximum=200)
     try:
         company = edgar.Company(identifier)
         financials = _edgar_financials_for_company(company, form=form)
         statement_obj = _edgar_statement(financials, statement=statement)
-        records = _records_from_object(statement_obj, limit=limit)
+        raw_records = _records_from_object(statement_obj, limit=max(limit, 200))
+        records, period_filter = _filter_financial_records_by_period(
+            raw_records,
+            fiscal_year=fiscal_year,
+            period=period,
+            limit=limit,
+        )
     except Exception as exc:
         return _observation(action, "failed", _component_exception("edgartools", exc), kind="sec_edgar_result")
     return _artifact_tool_result(
@@ -699,6 +798,9 @@ def _execute_sec_financials(
             "identifier": identifier,
             "form": form,
             "statement": statement or "auto",
+            "requested_fiscal_year": fiscal_year,
+            "requested_period": period or None,
+            "period_filter": period_filter,
             "limit": limit,
             "records": records,
             "semantic_decision_owner": "model",
@@ -1601,6 +1703,127 @@ def _records_from_object(value: Any, *, limit: int) -> list[JsonObject]:
     return [_record({"value": str(value)[:2_000]})]
 
 
+def _filter_financial_records_by_period(
+    records: list[JsonObject],
+    *,
+    fiscal_year: int | None,
+    period: str,
+    limit: int,
+) -> tuple[list[JsonObject], JsonObject]:
+    target_tokens = _period_target_tokens(fiscal_year=fiscal_year, period=period)
+    diagnostics: JsonObject = {
+        "requested_fiscal_year": fiscal_year,
+        "requested_period": period or None,
+        "input_record_count": len(records),
+        "filter_applied": False,
+        "period_signal_seen": False,
+        "output_record_count": min(len(records), limit),
+        "host_boundary": "period filtering only narrows SEC candidate records/columns; the model still chooses line items and formulas",
+    }
+    if not target_tokens:
+        return records[:limit], diagnostics
+
+    filtered: list[JsonObject] = []
+    signal_seen = False
+    for record in records:
+        projected, projection = _project_financial_record_to_period(record, target_tokens=target_tokens)
+        signal_seen = signal_seen or bool(projection.get("period_signal_seen"))
+        if projection.get("matched"):
+            filtered.append(projected)
+        if len(filtered) >= limit:
+            break
+
+    diagnostics["period_signal_seen"] = signal_seen
+    diagnostics["filter_applied"] = signal_seen
+    if signal_seen:
+        diagnostics["output_record_count"] = len(filtered)
+        diagnostics["match_tokens"] = sorted(target_tokens)[:12]
+        diagnostics["strict_no_match"] = not filtered
+        return filtered, diagnostics
+
+    diagnostics["reason"] = "no_period_columns_or_fields_detected"
+    diagnostics["output_record_count"] = min(len(records), limit)
+    return records[:limit], diagnostics
+
+
+def _project_financial_record_to_period(record: JsonObject, *, target_tokens: set[str]) -> tuple[JsonObject, JsonObject]:
+    projected: JsonObject = {}
+    period_signal_seen = False
+    matched = False
+    dropped_period_keys: list[str] = []
+    for key, value in record.items():
+        key_text = str(key)
+        value_text = str(value)
+        key_has_period_signal = _looks_like_period_key(key_text)
+        value_has_period_signal = _period_field_name(key_text) and _contains_year_or_fy(value_text)
+        if key_has_period_signal or value_has_period_signal:
+            period_signal_seen = True
+            if _text_matches_period_target(key_text, target_tokens) or _text_matches_period_target(value_text, target_tokens):
+                projected[key_text] = value
+                matched = True
+            else:
+                dropped_period_keys.append(key_text)
+            continue
+        projected[key_text] = value
+    if not period_signal_seen:
+        for value in record.values():
+            if isinstance(value, Mapping):
+                nested = _json_sanitize(value)
+                nested_text = json.dumps(nested, ensure_ascii=False, sort_keys=True, default=str)
+                if _contains_year_or_fy(nested_text):
+                    period_signal_seen = True
+                    matched = _text_matches_period_target(nested_text, target_tokens)
+                    break
+    if matched:
+        projected["_period_projection"] = {
+            "matched": True,
+            "dropped_period_keys": dropped_period_keys[:16],
+        }
+    return projected, {
+        "period_signal_seen": period_signal_seen,
+        "matched": matched,
+    }
+
+
+def _period_target_tokens(*, fiscal_year: int | None, period: str) -> set[str]:
+    tokens: set[str] = set()
+    if fiscal_year is not None:
+        year = str(fiscal_year)
+        tokens.update({year, f"fy{year}", f"fiscalyear{year}", f"fiscal{year}"})
+    normalized_period = _period_tokenize(period)
+    if normalized_period:
+        tokens.add(normalized_period)
+        match = re.search(r"(19|20)\d{2}", normalized_period)
+        if match:
+            year = match.group(0)
+            tokens.update({year, f"fy{year}", f"fiscalyear{year}", f"fiscal{year}"})
+    return {token for token in tokens if token}
+
+
+def _text_matches_period_target(text: str, target_tokens: set[str]) -> bool:
+    normalized = _period_tokenize(text)
+    return any(token and token in normalized for token in target_tokens)
+
+
+def _period_tokenize(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(text or "").casefold())
+
+
+def _period_field_name(key: str) -> bool:
+    normalized = _period_tokenize(key)
+    return any(marker in normalized for marker in ("period", "fiscal", "year", "fy", "date", "end", "frame"))
+
+
+def _looks_like_period_key(key: str) -> bool:
+    normalized = _period_tokenize(key)
+    return bool(re.search(r"(19|20)\d{2}", normalized) or normalized.startswith("fy")) or _period_field_name(key)
+
+
+def _contains_year_or_fy(text: str) -> bool:
+    normalized = _period_tokenize(text)
+    return bool(re.search(r"(19|20)\d{2}", normalized) or "fy" in normalized or "fiscal" in normalized)
+
+
 def _object_to_records_source(value: Any) -> Any:
     for method_name in ("to_dataframe", "to_pandas", "to_df"):
         method = getattr(value, method_name, None)
@@ -1882,6 +2105,13 @@ def _positive_int(value: object, *, default: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = default
     return max(1, min(maximum, parsed))
+
+
+def _optional_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _truncate(text: str, limit: int) -> str:

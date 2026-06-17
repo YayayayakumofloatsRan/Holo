@@ -1351,6 +1351,17 @@ def register_retrieval_tool(
                 "network_fetch_cost_field": "max_fetches",
                 "default_network_fetch_cost": 3,
             },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "open_world": operator.network_access,
+                "always_load": True,
+                "interrupt_behavior": "cancel",
+                "timeout_seconds": 90,
+                "max_result_size_chars": 50000,
+                "result_persistence_policy": "auto",
+                "idempotent": not operator.network_access,
+            },
         ),
     )
 

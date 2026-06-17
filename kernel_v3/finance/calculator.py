@@ -44,6 +44,14 @@ def register_finance_tools(registry: ToolRegistry) -> ToolRegistry:
                 "diagnostics": {"type": "object", "required": False},
                 "precision": {"type": "int", "required": False, "min": 8, "max": 80},
             },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "max_result_size_chars": 12000,
+                "result_persistence_policy": "never",
+                "idempotent": True,
+            },
         ),
     )
     registry.register(
@@ -69,6 +77,14 @@ def register_finance_tools(registry: ToolRegistry) -> ToolRegistry:
                 "evidence": {"type": "list[EvidenceItem]", "required": False},
                 "question": {"type": "str", "required": False},
                 "target_binding": {"type": "object", "required": False},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "max_result_size_chars": 50000,
+                "result_persistence_policy": "auto",
+                "idempotent": True,
             },
         ),
     )
