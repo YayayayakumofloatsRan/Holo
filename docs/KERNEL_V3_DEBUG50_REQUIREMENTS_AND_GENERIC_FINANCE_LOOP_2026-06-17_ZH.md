@@ -205,6 +205,11 @@ offset 单题推进，可以用：
 这只决定运行哪些题，不决定答案；筛选 metadata 固定标记
 `no_gold_fields_used=true`。
 
+同一 requirements 摘要也会驱动 deep agent loop 的 provider-native tool
+surface：例如表格题会展开 `data.table.query`，公式题会展开
+`calculator.compute` / `finance.verify_numeric`，SEC 事实题会展开
+`sec.edgar.financials`。这只是工具可见性优化，不替模型执行或判断。
+
 本次 debug50 实跑结果：
 
 ```text

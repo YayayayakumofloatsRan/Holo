@@ -412,6 +412,130 @@ def test_assistant_turn_prompt_expands_context_requested_deferred_tool() -> None
     assert all(item["name"] != "sec.edgar.financials" for item in surface["deferred_tools"])
 
 
+def test_assistant_turn_prompt_expands_finance_requirement_category_tools() -> None:
+    context = ContextBundle(
+        context_id="ctx-finance-requirements-tools",
+        thread_key="thread-finance-requirements-tools",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-finance-requirements-tools",
+            "run_id": "run-finance-requirements-tools",
+            "agent_runtime_directive": {
+                "finance_question_requirements": {
+                    "schema": "holo.kernel_v3.finance_question_requirements.v1",
+                    "required_tool_categories": [
+                        "structured_sec_facts",
+                        "document_table_extraction",
+                        "table_operations",
+                        "arithmetic",
+                        "numeric_verification",
+                    ],
+                    "risk_flags": ["requires_table_sort"],
+                    "gold_or_reference_values_used": False,
+                }
+            },
+        },
+        token_budget=8192,
+    )
+    manifests = [
+        ToolManifest(
+            name="tool.discovery",
+            version="1",
+            resource_kind="tooling",
+            operator_kind="discover",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Discover tools.",
+            input_schema={},
+            runtime={"always_load": True},
+        ),
+        ToolManifest(
+            name="sec.edgar.financials",
+            version="1",
+            resource_kind="finance",
+            operator_kind="sec",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="SEC structured facts.",
+            input_schema={"identifier": {"type": "str", "required": True}},
+            runtime={"should_defer": True, "read_only": True},
+        ),
+        ToolManifest(
+            name="document.docling.convert",
+            version="1",
+            resource_kind="document",
+            operator_kind="convert",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="Convert documents and tables.",
+            input_schema={"source": {"type": "str", "required": True}},
+            runtime={"should_defer": True, "read_only": True},
+        ),
+        ToolManifest(
+            name="data.table.query",
+            version="1",
+            resource_kind="data",
+            operator_kind="query",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Query evidence tables.",
+            input_schema={"sql": {"type": "str", "required": True}},
+            runtime={"should_defer": True, "read_only": True},
+        ),
+        ToolManifest(
+            name="calculator.compute",
+            version="1",
+            resource_kind="calculator",
+            operator_kind="compute",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Compute arithmetic.",
+            input_schema={"expression": {"type": "str", "required": True}},
+            runtime={"always_load": True, "read_only": True},
+        ),
+        ToolManifest(
+            name="finance.verify_numeric",
+            version="1",
+            resource_kind="finance",
+            operator_kind="verify",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Verify finance numeric claims.",
+            input_schema={"answer": {"type": "str", "required": True}},
+            runtime={"should_defer": True, "read_only": True},
+        ),
+    ]
+
+    prompt = json.loads(
+        _assistant_turn_prompt(
+            context,
+            None,
+            allowed_tool_names={manifest.name for manifest in manifests},
+            tool_manifests=manifests,
+        )
+    )
+
+    surface = prompt["tool_surface"]
+    visible_by_name = {item["name"]: item for item in surface["visible_tools"]}
+    for tool_name in (
+        "sec.edgar.financials",
+        "document.docling.convert",
+        "data.table.query",
+        "calculator.compute",
+        "finance.verify_numeric",
+    ):
+        assert tool_name in visible_by_name
+    assert visible_by_name["data.table.query"]["visibility_reason"] == "context_requested"
+    assert "data.table.query" in surface["context_requested_tools"]
+
+
 def test_streaming_planner_expands_context_requested_deferred_native_tool() -> None:
     provider = _CaptureNativeToolSurfaceProvider()
     planner = ModelAssistantTurnPlanner(
@@ -495,6 +619,81 @@ def test_streaming_planner_expands_context_requested_deferred_native_tool() -> N
     assert "sec.edgar.financials" not in {
         item["name"] for item in provider.parameters[0]["native_tool_deferred"]
     }
+
+
+def test_streaming_planner_expands_finance_requirement_category_native_tools() -> None:
+    provider = _CaptureNativeToolSurfaceProvider()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"tool.discovery", "calculator.compute", "data.table.query"},
+        tool_manifests=[
+            ToolManifest(
+                name="tool.discovery",
+                version="1",
+                resource_kind="tooling",
+                operator_kind="discover",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Discover tools.",
+                input_schema={},
+                runtime={"always_load": True},
+            ),
+            ToolManifest(
+                name="calculator.compute",
+                version="1",
+                resource_kind="finance",
+                operator_kind="calculate",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Evaluate arithmetic formulas.",
+                input_schema={"expression": {"type": "str", "required": True}},
+                runtime={"always_load": True},
+            ),
+            ToolManifest(
+                name="data.table.query",
+                version="1",
+                resource_kind="data",
+                operator_kind="query",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Query evidence tables.",
+                input_schema={"sql": {"type": "str", "required": True}},
+                runtime={"should_defer": True},
+            ),
+        ],
+        use_streaming=True,
+    )
+    context = ContextBundle(
+        context_id="ctx-native-finance-requirement",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-native-finance-requirement",
+            "run_id": "run-1",
+            "agent_runtime_directive": {
+                "finance_question_requirements": {
+                    "schema": "holo.kernel_v3.finance_question_requirements.v1",
+                    "required_tool_categories": ["table_operations", "arithmetic"],
+                    "gold_or_reference_values_used": False,
+                }
+            },
+        },
+        token_budget=4096,
+    )
+
+    stream = planner.stream_turn(context, None, step_id="step-1")
+    assert stream is not None
+    list(stream.events)
+
+    exposed = set(provider.parameters[0]["native_tool_name_map"].values())
+    assert {"tool.discovery", "calculator.compute", "data.table.query"}.issubset(exposed)
+    assert "data.table.query" not in {item["name"] for item in provider.parameters[0]["native_tool_deferred"]}
 
 
 def test_streaming_loop_executes_pending_workbench_followup_before_model_turn() -> None:

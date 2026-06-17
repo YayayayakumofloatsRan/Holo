@@ -843,3 +843,46 @@ matched/selected counts 和 filter 条件。空 slice 会返回
 
 说明：这一步仍不是 live accuracy。它把后续 live debug 的单位从 offset 单题推进到
 type-cluster slice，下一步可以按公式题、表格题、driver/bridge 题分别跑小批 live。
+
+## 22. Requirement-aware native tool loading checkpoint
+
+上一节完成了 type-cluster slicing，但 mature agent loop 还要求“任务需求”影响
+实际 provider/native tool surface，而不是只放在 prompt 文本里。本轮把
+`finance_question_requirements.required_tool_categories` 和 `risk_flags` 接入
+`DeepAgentLoopController` 的 context-requested tool expansion：
+
+- `structured_sec_facts` -> `sec.edgar.financials`
+- `document_table_extraction` -> `document.docling.convert` /
+  `document.trafilatura.extract`
+- `table_operations` -> `data.table.query`
+- `arithmetic` -> `calculator.compute`
+- `numeric_verification` -> `finance.verify_numeric`
+- `source_acquisition` / primary filing risk -> `retrieval.run` /
+  `sec.edgar.company_filings`
+- temporary workbench / table-sort / bridge risk -> `data.table.query` /
+  `script.exec`
+
+这只影响 deferred/native tool 的展开优先级，不自动执行工具、不选择事实、不决定答案。
+模型仍负责 one-shot 工具调用，host 仍负责 policy/schema/execution/journal/verifier。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_deep_agent_loop.py::test_assistant_turn_prompt_expands_finance_requirement_category_tools \
+  tests/test_kernel_v3_deep_agent_loop.py::test_streaming_planner_expands_finance_requirement_category_native_tools \
+  tests/test_kernel_v3_deep_agent_loop.py::test_streaming_planner_expands_context_requested_deferred_native_tool \
+  tests/test_kernel_v3_provider_native_tools.py::test_native_tool_surface_expands_context_requested_deferred_tool_before_ordinary_tools -q
+```
+
+结果：`4 passed in 0.52s`。
+
+完整相关结构测试：
+
+- `tests/test_kernel_v3_deep_agent_loop.py`: `33 passed in 3.38s`
+- `tests/test_kernel_v3_provider_native_tools.py`: `5 passed in 0.19s`
+
+说明：这仍不是 FinanceBench/FQA accuracy，但它补齐了一个 P0 运行链路：
+题面 requirements -> context requested tools -> prompt tool surface ->
+provider-native tools。后续 live slice 不需要模型先绕一轮 `tool.discovery` 才看到
+表格/SEC/calculator/verifier工具 schema。

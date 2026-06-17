@@ -2516,6 +2516,12 @@ def _context_requested_tool_names(
 
 def _collect_requested_tool_names(value: object, names: list[str]) -> None:
     if isinstance(value, dict):
+        categories = value.get("required_tool_categories")
+        if isinstance(categories, list):
+            names.extend(_tools_for_requirement_categories(categories))
+        risks = value.get("risk_flags")
+        if isinstance(risks, list):
+            names.extend(_tools_for_requirement_risk_flags(risks))
         for key in ("next_action", "slot_bind_next_action", "model_next_action"):
             nested = value.get(key)
             if isinstance(nested, dict):
@@ -2543,6 +2549,40 @@ def _collect_requested_tool_names(value: object, names: list[str]) -> None:
         for item in value:
             if isinstance(item, (dict, list)):
                 _collect_requested_tool_names(item, names)
+
+
+def _tools_for_requirement_categories(categories: list[object]) -> list[str]:
+    mapping = {
+        "source_acquisition": ["retrieval.run"],
+        "structured_sec_facts": ["sec.edgar.financials"],
+        "document_table_extraction": ["document.docling.convert", "document.trafilatura.extract"],
+        "table_operations": ["data.table.query"],
+        "arithmetic": ["calculator.compute"],
+        "numeric_verification": ["finance.verify_numeric"],
+        "temporary_workbench": ["data.table.query", "script.exec"],
+    }
+    result: list[str] = []
+    for item in categories:
+        result.extend(mapping.get(str(item or "").strip(), []))
+    return result
+
+
+def _tools_for_requirement_risk_flags(risk_flags: list[object]) -> list[str]:
+    mapping = {
+        "needs_primary_filing": ["retrieval.run", "sec.edgar.company_filings"],
+        "needs_structured_xbrl": ["sec.edgar.financials"],
+        "needs_table_rows": ["document.docling.convert", "data.table.query"],
+        "needs_bridge_reconciliation": ["document.docling.convert", "data.table.query"],
+        "needs_market_or_macro_context": ["market.openbb.fetch", "retrieval.run"],
+        "requires_calculator": ["calculator.compute"],
+        "requires_verifier": ["finance.verify_numeric"],
+        "requires_table_sort": ["data.table.query"],
+        "needs_temporary_workbench": ["data.table.query", "script.exec"],
+    }
+    result: list[str] = []
+    for item in risk_flags:
+        result.extend(mapping.get(str(item or "").strip(), []))
+    return result
 
 
 def _looks_like_tool_name(value: str) -> bool:
