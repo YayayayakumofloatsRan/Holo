@@ -241,6 +241,16 @@ task-compile inputs and ordinary finance claims, and surfaced through an
 without an explicit primary-source target binding remain on the normal formula
 trace path. Targeted structure tests pass (`372` finance/processor tests). This
 is agent-loop/workbench maturity evidence, not a FinanceBench or FinQA score.
+The next live diagnostic on `financebench_id_04672` confirmed that the rejected
+evidence pollution did not recur, but exposed another generic mature-loop
+boundary: a deep tool batch could contain `host_guard reason=max_tool_calls`
+while the outer evaluator still continued. `decide_termination(...)` now
+recognizes host budget guards inside nested deep tool batch payloads and
+overrides model `continue` feedback to a host failure report when no final
+answer can be delivered. The context compiler also has a minimal `agent_trace`
+projection and an explicit omit fallback for very small section budgets. Targeted
+structure tests pass (`483` kernel-v3 loop/tool/finance tests). This is
+agent-loop stability evidence, not a benchmark score.
 The latest P0 continuation extends provider-message replacement beyond prompt
 strings: deep-loop assistant prompts, `ProcessorFabric` JSON prompts, request
 parameters, OpenAI-compatible `provider_messages`, and structured provider

@@ -373,3 +373,55 @@ tool-result budget、microcompact、context collapse，再以可替换/可恢复
 说明：这是 P0 agent-loop/workbench 成熟度修复，不是 FinanceBench/FinQA 新分数。
 下一步应做小规模 live probe 验证：同类 primary-source 错源是否能从
 `evidence_replan` 转向正确 filing/document 工具，而不是继续污染 fact/claim ledger。
+
+## 13. Deep tool budget guard and trace budget checkpoint
+
+在 rejected-evidence workbench 边界之后，又做了一次真实 live 单题诊断，仍然针对
+`financebench_id_04672`。该 run 是线上诊断，不是成绩；gold/reference 没有进入模型
+上下文。运行使用 isolated state：
+
+```text
+.state/kernel_v3/bench/finance/fb_debug50_o001_l001_rejected_evidence_20260618.*
+```
+
+本次诊断没有重现上一轮“错源 rejected candidates 污染普通 fact/claim ledger”的问题。
+模型/工作台已经能把缺口收敛到 3M FY2022 filing、目标期间和 PP&E 等 primary-source
+line item。但新暴露出更底层的成熟 loop 缺口：deep tool batch 内部已经出现 host guard
+`reason=max_tool_calls`，而外层 `WorkloopEvaluator` 仍允许模型 evaluator 继续请求工具。
+这说明预算 guard 只存在于 batch payload 里，没有被 termination layer 作为 host 级
+终止信号识别。
+
+本轮修复把 mature TypeScript loop 的 host-boundary 思想落到 Python loop：
+
+- `decide_termination(...)` 现在能从普通 observation 和 deep
+  `tool_batch_result.content.results[]` 中递归识别 `host_guard` /
+  `loop_guard`，包括 `max_tool_calls` 和 `max_network_fetches`。
+- 当 deep batch 已经命中 `max_tool_calls`，且当前并非可交付 final answer，host 会覆盖
+  模型的 `continue` feedback，写出 `failure_report reason=max_tool_calls`。
+- 当 deep batch 命中 `max_network_fetches`，若已有有效 citation/evidence，host 可交付
+  partial-evidence final；否则同样输出 `failure_report reason=max_network_fetches`。
+- `agent_trace` 上下文压缩增加最小投影：只保留最近 ID、工具名、状态、tool batch
+  guard、feedback 缺口等 loop 恢复字段。若 section budget 仍不足，host 会显式省略
+  `agent_trace`，而不是让 context compiler 抛 `BudgetExceeded` 中断循环。
+
+这次改动仍然不是题目规则：host 没有选择财务事实、公式或答案，只是在预算和上下文
+边界上保证 agent loop 不会在已经被 host 阻断的工具路径上继续空转。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_phase61_workloop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase61_workloop.py tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_phase1_journal_store.py tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_tool_use.py tests/test_kernel_v3_provider_native_tools.py tests/test_kernel_v3_processor_streaming.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_tool_readiness.py tests/test_kernel_v3_finance_engine.py tests/test_kernel_v3_phase5_semantic_processors.py tests/test_kernel_v3_processor_usage.py tests/test_kernel_v3_phase61_workloop.py -q
+```
+
+结果：
+
+- `32 passed in 8.95s`
+- `430 passed in 23.53s`
+- `483 passed in 33.15s`
+
+剩余 P0 仍然清楚：继续对照成熟 agent loop，把 runtime progress/result 注入、动态
+tool discovery、工具上下文替换和类型簇 live debug50 连接起来。下一次 live 不应再长
+回归，而应按题型簇验证：工具路径是否能从 `evidence_replan` 进入正确 filing/source，
+并最终稳定到 slot bind、calculator/formula trace、numeric verifier 和 synthesis gate。

@@ -358,6 +358,14 @@ class ContextPackCompiler:
             return used
         self._drop_optional_items(section)
         used = measure_units(_section_payload(section))
+        if used > self.section_budget and str(section.get("name", "")) == "agent_trace":
+            self._minimize_agent_trace_section(section)
+            used = measure_units(_section_payload(section))
+        if used > self.section_budget and str(section.get("name", "")) == "agent_trace":
+            section["records"] = []
+            section["record_limit"] = 0
+            section["host_boundary"] = "agent_trace omitted because section budget is too small"
+            used = measure_units(_section_payload(section))
         if used > self.section_budget:
             raise BudgetExceeded(str(section.get("name", "")), used, self.section_budget)
         return used
@@ -450,6 +458,19 @@ class ContextPackCompiler:
                         payload = record.get(key)
                         if isinstance(payload, dict):
                             record[key] = _compact_nested_content(payload)
+
+    def _minimize_agent_trace_section(self, section: JsonObject) -> None:
+        records = section.get("records")
+        if not isinstance(records, list):
+            return
+        compacted = [
+            _minimal_agent_trace_record(record)
+            for record in records[-2:]
+            if isinstance(record, dict)
+        ]
+        section["records"] = [record for record in compacted if record]
+        section["record_limit"] = len(section["records"])
+        section["purpose"] = "minimal recent agent trajectory; detailed payloads omitted by budget"
 
     @staticmethod
     def from_dict(data: JsonObject) -> ContextPack:
@@ -629,6 +650,105 @@ def _compact_agent_trace_record(record: LedgerRecord) -> JsonObject:
     else:
         compacted["data"] = _compact_nested_content(data)
     return compacted
+
+
+def _minimal_agent_trace_record(record: JsonObject) -> JsonObject:
+    minimal: JsonObject = {}
+    for key in (
+        "record_id",
+        "step_id",
+        "kind",
+        "action_ref",
+        "observation_ref",
+        "feedback_ref",
+    ):
+        value = record.get(key)
+        if value is not None:
+            minimal[key] = value
+
+    assistant_turn = record.get("assistant_turn")
+    if isinstance(assistant_turn, dict):
+        minimal_turn = _pick_present(assistant_turn, ("turn_id", "tool_call_count", "stop_reason"))
+        tool_calls = assistant_turn.get("tool_calls")
+        if isinstance(tool_calls, list):
+            minimal_turn["tool_calls"] = [
+                _pick_present(item, ("tool_call_id", "name", "side_effect_class"))
+                for item in tool_calls[:4]
+                if isinstance(item, dict)
+            ]
+        if minimal_turn:
+            minimal["assistant_turn"] = minimal_turn
+
+    action = record.get("action")
+    if isinstance(action, dict):
+        minimal_action = _pick_present(action, ("action_id", "name", "kind", "side_effect_class"))
+        if minimal_action:
+            minimal["action"] = minimal_action
+
+    policy = record.get("policy_decision")
+    if isinstance(policy, dict):
+        minimal_policy = _pick_present(policy, ("action_id", "allowed", "reason", "side_effect_class"))
+        if minimal_policy:
+            minimal["policy_decision"] = minimal_policy
+
+    tool_event = record.get("tool_execution_event")
+    if isinstance(tool_event, dict):
+        minimal_event = _pick_present(tool_event, ("event_type", "tool_call_id", "tool_name", "status"))
+        if minimal_event:
+            minimal["tool_execution_event"] = minimal_event
+
+    observation = record.get("observation")
+    if isinstance(observation, dict):
+        minimal_observation = _pick_present(
+            observation,
+            ("observation_id", "kind", "status", "source", "action_id", "tool_call_id"),
+        )
+        tool_batch = observation.get("tool_batch")
+        if isinstance(tool_batch, dict):
+            minimal_batch = _pick_present(tool_batch, ("turn_id", "tool_call_count"))
+            results = tool_batch.get("results")
+            if isinstance(results, list):
+                minimal_batch["results"] = [
+                    _pick_present(item, ("tool_call_id", "tool", "status", "kind", "observation_id"))
+                    for item in results[:4]
+                    if isinstance(item, dict)
+                ]
+            if minimal_batch:
+                minimal_observation["tool_batch"] = minimal_batch
+        if minimal_observation:
+            minimal["observation"] = minimal_observation
+
+    feedback = record.get("feedback")
+    if isinstance(feedback, dict):
+        minimal_feedback = _pick_present(feedback, ("feedback_id", "status", "stop_reason"))
+        missing = feedback.get("missing_evidence")
+        if isinstance(missing, list):
+            minimal_feedback["missing_evidence"] = [str(item) for item in missing[:6]]
+        if minimal_feedback:
+            minimal["feedback"] = minimal_feedback
+
+    guard = record.get("guard")
+    if isinstance(guard, dict):
+        minimal_guard = _pick_present(guard, ("reason", "status", "source"))
+        if minimal_guard:
+            minimal["guard"] = minimal_guard
+
+    result = record.get("result")
+    if isinstance(result, dict):
+        minimal_result = _pick_present(result, ("status", "stop_reason", "reason"))
+        if minimal_result:
+            minimal["result"] = minimal_result
+
+    data = record.get("data")
+    if isinstance(data, dict) and len(minimal) <= 3:
+        minimal_data = _pick_present(data, ("status", "reason", "source", "kind"))
+        if minimal_data:
+            minimal["data"] = minimal_data
+    return minimal
+
+
+def _pick_present(data: JsonObject, keys: tuple[str, ...]) -> JsonObject:
+    return {key: data[key] for key in keys if data.get(key) is not None}
 
 
 def _compact_agent_trace_assistant_turn(data: JsonObject) -> JsonObject:

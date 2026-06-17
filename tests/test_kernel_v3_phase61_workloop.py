@@ -574,6 +574,83 @@ def test_phase61_spurious_user_input_after_successful_direct_response_finalizes(
     assert decision.override is True
 
 
+def test_phase61_tool_batch_max_tool_calls_guard_overrides_continue_feedback():
+    decision = decide_termination(
+        feedback=Feedback(
+            feedback_id="fb-model-continue-after-tool-budget",
+            run_id="run-1",
+            status="continue",
+            stop_reason=None,
+            answer=None,
+            missing_evidence=["more_tool_work"],
+        ),
+        observation=Observation(
+            observation_id="obs-tool-batch-budget",
+            run_id="run-1",
+            kind="tool_batch_result",
+            status="partial",
+            source="deep_agent_loop",
+            content={
+                "schema": "holo.kernel_v3.deep_tool_batch_result.v1",
+                "results": [
+                    {
+                        "kind": "host_guard",
+                        "source": "loop_guard",
+                        "status": "blocked",
+                        "tool": "retrieval.run",
+                        "content": {"reason": "max_tool_calls"},
+                    }
+                ],
+            },
+            observed_at_ms=1,
+            action_id=None,
+            tool_call_id=None,
+        ),
+        progress=ProgressAssessment(
+            assessment_id="progress-tool-budget",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-15",
+            made_progress=False,
+            progress_score=0.0,
+            progress_type="none",
+            new_refs=[],
+            signals=[],
+        ),
+        repetition=RepetitionSignal(
+            signal_id="repeat-tool-budget",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-15",
+            repeated=False,
+            repeat_type=None,
+            repeat_count=0,
+            threshold=2,
+            repeated_refs=[],
+        ),
+        evidence=EvidenceSufficiency(
+            sufficiency_id="evidence-tool-budget",
+            task_id="task-1",
+            run_id="run-1",
+            step_id="step-15",
+            sufficient=False,
+            citations_required=True,
+            evidence_count=0,
+            citation_count=0,
+            valid_citation_refs=[],
+            missing=["target_fact"],
+            reason="insufficient_evidence",
+        ),
+        recipe=_retrieval_recipe(),
+        no_progress_count=1,
+        config=WorkloopConfig(),
+    )
+
+    assert decision.decision == "failure_report"
+    assert decision.reason == "max_tool_calls"
+    assert decision.override is True
+
+
 def test_phase61_clarify_first_does_not_override_successful_direct_response():
     decision = decide_termination(
         feedback=Feedback(

@@ -643,6 +643,7 @@ def decide_termination(
     override = False
     decision = feedback.status
     reason = feedback.stop_reason or feedback.status
+    budget_guard_reason = _host_budget_guard_reason(observation)
     if feedback.status == "final_answer_ready":
         if _feedback_can_finalize(feedback=feedback, observation=observation, evidence=evidence, recipe=recipe):
             decision = "final_answer"
@@ -724,6 +725,18 @@ def decide_termination(
         else:
             decision = "failure_report"
             reason = feedback.stop_reason or feedback.status
+    if budget_guard_reason == "max_tool_calls" and decision != "final_answer":
+        decision = "failure_report"
+        reason = "max_tool_calls"
+        override = True
+    elif budget_guard_reason == "max_network_fetches" and decision != "final_answer":
+        if evidence.evidence_count > 0 and bool(evidence.valid_citation_refs):
+            decision = "final_answer"
+            reason = "network_budget_guard_with_partial_evidence"
+        else:
+            decision = "failure_report"
+            reason = "max_network_fetches"
+        override = True
     if _network_budget_guard_with_evidence(observation=observation, evidence=evidence) and decision != "final_answer":
         decision = "final_answer"
         reason = "network_budget_guard_with_partial_evidence"
@@ -782,12 +795,42 @@ def _allows_repeated_signal_to_continue(*, feedback: Feedback, repetition: Repet
 
 
 def _network_budget_guard_with_evidence(*, observation: Observation | None, evidence: EvidenceSufficiency) -> bool:
-    if observation is None or observation.source != "loop_guard" or observation.status != "blocked":
-        return False
-    content = observation.content if isinstance(observation.content, dict) else {}
-    if content.get("reason") != "max_network_fetches":
+    if _host_budget_guard_reason(observation) != "max_network_fetches":
         return False
     return evidence.evidence_count > 0 and bool(evidence.valid_citation_refs)
+
+
+def _host_budget_guard_reason(observation: Observation | None) -> str | None:
+    if observation is None:
+        return None
+    content = observation.content if isinstance(observation.content, dict) else {}
+    if observation.source == "loop_guard" and observation.status == "blocked":
+        reason = content.get("reason")
+        return str(reason) if reason in {"max_tool_calls", "max_network_fetches"} else None
+    return _host_budget_guard_reason_from_payload(content)
+
+
+def _host_budget_guard_reason_from_payload(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    reason = payload.get("reason")
+    if reason in {"max_tool_calls", "max_network_fetches"}:
+        return str(reason)
+    nested_content = payload.get("content")
+    if isinstance(nested_content, dict):
+        nested_reason = _host_budget_guard_reason_from_payload(nested_content)
+        if nested_reason:
+            return nested_reason
+    results = payload.get("results")
+    if isinstance(results, list):
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            if item.get("kind") == "host_guard" or item.get("source") == "loop_guard":
+                nested_reason = _host_budget_guard_reason_from_payload(item)
+                if nested_reason:
+                    return nested_reason
+    return None
 
 
 def _feedback_requires_workspace_file_read(feedback: Feedback) -> bool:
