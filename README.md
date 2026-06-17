@@ -125,6 +125,10 @@ finance capability. The first implementation checkpoint adds
 `kernel_v3/finance/open_components.py`, registering `finance.toolchain.describe`,
 `sec.edgar.company_filings`, `sec.edgar.financials`, `document.docling.convert`,
 and `market.openbb.fetch` as host-policy-bound optional component tools.
+`requirements-finance-open-components.txt` currently pins `edgartools==5.36.0`;
+the SEC filing-discovery and structured-financials tools have passed live
+smoke checks against MMM 10-K data with strict JSON observation output. This is
+toolchain evidence, not a finance benchmark score.
 The first 2026-06-14 general-capability line, covering DeepSeek cache
 discipline, stable context ordering, managed memory context, and general
 agent-gauntlet priorities, is tracked in

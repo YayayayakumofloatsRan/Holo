@@ -1,0 +1,15 @@
+# Optional mature finance components for Kernel v3.
+#
+# These dependencies are not required for unit tests. They make the host-policy
+# bound open-component tools in kernel_v3/finance/open_components.py executable.
+#
+# First enabled component, smoke-tested on 2026-06-17:
+# - sec.edgar.company_filings
+# - sec.edgar.financials
+edgartools==5.36.0
+
+# Planned next components are intentionally not installed by default here until
+# their tool wrappers have matching live smoke evidence and resource bounds.
+# langgraph
+# docling
+# openbb

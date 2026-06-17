@@ -224,9 +224,42 @@ market.openbb.fetch
 .venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py::test_calculator_rejects_unsafe_expressions tests/test_kernel_v3_finance_engine.py::test_finance_numeric_verifier_is_registered_as_read_only_tool -q
 ```
 
-最新结果：新增成熟组件工具边界测试 `5 passed`，旧 calculator/verifier 注册回归 `2 passed`，py_compile 通过。
+最新结果：新增成熟组件工具边界测试 `8 passed`，旧 calculator/verifier 注册回归 `2 passed`，py_compile 通过。
 
-## 7. 来源
+## 7. 2026-06-17 EdgarTools 实际接通检查点
+
+第一批真正安装并 live smoke 的成熟组件是 EdgarTools：
+
+```text
+requirements-finance-open-components.txt
+  edgartools==5.36.0
+```
+
+本次修正了三个接入稳定性问题：
+
+- EdgarTools import 默认会尝试写 `~/.edgar`；Holo 适配层现在在 import 前把 `EDGAR_LOCAL_DATA_DIR` 和 `EDGAR_CACHE_DIR` 默认指向 `/tmp/holo-edgar-cache/...`，并保留用户显式环境变量优先级。这避免污染 WSL home 和 `.state`。
+- 新版 EdgarTools 的 `filing_obj.financials` 可能是 property 而非 callable；`sec.edgar.financials` 现在同时兼容 property 和 method API。
+- Pandas/DataFrame 输出中的非有限浮点如 `NaN` 会被 sanitizer 转成 `None`，保证 Holo observation / journal 是严格 JSON。
+
+Live smoke 结果，不是 benchmark 分数：
+
+```text
+tool: sec.edgar.company_filings
+input: identifier=MMM, form=10-K, limit=1
+status: ok
+record_count: 1
+example: accession_number=0000066740-26-000014, form=10-K, filing_date=2026-02-03, reportDate=2025-12-31
+
+tool: sec.edgar.financials
+input: identifier=MMM, form=10-K, statement=cash_flow_statement, limit=5
+status: ok
+record_count: 5
+strict_json_check: json.dumps(observation, allow_nan=False) passed
+```
+
+这说明 Holo 的 SEC 成熟组件路径已经从 `dependency_missing` 进入可执行状态：模型可以在 planner 中选择 EdgarTools-backed filing discovery 或 SEC/XBRL financial statement candidates；host 仍只返回候选 facts/records，最终 metric、period、line item、unit、formula 和解释仍由 LLM 决定。
+
+## 8. 来源
 
 - LangGraph overview: <https://docs.langchain.com/oss/python/langgraph/overview>
 - AutoGen documentation: <https://microsoft.github.io/autogen/stable/>

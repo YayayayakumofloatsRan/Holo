@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from kernel_v3.agent.runtime import task_recipe
 from kernel_v3.contracts import CandidateAction
 from kernel_v3.finance import (
@@ -131,6 +133,44 @@ def test_openbb_tool_blocks_unallowlisted_routes_before_component_import(monkeyp
     assert observation.kind == "openbb_result"
     assert observation.content["error"] == "route_not_allowlisted"
     assert "equity.price.historical" in observation.content["allowed_routes"]
+
+
+def test_edgartools_environment_defaults_to_tmp_cache(monkeypatch, tmp_path) -> None:
+    cache_root = tmp_path / "edgar-cache"
+    monkeypatch.setenv("HOLO_EDGAR_CACHE_ROOT", str(cache_root))
+    monkeypatch.delenv("EDGAR_LOCAL_DATA_DIR", raising=False)
+    monkeypatch.delenv("EDGAR_CACHE_DIR", raising=False)
+
+    open_components._prepare_edgar_environment()
+
+    assert open_components.os.environ["EDGAR_LOCAL_DATA_DIR"] == str(cache_root / "data")
+    assert open_components.os.environ["EDGAR_CACHE_DIR"] == str(cache_root / "cache")
+    assert (cache_root / "data").is_dir()
+    assert (cache_root / "cache").is_dir()
+
+
+def test_edgartools_financials_adapter_accepts_property_api() -> None:
+    class FakeFilingObject:
+        financials = {"statement": "cash_flow"}
+
+    class FakeLatest:
+        def obj(self):
+            return FakeFilingObject()
+
+    class FakeFilings:
+        def latest(self):
+            return FakeLatest()
+
+    class FakeCompany:
+        def get_filings(self, *, form: str):
+            assert form == "10-K"
+            return FakeFilings()
+
+    assert open_components._edgar_financials_for_company(FakeCompany(), form="10-K") == {"statement": "cash_flow"}
+
+
+def test_open_component_json_sanitizer_removes_non_finite_float() -> None:
+    assert open_components._json_sanitize({"value": math.nan, "ok": 1.25}) == {"value": None, "ok": 1.25}
 
 
 def test_finance_retrieval_recipe_exposes_mature_component_tools_only_with_network_budget() -> None:

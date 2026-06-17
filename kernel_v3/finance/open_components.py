@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import math
 import os
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from kernel_v3.contracts import CandidateAction, JsonObject, JsonValue, Observation, ToolManifest
@@ -375,6 +377,8 @@ def _component_status(
 
 
 def _import_component(import_name: str, *, package: str) -> tuple[Any | None, JsonObject | None]:
+    if import_name == "edgar":
+        _prepare_edgar_environment()
     if importlib.util.find_spec(import_name) is None:
         return None, {
             "error": "dependency_missing",
@@ -387,6 +391,16 @@ def _import_component(import_name: str, *, package: str) -> tuple[Any | None, Js
         return importlib.import_module(import_name), None
     except Exception as exc:
         return None, _component_exception(package, exc)
+
+
+def _prepare_edgar_environment() -> None:
+    base = Path(os.environ.get("HOLO_EDGAR_CACHE_ROOT") or "/tmp/holo-edgar-cache")
+    data_dir = Path(os.environ.get("EDGAR_LOCAL_DATA_DIR") or base / "data")
+    cache_dir = Path(os.environ.get("EDGAR_CACHE_DIR") or base / "cache")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("EDGAR_LOCAL_DATA_DIR", str(data_dir))
+    os.environ.setdefault("EDGAR_CACHE_DIR", str(cache_dir))
 
 
 def _configure_edgar_identity(edgar: Any) -> JsonObject | None:
@@ -414,7 +428,8 @@ def _edgar_financials_for_company(company: Any, *, form: str) -> Any:
         latest = filings.latest() if hasattr(filings, "latest") else None
         if latest is not None:
             filing_obj = latest.obj() if hasattr(latest, "obj") else latest
-            financials = filing_obj.financials() if hasattr(filing_obj, "financials") else None
+            financials_attr = getattr(filing_obj, "financials", None)
+            financials = financials_attr() if callable(financials_attr) else financials_attr
             if financials is not None:
                 return financials
     if hasattr(company, "get_financials"):
@@ -531,8 +546,10 @@ def _record(value: Any) -> JsonObject:
 def _json_sanitize(value: Any, *, depth: int = 0) -> JsonValue:
     if depth > 8:
         return str(value)[:1_000]
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if value is None or isinstance(value, (bool, int, str)):
         return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, Mapping):
         result: JsonObject = {}
         for key, item in list(value.items())[:200]:
