@@ -102,6 +102,7 @@ from kernel_v3.retrieval.evaluate import qualify_evidence_candidate
 from kernel_v3.retrieval.extract import extract_spans, readable_document_text
 from kernel_v3.retrieval.targeting import target_entity_phrases
 from kernel_v3.session import TaskState
+from kernel_v3.tool_use import ARTIFACT_QUERY_NAME
 from kernel_v3.tools import ToolRegistry
 
 
@@ -6567,6 +6568,7 @@ def test_finance_fast_recipe_exposes_composable_toolchain_tools(tmp_path) -> Non
     )
 
     assert "retrieval.run" in recipe.allowed_tools
+    assert ARTIFACT_QUERY_NAME in recipe.allowed_tools
     assert CALCULATOR_TOOL_NAME in recipe.allowed_tools
     assert FINANCE_VERIFY_NUMERIC_TOOL_NAME in recipe.allowed_tools
     assert "workspace.list" in recipe.allowed_tools
@@ -6908,6 +6910,7 @@ def test_finance_fast_model_planner_can_select_verify_numeric_tool() -> None:
 
     assert action.name == FINANCE_VERIFY_NUMERIC_TOOL_NAME
     assert FINANCE_VERIFY_NUMERIC_TOOL_NAME in _planner_allowed_tool_names(recipe)
+    assert ARTIFACT_QUERY_NAME in _planner_allowed_tool_names(recipe)
     assert decision.allowed
     assert observation.status == "ok"
     assert observation.source == f"tool:{FINANCE_VERIFY_NUMERIC_TOOL_NAME}"

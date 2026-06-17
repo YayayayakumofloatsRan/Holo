@@ -1098,3 +1098,54 @@ artifact 不是只能读全文，而应支持模型 one-shot 做有界结构查�
 说明：这是 P0 mature-loop 工作台能力，不是 FinanceBench/FinQA accuracy。它减少
 未来 live debug 中反复整包 `artifact.read` 的概率，并给模型一个更接近成熟 agent
 loop 的临时工作台查询接口。
+
+## 27. Artifact query exposure checkpoint
+
+复查后发现上一节只证明了 `artifact.query` 工具本身可用，但还没有完全证明真实
+AgentRuntime / planner allowed surface 会把它暴露给模型。成熟 agent loop 的要求不是
+“工具注册在 registry 里”，而是模型 one-shot 时能看到可调用 schema，并且
+`tool.discovery` 也认为它是 allowed tool。
+
+本轮补齐：
+
+- `AgentRuntime._with_foundational_tools(...)` 的 `tool.discovery` allowed set 加入
+  `artifact.query`。
+- `_planner_allowed_tool_names(...)` 默认把 `artifact.query` 和 `artifact.read` 一起
+  加入 model planner / deep planner 可用工具集合。
+- `task_recipe("retrieval_answer")`、`workspace_answer`、`workspace_write` 默认
+  allowed_tools 均加入 `artifact.query`。
+- finance open-component / research profile runtime registry 测试确认
+  `artifact.query` 进入 recipe allowed tools 和 runtime manifests。
+- finance fast planner 测试确认 `_planner_allowed_tool_names(recipe)` 包含
+  `artifact.query`，模型 planner 可在同一 allowed set 中选择 verifier、calculator、
+  retrieval 和 artifact query。
+
+结构验证：
+
+```bash
+.venv/bin/python -m py_compile \
+  kernel_v3/agent/runtime.py \
+  tests/test_kernel_v3_finance_open_components.py \
+  tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_tool_use.py \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_provider_native_tools.py \
+  tests/test_kernel_v3_finance_open_components.py \
+  tests/test_kernel_v3_processor_usage.py -q
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_engine.py::test_finance_fast_recipe_exposes_composable_toolchain_tools \
+  tests/test_kernel_v3_finance_engine.py::test_finance_fast_model_planner_can_select_verify_numeric_tool \
+  tests/test_kernel_v3_finance_engine.py::test_finance_capability_planner_directive_shows_script_toolchain -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_benchmark.py -q
+```
+
+结果：
+
+- `tool/deep/provider/finance-open/processor`: `92 passed in 6.32s`
+- `finance_engine targeted`: `3 passed in 0.67s`
+- `finance_benchmark`: `61 passed in 176.06s`
+
+说明：这是工具暴露链路修复，不是 live finance score。当前 UbuntuHolo 仍未暴露
+`DEEPSEEK_API_KEY` / `HOLO_V3_LIVE_MODEL`，因此本轮仍不能报告新的
+FinanceBench/FinQA 准确率。

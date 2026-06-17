@@ -414,6 +414,14 @@ tool-result JSON into context. Provider full-result hints now include
 catalog describe the new path. Targeted structural tests pass (`81` loop/tool/
 finance-open-component tests, `11` processor usage tests, `61` finance benchmark
 harness tests). This is P0 workbench readiness, not a live finance score.
+The follow-up closes the exposure path: retrieval, workspace-answer, and
+workspace-write recipes now include `artifact.query`; planner allowed-tool sets
+and `tool.discovery` allowed manifests include it alongside `artifact.read`.
+Finance runtime tests confirm the tool is present in recipe allowed tools,
+runtime manifests, and model-planner allowed sets. Targeted structural tests
+pass (`92` tool/deep/provider/finance-open/processor tests, `3` finance-engine
+planner tests, `61` finance benchmark harness tests). This is model-visible
+tool-surface readiness, not a live finance score.
 The next finance tool-runtime P0 checkpoint makes those tool contracts executable
 rather than merely descriptive. `retrieval.run`, SEC/EDGAR, Trafilatura, OpenBB,
 DuckDB, SymPy, `calculator.compute`, `finance.slot_bind`, and

@@ -30,6 +30,7 @@ from kernel_v3.finance import (
 from kernel_v3.finance import open_components
 from kernel_v3.policy import PolicyGate
 from kernel_v3.tool_runtime import tool_runtime_spec_for_manifest
+from kernel_v3.tool_use import ARTIFACT_QUERY_NAME
 from kernel_v3.tools import ToolRegistry
 
 
@@ -905,6 +906,7 @@ def test_finance_retrieval_recipe_exposes_mature_component_tools_only_with_netwo
     )
 
     assert FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in offline_recipe.allowed_tools
+    assert ARTIFACT_QUERY_NAME in offline_recipe.allowed_tools
     for tool_name in FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES:
         assert tool_name in offline_recipe.allowed_tools
     assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME not in offline_recipe.allowed_tools
@@ -932,6 +934,7 @@ def test_finance_research_profile_exposes_tool_surface_without_numeric_verifier(
     )
 
     assert FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in recipe.allowed_tools
+    assert ARTIFACT_QUERY_NAME in recipe.allowed_tools
     assert DATA_TABLE_QUERY_TOOL_NAME in recipe.allowed_tools
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in recipe.allowed_tools
     assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME in recipe.allowed_tools
@@ -942,6 +945,7 @@ def test_finance_research_profile_exposes_tool_surface_without_numeric_verifier(
         for manifest in runtime._registry(recipe, "Explain a finance disclosure.").manifests()
     }
     assert FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME in manifests
+    assert ARTIFACT_QUERY_NAME in manifests
     assert DATA_TABLE_QUERY_TOOL_NAME in manifests
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in manifests
     retrieval_runtime = tool_runtime_spec_for_manifest(manifests["retrieval.run"])

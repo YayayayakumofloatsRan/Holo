@@ -121,7 +121,13 @@ from kernel_v3.retrieval.url_utils import expanded_url_targets
 from kernel_v3.runtime_graph import is_terminal_record
 from kernel_v3.session import TaskState
 from kernel_v3.substrate import Claim, EvidencePolicy, SlotFill, SlotFrame, SlotSpec, TransformPlan
-from kernel_v3.tool_use import ARTIFACT_READ_NAME, TOOL_DISCOVERY_NAME, register_artifact_tools, register_tool_discovery
+from kernel_v3.tool_use import (
+    ARTIFACT_QUERY_NAME,
+    ARTIFACT_READ_NAME,
+    TOOL_DISCOVERY_NAME,
+    register_artifact_tools,
+    register_tool_discovery,
+)
 from kernel_v3.tools import ToolManifest, ToolRegistry
 from kernel_v3.workmethod import WorkMethodState, WorkMethodSupervisor
 
@@ -777,7 +783,7 @@ class AgentRuntime:
             register_artifact_tools(registry, artifact_store=self.artifact_store)
             register_tool_discovery(
                 registry,
-                allowed_tool_names={*recipe.allowed_tools, ARTIFACT_READ_NAME, TOOL_DISCOVERY_NAME},
+                allowed_tool_names={*recipe.allowed_tools, ARTIFACT_QUERY_NAME, ARTIFACT_READ_NAME, TOOL_DISCOVERY_NAME},
             )
         return registry
 
@@ -6895,6 +6901,7 @@ def _planner_allowed_tool_names(recipe: TaskRecipe) -> set[str]:
     if allowed:
         allowed.add(TOOL_DISCOVERY_NAME)
         allowed.add(ARTIFACT_READ_NAME)
+        allowed.add(ARTIFACT_QUERY_NAME)
     if recipe.mode == "retrieval_answer":
         allowed.add("respond")
     return allowed or {"__no_tools_allowed__"}
@@ -7590,7 +7597,7 @@ def task_recipe(
         max_network_fetches = _retrieval_network_fetch_budget(recipe_metadata)
         if max_network_fetches > 0:
             recipe_metadata = _with_allowed_permission(recipe_metadata, "network:fetch")
-        allowed_tools = [TOOL_DISCOVERY_NAME, ARTIFACT_READ_NAME, "retrieval.run"]
+        allowed_tools = [TOOL_DISCOVERY_NAME, ARTIFACT_READ_NAME, ARTIFACT_QUERY_NAME, "retrieval.run"]
         finance_toolchain = _metadata_requests_finance_toolchain(recipe_metadata)
         if _metadata_requires_finance_numeric_verifier(recipe_metadata):
             allowed_tools.append(FINANCE_SLOT_BIND_TOOL_NAME)
@@ -7632,7 +7639,7 @@ def task_recipe(
     if normalized == "workspace_answer":
         return TaskRecipe(
             recipe_id="recipe-workspace-answer",
-            allowed_tools=[TOOL_DISCOVERY_NAME, ARTIFACT_READ_NAME, "workspace.list", "workspace.search", "file.read"],
+            allowed_tools=[TOOL_DISCOVERY_NAME, ARTIFACT_READ_NAME, ARTIFACT_QUERY_NAME, "workspace.list", "workspace.search", "file.read"],
             max_steps=4,
             max_tool_calls=3,
             max_network_fetches=0,
@@ -7648,7 +7655,15 @@ def task_recipe(
         recipe_metadata = _with_allowed_permission(recipe_metadata, "workspace:write")
         return TaskRecipe(
             recipe_id="recipe-workspace-write",
-            allowed_tools=[TOOL_DISCOVERY_NAME, ARTIFACT_READ_NAME, "workspace.list", "workspace.search", "file.read", "workspace.write"],
+            allowed_tools=[
+                TOOL_DISCOVERY_NAME,
+                ARTIFACT_READ_NAME,
+                ARTIFACT_QUERY_NAME,
+                "workspace.list",
+                "workspace.search",
+                "file.read",
+                "workspace.write",
+            ],
             max_steps=8,
             max_tool_calls=6,
             max_network_fetches=0,
