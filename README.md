@@ -514,6 +514,21 @@ claims, one calculator/formula trace ran, numeric verifier, verifier gate, and
 synthesis gate all passed, and the matched value was `1577.0`. This is a single
 debug-row live result, not a debug50/test100 score; it also remains expensive at
 `282,939` tokens.
+The latest 2026-06-18 live repair on `financebench_id_04672` closes the next
+tool-contract gap. Earlier live attempts found the right area but either lost
+filing scale (`$ 8,738` became bare `8738`) or let cash-flow PP&E purchases
+bind to a balance-sheet net PP&E slot. Kernel v3 now propagates nearby filing
+scale scopes into natural-text facts, rejects cash-flow PP&E purchase rows for
+balance-sheet net PP&E target binding, and lets `sec.edgar.financials` fall
+back to official SEC companyfacts JSON when EdgarTools cannot run without a
+valid `EDGAR_IDENTITY`. SEC financials records are promoted as toolchain
+candidate facts with `concept`, `fp`, `start`, `end`, `frame`, and `accn` so the
+LLM can bind line item and period from raw fields. The live rerun
+`.state/kernel_v3/bench/finance/fb_debug50_o001_l001_after_sec_fallback_20260618.jsonl`
+passed `1/1` with `numeric_within_tolerance`, final answer `$8.738 billion`,
+numeric verifier/gate/synthesis gate passed, `sec.edgar.financials` used once,
+`154` finance facts, `2` formula traces, and `363,559` tokens. This is a single
+live debug-row result, not a debug50/test100 score.
 The next same-day mature-loop checkpoint is recorded in section 17 of
 `docs/KERNEL_V3_AGENT_LOOP_FOLLOWUP_2026-06-18_ZH.md`. It ports another
 Claude-Code-style tool contract into Holo's finance path: model one-shot tool

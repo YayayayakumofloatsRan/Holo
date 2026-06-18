@@ -14679,8 +14679,18 @@ def _workspace_grounding(
 
 
 def _toolchain_candidate_facts(content: JsonObject, *, source: str) -> list[JsonObject]:
-    if source not in {"tool:shell.exec", "tool:script.exec", "tool:file.read", "tool:workspace.write"}:
+    if source not in {
+        "tool:shell.exec",
+        "tool:script.exec",
+        "tool:file.read",
+        "tool:workspace.write",
+        "tool:sec.edgar.financials",
+        "tool:data.table.query",
+        "tool:market.openbb.fetch",
+    }:
         return []
+    if source in {"tool:sec.edgar.financials", "tool:data.table.query", "tool:market.openbb.fetch"}:
+        return _dedupe_candidate_facts(_candidate_facts_from_json(content))
     texts: list[str] = []
     stdout = content.get("stdout")
     if isinstance(stdout, str) and stdout.strip():
@@ -14730,7 +14740,7 @@ def _candidate_facts_from_json(value: object) -> list[JsonObject]:
     if not isinstance(value, dict):
         return []
     table_facts = _candidate_facts_from_table_payload(value)
-    for key in ("facts", "candidate_facts", "candidateFacts", "finance_facts", "financeFacts"):
+    for key in ("facts", "candidate_facts", "candidateFacts", "finance_facts", "financeFacts", "records", "rows"):
         nested = value.get(key)
         if isinstance(nested, list):
             nested_facts = [fact for item in nested for fact in _candidate_facts_from_json(item)]
@@ -14762,7 +14772,11 @@ def _candidate_facts_from_json(value: object) -> list[JsonObject]:
         "year": "fy",
         "period": "period",
         "form": "form",
+        "fp": "fp",
         "filed": "filed",
+        "start": "start",
+        "end": "end",
+        "frame": "frame",
         "accn": "accn",
         "value": "value",
         "val": "value",
@@ -14965,7 +14979,11 @@ def _candidate_fact_evidence_text(fact: JsonObject) -> str:
         "fy",
         "period",
         "form",
+        "fp",
         "filed",
+        "start",
+        "end",
+        "frame",
         "accn",
         "value",
     ]

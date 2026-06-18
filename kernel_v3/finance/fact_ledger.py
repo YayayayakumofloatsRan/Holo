@@ -182,6 +182,13 @@ AMOUNT_PATTERN = re.compile(
     r"million|billion|trillion|thousand|mn|bn|m|b|usd|dollars|shares)?",
     re.IGNORECASE,
 )
+SCALE_SCOPE_PATTERN = re.compile(
+    r"\(\s*(?:in\s+)?(?P<paren>millions|million|billions|billion|thousands|thousand)\s*\)"
+    r"|\b(?:amounts?|dollars|u\.s\.\s+dollars|usd|financial\s+data)\s+in\s+"
+    r"(?P<named>millions|million|billions|billion|thousands|thousand)\b"
+    r"|\bin\s+(?P<plain>millions|million|billions|billion|thousands|thousand)\b",
+    re.IGNORECASE,
+)
 NATURAL_METRIC_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("transaction value", ("transaction value", "deal value", "total transaction", "valued at")),
     (
@@ -660,7 +667,10 @@ def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: Citatio
         scale_multiplier = _context_scale_multiplier(context, raw_unit=raw_unit)
         if scale_multiplier == Decimal(1):
             scale_multiplier = _context_scale_multiplier(document_scale_context, raw_unit=raw_unit)
+        if scale_multiplier == Decimal(1):
+            scale_multiplier = _nearby_scale_scope_multiplier(normalized_text, match.start(), raw_unit=raw_unit)
         value *= scale_multiplier
+        scale_metadata = _scale_scope_metadata(scale_multiplier)
         year = _nearby_year(context)
         fact_id = "finfact-natural-" + _short_hash(
             item.evidence_id,
@@ -690,6 +700,7 @@ def _natural_facts_from_text(text: str, *, item: EvidenceItem, citation: Citatio
                     "source_uri": item.uri,
                     "source_title": item.title,
                     "supported_metric": metric in SUPPORTED_FINANCE_METRICS,
+                    **scale_metadata,
                     **_evidence_fact_diagnostics(item),
                     "per_share": _context_indicates_per_share(
                         context,
@@ -772,12 +783,15 @@ def _natural_table_row_facts_from_text(
                 scale_multiplier = _context_scale_multiplier(row_context, raw_unit="")
                 if scale_multiplier == Decimal(1):
                     scale_multiplier = _context_scale_multiplier(document_scale_context, raw_unit="")
+                if scale_multiplier == Decimal(1):
+                    scale_multiplier = _nearby_scale_scope_multiplier(normalized_text, match.start(), raw_unit="")
                 for year, amount in zip(years, amounts):
                     raw_number, raw_unit, prefix, display_raw, signed_number = amount
                     value = _scaled_amount(signed_number, raw_unit, prefix)
                     if value is None:
                         continue
                     value *= scale_multiplier
+                    scale_metadata = _scale_scope_metadata(scale_multiplier)
                     fact_key = f"{metric}|{year}|{_decimal_string(value)}|{item.evidence_id}"
                     if fact_key in seen:
                         continue
@@ -811,6 +825,7 @@ def _natural_table_row_facts_from_text(
                                 "source_uri": item.uri,
                                 "source_title": item.title,
                                 "supported_metric": True,
+                                **scale_metadata,
                                 **_evidence_fact_diagnostics(item),
                                 "per_share": False,
                             },
@@ -1599,6 +1614,59 @@ def _context_scale_multiplier(context: str, *, raw_unit: str) -> Decimal:
     if re.search(r"\(\s*thousands\s*\)|\(\s*in\s+thousands\s*\)|\bin\s+thousands\b|\bamounts?\s+in\s+thousands\b", text):
         return Decimal(1_000)
     return Decimal(1)
+
+
+def _nearby_scale_scope_multiplier(text: str, offset: int, *, raw_unit: str) -> Decimal:
+    if raw_unit:
+        return Decimal(1)
+    source = str(text or "")
+    if not source:
+        return Decimal(1)
+    cursor = max(0, min(len(source), int(offset or 0)))
+    start = max(0, cursor - 1200)
+    end = min(len(source), cursor + 160)
+    scope = source[start:end]
+    matches = list(SCALE_SCOPE_PATTERN.finditer(scope))
+    if not matches:
+        return Decimal(1)
+    before = [match for match in matches if start + match.end() <= cursor + 24]
+    match = before[-1] if before else min(matches, key=lambda item: abs((start + item.start()) - cursor))
+    label = next(
+        (
+            match.group(name)
+            for name in ("paren", "named", "plain")
+            if match.group(name)
+        ),
+        "",
+    )
+    return _scale_multiplier_from_label(label)
+
+
+def _scale_multiplier_from_label(label: str) -> Decimal:
+    text = str(label or "").strip().lower()
+    if text in {"thousand", "thousands"}:
+        return Decimal(1_000)
+    if text in {"million", "millions"}:
+        return Decimal(1_000_000)
+    if text in {"billion", "billions"}:
+        return Decimal(1_000_000_000)
+    return Decimal(1)
+
+
+def _scale_scope_metadata(multiplier: Decimal) -> JsonObject:
+    if multiplier == Decimal(1_000):
+        scale = "thousands"
+    elif multiplier == Decimal(1_000_000):
+        scale = "millions"
+    elif multiplier == Decimal(1_000_000_000):
+        scale = "billions"
+    else:
+        return {}
+    return {
+        "source_scale": scale,
+        "source_scale_multiplier": _decimal_string(multiplier),
+        "source_scale_applied": True,
+    }
 
 
 def _natural_unit(prefix: str, unit: str) -> str | None:

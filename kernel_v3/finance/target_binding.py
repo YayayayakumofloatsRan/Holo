@@ -290,6 +290,8 @@ def _metric_matches(fact: FinanceFact, *, binding: JsonObject, question: str) ->
     line_item = _string(binding.get("required_line_item")).lower()
     text = f"{question} {line_item}"
     if line_item in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}:
+        if _cash_flow_ppe_purchase_context(fact):
+            return False
         return metric in {"property plant and equipment net", "net property plant and equipment", "net ppne", "ppne"}
     if line_item == "capital expenditures":
         return metric == "capital expenditures"
@@ -352,19 +354,55 @@ def _statement_matches(fact: FinanceFact, *, binding: JsonObject) -> bool:
     statement = _string(binding.get("required_statement")).lower()
     if not statement:
         return False
-    context = _string(fact.metadata.get("context")).lower()
-    source_title = _string(fact.metadata.get("source_title")).lower()
-    concept = _string(fact.metadata.get("concept")).lower()
+    haystack = _fact_binding_text(fact)
     if statement == "cash_flow_statement":
-        return any(marker in f"{context} {source_title} {concept}" for marker in ("cash flow", "cash flows", "paymentstoacquire"))
+        return any(marker in haystack for marker in ("cash flow", "cash flows", "paymentstoacquire"))
     if statement == "income_statement":
-        return "income" in f"{context} {source_title} {concept}"
+        return "income" in haystack
     if statement == "balance_sheet":
+        if _cash_flow_ppe_purchase_context(fact):
+            return False
         return any(
-            marker in f"{context} {source_title} {concept}"
-            for marker in ("balance sheet", "assets", "liabilities", "propertyplantandequipment", "property plant and equipment")
+            marker in haystack
+            for marker in (
+                "balance sheet",
+                "assets",
+                "liabilities",
+                "propertyplantandequipmentnet",
+                "property plant and equipment net",
+                "property, plant and equipment, net",
+                "net property plant and equipment",
+                "net property, plant and equipment",
+            )
         )
     return False
+
+
+def _fact_binding_text(fact: FinanceFact) -> str:
+    metadata = fact.metadata if isinstance(fact.metadata, dict) else {}
+    return _normalize(
+        " ".join(
+            str(item or "")
+            for item in (
+                fact.metric,
+                metadata.get("context"),
+                metadata.get("source_title"),
+                metadata.get("concept"),
+                metadata.get("label"),
+                metadata.get("raw"),
+                metadata.get("row_marker"),
+            )
+        )
+    )
+
+
+def _cash_flow_ppe_purchase_context(fact: FinanceFact) -> bool:
+    text = _fact_binding_text(fact)
+    if "paymentstoacquirepropertyplantandequipment" in text:
+        return True
+    if any(marker in text for marker in ("purchases of property plant and equipment", "payments to acquire property plant and equipment")):
+        return True
+    return "cash flow" in text and "property plant and equipment" in text and "net property plant and equipment" not in text
 
 
 def _required_statement(text: str, *, required_line_item: str | None = None) -> str | None:

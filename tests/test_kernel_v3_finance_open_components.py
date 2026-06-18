@@ -211,6 +211,87 @@ def test_finance_toolchain_describe_reports_component_install_status(monkeypatch
     assert "process_observability_visualization" in family_ids
 
 
+def test_sec_financials_tool_falls_back_to_official_companyfacts_when_edgartools_unavailable(monkeypatch) -> None:
+    def fake_import_component(import_name: str, *, package: str):
+        return None, {
+            "error": "dependency_missing",
+            "component": package,
+            "import_name": import_name,
+            "install_hint": f"pip install {package}",
+            "host_boundary": "tool did not run; no benchmark answer was inferred by host fallback",
+        }
+
+    def fake_fetch_companyfacts(cik: str):
+        assert cik == "0000066740"
+        return {
+            "entityName": "3M COMPANY",
+            "cik": "66740",
+            "facts": {
+                "us-gaap": {
+                    "PropertyPlantAndEquipmentNet": {
+                        "label": "Property, Plant and Equipment, Net",
+                        "units": {
+                            "USD": [
+                                {
+                                    "end": "2017-12-31",
+                                    "val": 8866000000,
+                                    "accn": "0001558370-19-000470",
+                                    "fy": 2018,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2019-02-07",
+                                },
+                                {
+                                    "end": "2018-12-31",
+                                    "val": 8738000000,
+                                    "accn": "0001558370-19-000470",
+                                    "fy": 2018,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2019-02-07",
+                                },
+                            ]
+                        },
+                    }
+                }
+            },
+        }
+
+    monkeypatch.setattr(open_components, "_import_component", fake_import_component)
+    monkeypatch.setattr(open_components, "_fetch_sec_companyfacts_json", fake_fetch_companyfacts)
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-sec-financials-fallback",
+        kind="tool",
+        name=SEC_EDGAR_FINANCIALS_TOOL_NAME,
+        description="retrieve SEC financials",
+        score=1.0,
+        payload={"identifier": "MMM", "form": "10-K", "statement": "balance_sheet", "fiscal_year": 2018, "limit": 10},
+        reasons=["need balance sheet PP&E"],
+        side_effect_class="network",
+    )
+    decision = PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}).validate(
+        run_id="run-sec-financials-fallback",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "sec_edgar_result"
+    assert observation.content["component"] == "sec_companyfacts_direct"
+    assert observation.content["fallback_from"]["error"] == "dependency_missing"
+    records = observation.content["records"]
+    assert records[0]["concept"] == "PropertyPlantAndEquipmentNet"
+    assert records[0]["metric"] == "property plant and equipment net"
+    assert records[0]["end"] == "2018-12-31"
+    assert records[0]["value"] == 8738000000
+    assert records[1]["end"] == "2017-12-31"
+    assert records[1]["value"] == 8866000000
+
+
 def test_finance_tool_surface_catalog_covers_required_one_shot_tool_families() -> None:
     catalog = finance_tool_surface_catalog()
     family_ids = {item["family_id"] for item in catalog}

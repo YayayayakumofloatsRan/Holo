@@ -1168,6 +1168,34 @@ def test_finance_fact_ledger_preserves_specific_revenue_concepts() -> None:
     assert by_metric[("sales and other operating revenues", 2024)].value == "193414000000"
 
 
+def test_finance_fact_ledger_propagates_nearby_filing_scale_scope_to_natural_amounts() -> None:
+    text = (
+        "Cash Flows from Investing Activities: Years ended December 31 (Millions) 2018 2017 2016 "
+        "Purchases of property, plant and equipment (PP&E) $ (1,577) $ (1,373) $ (1,420) "
+        "Proceeds from sale of property, plant and equipment and other assets 222 249 451 "
+        "Europe, Middle East and Africa 20,884 20,869 20,203 295 256 294 "
+        "Latin America and Canada 16,249 15,426 17,509 50 56 64 448 505 "
+        "Total Company 93,516 91,536 91,584 $ 1,577 $1,373 $1,420 $ 8,738 $ 8,866 "
+        "Employment: Employment increased 1,980 positions in 2018 and decreased by 48 positions in 2017. "
+        "Capital Spending/Net Property, Plant and Equipment: Investments in property,"
+    )
+    evidence = [_finance_evidence(evidence_id="mmm-ppne-scale-scope", text=text)]
+    citations = [_finance_citation(evidence[0], citation_id="cite-mmm-ppne")]
+
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+
+    ppne_fact = next(
+        fact
+        for fact in facts
+        if fact.metric == "property plant and equipment net" and fact.metadata.get("raw") == "$ 8,738"
+    )
+    assert ppne_fact.value == "8738000000"
+    assert ppne_fact.unit == "USD"
+    assert ppne_fact.metadata["source_scale"] == "millions"
+    assert ppne_fact.metadata["source_scale_multiplier"] == "1000000"
+    assert ppne_fact.metadata["source_scale_applied"] is True
+
+
 def test_finance_fact_context_keeps_competing_facts_model_owned() -> None:
     facts = [
         FinanceFact(
@@ -4384,6 +4412,76 @@ def test_primary_source_numeric_binding_selects_balance_sheet_net_ppne() -> None
     assert resolution["selected_fact_ids"] == ["target-net-ppne"]
 
 
+def test_primary_source_numeric_binding_rejects_cash_flow_ppne_purchase_for_balance_sheet_net_ppne() -> None:
+    binding = target_document_binding_from_metadata(
+        {
+            "company": "3M",
+            "doc_link": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+            "doc_type": "10-K",
+            "doc_period": "2018",
+            "root_goal": "What is the year end FY2018 net PPNE shown in the balance sheet?",
+            "primary_source_required": True,
+        }
+    )
+    cash_flow_fact = FinanceFact(
+        fact_id="cash-flow-ppe-purchase",
+        entity="3M",
+        ticker="MMM",
+        period="2018",
+        fiscal_year=2018,
+        metric="property plant and equipment net",
+        value="-1577000000",
+        unit="USD",
+        scale="actual",
+        source_ref="cite-cf",
+        evidence_ref="ev-cf",
+        citation_ref="cite-cf",
+        metadata={
+            "source_uri": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+            "source_title": "3M 2018 10-K",
+            "context": (
+                "Consolidated Statement of Cash Flows Years ended December 31 (Millions) "
+                "Purchases of property, plant and equipment (PP&E) $ (1,577)"
+            ),
+            "raw": "(1,577)",
+        },
+    )
+    balance_sheet_fact = FinanceFact(
+        fact_id="balance-sheet-net-ppne",
+        entity="3M",
+        ticker="MMM",
+        period="2018",
+        fiscal_year=2018,
+        metric="property plant and equipment net",
+        value="8738000000",
+        unit="USD",
+        scale="actual",
+        source_ref="cite-bs",
+        evidence_ref="ev-bs",
+        citation_ref="cite-bs",
+        metadata={
+            "source_uri": "https://investors.3m.com/financials/sec-filings/content/0001558370-19-000470/0001558370-19-000470.pdf",
+            "source_title": "3M 2018 10-K",
+            "concept": "PropertyPlantAndEquipmentNet",
+            "context": "Consolidated Balance Sheet Property, plant and equipment, net $ 8,738",
+            "raw": "$ 8,738",
+        },
+    )
+
+    bound = attach_target_binding_to_facts(
+        [cash_flow_fact, balance_sheet_fact],
+        binding,
+        question="FY2018 net PPNE from balance sheet",
+    )
+    resolution = primary_source_numeric_binding_resolution(bound, binding, question="FY2018 net PPNE from balance sheet")
+
+    assert resolution["status"] == "selected"
+    assert resolution["selected_fact_ids"] == ["balance-sheet-net-ppne"]
+    rejected = {item["fact_id"]: item for item in resolution["rejected_candidates"]}
+    assert "cash-flow-ppe-purchase" in rejected
+    assert "target_line_item_mismatch" in rejected["cash-flow-ppe-purchase"]["reasons"]
+
+
 def test_target_binding_distinguishes_net_revenues_from_component_revenue() -> None:
     binding = target_document_binding_from_metadata(
         {"company": "Goldman Sachs", "doc_period": "2024", "doc_type": "10-K"},
@@ -7217,6 +7315,66 @@ def test_script_exec_table_rows_become_scaled_candidate_facts() -> None:
     assert facts[0].value == "-1577000000"
     assert facts[0].scale == "millions"
     assert facts[0].citation_ref == "cite-script"
+
+
+def test_sec_financials_records_become_candidate_facts_with_period_fields() -> None:
+    candidates = _toolchain_candidate_facts(
+        {
+            "component": "sec_companyfacts_direct",
+            "records": [
+                {
+                    "entityName": "3M COMPANY",
+                    "cik": "66740",
+                    "taxonomy": "us-gaap",
+                    "concept": "PropertyPlantAndEquipmentNet",
+                    "label": "Property, Plant and Equipment, Net",
+                    "metric": "property plant and equipment net",
+                    "unit": "USD",
+                    "scale": "actual",
+                    "period": "annual",
+                    "fy": 2018,
+                    "fp": "FY",
+                    "form": "10-K",
+                    "filed": "2019-02-07",
+                    "end": "2018-12-31",
+                    "accn": "0001558370-19-000470",
+                    "value": 8738000000,
+                }
+            ],
+        },
+        source="tool:sec.edgar.financials",
+    )
+
+    assert candidates == [
+        {
+            "entityName": "3M COMPANY",
+            "cik": "66740",
+            "concept": "PropertyPlantAndEquipmentNet",
+            "label": "Property, Plant and Equipment, Net",
+            "metric": "property plant and equipment net",
+            "unit": "USD",
+            "scale": "actual",
+            "fy": "2018",
+            "period": "annual",
+            "form": "10-K",
+            "fp": "FY",
+            "filed": "2019-02-07",
+            "end": "2018-12-31",
+            "accn": "0001558370-19-000470",
+            "value": "8738000000",
+        }
+    ]
+    text = _candidate_fact_evidence_text(candidates[0])
+    assert "concept=PropertyPlantAndEquipmentNet" in text
+    assert "end=2018-12-31" in text
+    evidence = [_finance_evidence(evidence_id="sec-financials-ppne", title="sec financials candidate fact", text=text)]
+    facts = build_finance_fact_ledger(evidence=evidence, citations=[_finance_citation(evidence[0], citation_id="cite-sec")])
+
+    assert len(facts) == 1
+    assert facts[0].metric == "property plant and equipment net"
+    assert facts[0].value == "8738000000"
+    assert facts[0].metadata["end"] == "2018-12-31"
+    assert facts[0].metadata["concept"] == "PropertyPlantAndEquipmentNet"
 
 
 def test_structured_metric_value_evidence_does_not_emit_unscaled_natural_duplicate() -> None:

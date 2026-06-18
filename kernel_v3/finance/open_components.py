@@ -767,9 +767,23 @@ def _execute_sec_financials(
 ) -> Observation | ToolResult:
     edgar, error = _import_component("edgar", package="edgartools")
     if error is not None:
+        fallback = _execute_sec_financials_companyfacts_fallback(
+            action,
+            artifact_store=artifact_store,
+            fallback_from=error,
+        )
+        if _tool_result_status(fallback) == "ok":
+            return fallback
         return _observation(action, "failed", error, kind="sec_edgar_result")
     identity_error = _configure_edgar_identity(edgar)
     if identity_error is not None:
+        fallback = _execute_sec_financials_companyfacts_fallback(
+            action,
+            artifact_store=artifact_store,
+            fallback_from=identity_error,
+        )
+        if _tool_result_status(fallback) == "ok":
+            return fallback
         return _observation(action, "failed", identity_error, kind="sec_edgar_result")
     identifier = str(action.payload.get("identifier") or "").strip()
     form = str(action.payload.get("form") or "10-K").strip() or "10-K"
@@ -789,7 +803,15 @@ def _execute_sec_financials(
             limit=limit,
         )
     except Exception as exc:
-        return _observation(action, "failed", _component_exception("edgartools", exc), kind="sec_edgar_result")
+        component_error = _component_exception("edgartools", exc)
+        fallback = _execute_sec_financials_companyfacts_fallback(
+            action,
+            artifact_store=artifact_store,
+            fallback_from=component_error,
+        )
+        if _tool_result_status(fallback) == "ok":
+            return fallback
+        return _observation(action, "failed", component_error, kind="sec_edgar_result")
     return _artifact_tool_result(
         action,
         "ok",
@@ -801,6 +823,82 @@ def _execute_sec_financials(
             "requested_fiscal_year": fiscal_year,
             "requested_period": period or None,
             "period_filter": period_filter,
+            "limit": limit,
+            "records": records,
+            "semantic_decision_owner": "model",
+        },
+        kind="sec_edgar_result",
+        artifact_store=artifact_store,
+        artifact_kind="sec_edgar_financials_payload",
+    )
+
+
+def _execute_sec_financials_companyfacts_fallback(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None,
+    fallback_from: JsonObject,
+) -> Observation | ToolResult:
+    identifier = str(action.payload.get("identifier") or "").strip()
+    form = str(action.payload.get("form") or "10-K").strip() or "10-K"
+    statement = _normalize_statement(str(action.payload.get("statement") or ""))
+    fiscal_year = _optional_int(action.payload.get("fiscal_year"))
+    period = str(action.payload.get("period") or action.payload.get("target_period") or "").strip()
+    limit = _positive_int(action.payload.get("limit"), default=80, maximum=200)
+    cik = _sec_cik_from_identifier(identifier)
+    if not cik:
+        return _observation(
+            action,
+            "failed",
+            {
+                "error": "sec_companyfacts_fallback_identifier_unresolved",
+                "component": "sec_companyfacts_direct",
+                "identifier": identifier,
+                "fallback_from": fallback_from,
+                "host_boundary": "tool did not infer SEC facts without a resolvable CIK",
+            },
+            kind="sec_edgar_result",
+        )
+    try:
+        payload = _fetch_sec_companyfacts_json(cik)
+        raw_records = _sec_companyfacts_financial_records(
+            payload,
+            statement=statement,
+            form=form,
+            fiscal_year=fiscal_year,
+            period=period,
+        )
+    except Exception as exc:
+        return _observation(
+            action,
+            "failed",
+            {
+                **_component_exception("sec_companyfacts_direct", exc),
+                "fallback_from": fallback_from,
+            },
+            kind="sec_edgar_result",
+        )
+    records = raw_records[:limit]
+    return _artifact_tool_result(
+        action,
+        "ok",
+        {
+            "component": "sec_companyfacts_direct",
+            "fallback_from": fallback_from,
+            "identifier": identifier,
+            "cik": cik,
+            "form": form,
+            "statement": statement or "auto",
+            "requested_fiscal_year": fiscal_year,
+            "requested_period": period or None,
+            "period_filter": {
+                "requested_fiscal_year": fiscal_year,
+                "requested_period": period or None,
+                "input_record_count": len(raw_records),
+                "output_record_count": len(records),
+                "source": "official_sec_companyfacts_json",
+                "host_boundary": "fallback only exposes SEC/XBRL candidate records; the model still chooses line items and formulas",
+            },
             "limit": limit,
             "records": records,
             "semantic_decision_owner": "model",
@@ -1623,6 +1721,180 @@ def _configure_edgar_identity(edgar: Any) -> JsonObject | None:
     if callable(set_identity):
         set_identity(str(identity))
     return None
+
+
+def _sec_cik_from_identifier(identifier: str) -> str | None:
+    text = str(identifier or "").strip()
+    if not text:
+        return None
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if digits and (text.isdigit() or text.upper().startswith("CIK")):
+        return digits.zfill(10)[-10:]
+    try:
+        from kernel_v3.research.issuer_registry import builtin_issuers_for_text
+
+        for issuer in builtin_issuers_for_text(text):
+            cik = str(issuer.get("sec_cik") or "").strip()
+            if cik:
+                return "".join(ch for ch in cik if ch.isdigit()).zfill(10)[-10:]
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_sec_companyfacts_json(cik: str) -> JsonObject:
+    padded = "".join(ch for ch in str(cik or "") if ch.isdigit()).zfill(10)[-10:]
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _finance_document_user_agent(),
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.load(response)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _sec_companyfacts_financial_records(
+    payload: JsonObject,
+    *,
+    statement: str,
+    form: str,
+    fiscal_year: int | None,
+    period: str,
+) -> list[JsonObject]:
+    entity = str(payload.get("entityName") or "").strip()
+    cik = str(payload.get("cik") or "").strip()
+    facts = payload.get("facts") if isinstance(payload.get("facts"), dict) else {}
+    us_gaap = facts.get("us-gaap") if isinstance(facts.get("us-gaap"), dict) else {}
+    concepts = _sec_companyfacts_concepts_for_statement(statement)
+    records: list[JsonObject] = []
+    for concept, metric in concepts:
+        concept_payload = us_gaap.get(concept)
+        if not isinstance(concept_payload, dict):
+            continue
+        label = str(concept_payload.get("label") or concept).strip()
+        units = concept_payload.get("units") if isinstance(concept_payload.get("units"), dict) else {}
+        for unit, unit_records in units.items():
+            if not isinstance(unit_records, list):
+                continue
+            for record in unit_records:
+                if not isinstance(record, dict):
+                    continue
+                if form and str(record.get("form") or "").upper() != form.upper():
+                    continue
+                if fiscal_year is not None and _optional_int(record.get("fy")) != fiscal_year:
+                    continue
+                if period and not _sec_companyfacts_record_matches_period(record, period):
+                    continue
+                value = record.get("val")
+                if value in (None, ""):
+                    continue
+                records.append(
+                    {
+                        "entityName": entity,
+                        "cik": cik,
+                        "taxonomy": "us-gaap",
+                        "concept": concept,
+                        "label": label,
+                        "metric": metric,
+                        "unit": str(unit),
+                        "scale": "actual",
+                        "period": "annual" if str(record.get("fp") or "").upper() == "FY" else str(record.get("fp") or ""),
+                        "fy": record.get("fy"),
+                        "fp": record.get("fp"),
+                        "form": record.get("form"),
+                        "filed": record.get("filed"),
+                        "start": record.get("start"),
+                        "end": record.get("end"),
+                        "frame": record.get("frame"),
+                        "accn": record.get("accn"),
+                        "value": value,
+                        "val": value,
+                        "source": "sec_xbrl_companyfacts_direct",
+                    }
+                )
+    records.sort(key=_sec_companyfacts_record_sort_key)
+    return records
+
+
+def _sec_companyfacts_concepts_for_statement(statement: str) -> list[tuple[str, str]]:
+    balance_sheet = [
+        ("Assets", "assets"),
+        ("Liabilities", "liabilities"),
+        ("StockholdersEquity", "shareholders equity"),
+        ("StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", "shareholders equity including noncontrolling interest"),
+        ("PropertyPlantAndEquipmentNet", "property plant and equipment net"),
+        ("InventoryNet", "inventory"),
+        ("CashAndCashEquivalentsAtCarryingValue", "cash and cash equivalents"),
+        ("DebtLongtermAndShorttermCombinedAmount", "debt"),
+        ("LongTermDebt", "long-term debt"),
+        ("LongTermDebtCurrent", "current long-term debt"),
+        ("DebtCurrent", "short-term debt"),
+    ]
+    income_statement = [
+        ("Revenues", "revenue"),
+        ("RevenueFromContractWithCustomerExcludingAssessedTax", "revenue"),
+        ("SalesRevenueNet", "net sales"),
+        ("NetIncomeLoss", "net income"),
+        ("GrossProfit", "gross profit"),
+        ("OperatingIncomeLoss", "operating income"),
+        ("CostOfRevenue", "cost of revenue"),
+        ("CostOfGoodsAndServicesSold", "cost of goods sold"),
+    ]
+    cash_flow_statement = [
+        ("PaymentsToAcquirePropertyPlantAndEquipment", "capital expenditures"),
+        ("NetCashProvidedByUsedInOperatingActivities", "operating cash flow"),
+    ]
+    if statement == "balance_sheet":
+        return balance_sheet
+    if statement == "income_statement":
+        return income_statement
+    if statement == "cash_flow_statement":
+        return cash_flow_statement
+    return [*balance_sheet, *income_statement, *cash_flow_statement]
+
+
+def _sec_companyfacts_record_matches_period(record: JsonObject, period: str) -> bool:
+    target = re.sub(r"[^a-z0-9]+", "", str(period or "").casefold())
+    if not target:
+        return True
+    text = " ".join(str(record.get(key) or "") for key in ("fy", "fp", "start", "end", "frame", "filed"))
+    normalized = re.sub(r"[^a-z0-9]+", "", text.casefold())
+    return target in normalized
+
+
+def _sec_companyfacts_record_sort_key(record: JsonObject) -> tuple[int, int, str]:
+    metric_rank = {
+        "property plant and equipment net": 0,
+        "assets": 1,
+        "liabilities": 2,
+        "shareholders equity": 3,
+        "inventory": 4,
+        "cash and cash equivalents": 5,
+        "capital expenditures": 6,
+        "operating cash flow": 7,
+        "revenue": 8,
+        "net sales": 9,
+        "net income": 10,
+    }
+    metric = str(record.get("metric") or "")
+    return (metric_rank.get(metric, 50), -_sec_companyfacts_date_sort_value(record.get("end")), str(record.get("concept") or ""))
+
+
+def _sec_companyfacts_date_sort_value(value: object) -> int:
+    match = re.match(r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})$", str(value or ""))
+    if not match:
+        return 0
+    return int(match.group("year")) * 372 + int(match.group("month")) * 31 + int(match.group("day"))
+
+
+def _tool_result_status(result: Observation | ToolResult) -> str:
+    observation = result.observation if isinstance(result, ToolResult) else result
+    return str(observation.status or "")
 
 
 def _edgar_financials_for_company(company: Any, *, form: str) -> Any:

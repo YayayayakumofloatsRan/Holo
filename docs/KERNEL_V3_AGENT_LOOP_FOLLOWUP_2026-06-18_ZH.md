@@ -1476,3 +1476,129 @@ balance-sheet `property_plant_and_equipment_net`，但 finalization 仍允许合
 没有新增可报告的 live accuracy。下一步仍应对 `financebench_id_04672` 或同类
 missing-slot 类型簇跑 live debug，确认模型在真实工具链中会继续检索或输出正确的
 不可得/未单列答案，而不是把 proxy number 当成答案。
+
+## 33. SEC structured fact fallback and target-binding repair checkpoint
+
+继续按“优先照搬成熟 agent loop，不做单题补丁”的原则复盘
+`financebench_id_04672`。上一节的 missing-slot gate 生效后，live 仍失败，但
+journal 显示模型并不是完全不会做题：
+
+- 一次 live 里模型/semantic numeric judge 已能识别 `$8.738B` 是正确方向；
+  host numeric verifier 拒绝的直接原因是 filing 表格里的
+  `Dollars/Millions` 缩放没有稳定进入 FinanceFact。
+- 后续 live 中 scale 修好了一部分，但 `target_binding` 又把现金流量表
+  `Purchases of property, plant and equipment` 错判成 balance-sheet
+  `PropertyPlantAndEquipmentNet`，selected facts 变成 `-1.577B/-1.373B/-1.420B`。
+- `sec.edgar.financials` 被模型正确调用，但因本机没有有效
+  `EDGAR_IDENTITY`，EdgarTools 返回 `edgar_identity_missing`，没有产出
+  structured SEC facts；agent 只能继续在 PDF 文本里绕，最后耗尽工具预算。
+
+本轮修复的是通用工具合同和绑定合同：
+
+- `FinanceFactLedger` 的自然文本/表格行抽取新增 nearby filing scale scope
+  传播。局部窗口和文档开头都没有 scale 时，会在数值附近向前查找
+  `(Millions)`、`amounts in millions`、`dollars in millions` 等 SEC/filing
+  表格作用域，并把 `source_scale`、`source_scale_multiplier`、
+  `source_scale_applied` 写入 fact metadata。
+- `target_binding` 收紧 balance-sheet net PP&E 绑定：cash-flow 语境中的
+  `Purchases/Payments to acquire PP&E` 不再能通过
+  `property plant and equipment net` 的 line-item / statement match；真正
+  `PropertyPlantAndEquipmentNet` concept 或带 `net` 的 balance-sheet 行仍可通过。
+- `sec.edgar.financials` 在 EdgarTools 缺失、缺 identity、或 identity 被 SEC
+  拒绝时，会 fallback 到官方 `data.sec.gov/api/xbrl/companyfacts` JSON。
+  这是官方 SEC/XBRL 候选事实，不是 host 生成答案；LLM 仍负责选择 metric、
+  period、line item 和最终表述。
+- `_toolchain_candidate_facts` 现在解析 `tool:sec.edgar.financials` 的
+  `records`，并把 `fp/start/end/frame/accn` 保留到 candidate fact evidence
+  中。这样 model-visible tool-use context 可以直接看到
+  `PropertyPlantAndEquipmentNet`、`end=2018-12-31`、`value=8738000000`。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_open_components.py::test_sec_financials_tool_falls_back_to_official_companyfacts_when_edgartools_unavailable \
+  tests/test_kernel_v3_finance_engine.py::test_sec_financials_records_become_candidate_facts_with_period_fields \
+  tests/test_kernel_v3_finance_engine.py::test_primary_source_numeric_binding_rejects_cash_flow_ppne_purchase_for_balance_sheet_net_ppne \
+  tests/test_kernel_v3_finance_engine.py::test_finance_fact_ledger_propagates_nearby_filing_scale_scope_to_natural_amounts -q
+.venv/bin/python -m pytest -q tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_finance_open_components.py \
+  tests/test_kernel_v3_finance_tool_readiness.py
+.venv/bin/python -m py_compile \
+  kernel_v3/finance/open_components.py \
+  kernel_v3/finance/fact_ledger.py \
+  kernel_v3/finance/target_binding.py \
+  kernel_v3/agent/runtime.py \
+  tests/test_kernel_v3_finance_engine.py \
+  tests/test_kernel_v3_finance_open_components.py
+```
+
+结果：
+
+- targeted structural/tool-contract tests: `4 passed in 2.09s`
+- finance engine structural set: `307 passed in 8.88s`
+- finance open-components/readiness set: `31 passed in 4.05s`
+- `py_compile` passed
+- `git diff --check` passed
+
+真实 SEC 工具 smoke：
+
+```text
+sec.edgar.financials(identifier=MMM, statement=balance_sheet, fiscal_year=2018)
+status=ok
+component=sec_companyfacts_direct
+fallback_from=edgar_identity_missing
+first record:
+concept=PropertyPlantAndEquipmentNet
+metric=property plant and equipment net
+value=8738000000
+unit=USD
+fy=2018
+fp=FY
+form=10-K
+end=2018-12-31
+accn=0001558370-19-000470
+```
+
+live 复测：
+
+```bash
+HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
+  --dataset .state/kernel_v3/bench/finance/financebench_150_doc_retrieval.jsonl \
+  --dev-gold .state/kernel_v3/bench/finance/financebench_150_doc_retrieval.gold.jsonl \
+  --offset 1 --limit 1 --parallel 1 \
+  --output .state/kernel_v3/bench/finance/fb_debug50_o001_l001_after_sec_fallback_20260618.jsonl \
+  --summary-output .state/kernel_v3/bench/finance/fb_debug50_o001_l001_after_sec_fallback_20260618.summary.json \
+  --online --planner model --evaluator model --synthesizer model \
+  --semantic-intake model --turn-router model \
+  --execution-profile finance-capability --mission off \
+  --research-profile finance_fundamentals --research-depth deep \
+  --live-retrieval --live-search-strategy adaptive --agent-loop-streaming \
+  --max-agent-steps 12 --max-agent-tool-calls 24 \
+  --max-agent-artifact-bytes 2500000 \
+  --live-max-network-fetches 12 --live-download-byte-budget 80000000 \
+  --live-timeout-seconds 45 --context-profile provider --profile balanced \
+  --thinking disabled --reasoning-effort low --model deepseek-v4-flash \
+  --generation-mode auto --latency-target quality --response-language en \
+  --progress-events
+```
+
+结果：
+
+- `financebench_id_04672`: `status=passed`, `reason=numeric_within_tolerance`
+- final answer: `3M's year-end FY2018 net PP&E was $8.738 billion...`
+- matched gold numeric: `8.738` vs expected `8.7` within tolerance
+- `numeric_verifier_status=passed`
+- `verifier_gate=passed`
+- `synthesis_gate=passed`
+- `sec.edgar.financials` used once
+- `finance_fact_count=154`
+- `formula_trace_count=2`
+- `calculator_call_count=2`
+- `tokens=363,559`
+
+说明：这是单道 live debug-row 成绩，gold/reference 没有进入模型上下文；不是
+debug50/test100 准确率。它证明本轮修复的是更通用的工具链/agent-loop contract：
+官方 SEC structured fact 可以在 open-component 失败边界下继续进入
+tool-use context，模型再用 one-shot 工具选择完成 line-item/period binding。
