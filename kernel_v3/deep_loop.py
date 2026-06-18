@@ -66,8 +66,10 @@ termination.
 Use only tools exposed in the provided tool surface. Do not ask the user unless
 critical arguments are truly missing and cannot be inferred from the task,
 context, or public/source lookup workflow. Tool failures are observations for
-replanning. If enough evidence is present, return no tool_calls and put the
-answer in final_answer. Do not include markdown fences or prose outside JSON."""
+replanning. If single_agent_tool_loop_contract is present, obey its stop_rule,
+answer_output_contract, and benchmark_solvability_policy before finalizing. If
+enough evidence is present, return no tool_calls and put the answer in
+final_answer. Do not include markdown fences or prose outside JSON."""
 
 
 _MAX_PROVIDER_TOOL_RESULT_CONTINUATIONS = 16

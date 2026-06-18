@@ -223,7 +223,11 @@ model is told to assume FB/FQA-style tasks are intended to be solvable, to repla
 across source/parser/artifact/calculation/verifier paths after failed tool
 results while budget remains, and to finalize only with direct answer, period
 basis, cited facts, formula/transform trace, units/rounding, requested judgment,
-and real limitations.
+and real limitations. The follow-up prompt-system audit also makes the generic
+`assistant.turn` contract explicitly defer to `single_agent_tool_loop_contract`
+when present and verifies streaming tool-result continuations preserve the
+initial prompt contract. See
+`docs/KERNEL_V3_AGENT_LOOP_PROMPT_SYSTEM_AUDIT_2026-06-18_ZH.md`.
 The no-gold debug50 requirements audit is now executable through
 `bench finance-requirements-audit --dataset data/bench/finance/financebench_doc_retrieval.jsonl --split debug50`.
 It reads question text and public metadata only, reports task families, risk

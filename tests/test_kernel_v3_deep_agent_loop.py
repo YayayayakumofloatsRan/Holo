@@ -428,6 +428,7 @@ def test_deep_agent_loop_prompt_blocks_final_when_feedback_requires_tool_work() 
 
     prompt = json.loads(_assistant_turn_prompt(context, feedback, allowed_tool_names={"retrieval.run", "respond"}))
 
+    assert "obey its stop_rule" in prompt["contract"]
     contract = prompt["continuation_contract"]
     assert contract["feedback_status"] == "continue"
     assert contract["must_not_finalize_without_new_tool_observation"] is True
@@ -722,6 +723,10 @@ def test_assistant_turn_prompt_exposes_strict_finance_single_agent_loop_contract
     assert loop_contract["risk_flags"] == ["requires_verifier"]
     assert "model-requested tool_calls inside this loop" in loop_contract["tool_use_boundary"]
     assert "must not create hidden finance tool results" in loop_contract["finalizer_boundary"]
+    assert "assume the task is intended to be solvable" in loop_contract["benchmark_solvability_policy"]
+    assert "If a tool returns no result or fails while budget remains" in loop_contract["stop_rule"]
+    assert "direct answer to the exact question" in loop_contract["answer_output_contract"]["required_elements"]
+    assert "generic failure text when partial cited evidence can answer" in loop_contract["answer_output_contract"]["forbidden_elements"]
     assert any(
         "calculator.compute or data.table.query" in item
         for item in loop_contract["required_for_finance_numeric_answers"]
@@ -1547,8 +1552,12 @@ def test_streaming_loop_injects_tool_results_into_provider_continuation() -> Non
 
     assert result.status == "completed"
     assert len(provider.requests) == 2
+    initial_prompt_text = provider.requests[0].prompt
+    initial_prompt = json.loads(initial_prompt_text)
+    assert "obey its stop_rule" in initial_prompt["contract"]
     continuation_messages = provider.requests[1].parameters["provider_messages"]
     assert [message["role"] for message in continuation_messages] == ["user", "assistant", "tool"]
+    assert continuation_messages[0]["content"] == initial_prompt_text
     assert continuation_messages[1]["tool_calls"][0]["id"] == "tc-alpha"
     tool_payload = json.loads(continuation_messages[2]["content"])
     assert tool_payload["schema"] == "holo.kernel_v3.provider_tool_result_message.v1"

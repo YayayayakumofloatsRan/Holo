@@ -16,6 +16,8 @@ FB/FQA score-critical 工具链已齐全：
 - Docling/OpenBB 不装进主 venv，但隔离 worker 已 ready。
 - provider/planner prompt 与 assistant-turn prompt 均携带 `answer_output_contract`,
   `benchmark_solvability_policy` 和 stop rule。
+- 通用 `assistant.turn` prompt contract 已明确要求：如果
+  `single_agent_tool_loop_contract` 存在，必须遵守其 stop/output/replan 规则。
 
 这不是 FinanceBench/FQA 做题分数；它只是工具入口、模型可见性、host policy、组件和本地执行链路的 preflight。
 
@@ -49,6 +51,8 @@ FB/FQA score-critical 工具链已齐全：
 - `anti_pattern`: 禁止 generic failure report、禁止 unsupported thresholds/peer benchmarks/decorative numbers、禁止 material transform 心算。
 
 这些合同同时进入 provider compact payload 和 deep single-agent assistant-turn prompt。
+更完整的 prompt-system 审查记录见
+`docs/KERNEL_V3_AGENT_LOOP_PROMPT_SYSTEM_AUDIT_2026-06-18_ZH.md`。
 
 ## 增强项边界
 
