@@ -9,8 +9,8 @@ JsonValue = Any
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 ModelEventType = Literal["text_delta", "tool_call", "message_stop"]
-ToolStatus = Literal["queued", "executing", "completed", "yielded"]
-LoopStatus = Literal["completed", "failed", "blocked"]
+ToolStatus = Literal["queued", "executing", "completed", "yielded", "cancelled", "failed"]
+LoopStatus = Literal["completed", "failed", "blocked", "aborted"]
 
 
 def now_ms() -> int:

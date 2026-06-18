@@ -44,11 +44,24 @@ Kernel v4 的 Python 对应实现：
 - `kernel_v4/loop.py`：`SingleAgentLoop`。
 - `kernel_v4/tooling.py`：`ToolRegistry`、`StreamingToolExecutor`、`tool.discovery`、`artifact.read`。
 - `kernel_v4/context.py`：`ToolUseContext`、大 tool result artifact replacement。
+- `kernel_v4/runtime.py`：`AbortController`、`WorkflowObserver`、`ContextEdit`、`ToolLifecycleRecord`。
 - `kernel_v4/contracts.py`：消息、工具调用、工具结果、模型事件、循环结果协议。
 - `kernel_v4/prompts.py`：通用单 agent prompt 和金融特调 prompt。
 - `kernel_v4/finance_tools.py`：成熟金融工具后端适配，不引入 `finance.slot_bind`。
 - `kernel_v4/providers.py`：OpenAI-compatible / DeepSeek live provider，支持原生 function tool schema、provider-native `tool_choice` 强制工具、streaming tool-call delta 解析和 v4 工具名回映射。
 - `kernel_v4/live_smoke.py`：最小 live provider smoke 入口，可用 `--force-tool calculator.compute` 验证真实 provider 工具闭环；默认只强制第 1 个模型 turn，后续 turn 恢复模型自主回答。
+
+## 运行时控制与可视化
+
+2026-06-18 的第二次 v4 架构补齐，优先复刻参考项目的运行时控制面，而不是进入做题：
+
+- `AbortController` / `AbortSignal`：外部 runner 或 UI 可以中止当前 loop。loop 在模型 turn 前、模型 turn 后、工具执行前后检查 abort 状态。
+- tool cancel 补偿：如果 abort 发生在工具调用已经出现之后，host 会生成 `holo.kernel_v4.tool_cancelled.v1` synthetic tool result，避免留下孤立 `tool_call`。
+- `ContextEdit`：工具或 host 可以通过 `context.apply_edit(...)` 修改运行上下文，例如设置 metadata、追加消息、删除 artifact。后续模型 turn 的 `workflow` 上下文会看到最近 edits 和 metadata keys。
+- `ToolLifecycleRecord`：每个工具调用记录 `queued -> executing -> completed/failed/cancelled -> yielded` 生命周期，并记录 artifact/error/cancel reason。
+- `WorkflowObserver`：所有关键 loop 事件会实时发给 callback。`live_smoke` 支持 `--show-workflow` 以 JSONL 形式输出内部工作流。
+
+这部分是通用 agent loop 能力，不绑定 FinanceBench，也不引入金融规则 gate。
 
 ## 金融工具面
 
@@ -86,7 +99,7 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 
 ```text
 .venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_live_provider.py -q
-12 passed
+15 passed
 ```
 
 测试覆盖：
@@ -100,6 +113,9 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 - provider 可以把 v4 工具名强制投射到 provider-native `tool_choice`。
 - streaming tool-call delta 能映射回 v4 原工具名。
 - provider packet preview 不暴露 API key。
+- workflow callback 可以实时看到 model/tool/loop 事件。
+- abort 可以取消运行中的工具，并生成 synthetic tool result。
+- context edit 会进入下一轮模型请求上下文。
 
 已完成的最小 live smoke：
 

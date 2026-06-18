@@ -72,6 +72,8 @@ class ToolRegistry:
             )
 
     async def execute(self, call: ToolCall, context: ToolUseContext) -> ToolMessage:
+        if context.abort_signal.aborted:
+            return _cancelled_tool_message(call, context, reason=context.abort_signal.reason or "cancelled")
         definition = self.get(call.name)
         if definition is None:
             return tool_message_from_result(
@@ -166,41 +168,56 @@ class StreamingToolExecutor:
         concurrency_safe = True if definition is None else bool(definition.manifest.concurrency_safe)
         item = _TrackedTool(call=call, concurrency_safe=concurrency_safe)
         self._items.append(item)
-        self._events.append(
-            LoopEvent(
-                event_type="tool_queued",
-                turn_index=self.turn_index,
-                data={"tool_call_id": call.tool_call_id, "tool": call.name, "concurrency_safe": concurrency_safe},
-            )
+        self.context.record_tool_lifecycle(
+            tool_call_id=call.tool_call_id,
+            tool=call.name,
+            status="queued",
+            turn_index=self.turn_index,
+            metadata={"concurrency_safe": concurrency_safe},
+        )
+        self._emit(
+            event_type="tool_queued",
+            data={"tool_call_id": call.tool_call_id, "tool": call.name, "concurrency_safe": concurrency_safe},
         )
 
     async def drain_completed(self) -> list[ToolMessage]:
         await self._start_ready()
         completed: list[ToolMessage] = []
         for item in self._items:
-            if item.status != "completed" or item.result is None:
+            if item.status not in {"completed", "cancelled", "failed"} or item.result is None:
                 continue
             item.status = "yielded"
             completed.append(item.result)
             self.context.in_progress_tool_use_ids.discard(item.call.tool_call_id)
-            self._events.append(
-                LoopEvent(
-                    event_type="tool_result",
-                    turn_index=self.turn_index,
-                    data={
-                        "tool_call_id": item.call.tool_call_id,
-                        "tool": item.call.name,
-                        "is_error": item.result.is_error,
-                        **({"artifact_id": item.result.artifact_id} if item.result.artifact_id else {}),
-                    },
-                )
+            self.context.record_tool_lifecycle(
+                tool_call_id=item.call.tool_call_id,
+                tool=item.call.name,
+                status="yielded",
+                turn_index=self.turn_index,
+                metadata={
+                    "is_error": item.result.is_error,
+                    **({"artifact_id": item.result.artifact_id} if item.result.artifact_id else {}),
+                },
+            )
+            self._emit(
+                event_type="tool_result",
+                data={
+                    "tool_call_id": item.call.tool_call_id,
+                    "tool": item.call.name,
+                    "is_error": item.result.is_error,
+                    **({"artifact_id": item.result.artifact_id} if item.result.artifact_id else {}),
+                },
             )
         return completed
 
     async def drain_remaining(self) -> list[ToolMessage]:
         results: list[ToolMessage] = []
         while any(item.status != "yielded" for item in self._items):
+            if self.context.abort_signal.aborted:
+                await self.cancel_remaining(reason=self.context.abort_signal.reason or "cancelled")
             await self._start_ready()
+            if self.context.abort_signal.aborted:
+                await self.cancel_remaining(reason=self.context.abort_signal.reason or "cancelled")
             pending = [item.task for item in self._items if item.task is not None and item.status == "executing"]
             if pending:
                 await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
@@ -208,6 +225,31 @@ class StreamingToolExecutor:
             if not pending and not any(item.status == "queued" for item in self._items):
                 break
         return results
+
+    async def cancel_remaining(self, *, reason: str) -> None:
+        pending_tasks: list[asyncio.Task[None]] = []
+        for item in self._items:
+            if item.status in {"completed", "yielded", "cancelled", "failed"}:
+                continue
+            if item.task is not None and not item.task.done():
+                item.task.cancel()
+                pending_tasks.append(item.task)
+            item.result = _cancelled_tool_message(item.call, self.context, reason=reason)
+            item.status = "cancelled"
+            self.context.in_progress_tool_use_ids.discard(item.call.tool_call_id)
+            self.context.record_tool_lifecycle(
+                tool_call_id=item.call.tool_call_id,
+                tool=item.call.name,
+                status="cancelled",
+                turn_index=self.turn_index,
+                metadata={"reason": reason},
+            )
+            self._emit(
+                event_type="tool_cancelled",
+                data={"tool_call_id": item.call.tool_call_id, "tool": item.call.name, "reason": reason},
+            )
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
 
     def pop_events(self) -> list[LoopEvent]:
         events = list(self._events)
@@ -218,20 +260,31 @@ class StreamingToolExecutor:
         for item in self._items:
             if item.status != "queued":
                 continue
+            if self.context.abort_signal.aborted:
+                await self.cancel_remaining(reason=self.context.abort_signal.reason or "cancelled")
+                return
             if not self._can_start(item):
                 if not item.concurrency_safe:
                     break
                 continue
             item.status = "executing"
             self.context.in_progress_tool_use_ids.add(item.call.tool_call_id)
-            self._events.append(
-                LoopEvent(
-                    event_type="tool_start",
-                    turn_index=self.turn_index,
-                    data={"tool_call_id": item.call.tool_call_id, "tool": item.call.name},
-                )
+            self.context.record_tool_lifecycle(
+                tool_call_id=item.call.tool_call_id,
+                tool=item.call.name,
+                status="executing",
+                turn_index=self.turn_index,
+            )
+            self._emit(
+                event_type="tool_start",
+                data={"tool_call_id": item.call.tool_call_id, "tool": item.call.name},
             )
             item.task = asyncio.create_task(self._execute_item(item))
+
+    def _emit(self, *, event_type: str, data: JsonObject) -> None:
+        event = LoopEvent(event_type=event_type, turn_index=self.turn_index, data=data)
+        self._events.append(event)
+        self.context.emit_workflow(event)
 
     def _can_start(self, item: "_TrackedTool") -> bool:
         executing = [other for other in self._items if other.status == "executing"]
@@ -240,8 +293,34 @@ class StreamingToolExecutor:
         return item.concurrency_safe and all(other.concurrency_safe for other in executing)
 
     async def _execute_item(self, item: "_TrackedTool") -> None:
-        item.result = await self.registry.execute(item.call, self.context)
-        item.status = "completed"
+        try:
+            item.result = await self.registry.execute(item.call, self.context)
+        except asyncio.CancelledError:
+            item.result = _cancelled_tool_message(
+                item.call,
+                self.context,
+                reason=self.context.abort_signal.reason or "cancelled",
+            )
+            item.status = "cancelled"
+            self.context.record_tool_lifecycle(
+                tool_call_id=item.call.tool_call_id,
+                tool=item.call.name,
+                status="cancelled",
+                turn_index=self.turn_index,
+                metadata={"reason": self.context.abort_signal.reason or "cancelled"},
+            )
+            return
+        item.status = "failed" if item.result.is_error else "completed"
+        self.context.record_tool_lifecycle(
+            tool_call_id=item.call.tool_call_id,
+            tool=item.call.name,
+            status=item.status,
+            turn_index=self.turn_index,
+            metadata={
+                "is_error": item.result.is_error,
+                **({"artifact_id": item.result.artifact_id} if item.result.artifact_id else {}),
+            },
+        )
 
 
 @dataclass
@@ -259,6 +338,21 @@ def _positive_int(value: object, *, default: int, upper: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, min(parsed, upper))
+
+
+def _cancelled_tool_message(call: ToolCall, context: ToolUseContext, *, reason: str) -> ToolMessage:
+    return tool_message_from_result(
+        tool_call_id=call.tool_call_id,
+        name=call.name,
+        content={
+            "schema": "holo.kernel_v4.tool_cancelled.v1",
+            "tool": call.name,
+            "reason": reason,
+        },
+        context=context,
+        is_error=True,
+        metadata={"cancelled": True, "reason": reason},
+    )
 
 
 def _score_manifest(query: str, haystack: str, name: str) -> float:

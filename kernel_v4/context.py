@@ -4,7 +4,8 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
-from kernel_v4.contracts import ChatMessage, JsonObject, ToolMessage, stringify_tool_content
+from kernel_v4.contracts import ChatMessage, JsonObject, LoopEvent, ToolMessage, stringify_tool_content
+from kernel_v4.runtime import AbortController, ContextEdit, ToolLifecycleRecord, WorkflowObserver
 
 
 DEFAULT_TOOL_RESULT_INLINE_CHARS = 50_000
@@ -23,21 +24,96 @@ class ToolUseContext:
     run_id: str
     thread_key: str = "default"
     messages: list[ChatMessage] = field(default_factory=list)
+    abort_controller: AbortController = field(default_factory=AbortController)
+    workflow: WorkflowObserver = field(default_factory=WorkflowObserver)
     in_progress_tool_use_ids: set[str] = field(default_factory=set)
     artifacts: dict[str, str] = field(default_factory=dict)
     tool_result_replacements: dict[str, str] = field(default_factory=dict)
+    context_edits: list[ContextEdit] = field(default_factory=list)
+    tool_lifecycle: dict[str, ToolLifecycleRecord] = field(default_factory=dict)
     metadata: JsonObject = field(default_factory=dict)
 
     def store_artifact(self, *, kind: str, content: str) -> str:
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         artifact_id = f"v4-{kind}-{digest[:16]}"
         self.artifacts[artifact_id] = content
+        self.apply_edit(ContextEdit(operation="artifact.store", key=artifact_id, value={"kind": kind, "chars": len(content)}))
         return artifact_id
 
     def read_artifact(self, artifact_id: str) -> str:
         if artifact_id not in self.artifacts:
             raise KeyError(f"unknown v4 artifact: {artifact_id}")
         return self.artifacts[artifact_id]
+
+    @property
+    def abort_signal(self):
+        return self.abort_controller.signal
+
+    def emit_workflow(self, event: LoopEvent) -> None:
+        self.workflow.emit(event)
+
+    def apply_edit(self, edit: ContextEdit) -> JsonObject:
+        result: JsonObject = {"operation": edit.operation, "applied": True}
+        if edit.operation == "metadata.set":
+            if not edit.key:
+                raise ValueError("metadata.set requires key")
+            self.metadata[edit.key] = edit.value
+            result["key"] = edit.key
+        elif edit.operation == "metadata.delete":
+            if not edit.key:
+                raise ValueError("metadata.delete requires key")
+            self.metadata.pop(edit.key, None)
+            result["key"] = edit.key
+        elif edit.operation == "artifact.delete":
+            if not edit.key:
+                raise ValueError("artifact.delete requires key")
+            self.artifacts.pop(edit.key, None)
+            result["artifact_id"] = edit.key
+        elif edit.operation == "message.append":
+            if not isinstance(edit.value, ChatMessage):
+                raise TypeError("message.append requires ChatMessage value")
+            self.messages.append(edit.value)
+            result["message_role"] = edit.value.role
+        elif edit.operation == "artifact.store":
+            result["artifact_id"] = edit.key or ""
+        else:
+            raise ValueError(f"unsupported context edit operation: {edit.operation}")
+        self.context_edits.append(edit)
+        return result
+
+    def record_tool_lifecycle(
+        self,
+        *,
+        tool_call_id: str,
+        tool: str,
+        status: str,
+        turn_index: int,
+        metadata: JsonObject | None = None,
+    ) -> ToolLifecycleRecord:
+        record = self.tool_lifecycle.get(tool_call_id)
+        if record is None:
+            record = ToolLifecycleRecord(tool_call_id=tool_call_id, tool=tool, status="queued")
+            self.tool_lifecycle[tool_call_id] = record
+        record.transition(status, metadata=metadata)
+        self.emit_workflow(
+            LoopEvent(
+                event_type="tool_lifecycle",
+                turn_index=turn_index,
+                data=record.to_dict(),
+            )
+        )
+        return record
+
+    def workflow_context_summary(self, *, recent_limit: int = 20) -> JsonObject:
+        recent_edits = self.context_edits[-recent_limit:]
+        recent_lifecycle = list(self.tool_lifecycle.values())[-recent_limit:]
+        return {
+            "abort": self.abort_signal.to_dict(),
+            "context_edit_count": len(self.context_edits),
+            "context_edits_recent": [edit.to_dict() for edit in recent_edits],
+            "context_metadata_keys": sorted(self.metadata.keys()),
+            "tool_lifecycle_recent": [record.to_dict() for record in recent_lifecycle],
+        }
 
 
 def project_messages_for_model(

@@ -15,6 +15,9 @@ is `kernel_v4/providers.py`; a minimal DeepSeek/OpenAI-compatible smoke can be
 run with `python -m kernel_v4.live_smoke` when `DEEPSEEK_API_KEY` is present.
 For tool-loop verification, use
 `python -m kernel_v4.live_smoke --finance-tools --force-tool calculator.compute`.
+For real-time loop inspection, add `--show-workflow`; v4 now exposes
+abort/cancel, context edits, and tool-result lifecycle events through
+`WorkflowObserver`.
 
 Holo Kernel v3 remains in the repository as the prior harness line: a
 host-owned agent harness where models propose structured decisions and the host

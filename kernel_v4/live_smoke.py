@@ -43,7 +43,11 @@ async def run_live_smoke(args: argparse.Namespace) -> dict[str, object]:
             finance_mode=args.finance_tools,
         ),
     )
-    result = await loop.run(args.prompt, thread_key="kernel-v4-live-smoke")
+    result = await loop.run(
+        args.prompt,
+        thread_key="kernel-v4-live-smoke",
+        workflow_event_handler=_workflow_printer if args.show_workflow else None,
+    )
     return {
         "status": result.status,
         "reason": result.reason,
@@ -78,7 +82,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--finance-tools", action="store_true")
     parser.add_argument("--allow-network", action="store_true")
+    parser.add_argument("--show-workflow", action="store_true", help="Print live workflow events to stderr as JSONL.")
     return parser
+
+
+def _workflow_printer(event) -> None:
+    print(
+        json.dumps(
+            {
+                "workflow_event": event.event_type,
+                "turn_index": event.turn_index,
+                "at_ms": event.at_ms,
+                "data": event.data,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

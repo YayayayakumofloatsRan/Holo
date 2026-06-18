@@ -15,6 +15,7 @@ from kernel_v4.contracts import (
     now_ms,
 )
 from kernel_v4.prompts import build_system_prompt, tool_surface_prompt
+from kernel_v4.runtime import AbortController, WorkflowEventSink, WorkflowObserver
 from kernel_v4.tooling import StreamingToolExecutor, ToolRegistry
 
 
@@ -54,28 +55,52 @@ class SingleAgentLoop:
         *,
         thread_key: str = "default",
         run_id: str | None = None,
+        abort_controller: AbortController | None = None,
+        workflow_event_handler: WorkflowEventSink | None = None,
     ) -> LoopResult:
-        context = ToolUseContext(run_id=run_id or f"run-{uuid.uuid4().hex[:12]}", thread_key=thread_key)
+        context = ToolUseContext(
+            run_id=run_id or f"run-{uuid.uuid4().hex[:12]}",
+            thread_key=thread_key,
+            abort_controller=abort_controller or AbortController(),
+            workflow=WorkflowObserver(workflow_event_handler),
+        )
         system_prompt = build_system_prompt(
             finance=self.config.finance_mode,
             extra=self.config.extra_system_prompt,
         )
         context.messages = [ChatMessage(role="user", content=user_message)]
-        events: list[LoopEvent] = [
-            LoopEvent(
-                event_type="loop_start",
+        events: list[LoopEvent] = []
+        _emit(
+            context,
+            events,
+            event_type="loop_start",
+            turn_index=0,
+            data={
+                "run_id": context.run_id,
+                "thread_key": thread_key,
+                "finance_mode": self.config.finance_mode,
+                "legacy_finance_gates": "not_loaded",
+            },
+        )
+        if context.abort_signal.aborted:
+            return _aborted_result(
+                context,
+                events,
+                reason=context.abort_signal.reason or "cancelled",
                 turn_index=0,
-                data={
-                    "run_id": context.run_id,
-                    "thread_key": thread_key,
-                    "finance_mode": self.config.finance_mode,
-                    "legacy_finance_gates": "not_loaded",
-                },
+                tool_call_count=0,
             )
-        ]
         tool_call_count = 0
 
         for turn_index in range(1, self.config.max_turns + 1):
+            if context.abort_signal.aborted:
+                return _aborted_result(
+                    context,
+                    events,
+                    reason=context.abort_signal.reason or "cancelled",
+                    turn_index=turn_index,
+                    tool_call_count=tool_call_count,
+                )
             visible_messages = project_messages_for_model(
                 context.messages,
                 context,
@@ -89,17 +114,19 @@ class SingleAgentLoop:
                 "in_progress_tool_use_ids": sorted(context.in_progress_tool_use_ids),
                 "tool_surface": tool_surface_prompt(visible_tools),
                 "artifact_count": len(context.artifacts),
+                "workflow": context.workflow_context_summary(),
                 "host_boundary": "host executes requested tools and returns tool results; model owns semantic decisions",
             }
-            events.append(
-                LoopEvent(
-                    event_type="model_turn_start",
-                    turn_index=turn_index,
-                    data={
-                        "message_count": len(visible_messages),
-                        "visible_tool_count": len(visible_tools),
-                    },
-                )
+            _emit(
+                context,
+                events,
+                event_type="model_turn_start",
+                turn_index=turn_index,
+                data={
+                    "message_count": len(visible_messages),
+                    "visible_tool_count": len(visible_tools),
+                    "abort": context.abort_signal.to_dict(),
+                },
             )
 
             assistant = await self._collect_assistant_turn(
@@ -107,17 +134,35 @@ class SingleAgentLoop:
                 tools=visible_tools,
                 system_prompt=system_prompt,
                 context=request_context,
+                runtime_context=context,
                 turn_index=turn_index,
                 events=events,
             )
             context.messages.append(assistant.as_chat_message())
+            if context.abort_signal.aborted:
+                if assistant.tool_calls:
+                    executor = StreamingToolExecutor(self.tools, context, turn_index=turn_index)
+                    for call in assistant.tool_calls:
+                        executor.add_tool_call(call)
+                        events.extend(executor.pop_events())
+                    tool_results = await executor.drain_remaining()
+                    events.extend(executor.pop_events())
+                    for result in tool_results:
+                        context.messages.append(result.as_chat_message())
+                return _aborted_result(
+                    context,
+                    events,
+                    reason=context.abort_signal.reason or "cancelled",
+                    turn_index=turn_index,
+                    tool_call_count=tool_call_count + len(assistant.tool_calls),
+                )
             if not assistant.tool_calls:
-                events.append(
-                    LoopEvent(
-                        event_type="loop_completed",
-                        turn_index=turn_index,
-                        data={"reason": "assistant_final_answer", "answer_chars": len(assistant.content)},
-                    )
+                _emit(
+                    context,
+                    events,
+                    event_type="loop_completed",
+                    turn_index=turn_index,
+                    data={"reason": "assistant_final_answer", "answer_chars": len(assistant.content)},
                 )
                 return LoopResult(
                     status="completed",
@@ -146,6 +191,14 @@ class SingleAgentLoop:
             events.extend(executor.pop_events())
             for result in tool_results:
                 context.messages.append(result.as_chat_message())
+            if context.abort_signal.aborted:
+                return _aborted_result(
+                    context,
+                    events,
+                    reason=context.abort_signal.reason or "cancelled",
+                    turn_index=turn_index,
+                    tool_call_count=tool_call_count,
+                )
 
         return _failed_result(
             context,
@@ -162,6 +215,7 @@ class SingleAgentLoop:
         tools: list,
         system_prompt: str,
         context: dict,
+        runtime_context: ToolUseContext,
         turn_index: int,
         events: list[LoopEvent],
     ) -> AssistantMessage:
@@ -176,24 +230,24 @@ class SingleAgentLoop:
             event = _coerce_model_event(event)
             if event.event_type == "text_delta":
                 text_parts.append(event.text)
-                events.append(
-                    LoopEvent(
-                        event_type="assistant_text_delta",
-                        turn_index=turn_index,
-                        data={"chars": len(event.text)},
-                    )
+                _emit(
+                    runtime_context,
+                    events,
+                    event_type="assistant_text_delta",
+                    turn_index=turn_index,
+                    data={"chars": len(event.text)},
                 )
             elif event.event_type == "tool_call" and event.tool_call is not None:
                 tool_calls.append(event.tool_call)
-                events.append(
-                    LoopEvent(
-                        event_type="assistant_tool_call",
-                        turn_index=turn_index,
-                        data={"tool_call_id": event.tool_call.tool_call_id, "tool": event.tool_call.name},
-                    )
+                _emit(
+                    runtime_context,
+                    events,
+                    event_type="assistant_tool_call",
+                    turn_index=turn_index,
+                    data={"tool_call_id": event.tool_call.tool_call_id, "tool": event.tool_call.name},
                 )
             elif event.event_type == "message_stop":
-                events.append(LoopEvent(event_type="assistant_message_stop", turn_index=turn_index, data={}))
+                _emit(runtime_context, events, event_type="assistant_message_stop", turn_index=turn_index, data={})
         return AssistantMessage(
             content="".join(text_parts).strip(),
             tool_calls=tuple(tool_calls),
@@ -209,7 +263,7 @@ def _failed_result(
     turn_index: int,
     tool_call_count: int,
 ) -> LoopResult:
-    events.append(LoopEvent(event_type="loop_failed", turn_index=turn_index, data={"reason": reason}))
+    _emit(context, events, event_type="loop_failed", turn_index=turn_index, data={"reason": reason})
     return LoopResult(
         status="failed",
         answer="",
@@ -219,6 +273,40 @@ def _failed_result(
         tool_call_count=tool_call_count,
         turn_count=turn_index,
     )
+
+
+def _aborted_result(
+    context: ToolUseContext,
+    events: list[LoopEvent],
+    *,
+    reason: str,
+    turn_index: int,
+    tool_call_count: int,
+) -> LoopResult:
+    _emit(context, events, event_type="loop_aborted", turn_index=turn_index, data={"reason": reason})
+    return LoopResult(
+        status="aborted",
+        answer="",
+        messages=tuple(context.messages),
+        events=tuple(events),
+        reason=reason,
+        tool_call_count=tool_call_count,
+        turn_count=turn_index,
+    )
+
+
+def _emit(
+    context: ToolUseContext,
+    events: list[LoopEvent],
+    *,
+    event_type: str,
+    turn_index: int,
+    data: dict,
+) -> LoopEvent:
+    event = LoopEvent(event_type=event_type, turn_index=turn_index, data=data)
+    events.append(event)
+    context.emit_workflow(event)
+    return event
 
 
 def _coerce_model_event(value) -> ModelEvent:
