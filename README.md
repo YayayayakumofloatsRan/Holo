@@ -203,7 +203,7 @@ or JSON table snippets into `text_blocks`, query-ready `tables`, and
 only and LLM semantics remain model-owned. The updated readiness gate reports
 `status=ok`, `local_smoke_status=ok`, `allowed_tools_count=23`, focused
 open/readiness tests `33 passed`, deep/profile tests `60 passed`, and
-finance-engine tests `311 passed`. This is still not a live FinanceBench/FQA
+finance-engine tests `312 passed`. This is still not a live FinanceBench/FQA
 score.
 The 2026-06-18 tool-completeness follow-up adds `calendar.days_between` for
 evidence-backed fiscal/calendar day-count transforms needed by DIO/DSO/DPO/CCC
@@ -216,6 +216,14 @@ main venv or an isolated worker. Latest local preflight: `status=ok`,
 components are reported separately as enhancements and do not block FB/FQA
 debug/test runs. The current completeness note is
 `docs/KERNEL_V3_FINANCE_TOOL_COMPLETENESS_2026-06-18_ZH.md`.
+The same checkpoint now hardens the single-agent loop prompt contract:
+provider/planner and assistant-turn prompts both carry an explicit
+`answer_output_contract`, `benchmark_solvability_policy`, and stop rule. The
+model is told to assume FB/FQA-style tasks are intended to be solvable, to replan
+across source/parser/artifact/calculation/verifier paths after failed tool
+results while budget remains, and to finalize only with direct answer, period
+basis, cited facts, formula/transform trace, units/rounding, requested judgment,
+and real limitations.
 The no-gold debug50 requirements audit is now executable through
 `bench finance-requirements-audit --dataset data/bench/finance/financebench_doc_retrieval.jsonl --split debug50`.
 It reads question text and public metadata only, reports task families, risk

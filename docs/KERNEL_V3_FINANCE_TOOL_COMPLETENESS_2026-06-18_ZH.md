@@ -14,6 +14,8 @@ FB/FQA score-critical 工具链已齐全：
 - `allowed_tools_count=23`。
 - `provider_tool_selection=23`, `planner_prompt_tool_selection=23`。
 - Docling/OpenBB 不装进主 venv，但隔离 worker 已 ready。
+- provider/planner prompt 与 assistant-turn prompt 均携带 `answer_output_contract`,
+  `benchmark_solvability_policy` 和 stop rule。
 
 这不是 FinanceBench/FQA 做题分数；它只是工具入口、模型可见性、host policy、组件和本地执行链路的 preflight。
 
@@ -36,6 +38,17 @@ FB/FQA score-critical 工具链已齐全：
 - `fb_fqa_score_critical_required_tools`: 必备工具完整性门禁。
 - `local_execution_smoke`: 本地 no-internet smoke 执行门禁。
 - `optional_enhancements`: 浏览器抓取、observability、prompt eval、多 agent 框架等增强项。
+
+## Loop/Prompt 合同
+
+当前 prompt 不是只把工具名给模型，而是明确给出闭环：
+
+- `benchmark_solvability_policy`: 对 FB/FQA 风格题默认视为“设计上可解”，不能在一次搜索、解析或工具失败后直接说无法完成。
+- `answer_output_contract`: 最终答案必须包含直接回答、entity/security、period basis、事实和 citation/evidence refs、公式/变量/transform、结果单位/rounding、比较或业务判断、真实 limitations。
+- `stop_rule`: 只有 required evidence、formula traces、verification observations 足够，或明确 non-applicability / evidence limitation 时才能 final_answer；预算还在且工具失败时必须换工具/换 source family/replan。
+- `anti_pattern`: 禁止 generic failure report、禁止 unsupported thresholds/peer benchmarks/decorative numbers、禁止 material transform 心算。
+
+这些合同同时进入 provider compact payload 和 deep single-agent assistant-turn prompt。
 
 ## 增强项边界
 
@@ -61,6 +74,6 @@ FB/FQA score-critical 工具链已齐全：
 结果：
 
 - open/readiness: `33 passed`
-- finance engine: `311 passed`
+- finance engine: `312 passed`
 - finance-tool-audit: `status=ok`, `fb_fqa_required_tool_status=ok`, `local_smoke_status=ok`, `allowed_tools_count=23`, `provider_tool_selection=23`, `planner_prompt_tool_selection=23`
 - finance-tool-workers: `status=ok`, `missing_workers=[]`

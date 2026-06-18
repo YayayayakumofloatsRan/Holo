@@ -92,6 +92,7 @@ from kernel_v3.finance import (
     verify_finance_answer,
 )
 from kernel_v3.processors.adapters import _compact_runtime_directive_for_provider, _planner_prompt
+from kernel_v3.deep_loop import _assistant_turn_prompt
 from kernel_v3.finance.task_compiler import TASK_COMPILE_FACT_LIMIT, _model_task_compile_prompt
 from kernel_v3.journal import JournalStore
 from kernel_v3.loop import LoopControllerV3
@@ -6898,10 +6899,66 @@ def test_finance_capability_provider_compact_preserves_one_shot_tool_surface() -
     assert compact["toolchain_install_summary"]["host_rule"].startswith("Prefer installed components")
     assert compact["finance_agent_loop_contract"]["schema"] == FINANCE_AGENT_LOOP_CONTRACT_SCHEMA
     assert "must not create hidden finance tool results" in compact["finance_agent_loop_contract"]["finalization_boundary"]
+    assert "benchmark_solvability_policy" in compact["finance_agent_loop_contract"]
+    assert "answer_output_contract" in compact["finance_agent_loop_contract"]
+    assert "direct answer to the exact question" in compact["finance_agent_loop_contract"]["answer_output_contract"]["required_elements"]
     assert "debug50" not in json.dumps(compact["finance_agent_loop_contract"]).lower()
-    assert compact["llm_first_finance_template"]["standard_tool_interface"]["planner_action"].startswith(
+    finance_template = compact["llm_first_finance_template"]
+    assert finance_template["standard_tool_interface"]["planner_action"].startswith(
         "Return planner.propose JSON"
     )
+    assert "Do not give up after the first failed search/parser attempt" in finance_template["benchmark_solvability_policy"]
+    assert "answer_output_contract" in finance_template
+    assert "direct answer first" in finance_template["answer_output_contract"]["required_elements"]
+    assert any("Do not stop after one empty retrieval" in item for item in finance_template["anti_pattern"])
+
+
+def test_finance_capability_assistant_turn_prompt_exposes_stop_and_answer_contract(tmp_path) -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    metadata["retrieval"] = {
+        **metadata["retrieval"],
+        "allow_network": True,
+        "max_network_fetches": 3,
+    }
+    metadata["execution_metadata"] = {
+        **dict(metadata.get("execution_metadata") or {}),
+        "semantic_goal": {
+            "root_goal": "For HD and LOW, calculate FY2024 DIO and compare inventory efficiency."
+        },
+    }
+    recipe = task_recipe("retrieval_answer", metadata=metadata)
+    runtime = AgentRuntime(workspace_root=tmp_path)
+    registry = runtime._registry(recipe, "FB/FQA strict loop prompt contract")
+    directive = _planner_directive(recipe)
+    context = ContextBundle(
+        context_id="ctx-assistant-turn-contract",
+        thread_key="thread-assistant-turn-contract",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-assistant-turn-contract",
+            "run_id": "run-assistant-turn-contract",
+            "input_text": "Calculate FY2024 DIO and compare inventory efficiency.",
+            "agent_runtime_directive": directive,
+        },
+        token_budget=4096,
+    )
+
+    prompt = json.loads(
+        _assistant_turn_prompt(
+            context,
+            None,
+            allowed_tool_names=set(recipe.allowed_tools),
+            tool_manifests=registry.manifests(),
+        )
+    )
+    contract = prompt["single_agent_tool_loop_contract"]
+
+    assert contract["decision_owner"] == "model"
+    assert "assume the task is intended to be solvable" in contract["benchmark_solvability_policy"]
+    assert "If a tool returns no result or fails while budget remains" in contract["stop_rule"]
+    assert "direct answer to the exact question" in contract["answer_output_contract"]["required_elements"]
+    assert "generic failure text when partial cited evidence can answer" in contract["answer_output_contract"]["forbidden_elements"]
 
 
 def test_finance_capability_planner_exposes_question_requirements_without_task_patch() -> None:

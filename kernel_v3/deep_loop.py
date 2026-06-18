@@ -2729,9 +2729,33 @@ def _single_agent_tool_loop_contract_for_turn(context: ContextBundle) -> JsonObj
             "calculator.compute or data.table.query for deterministic transforms",
             "finance.verify_numeric when numeric verification is available",
         ],
+        "benchmark_solvability_policy": (
+            "For benchmark-like FB/FQA tasks with named entities, periods, filings, or provided context, "
+            "assume the task is intended to be solvable. Do not return generic inability until relevant "
+            "allowed source families, parser/table tools, artifact reads, calculation tools, and verifier paths "
+            "have been tried or are blocked by explicit policy, budget, or repeated tool failures."
+        ),
+        "answer_output_contract": {
+            "required_elements": [
+                "direct answer to the exact question",
+                "entity/security and period basis",
+                "source-backed facts with evidence/citation refs",
+                "formula or transform expression for calculations",
+                "computed result with unit and rounding basis",
+                "comparison or qualitative judgment when requested",
+                "limitations only for genuinely missing or non-applicable evidence",
+            ],
+            "forbidden_elements": [
+                "unsupported numbers, thresholds, or peer benchmarks",
+                "generic failure text when partial cited evidence can answer",
+                "mental arithmetic when calculator.compute or data.table.query is available",
+                "unstated substitutions for requested line items, periods, or average/ending basis",
+            ],
+        },
         "stop_rule": (
             "Return final_answer only after required evidence, formula traces, and verification observations "
-            "are present, or after stating explicit non-applicability or evidence limitations."
+            "are present, or after stating explicit non-applicability or evidence limitations. "
+            "If a tool returns no result or fails while budget remains, replan through another relevant allowed tool or artifact path before finalizing."
         ),
         "gold_reference_visibility": "benchmark gold/reference material is never model-visible",
         "finance_contract_schema": finance_contract.get("schema"),

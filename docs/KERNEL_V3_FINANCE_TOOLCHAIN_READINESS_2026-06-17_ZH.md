@@ -63,7 +63,7 @@ FinQA/FQA 的 P0 缺口是 provided report context 到 query-ready table 的稳�
 更新后结果：focused open/readiness tests `33 passed`，本地 finance-tool-audit smoke
 `status=ok` / `fb_fqa_required_tool_status=ok` / `local_smoke_status=ok` /
 `allowed_tools_count=23`，deep/profile tests `60 passed`，
-finance-engine tests `311 passed`。这仍然只是工具接口和执行链路证据，不是 FinanceBench/FQA 分数。
+finance-engine tests `312 passed`。这仍然只是工具接口和执行链路证据，不是 FinanceBench/FQA 分数。
 
 2026-06-18 工具完整性补审计增加了 `calendar.days_between`。它只做
 evidence-backed start/end date 的日期解析和 day-count transform，返回
@@ -74,6 +74,13 @@ exclusive/inclusive/absolute days 和 365/366 year fraction；LLM 仍决定财�
 - `fb_fqa_score_critical_required_tools`: 必须全部注册、模型可见、policy allowed，并由主 venv 或隔离 worker 支撑。
 - `local_execution_smoke`: 可选 no-internet smoke，确认工具实际能执行并返回 observation/artifact hint。
 - `optional_enhancements`: 浏览器抓取、observability、prompt eval、多 agent 框架等增强项；不阻塞 FB/FQA debug/test，除非 live 题型证明需要。
+
+同一 checkpoint 还补强了 prompt/loop contract：
+
+- provider/planner prompt 和 assistant-turn prompt 都包含 `answer_output_contract`。
+- FB/FQA 风格任务默认视为 intended-solvable，禁止一次工具失败后 generic give-up。
+- stop rule 要求：有证据、公式 trace、verifier observation，或明确 non-applicability / evidence limitation，才能 final。
+- 预算还在且工具失败时，模型应换 source family、artifact path、parser/table/calculator/verifier 路径继续 replan。
 
 ## 覆盖的 FB/FQA 工具类别
 

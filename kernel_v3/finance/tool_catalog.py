@@ -182,11 +182,35 @@ def finance_agent_loop_contract() -> JsonObject:
             "but it must not create hidden finance tool results, bind missing slots, or compute missing formulas "
             "after final_answer."
         ),
+        "benchmark_solvability_policy": (
+            "For benchmark-like FB/FQA tasks with named entities, periods, documents, or provided context, "
+            "assume the task is intended to be solvable. Do not emit a generic inability or ask the user "
+            "for benchmark facts until relevant allowed source families, table/context parsers, calculators, "
+            "artifact reads, and verifier paths have been tried or are blocked by explicit budget/policy/tool failures."
+        ),
+        "answer_output_contract": {
+            "required_elements": [
+                "direct answer to the exact question",
+                "entity/security and period basis",
+                "source-backed facts with evidence/citation refs",
+                "formula or transform expression when any calculation is used",
+                "computed result with unit and rounding basis",
+                "comparison or qualitative judgment when requested",
+                "limitations only for genuinely missing or non-applicable evidence",
+            ],
+            "forbidden_elements": [
+                "unsupported numbers, thresholds, or peer benchmarks",
+                "generic failure text when partial evidence can answer",
+                "mental arithmetic when calculator.compute or data.table.query is available for the transform",
+                "unstated substitutions for requested line items, periods, or inventory/average/ending basis",
+            ],
+        },
         "stop_invariants": [
             "do not finalize numeric answers without source-backed facts or explicit assumptions",
             "do not finalize formula questions without FormulaTrace unless the answer is a justified non-applicability judgment",
             "do not ask the user for benchmark details already present in prompt metadata",
             "treat parser/provider failures as observations for replanning unless policy, safety, or budget blocks apply",
+            "do not stop at first retrieval/parser miss; replan across relevant allowed tool families while budget remains",
             "gold/reference material is never model-visible and cannot be used for runtime planning",
         ],
     }
@@ -421,6 +445,12 @@ def finance_one_shot_tool_protocol() -> JsonObject:
             "the concrete payload and stop condition",
             "whether returned evidence is sufficient",
             "which facts and formula to use in the answer",
+            "whether to continue, repair, or finalize from observed tool results",
+        ],
+        "model_must_not": [
+            "treat a single tool failure or empty result as proof the task is impossible",
+            "return final_answer before required evidence/calculation/verifier observations are present unless the answer is a justified non-applicability or limitation",
+            "use hidden benchmark gold/reference or hard-coded thresholds",
         ],
         "host_must_enforce": [
             "tool manifest schema",

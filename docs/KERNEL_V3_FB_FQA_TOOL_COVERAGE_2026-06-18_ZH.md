@@ -154,7 +154,14 @@ Host boundary:
 - focused open/readiness tests: `33 passed`
 - finance-tool-audit smoke: `status=ok`, `fb_fqa_required_tool_status=ok`, `local_smoke_status=ok`, `allowed_tools_count=23`
 - deep/profile tests: `60 passed`
-- finance engine tests: `311 passed`
+- finance engine tests: `312 passed`
+
+Prompt/loop contract 也已同步加固：
+
+- provider/planner prompt 暴露 `answer_output_contract` 和 `benchmark_solvability_policy`。
+- assistant-turn prompt 的 single-agent loop contract 暴露同样的 answer/stop/replan 规则。
+- 模型被要求默认将 FB/FQA 风格题视为 intended-solvable；一次 search/parser/tool miss 只是 observation，不是失败结论。
+- final answer 必须直接回答问题，列清 period/entity basis、事实证据、公式/transform、单位/rounding、比较/业务判断和真实 limitations。
 
 ## 剩余边界
 

@@ -9190,6 +9190,28 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                             "finance.toolchain.describe": "Use first when unsure which finance tool family applies; it returns the full tool surface and one-shot tool-call protocol.",
                             "respond": "Use only when evidence is sufficient for the root question or remaining gaps can be explicitly limited.",
                         },
+                        "benchmark_solvability_policy": (
+                            "For FB/FQA-style tasks, assume the question is intended to be solvable from public filings, "
+                            "provided context, or allowed tools. Do not give up after the first failed search/parser attempt; "
+                            "switch source family, use artifact.read/query, use table/context parsing, or state a precise budget/policy/tool blocker."
+                        ),
+                        "answer_output_contract": {
+                            "required_elements": [
+                                "direct answer first",
+                                "entity/security and period basis",
+                                "facts with evidence/citation refs",
+                                "formulas/transforms and variables for calculated answers",
+                                "computed values with units and rounding",
+                                "comparison/judgment requested by the question",
+                                "limitations only for real unresolved gaps",
+                            ],
+                            "forbidden_elements": [
+                                "unsupported thresholds, peer benchmarks, or decorative numbers",
+                                "generic 'cannot determine' when partial cited evidence can answer",
+                                "mental arithmetic instead of calculator/table query for material transforms",
+                                "unstated changes to requested line item, period, fiscal-day, average/ending, or unit basis",
+                            ],
+                        },
                         "finance_workflow": [
                             "Identify the exact entity, security/issuer aliases, period, document/event, and asked output.",
                             "If the right data path is unclear, call finance.toolchain.describe once, then emit the next concrete tool action yourself.",
@@ -9204,6 +9226,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                         "anti_pattern": [
                             "Do not wait for keyword or threshold rules to decide the answer.",
                             "Do not give a generic failure report when cited partial evidence can answer the question.",
+                            "Do not stop after one empty retrieval/parser result; treat failures as observations and replan while budget remains.",
                             "Do not use unsupported incidental numbers; remove them or label limitations.",
                         ],
                     }
