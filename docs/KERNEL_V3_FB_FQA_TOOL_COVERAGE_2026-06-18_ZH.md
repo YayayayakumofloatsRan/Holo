@@ -80,7 +80,7 @@ FinQA/FQA 与 FinanceBench 的不同点：FinQA 主要难点不是 live source a
 | --- | --- | --- |
 | Filing line item / disclosure | 找官方 filing、提取目标 line item、引用来源 | `retrieval.run`, `sec.edgar.company_filings`, `sec.edgar.financials`, `document.docling.convert`, `document.trafilatura.extract`, `artifact.read`, `artifact.query` |
 | Filing table extraction | PDF/HTML/table 转结构化候选，后续查询 | `document.docling.convert`, `document.trafilatura.extract`, `provided_context.parse`, `data.table.query`, `script.exec` |
-| Defined formula calculation | 绑定事实、执行公式、保留 FormulaTrace | `finance.slot_bind`, `calculator.compute`, `math.sympy.compute`, `data.table.query` |
+| Defined formula calculation | 绑定事实、执行公式、保留 FormulaTrace，必要时计算财年天数 | `finance.slot_bind`, `calculator.compute`, `math.sympy.compute`, `calendar.days_between`, `data.table.query` |
 | Business judgment after calculation | 结合比例和业务语境判断，不能用硬阈值 | LLM semantic synthesis + `finance.verify_numeric` |
 | Driver / bridge / reconciliation | 抽取 management discussion 或 bridge table，计算/排序/解释 driver | `document.docling.convert`, `provided_context.parse`, `data.table.query`, `calculator.compute`, `script.exec` |
 | Table ranking / comparison | 行列过滤、排序、聚合、极值比较 | `provided_context.parse`, `data.table.query`, `calculator.compute` |
@@ -115,6 +115,28 @@ Host boundary:
 - LLM 选择相关行列、公式、单位、业务解释和是否继续取证。
 - reference program / gold answer 不进入 prompt。
 
+`calendar.days_between`
+
+```json
+{
+  "start_date": "2024-01-28",
+  "end_date": "2025-02-02",
+  "label": "optional period label"
+}
+```
+
+返回：
+
+- `days_exclusive` / `days_inclusive`。
+- `absolute_days_exclusive` / `absolute_days_inclusive`。
+- `year_fraction_365_exclusive` / `year_fraction_366_exclusive`。
+
+Host boundary:
+
+- host 只解析日期并返回可审计 day-count transform。
+- LLM 决定 DIO/DSO/DPO/CCC 等公式到底用 365、366、inclusive days 还是 actual fiscal days。
+- 日期必须来自题目或证据；工具不会推断期间。
+
 ## 当前门禁结果
 
 验证命令：
@@ -129,9 +151,9 @@ Host boundary:
 
 结果：
 
-- focused open/readiness tests: `32 passed`
-- finance-tool-audit smoke: `status=ok`, `local_smoke_status=ok`, `allowed_tools_count=22`
-- structural loop/profile tests: `92 passed`
+- focused open/readiness tests: `33 passed`
+- finance-tool-audit smoke: `status=ok`, `fb_fqa_required_tool_status=ok`, `local_smoke_status=ok`, `allowed_tools_count=23`
+- deep/profile tests: `60 passed`
 - finance engine tests: `311 passed`
 
 ## 剩余边界

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from kernel_v3 import cli
 from kernel_v3.finance import (
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME,
     CALCULATOR_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
@@ -39,6 +40,7 @@ def test_finance_tool_readiness_audit_exposes_fb_fqa_tools_to_model(tmp_path) ->
         PROVIDED_CONTEXT_PARSE_TOOL_NAME,
         DATA_TABLE_QUERY_TOOL_NAME,
         MATH_SYMPY_COMPUTE_TOOL_NAME,
+        CALENDAR_DAYS_BETWEEN_TOOL_NAME,
         SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
         SEC_EDGAR_FINANCIALS_TOOL_NAME,
         DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
@@ -55,6 +57,8 @@ def test_finance_tool_readiness_audit_exposes_fb_fqa_tools_to_model(tmp_path) ->
     assert audit["capability_claim"] is False
     assert audit["benchmark_progress_claim"] is False
     assert audit["interface_status"] == "ok"
+    assert audit["fb_fqa_required_tool_status"] == "ok"
+    assert audit["fb_fqa_required_tool_complete"] is True
     assert required <= set(tools)
     for name in required:
         assert tools[name]["allowed_by_recipe"] is True
@@ -63,6 +67,12 @@ def test_finance_tool_readiness_audit_exposes_fb_fqa_tools_to_model(tmp_path) ->
         assert tools[name]["planner_prompt_visible"] is True
         assert tools[name]["policy_allowed"] is True
     assert all(category["status"] == "ok" for category in audit["required_categories"])
+    table_category = next(
+        category
+        for category in audit["required_categories"]
+        if category["category_id"] == "financebench_filing_table_extraction"
+    )
+    assert PROVIDED_CONTEXT_PARSE_TOOL_NAME in table_category["required_tools"]
     assert tools[DOCUMENT_DOCLING_CONVERT_TOOL_NAME]["component_binding"]["install_policy"] == "isolated_optional_heavy"
     assert tools[MARKET_OPENBB_FETCH_TOOL_NAME]["component_binding"]["install_policy"] == "isolated_optional_heavy"
     assert tools[DATA_TABLE_QUERY_TOOL_NAME]["component_binding"]["component_status"] == "ok"
@@ -84,6 +94,7 @@ def test_finance_tool_readiness_audit_local_smoke_executes_workbench_tools(tmp_p
     assert smoke[FINANCE_VERIFY_NUMERIC_TOOL_NAME]["status"] == "ok"
     assert smoke[DATA_TABLE_QUERY_TOOL_NAME]["status"] == "ok"
     assert smoke[MATH_SYMPY_COMPUTE_TOOL_NAME]["status"] == "ok"
+    assert smoke[CALENDAR_DAYS_BETWEEN_TOOL_NAME]["status"] == "ok"
     assert smoke[DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME]["status"] == "ok"
     assert smoke["script.exec"]["status"] == "ok"
 
@@ -110,6 +121,13 @@ def test_finance_tool_readiness_accepts_configured_isolated_required_components(
     assert tools[MARKET_OPENBB_FETCH_TOOL_NAME]["component_binding"]["component_status"] == "ok"
     assert "docling" not in audit["toolchain_install_summary"]["required_missing_components"]
     assert "openbb" not in audit["toolchain_install_summary"]["required_missing_components"]
+    summary = audit["toolchain_install_summary"]
+    if "docling" in summary["missing_components"]:
+        assert "docling" in summary["main_env_missing_but_isolated_ready_components"]
+    if "openbb" in summary["missing_components"]:
+        assert "openbb" in summary["main_env_missing_but_isolated_ready_components"]
+    assert "docling" not in summary["optional_enhancement_missing_components"]
+    assert "openbb" not in summary["optional_enhancement_missing_components"]
 
 
 def test_finance_tool_audit_cli_returns_preflight_not_capability_claim(tmp_path) -> None:
@@ -126,5 +144,7 @@ def test_finance_tool_audit_cli_returns_preflight_not_capability_claim(tmp_path)
 
     assert payload["schema"] == "holo.kernel_v3.finance_tool_readiness.v1"
     assert payload["interface_status"] == "ok"
+    assert payload["fb_fqa_required_tool_status"] == "ok"
+    assert payload["fb_fqa_required_tool_complete"] is True
     assert payload["capability_claim"] is False
     assert payload["benchmark_progress_claim"] is False

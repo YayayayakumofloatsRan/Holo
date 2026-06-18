@@ -60,15 +60,26 @@ FinQA/FQA 的 P0 缺口是 provided report context 到 query-ready table 的稳�
 - 使用成熟组件 `pandas` / `lxml` / `beautifulsoup4` 做结构化解析。
 - Host 只做结构化，不做语义选择；LLM 仍决定行列、公式和答案。
 
-更新后结果：focused open/readiness tests `32 passed`，本地 finance-tool-audit smoke
-`status=ok` / `local_smoke_status=ok` / `allowed_tools_count=22`，结构回归 `92 passed`，
+更新后结果：focused open/readiness tests `33 passed`，本地 finance-tool-audit smoke
+`status=ok` / `fb_fqa_required_tool_status=ok` / `local_smoke_status=ok` /
+`allowed_tools_count=23`，deep/profile tests `60 passed`，
 finance-engine tests `311 passed`。这仍然只是工具接口和执行链路证据，不是 FinanceBench/FQA 分数。
+
+2026-06-18 工具完整性补审计增加了 `calendar.days_between`。它只做
+evidence-backed start/end date 的日期解析和 day-count transform，返回
+exclusive/inclusive/absolute days 和 365/366 year fraction；LLM 仍决定财务公式使用
+365、实际 fiscal days，还是在答案中说明口径。`finance-tool-audit` 现在输出
+`completeness_tiers`：
+
+- `fb_fqa_score_critical_required_tools`: 必须全部注册、模型可见、policy allowed，并由主 venv 或隔离 worker 支撑。
+- `local_execution_smoke`: 可选 no-internet smoke，确认工具实际能执行并返回 observation/artifact hint。
+- `optional_enhancements`: 浏览器抓取、observability、prompt eval、多 agent 框架等增强项；不阻塞 FB/FQA debug/test，除非 live 题型证明需要。
 
 ## 覆盖的 FB/FQA 工具类别
 
 - FinanceBench filing retrieval: `tool.discovery`, `retrieval.run`, `sec.edgar.company_filings`, `sec.edgar.financials`, `artifact.read`, `artifact.query`, `provided_context.parse`, `document.trafilatura.extract`, `document.docling.convert`
-- FinanceBench filing table extraction: `artifact.read`, `artifact.query`, `document.trafilatura.extract`, `document.docling.convert`, `data.table.query`, `workspace.write`, `shell.exec`, `script.exec`
-- FinanceBench numeric ratio reasoning: `finance.slot_bind`, `calculator.compute`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
+- FinanceBench filing table extraction: `artifact.read`, `artifact.query`, `provided_context.parse`, `document.trafilatura.extract`, `document.docling.convert`, `data.table.query`, `workspace.write`, `shell.exec`, `script.exec`
+- FinanceBench numeric ratio reasoning: `finance.slot_bind`, `calculator.compute`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`, `calendar.days_between`
 - FinanceBench market or macro context: `retrieval.run`, `market.openbb.fetch`, `calculator.compute`, `finance.verify_numeric`
 - FinQA/FQA report context numeric reasoning: `tool.discovery`, `provided_context.parse`, `calculator.compute`, `finance.slot_bind`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
 - FinQA/FQA table/program-like transforms: `provided_context.parse`, `data.table.query`, `finance.slot_bind`, `calculator.compute`, `math.sympy.compute`, `finance.verify_numeric`

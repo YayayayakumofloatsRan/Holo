@@ -9,6 +9,7 @@ from kernel_v3.agent.runtime import AgentRuntime, task_recipe
 from kernel_v3.context import ArtifactStore
 from kernel_v3.contracts import CandidateAction
 from kernel_v3.finance import (
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
@@ -65,6 +66,7 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
         PROVIDED_CONTEXT_PARSE_TOOL_NAME,
         DATA_TABLE_QUERY_TOOL_NAME,
         MATH_SYMPY_COMPUTE_TOOL_NAME,
+        CALENDAR_DAYS_BETWEEN_TOOL_NAME,
     }
     for tool_name in always_loaded:
         runtime = tool_runtime_spec_for_manifest(manifests[tool_name])
@@ -74,6 +76,7 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
     assert tool_runtime_spec_for_manifest(manifests[SEC_EDGAR_FINANCIALS_TOOL_NAME]).concurrency_safe is True
     assert tool_runtime_spec_for_manifest(manifests[PROVIDED_CONTEXT_PARSE_TOOL_NAME]).concurrency_safe is True
     assert tool_runtime_spec_for_manifest(manifests[DATA_TABLE_QUERY_TOOL_NAME]).concurrency_safe is True
+    assert tool_runtime_spec_for_manifest(manifests[CALENDAR_DAYS_BETWEEN_TOOL_NAME]).concurrency_safe is True
     assert tool_runtime_spec_for_manifest(manifests[DOCUMENT_DOCLING_CONVERT_TOOL_NAME]).concurrency_safe is False
     assert tool_runtime_spec_for_manifest(manifests[DOCUMENT_DOCLING_CONVERT_TOOL_NAME]).timeout_seconds == 120
     sec_schema = manifests[SEC_EDGAR_FINANCIALS_TOOL_NAME].input_schema
@@ -119,6 +122,34 @@ def test_provided_context_parse_returns_query_ready_finqa_table() -> None:
     assert table["rows"][0]["metric"] == "payment volume"
     assert table["data_table_query_payload"]["rows"][1]["2008"] == "55.2"
     assert observation.content["data_table_payloads"][0]["table_name"] == "finqa_context_1"
+
+
+def test_calendar_days_between_returns_model_owned_day_count_transform() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-calendar-days-between",
+        kind="tool",
+        name=CALENDAR_DAYS_BETWEEN_TOOL_NAME,
+        description="compute retail fiscal days",
+        score=1.0,
+        payload={"start_date": "2024-01-28", "end_date": "2025-02-02", "label": "FY2024 retail period"},
+        reasons=["need auditable day count"],
+        side_effect_class="read",
+    )
+
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-calendar-days-between",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "calendar_days_between"
+    assert observation.content["days_exclusive"] == 371
+    assert observation.content["absolute_days_exclusive"] == 371
+    assert observation.content["semantic_decision_owner"] == "model"
 
 
 def test_finance_slot_bind_tool_validates_model_selected_facts_and_returns_calculator_payload() -> None:
@@ -1069,6 +1100,7 @@ def test_finance_research_profile_exposes_tool_surface_without_numeric_verifier(
     assert ARTIFACT_QUERY_NAME in recipe.allowed_tools
     assert DATA_TABLE_QUERY_TOOL_NAME in recipe.allowed_tools
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in recipe.allowed_tools
+    assert CALENDAR_DAYS_BETWEEN_TOOL_NAME in recipe.allowed_tools
     assert SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME in recipe.allowed_tools
     assert DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME in recipe.allowed_tools
     runtime = AgentRuntime(workspace_root=tmp_path)
@@ -1080,6 +1112,7 @@ def test_finance_research_profile_exposes_tool_surface_without_numeric_verifier(
     assert ARTIFACT_QUERY_NAME in manifests
     assert DATA_TABLE_QUERY_TOOL_NAME in manifests
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in manifests
+    assert CALENDAR_DAYS_BETWEEN_TOOL_NAME in manifests
     retrieval_runtime = tool_runtime_spec_for_manifest(manifests["retrieval.run"])
     assert retrieval_runtime.always_load is True
     assert retrieval_runtime.concurrency_safe is True

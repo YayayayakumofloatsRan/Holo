@@ -36,6 +36,7 @@ from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback,
 from kernel_v3.deep_loop import DeepAgentLoopController, ModelAssistantTurnPlanner
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.finance import (
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME,
     CALCULATOR_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
@@ -8860,6 +8861,14 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
             },
             {
                 "kind": "tool",
+                "name": ARTIFACT_QUERY_NAME,
+                "side_effect_class": "read",
+                "use_when": "a long artifact, JSON payload, extracted table, or text blob must be narrowed by path, keyword, or row terms before a broader read",
+                "payload_requirements": ["artifact_id: required", "path: optional JSON/list path", "query: optional row/text term", "max_matches/max_chars: optional bounds"],
+                "host_boundary": "queries only host-exposed artifacts; returns bounded matches and keeps full artifact behind artifact.read",
+            },
+            {
+                "kind": "tool",
                 "name": "retrieval.run",
                 "side_effect_class": "read",
                 "use_when": "external or indexed evidence is needed, evidence coverage is incomplete, or citation support is missing",
@@ -9045,6 +9054,20 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "host_boundary": "uses SymPy; ordinary finance arithmetic should still use calculator.compute with evidence-backed inputs",
                 }
             )
+        if CALENDAR_DAYS_BETWEEN_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": CALENDAR_DAYS_BETWEEN_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": (
+                        "the model has evidence-backed beginning/end dates and needs actual fiscal/calendar day counts "
+                        "for DIO, DSO, DPO, cash conversion cycle, average-period, or year-fraction calculations"
+                    ),
+                    "payload_requirements": ["start_date: evidence-backed date", "end_date: evidence-backed date", "label: optional"],
+                    "host_boundary": "uses Python datetime only; model chooses whether the finance formula should use 365 or actual fiscal days",
+                }
+            )
         if "workspace.list" in recipe.allowed_tools:
             tool_selection.append(
                 {
@@ -9163,6 +9186,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                             "finance.slot_bind": "Use after finance facts are visible to submit model-owned slot bindings, period/line-item basis, and formula_requests for host validation.",
                             "calculator.compute": "Use only after observed evidence supplies numeric inputs; put expression, variables, unit, formula_name, and input_fact_ids when available.",
                             "math.sympy.compute": "Use SymPy for symbolic or high-precision math beyond ordinary finance arithmetic.",
+                            "calendar.days_between": "Use after evidence supplies start/end dates when actual fiscal or calendar day counts may matter.",
                             "finance.toolchain.describe": "Use first when unsure which finance tool family applies; it returns the full tool surface and one-shot tool-call protocol.",
                             "respond": "Use only when evidence is sufficient for the root question or remaining gaps can be explicitly limited.",
                         },

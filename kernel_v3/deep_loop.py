@@ -3109,7 +3109,7 @@ def _tools_for_requirement_categories(categories: list[object]) -> list[str]:
         "structured_sec_facts": ["sec.edgar.financials"],
         "document_table_extraction": ["provided_context.parse", "document.docling.convert", "document.trafilatura.extract"],
         "table_operations": ["data.table.query"],
-        "arithmetic": ["calculator.compute"],
+        "arithmetic": ["calculator.compute", "calendar.days_between"],
         "numeric_verification": ["finance.verify_numeric"],
         "temporary_workbench": ["data.table.query", "script.exec"],
     }
@@ -3127,6 +3127,7 @@ def _tools_for_requirement_risk_flags(risk_flags: list[object]) -> list[str]:
         "needs_bridge_reconciliation": ["document.docling.convert", "data.table.query"],
         "needs_market_or_macro_context": ["market.openbb.fetch", "retrieval.run"],
         "requires_calculator": ["calculator.compute"],
+        "requires_calendar_days": ["calendar.days_between"],
         "requires_verifier": ["finance.verify_numeric"],
         "requires_table_sort": ["data.table.query"],
         "needs_temporary_workbench": ["data.table.query", "script.exec"],

@@ -14,6 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ PROVIDED_CONTEXT_PARSE_TOOL_NAME = "provided_context.parse"
 MARKET_OPENBB_FETCH_TOOL_NAME = "market.openbb.fetch"
 DATA_TABLE_QUERY_TOOL_NAME = "data.table.query"
 MATH_SYMPY_COMPUTE_TOOL_NAME = "math.sympy.compute"
+CALENDAR_DAYS_BETWEEN_TOOL_NAME = "calendar.days_between"
 
 FINANCE_OPEN_COMPONENT_TOOL_NAMES = [
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
@@ -51,6 +53,7 @@ FINANCE_OPEN_COMPONENT_TOOL_NAMES = [
     MARKET_OPENBB_FETCH_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME,
 ]
 
 FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES = [
@@ -65,6 +68,7 @@ FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES = [
     PROVIDED_CONTEXT_PARSE_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME,
 ]
 
 _OPENBB_ALLOWED_ROUTES = {
@@ -689,6 +693,38 @@ def register_finance_open_component_tools(
             },
         ),
     )
+    registry.register(
+        CALENDAR_DAYS_BETWEEN_TOOL_NAME,
+        _execute_calendar_days_between,
+        manifest=ToolManifest(
+            name=CALENDAR_DAYS_BETWEEN_TOOL_NAME,
+            version="1",
+            resource_kind="calendar",
+            operator_kind="days_between",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description=(
+                "Compute bounded day counts between two model-provided dates. "
+                "Use for fiscal-period day counts after evidence supplies beginning and ending dates; "
+                "the model still decides whether a finance formula should use 365, inclusive days, or actual fiscal days."
+            ),
+            input_schema={
+                "start_date": {"type": "str", "required": True, "min_length": 1},
+                "end_date": {"type": "str", "required": True, "min_length": 1},
+                "label": {"type": "str", "required": False, "min_length": 1},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "timeout_seconds": 5,
+                "max_result_size_chars": 12000,
+                "result_persistence_policy": "never",
+                "idempotent": True,
+            },
+        ),
+    )
     return registry
 
 
@@ -767,6 +803,13 @@ def _execute_toolchain_describe(action: CandidateAction) -> Observation:
                 package="sympy",
                 tools=[MATH_SYMPY_COMPUTE_TOOL_NAME],
                 source="https://www.sympy.org/en/index.html",
+            ),
+            _component_status(
+                component="python_datetime",
+                import_name="datetime",
+                package="python-stdlib",
+                tools=[CALENDAR_DAYS_BETWEEN_TOOL_NAME],
+                source="https://docs.python.org/3/library/datetime.html",
             ),
             _component_status(
                 component="langgraph",
@@ -1403,6 +1446,74 @@ def _execute_sympy_compute(action: CandidateAction) -> Observation:
         },
         kind="sympy_compute",
     )
+
+
+def _execute_calendar_days_between(action: CandidateAction) -> Observation:
+    start_raw = str(action.payload.get("start_date") or "").strip()
+    end_raw = str(action.payload.get("end_date") or "").strip()
+    start_date = _parse_calendar_date(start_raw)
+    end_date = _parse_calendar_date(end_raw)
+    if start_date is None or end_date is None:
+        return _observation(
+            action,
+            "failed",
+            {
+                "error": "date_parse_failed",
+                "start_date": start_raw,
+                "end_date": end_raw,
+                "accepted_examples": ["2025-02-02", "2025/02/02", "February 2, 2025", "Feb 2, 2025"],
+                "host_boundary": "date parsing failed; the model must provide evidence-backed date strings or choose a different formula basis",
+            },
+            kind="calendar_days_between",
+        )
+    days_exclusive = (end_date - start_date).days
+    step = 1 if days_exclusive >= 0 else -1
+    days_inclusive = days_exclusive + step
+    return _observation(
+        action,
+        "ok",
+        {
+            "component": "python_datetime",
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "label": str(action.payload.get("label") or "").strip(),
+            "days_exclusive": days_exclusive,
+            "days_inclusive": days_inclusive,
+            "absolute_days_exclusive": abs(days_exclusive),
+            "absolute_days_inclusive": abs(days_inclusive),
+            "year_fraction_365_exclusive": days_exclusive / 365,
+            "year_fraction_366_exclusive": days_exclusive / 366,
+            "semantic_decision_owner": "model",
+            "host_boundary": "returns calendar transforms only; model chooses the financial day-count basis",
+        },
+        kind="calendar_days_between",
+    )
+
+
+def _parse_calendar_date(value: str) -> date | None:
+    text = " ".join(str(value or "").strip().replace(",", ", ").split())
+    if not text:
+        return None
+    normalized = text.replace(".", "")
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        pass
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%m/%d/%Y",
+        "%m-%d-%Y",
+        "%B %d, %Y",
+        "%b %d, %Y",
+        "%d %B %Y",
+        "%d %b %Y",
+    ):
+        try:
+            return datetime.strptime(normalized, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _parse_provided_context_to_tables(

@@ -60,6 +60,7 @@ from kernel_v3.contracts import CandidateAction, ContextBundle, Feedback, Observ
 from kernel_v3.bench import convert_public_finance_benchmark, load_finance_benchmark_items
 from kernel_v3.context import ArtifactStore
 from kernel_v3.finance import (
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME,
     CALCULATOR_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
@@ -6820,6 +6821,7 @@ def test_finance_fast_planner_directive_shows_composable_toolchain() -> None:
     assert "shell.exec" in tool_names
     assert DATA_TABLE_QUERY_TOOL_NAME in tool_names
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in tool_names
+    assert CALENDAR_DAYS_BETWEEN_TOOL_NAME in tool_names
     assert "shell.exec" not in directive["forbidden"]
 
 
@@ -6843,6 +6845,7 @@ def test_finance_capability_planner_directive_preserves_full_open_tool_surface()
     assert FINANCE_SLOT_BIND_TOOL_NAME in tool_names
     assert DATA_TABLE_QUERY_TOOL_NAME in tool_names
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in tool_names
+    assert CALENDAR_DAYS_BETWEEN_TOOL_NAME in tool_names
     install_summary = compact["toolchain_install_summary"]
     assert "installed_components" in install_summary
     assert "missing_components" in install_summary
@@ -6887,6 +6890,7 @@ def test_finance_capability_provider_compact_preserves_one_shot_tool_surface() -
     assert FINANCE_SLOT_BIND_TOOL_NAME in tool_names
     assert DATA_TABLE_QUERY_TOOL_NAME in tool_names
     assert MATH_SYMPY_COMPUTE_TOOL_NAME in tool_names
+    assert CALENDAR_DAYS_BETWEEN_TOOL_NAME in tool_names
     assert "workspace.write" in tool_names
     assert "shell.exec" in tool_names
     assert "script.exec" in tool_names

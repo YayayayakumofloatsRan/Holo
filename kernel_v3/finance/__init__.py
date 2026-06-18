@@ -9,6 +9,7 @@ from kernel_v3.finance.fact_ledger import build_finance_fact_ledger
 from kernel_v3.finance.formula_planner import FinanceFormulaPlan, plan_finance_formula
 from kernel_v3.finance.numeric_verifier import finance_numeric_repair_guidance, verify_finance_answer
 from kernel_v3.finance.open_components import (
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
@@ -70,6 +71,7 @@ __all__ = [
     "FormulaTrace",
     "NumericVerification",
     "CALCULATOR_TOOL_NAME",
+    "CALENDAR_DAYS_BETWEEN_TOOL_NAME",
     "DATA_TABLE_QUERY_TOOL_NAME",
     "DOCUMENT_DOCLING_CONVERT_TOOL_NAME",
     "DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME",

@@ -8,6 +8,7 @@ from kernel_v3.agent.runtime import AgentRuntime, _planner_directive, task_recip
 from kernel_v3.contracts import CandidateAction, ContextBundle, JsonObject
 from kernel_v3.context import ArtifactStore
 from kernel_v3.finance import (
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME,
     CALCULATOR_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
@@ -54,6 +55,7 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "required_tools": [
             ARTIFACT_READ_NAME,
             ARTIFACT_QUERY_NAME,
+            PROVIDED_CONTEXT_PARSE_TOOL_NAME,
             DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
             DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
             DATA_TABLE_QUERY_TOOL_NAME,
@@ -72,6 +74,7 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
             FINANCE_VERIFY_NUMERIC_TOOL_NAME,
             DATA_TABLE_QUERY_TOOL_NAME,
             MATH_SYMPY_COMPUTE_TOOL_NAME,
+            CALENDAR_DAYS_BETWEEN_TOOL_NAME,
         ],
     },
     {
@@ -149,6 +152,7 @@ TOOL_COMPONENT_BINDINGS: dict[str, JsonObject] = {
     MARKET_OPENBB_FETCH_TOOL_NAME: {"components": ["openbb"], "install_policy": "isolated_optional_heavy"},
     DATA_TABLE_QUERY_TOOL_NAME: {"components": ["duckdb", "pandas"], "install_policy": "core_open_source"},
     MATH_SYMPY_COMPUTE_TOOL_NAME: {"components": ["sympy"], "install_policy": "core_open_source"},
+    CALENDAR_DAYS_BETWEEN_TOOL_NAME: {"components": ["python"], "install_policy": "holo_core"},
     "workspace.list": {"components": ["python"], "install_policy": "holo_core"},
     "workspace.search": {"components": ["python"], "install_policy": "holo_core"},
     "file.read": {"components": ["python"], "install_policy": "holo_core"},
@@ -299,8 +303,26 @@ def build_finance_tool_readiness_audit(
     local_smoke = _local_smoke_checks(registry=registry, gate=gate, artifact_store=runtime.artifact_store) if execute_local_smoke else []
     local_smoke_failures = [item for item in local_smoke if item.get("status") not in {"ok", "blocked_expected"}]
     interface_status = "ok" if not interface_failures else "failed"
+    isolated_configured_components = [
+        name for name, status in sorted(isolated_statuses.items()) if bool(status.get("configured"))
+    ]
+    main_env_missing_but_isolated_ready = [
+        item for item in missing_components if item in isolated_configured_components
+    ]
+    optional_enhancement_missing_components = [
+        item
+        for item in missing_components
+        if item not in set(required_missing_components) and item not in set(main_env_missing_but_isolated_ready)
+    ]
     component_status = "ok" if not required_missing_components else ("failed" if critical_missing else "attention")
     smoke_status = "not_run" if not execute_local_smoke else ("ok" if not local_smoke_failures else "failed")
+    fb_fqa_required_tool_complete = (
+        interface_status == "ok"
+        and not required_missing_components
+        and smoke_status in {"not_run", "ok"}
+    )
+    fb_fqa_required_tool_status = "ok" if fb_fqa_required_tool_complete else "failed"
+    optional_enhancement_status = "ok" if not optional_enhancement_missing_components else "attention"
     status = "failed" if interface_status == "failed" or component_status == "failed" or smoke_status == "failed" else (
         "attention" if component_status == "attention" else "ok"
     )
@@ -310,6 +332,9 @@ def build_finance_tool_readiness_audit(
         "interface_status": interface_status,
         "component_status": component_status,
         "local_smoke_status": smoke_status,
+        "fb_fqa_required_tool_status": fb_fqa_required_tool_status,
+        "fb_fqa_required_tool_complete": fb_fqa_required_tool_complete,
+        "optional_enhancement_status": optional_enhancement_status,
         "capability_claim": False,
         "benchmark_progress_claim": False,
         "evidence_policy": {
@@ -325,6 +350,34 @@ def build_finance_tool_readiness_audit(
         "allowed_permissions": _string_list(recipe.metadata.get("allowed_permissions")),
         "provider_tool_selection_count": compact_directive.get("tool_selection_count"),
         "planner_prompt_tool_selection_count": prompt_directive.get("tool_selection_count"),
+        "completeness_tiers": [
+            {
+                "tier_id": "fb_fqa_score_critical_required_tools",
+                "status": fb_fqa_required_tool_status,
+                "complete": fb_fqa_required_tool_complete,
+                "contract": "Every FinanceBench/FinQA required tool must be registered, model-visible, policy-allowed, and backed by either the main venv or an isolated worker.",
+                "required_missing_components": required_missing_components,
+                "interface_failures": interface_failures,
+            },
+            {
+                "tier_id": "local_execution_smoke",
+                "status": smoke_status,
+                "complete": smoke_status in {"not_run", "ok"},
+                "contract": "When requested, run no-internet smoke checks for model-visible tool execution, artifact round trips, table query, calculation, and verifier paths.",
+                "failed_smoke_tools": [
+                    str(item.get("tool"))
+                    for item in local_smoke_failures
+                    if isinstance(item, dict) and item.get("tool")
+                ],
+            },
+            {
+                "tier_id": "optional_enhancements",
+                "status": optional_enhancement_status,
+                "complete": not optional_enhancement_missing_components,
+                "contract": "Browser crawling, observability, prompt eval, and multi-agent frameworks are enhancement candidates; they do not block FB/FQA scoring unless a live task proves the need.",
+                "missing_components": optional_enhancement_missing_components,
+            },
+        ],
         "required_categories": category_rows,
         "tools": [tool_rows[name] for name in required_tools],
         "toolchain_install_summary": {
@@ -335,9 +388,11 @@ def build_finance_tool_readiness_audit(
             "isolated_optional_missing_components": [
                 item for item in required_missing_components if item in ISOLATED_OPTIONAL_COMPONENTS
             ],
-            "isolated_configured_components": [
-                name for name, status in sorted(isolated_statuses.items()) if bool(status.get("configured"))
-            ],
+            "isolated_configured_components": isolated_configured_components,
+            "main_env_missing_but_isolated_ready_components": main_env_missing_but_isolated_ready,
+            "optional_enhancement_missing_components": optional_enhancement_missing_components,
+            "score_critical_required_status": fb_fqa_required_tool_status,
+            "score_critical_required_complete": fb_fqa_required_tool_complete,
             "installed_count": install_summary.get("installed_count"),
             "missing_count": install_summary.get("missing_count"),
         },
@@ -349,6 +404,7 @@ def render_finance_tool_readiness_audit(audit: JsonObject) -> str:
     lines = [
         f"Finance tool readiness: {audit.get('status')}",
         f"interface={audit.get('interface_status')} components={audit.get('component_status')} local_smoke={audit.get('local_smoke_status')}",
+        f"fb_fqa_required_tools={audit.get('fb_fqa_required_tool_status')} optional_enhancements={audit.get('optional_enhancement_status')}",
         f"execution_profile={audit.get('execution_profile')} runtime_backend={audit.get('runtime_backend')} live_network_budget={audit.get('live_network_budget_enabled')}",
         f"allowed_tools={audit.get('allowed_tools_count')} provider_tool_selection={audit.get('provider_tool_selection_count')} planner_prompt_tool_selection={audit.get('planner_prompt_tool_selection_count')}",
         "capability_claim=false; benchmark_progress_claim=false",
@@ -374,13 +430,19 @@ def render_finance_tool_readiness_audit(audit: JsonObject) -> str:
         if required_missing:
             lines.append("Required missing components: " + ", ".join(required_missing))
         if missing:
-            lines.append("All catalog missing components: " + ", ".join(missing))
+            lines.append("Main-env/catalog missing components: " + ", ".join(missing))
         optional = _string_list(summary.get("isolated_optional_missing_components"))
         if optional:
             lines.append("Required isolated optional components not configured in main or worker env: " + ", ".join(optional))
         configured = _string_list(summary.get("isolated_configured_components"))
         if configured:
             lines.append("Isolated configured components: " + ", ".join(configured))
+        isolated_ready = _string_list(summary.get("main_env_missing_but_isolated_ready_components"))
+        if isolated_ready:
+            lines.append("Main-env missing but isolated-worker ready: " + ", ".join(isolated_ready))
+        optional_missing = _string_list(summary.get("optional_enhancement_missing_components"))
+        if optional_missing:
+            lines.append("Optional enhancement components not installed: " + ", ".join(optional_missing))
         if critical:
             lines.append("Critical missing components: " + ", ".join(critical))
     return "\n".join(lines)
@@ -526,6 +588,10 @@ def _local_smoke_checks(*, registry, gate: PolicyGate, artifact_store: ArtifactS
         (
             MATH_SYMPY_COMPUTE_TOOL_NAME,
             {"expression": "(x + x) / y", "variables": {"x": 3, "y": 2}, "operation": "simplify"},
+        ),
+        (
+            CALENDAR_DAYS_BETWEEN_TOOL_NAME,
+            {"start_date": "2024-01-28", "end_date": "2025-02-02", "label": "retail FY2024"},
         ),
         (
             DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,

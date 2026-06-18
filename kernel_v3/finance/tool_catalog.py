@@ -306,17 +306,18 @@ def finance_tool_surface_catalog() -> list[JsonObject]:
         ),
         _tool_family(
             family_id="calculator_math_stats",
-            purpose="auditable arithmetic, ratio computation, percentages, bps, valuation multiples, DIO, CAGR, and statistical helpers",
-            holo_tools=["calculator.compute", "math.sympy.compute"],
+            purpose="auditable arithmetic, ratio computation, percentages, bps, valuation multiples, DIO, CAGR, date/day-count transforms, and statistical helpers",
+            holo_tools=["calculator.compute", "math.sympy.compute", "calendar.days_between"],
             current_status="holo_owned_active",
             mature_components=[
                 _component("python_decimal", "decimal", package="python-stdlib", source="https://docs.python.org/3/library/decimal.html", stdlib=True),
+                _component("python_datetime", "datetime", package="python-stdlib", source="https://docs.python.org/3/library/datetime.html", stdlib=True),
                 _component("python_statistics", "statistics", package="python-stdlib", source="https://docs.python.org/3/library/statistics.html", stdlib=True),
                 _component("sympy", "sympy", source="https://www.sympy.org/en/index.html"),
             ],
             selected_component="python_decimal",
-            integration_decision="active_decimal_calculator; add SymPy only for symbolic/complex math when needed",
-            boundary="calculator only evaluates model-proposed formulas with evidence-backed inputs; it never selects the answer",
+            integration_decision="active_decimal_calculator; active calendar day-count helper; use SymPy only for symbolic/complex math when needed",
+            boundary="calculator/calendar tools only evaluate model-proposed transforms with evidence-backed inputs; they never select the answer",
         ),
         _tool_family(
             family_id="table_dataframe_query",
