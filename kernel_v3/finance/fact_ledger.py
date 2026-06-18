@@ -154,7 +154,7 @@ SUPPORTED_FINANCE_METRICS = {
 }
 
 KEY_PATTERN = re.compile(
-    r"(?P<key>entityName|ticker|cik|taxonomy|concept|metric|label|unit|period_fy|period|fy|fp|form|filed|end|start|frame|accn|value|val|scale)=",
+    r"(?P<key>entityName|ticker|cik|taxonomy|concept|metric|label|unit|period_fy|period|fy|fp|form|filed|end|start|frame|accn|source_uri|source_title|source_kind|value|val|scale)=",
     re.IGNORECASE,
 )
 HTML_TABLE_FACT_PATTERN = re.compile(
@@ -980,8 +980,9 @@ def _fact_from_values(
         "frame": values.get("frame"),
         "accn": values.get("accn"),
         "supported_metric": metric in SUPPORTED_FINANCE_METRICS,
-        "source_uri": item.uri,
-        "source_title": item.title,
+        "source_uri": values.get("source_uri") or item.uri,
+        "source_title": values.get("source_title") or item.title,
+        "source_kind": values.get("source_kind"),
         **_evidence_fact_diagnostics(item),
     }
     metadata = {key: item for key, item in metadata.items() if item not in (None, "")}

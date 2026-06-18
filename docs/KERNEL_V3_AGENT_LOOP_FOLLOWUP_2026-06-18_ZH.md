@@ -1,6 +1,8 @@
 # Kernel v3 Agent Loop Follow-Up 2026-06-18
 
-状态：已完成一轮通用 agent loop 合同修复；结构测试通过；live 复测因权限审核超时未完成，不能报告为金融准确率提升。
+状态：已完成多轮通用 agent loop 合同修复；结构测试通过；已有单题 live debug-row
+证明 `sec.edgar.financials -> slot_bind -> calculator/formula_trace -> verifier/gate`
+链路可闭合。该结果不是 debug50/test100 准确率。
 
 ## 1. 本轮触发
 
@@ -1602,3 +1604,85 @@ HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
 debug50/test100 准确率。它证明本轮修复的是更通用的工具链/agent-loop contract：
 官方 SEC structured fact 可以在 open-component 失败边界下继续进入
 tool-use context，模型再用 one-shot 工具选择完成 line-item/period binding。
+
+## 10. Structured SEC recovery and noise guard checkpoint
+
+继续调试 `financebench_id_00499` 暴露了下一层 agent-loop 问题：
+
+- 第一轮有效 live 已经取得主来源事实，`primary_source_numeric_binding` 能
+  `selected`，但 `finance.slot_bind` 没有产生 calculator payload，finalizer
+  提前生成缺槽失败报告。
+- 对照成熟 TypeScript agent loop 后，结论是：内部模型工具失败也必须作为可
+  恢复 observation 回到工具链，而不能在 finalizer 内部吞掉。
+- 本轮新增 `finance.slot_bind failed -> structured SEC recovery -> rebuild
+  ledger -> rerun slot_bind` 路径。host 只执行官方 SEC/XBRL 候选事实恢复，
+  不选择答案事实、不计算 benchmark 答案，仍由模型重新绑定 slots 和 formulas。
+- `sec.edgar.financials` fallback/candidate fact 全链路保留
+  `source_uri/source_title/source_kind/taxonomy/fp/start/end/frame`，避免权威
+  来源在 tool-use context、ledger、binding 之间丢失。
+- 修复结构化工具 payload 噪声：当 `sec.edgar.financials` 已产出 candidate
+  facts 时，不再把整个 JSON payload 作为自然语言证据送进 fact ledger。此前
+  `cik=66740` 曾被 natural extractor 误抽成 `revenue=66740`，污染模型
+  slot binding。
+
+结构测试：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_open_components.py \
+  tests/test_kernel_v3_finance_tool_readiness.py \
+  tests/test_kernel_v3_deep_agent_loop.py
+.venv/bin/python -m py_compile kernel_v3/agent/runtime.py
+git diff --check
+```
+
+结果：
+
+- finance engine structural set: `309 passed in 11.64s`
+- finance open-components/readiness/deep-loop set: `71 passed in 9.72s`
+- targeted structured SEC noise guard tests passed
+- `py_compile` passed
+- `git diff --check` passed
+
+live 复测：
+
+```bash
+HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
+  --dataset .state/kernel_v3/bench/finance/financebench_150_doc_retrieval.jsonl \
+  --dev-gold .state/kernel_v3/bench/finance/financebench_150_doc_retrieval.gold.jsonl \
+  --offset 2 --limit 1 --parallel 1 \
+  --output .state/kernel_v3/bench/finance/fb_debug50_o002_l001_after_structured_noise_guard_20260618.jsonl \
+  --summary-output .state/kernel_v3/bench/finance/fb_debug50_o002_l001_after_structured_noise_guard_20260618.summary.json \
+  --online --planner model --evaluator model --synthesizer model \
+  --semantic-intake model --turn-router model \
+  --execution-profile finance-capability --mission off \
+  --research-profile finance_fundamentals --research-depth deep \
+  --live-retrieval --live-search-strategy adaptive --agent-loop-streaming \
+  --max-agent-steps 12 --max-agent-tool-calls 24 \
+  --max-agent-artifact-bytes 2500000 \
+  --live-max-network-fetches 12 --live-download-byte-budget 80000000 \
+  --live-timeout-seconds 45 --context-profile provider --profile balanced \
+  --thinking disabled --reasoning-effort low --model deepseek-v4-flash \
+  --generation-mode auto --latency-target quality --response-language en \
+  --progress-events
+```
+
+结果：
+
+- `financebench_id_00499`: `status=passed`, `reason=numeric_within_tolerance`
+- `sec.edgar.financials=3`
+- `calculator.compute=4`
+- `formula_trace_count=4`
+- `trace_link=100%`, `trace_cite=100%`
+- `numeric_verifier_status=passed`
+- `verifier_gate=passed`
+- `synthesis_gate=passed`
+- matched numerics: `5.1%`, `19.8%`, `12.4%`
+- `finance_fact_count=40`
+- `tokens=175,458`
+
+说明：这是单道 live debug-row 成绩，gold/reference 没有进入模型上下文；不是
+debug50/test100 准确率。它证明本轮 agent loop 已经把一个此前反复失败的
+FinanceBench 类型推进到可验证闭环：结构化 SEC 工具事实、模型 slot binding、
+calculator formula traces、numeric verifier gate 和 final synthesis gate 均可贯通。

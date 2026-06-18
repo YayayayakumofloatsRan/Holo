@@ -288,6 +288,9 @@ def test_sec_financials_tool_falls_back_to_official_companyfacts_when_edgartools
     assert records[0]["metric"] == "property plant and equipment net"
     assert records[0]["end"] == "2018-12-31"
     assert records[0]["value"] == 8738000000
+    assert records[0]["source_uri"] == "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json"
+    assert records[0]["source_title"] == "SEC companyfacts JSON for CIK 0000066740"
+    assert records[0]["source_kind"] == "sec_companyfacts_json"
     assert records[1]["end"] == "2017-12-31"
     assert records[1]["value"] == 8866000000
 

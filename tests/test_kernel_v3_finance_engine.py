@@ -2409,6 +2409,47 @@ def test_recipe_evaluator_turns_slot_bind_missing_next_action_into_continue_feed
     assert "missing_slot:net_ppne" in feedback
 
 
+def test_recipe_evaluator_turns_slot_bind_missing_without_next_action_into_continue_feedback() -> None:
+    metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    metadata["retrieval"] = {
+        **metadata["retrieval"],
+        "allow_network": True,
+        "max_network_fetches": 3,
+    }
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata=metadata,
+    )
+    context = ContextBundle(
+        context_id="ctx-slot-bind-followup-no-next-action",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-slot-bind-followup-no-next-action",
+            "run_id": "run-1",
+            "finance_working_state": {
+                "schema": "holo.kernel_v3.finance_working_state.v1",
+                "slot_bind": {
+                    "status": "failed",
+                    "decision": "needs_more_evidence",
+                    "missing_slots": ["operating_cash_flow", "property_plant_and_equipment_net"],
+                },
+                "numeric_verification": {},
+            },
+        },
+        token_budget={},
+    )
+
+    feedback = _finance_slot_bind_followup_feedback(context, recipe=recipe)
+
+    assert "finance_slot_bind_followup" in feedback
+    assert f"next_tool:{SEC_EDGAR_FINANCIALS_TOOL_NAME}" in feedback
+    assert "next_tool:retrieval.run" in feedback
+    assert "missing_slot:operating_cash_flow" in feedback
+    assert "missing_slot:property_plant_and_equipment_net" in feedback
+
+
 def test_recipe_evaluator_turns_rejected_primary_source_binding_into_replan_feedback() -> None:
     journal = JournalStore.in_memory()
     binding = target_document_binding_from_metadata(
@@ -6892,6 +6933,8 @@ def test_finance_capability_planner_exposes_question_requirements_without_task_p
     workflow_text = json.dumps(directive["llm_first_finance_template"]["finance_workflow"], ensure_ascii=False)
     assert "inventory-efficiency / DIO" not in workflow_text
     assert "compile all required input slots" in workflow_text
+    assert "sec.edgar.financials" in workflow_text
+    assert "noisy PDF/table extraction" in workflow_text
 
 
 def test_finance_capability_planner_prompt_exposes_temporary_workbench_tools_to_model() -> None:
@@ -7338,6 +7381,9 @@ def test_sec_financials_records_become_candidate_facts_with_period_fields() -> N
                     "filed": "2019-02-07",
                     "end": "2018-12-31",
                     "accn": "0001558370-19-000470",
+                    "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+                    "source_title": "SEC companyfacts JSON for CIK 0000066740",
+                    "source_kind": "sec_companyfacts_json",
                     "value": 8738000000,
                 }
             ],
@@ -7349,6 +7395,7 @@ def test_sec_financials_records_become_candidate_facts_with_period_fields() -> N
         {
             "entityName": "3M COMPANY",
             "cik": "66740",
+            "taxonomy": "us-gaap",
             "concept": "PropertyPlantAndEquipmentNet",
             "label": "Property, Plant and Equipment, Net",
             "metric": "property plant and equipment net",
@@ -7361,13 +7408,24 @@ def test_sec_financials_records_become_candidate_facts_with_period_fields() -> N
             "filed": "2019-02-07",
             "end": "2018-12-31",
             "accn": "0001558370-19-000470",
+            "source_kind": "sec_companyfacts_json",
+            "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+            "source_title": "SEC companyfacts JSON for CIK 0000066740",
             "value": "8738000000",
         }
     ]
     text = _candidate_fact_evidence_text(candidates[0])
     assert "concept=PropertyPlantAndEquipmentNet" in text
     assert "end=2018-12-31" in text
-    evidence = [_finance_evidence(evidence_id="sec-financials-ppne", title="sec financials candidate fact", text=text)]
+    assert "source_uri=https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json" in text
+    evidence = [
+        _finance_evidence(
+            evidence_id="sec-financials-ppne",
+            title="sec financials candidate fact",
+            uri="sec-edgar://MMM/10-K/balance_sheet",
+            text=text,
+        )
+    ]
     facts = build_finance_fact_ledger(evidence=evidence, citations=[_finance_citation(evidence[0], citation_id="cite-sec")])
 
     assert len(facts) == 1
@@ -7375,6 +7433,75 @@ def test_sec_financials_records_become_candidate_facts_with_period_fields() -> N
     assert facts[0].value == "8738000000"
     assert facts[0].metadata["end"] == "2018-12-31"
     assert facts[0].metadata["concept"] == "PropertyPlantAndEquipmentNet"
+    assert facts[0].metadata["source_uri"] == "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json"
+    assert facts[0].metadata["source_kind"] == "sec_companyfacts_json"
+
+
+def test_structured_sec_financials_grounding_does_not_emit_payload_natural_facts() -> None:
+    journal = JournalStore.in_memory()
+    observation = Observation(
+        observation_id="obs-sec-financials-income",
+        run_id="run-1",
+        kind="sec_edgar_result",
+        status="ok",
+        source=f"tool:{SEC_EDGAR_FINANCIALS_TOOL_NAME}",
+        content={
+            "component": "sec_companyfacts_direct",
+            "identifier": "MMM",
+            "statement": "income_statement",
+            "records": [
+                {
+                    "entityName": "3M COMPANY",
+                    "cik": "66740",
+                    "taxonomy": "us-gaap",
+                    "concept": "RevenueFromContractWithCustomerExcludingAssessedTax",
+                    "label": "Revenue from Contract with Customer, Excluding Assessed Tax",
+                    "metric": "revenue",
+                    "unit": "USD",
+                    "scale": "actual",
+                    "period": "annual",
+                    "fy": 2022,
+                    "fp": "FY",
+                    "form": "10-K",
+                    "filed": "2023-02-08",
+                    "start": "2022-01-01",
+                    "end": "2022-12-31",
+                    "accn": "0000066740-23-000014",
+                    "source_uri": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json",
+                    "source_title": "SEC companyfacts JSON for CIK 0000066740",
+                    "source_kind": "sec_companyfacts_json",
+                    "value": 34229000000,
+                }
+            ],
+        },
+        observed_at_ms=1,
+        action_id="act-sec-financials-income",
+        tool_call_id=None,
+    )
+    journal.append(
+        task_id="task-sec-financials-grounding",
+        run_id="run-1",
+        step_id="step-1",
+        kind="observation",
+        data=observation.to_dict(),
+        observation_ref=observation.observation_id,
+    )
+
+    evidence, citations, _report = _workspace_grounding(
+        journal,
+        "task-sec-financials-grounding",
+        "run-1",
+        artifact_store=ArtifactStore.in_memory(),
+    )
+    facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
+
+    assert evidence
+    assert all(not item.evidence_id.startswith("workspace-evidence") for item in evidence)
+    revenues = [fact for fact in facts if fact.metric == "revenue"]
+    assert len(revenues) == 1
+    assert revenues[0].value == "34229000000"
+    assert revenues[0].metadata["source_uri"] == "https://data.sec.gov/api/xbrl/companyfacts/CIK0000066740.json"
+    assert all(fact.value != "66740" for fact in facts)
 
 
 def test_structured_metric_value_evidence_does_not_emit_unscaled_natural_duplicate() -> None:

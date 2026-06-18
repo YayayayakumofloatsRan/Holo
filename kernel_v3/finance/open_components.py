@@ -1743,8 +1743,7 @@ def _sec_cik_from_identifier(identifier: str) -> str | None:
 
 
 def _fetch_sec_companyfacts_json(cik: str) -> JsonObject:
-    padded = "".join(ch for ch in str(cik or "") if ch.isdigit()).zfill(10)[-10:]
-    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json"
+    url = _sec_companyfacts_source_uri(cik)
     request = urllib.request.Request(
         url,
         headers={
@@ -1758,6 +1757,11 @@ def _fetch_sec_companyfacts_json(cik: str) -> JsonObject:
     return payload if isinstance(payload, dict) else {}
 
 
+def _sec_companyfacts_source_uri(cik: str) -> str:
+    padded = "".join(ch for ch in str(cik or "") if ch.isdigit()).zfill(10)[-10:]
+    return f"https://data.sec.gov/api/xbrl/companyfacts/CIK{padded}.json"
+
+
 def _sec_companyfacts_financial_records(
     payload: JsonObject,
     *,
@@ -1768,6 +1772,8 @@ def _sec_companyfacts_financial_records(
 ) -> list[JsonObject]:
     entity = str(payload.get("entityName") or "").strip()
     cik = str(payload.get("cik") or "").strip()
+    source_uri = _sec_companyfacts_source_uri(cik)
+    source_title = f"SEC companyfacts JSON for CIK {''.join(ch for ch in cik if ch.isdigit()).zfill(10)[-10:]}"
     facts = payload.get("facts") if isinstance(payload.get("facts"), dict) else {}
     us_gaap = facts.get("us-gaap") if isinstance(facts.get("us-gaap"), dict) else {}
     concepts = _sec_companyfacts_concepts_for_statement(statement)
@@ -1815,6 +1821,9 @@ def _sec_companyfacts_financial_records(
                         "value": value,
                         "val": value,
                         "source": "sec_xbrl_companyfacts_direct",
+                        "source_uri": source_uri,
+                        "source_title": source_title,
+                        "source_kind": "sec_companyfacts_json",
                     }
                 )
     records.sort(key=_sec_companyfacts_record_sort_key)

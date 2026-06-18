@@ -2806,6 +2806,166 @@ class AgentRuntime:
         )
         return plans
 
+    def _recover_finance_slot_bind_missing_with_sec_financials(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe,
+        compiled_program: JsonObject,
+        ledger_ref: str,
+    ) -> int:
+        if SEC_EDGAR_FINANCIALS_TOOL_NAME not in set(recipe.allowed_tools):
+            return 0
+        slot_bind = _latest_finance_slot_bind_state(self.journal, task_id=task_id, run_id=run_id)
+        missing_slots = _string_list(slot_bind.get("missing_slots"))
+        if not missing_slots:
+            return 0
+        if _finance_structured_recovery_already_attempted(self.journal, task_id=task_id, run_id=run_id):
+            return 0
+        question = _root_goal_from_recipe(recipe)
+        binding = _target_document_binding_from_recipe(recipe)
+        identifier = _finance_structured_recovery_identifier(question=question, binding=binding, recipe=recipe)
+        fiscal_year = _finance_structured_recovery_fiscal_year(question=question, binding=binding, compiled_program=compiled_program)
+        statements = _finance_structured_recovery_statements(compiled_program=compiled_program, missing_slots=missing_slots)
+        form = _finance_structured_recovery_form(binding=binding)
+        recovery_ref = "finance-structured-recovery-" + _short_hash(task_id, run_id, ledger_ref, ",".join(missing_slots))
+        if not identifier or not statements:
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="finance_structured_evidence_recovery",
+                data=redact_journal_data(
+                    {
+                        "schema": "holo.kernel_v3.finance_structured_evidence_recovery.v1",
+                        "status": "skipped",
+                        "reason": "identifier_or_statement_unresolved",
+                        "identifier": identifier,
+                        "statements": statements,
+                        "missing_slots": missing_slots,
+                        "ledger_ref": ledger_ref,
+                        "semantic_decision_owner": "model",
+                        "host_role": "execute_model_missing_slot_recovery_tools_only",
+                    }
+                ),
+                feedback_ref=ledger_ref,
+                state_delta={"finance_structured_evidence_recovery": "skipped"},
+            )
+            return 0
+        registry = register_finance_tools(ToolRegistry.with_builtin_respond(), artifact_store=self.artifact_store)
+        policy_gate = PolicyGate(permission="read_write", allowed_permissions={"network:fetch"})
+        executed: list[JsonObject] = []
+        ok_count = 0
+        for index, statement in enumerate(statements, start=1):
+            payload: JsonObject = {
+                "identifier": identifier,
+                "form": form,
+                "statement": statement,
+                "limit": 160,
+                "metadata": {
+                    "finance_structured_evidence_recovery": True,
+                    "missing_slots": missing_slots[:24],
+                    "compiled_program_ref": compiled_program.get("record_id"),
+                    "ledger_ref": ledger_ref,
+                },
+            }
+            if fiscal_year is not None:
+                payload["fiscal_year"] = fiscal_year
+            action = CandidateAction(
+                action_id=f"act-{recovery_ref}-{index}-{statement}",
+                kind="tool",
+                name=SEC_EDGAR_FINANCIALS_TOOL_NAME,
+                description=f"recover structured SEC {statement} facts for missing finance slots",
+                score=0.9,
+                payload=payload,
+                reasons=["finance_slot_bind_missing_slots", "structured_sec_recovery"],
+                side_effect_class="network",
+            )
+            manifest = registry.manifest_for_action(action)
+            decision = policy_gate.validate(run_id=run_id, action=action, manifest=manifest)
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="policy_decision",
+                data=redact_journal_data(decision.to_dict()),
+                action_ref=action.action_id,
+                feedback_ref=ledger_ref,
+                state_delta={"policy_allowed": decision.allowed},
+            )
+            tool_result = registry.execute_with_artifacts(
+                action,
+                policy_decision=decision,
+                execution_context={
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "step_id": None,
+                    "input_text": question,
+                },
+            )
+            observation = Observation(
+                observation_id=tool_result.observation.observation_id,
+                run_id=run_id,
+                kind=tool_result.observation.kind,
+                status=tool_result.observation.status,
+                source=tool_result.observation.source,
+                content=tool_result.observation.content,
+                observed_at_ms=tool_result.observation.observed_at_ms,
+                action_id=action.action_id,
+                tool_call_id=tool_result.observation.tool_call_id,
+            )
+            self.journal.append(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=None,
+                kind="observation",
+                data=redact_journal_data(observation.to_dict()),
+                action_ref=action.action_id,
+                observation_ref=observation.observation_id,
+                feedback_ref=ledger_ref,
+                state_delta={"observation_status": observation.status},
+                artifact_refs=[artifact.artifact_id for artifact in tool_result.artifact_refs],
+            )
+            if observation.status == "ok":
+                ok_count += 1
+            executed.append(
+                {
+                    "tool": SEC_EDGAR_FINANCIALS_TOOL_NAME,
+                    "statement": statement,
+                    "status": observation.status,
+                    "action_id": action.action_id,
+                    "artifact_count": len(tool_result.artifact_refs),
+                }
+            )
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="finance_structured_evidence_recovery",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.finance_structured_evidence_recovery.v1",
+                    "status": "ok" if ok_count else "failed",
+                    "identifier": identifier,
+                    "form": form,
+                    "fiscal_year": fiscal_year,
+                    "statements": statements,
+                    "missing_slots": missing_slots,
+                    "executed": executed,
+                    "ok_count": ok_count,
+                    "ledger_ref": ledger_ref,
+                    "compiled_program_ref": compiled_program.get("record_id"),
+                    "semantic_decision_owner": "model",
+                    "host_role": "execute_model_missing_slot_recovery_tools_only",
+                    "host_boundary": "official SEC/XBRL candidate facts only; model still reruns slot binding and formula choice",
+                }
+            ),
+            feedback_ref=ledger_ref,
+            state_delta={"finance_structured_evidence_recovery": "ok" if ok_count else "failed"},
+        )
+        return ok_count
+
     def _run_finance_numeric_preflight(
         self,
         task_id: str,
@@ -2868,7 +3028,48 @@ class AgentRuntime:
                     ledger_ref=ledger_record.record_id,
                 )
                 if not plans:
-                    return
+                    recovered_count = self._recover_finance_slot_bind_missing_with_sec_financials(
+                        task_id,
+                        run_id,
+                        recipe=recipe,
+                        compiled_program=compiled_program,
+                        ledger_ref=ledger_record.record_id,
+                    )
+                    if not recovered_count:
+                        return
+                    toolchain_evidence, toolchain_citations, _toolchain_report = _workspace_grounding(
+                        self.journal,
+                        task_id,
+                        run_id,
+                        artifact_store=self.artifact_store,
+                        evidence_char_limit=int(_context_budget_metadata(recipe)["workspace_evidence_chars"]),
+                        citation_char_limit=int(_context_budget_metadata(recipe)["workspace_citation_chars"]),
+                        synthesis_evidence_preview_chars=int(_context_budget_metadata(recipe)["synthesis_evidence_preview_chars"]),
+                        synthesis_citation_preview_chars=int(_context_budget_metadata(recipe)["synthesis_citation_preview_chars"]),
+                    )
+                    if toolchain_evidence:
+                        evidence = _merge_evidence_items(evidence, toolchain_evidence)
+                        citations = _merge_citation_items(citations, toolchain_citations)
+                        facts, ledger_record = self._append_finance_fact_ledger(
+                            task_id,
+                            run_id,
+                            evidence=evidence,
+                            citations=citations,
+                            purpose="preflight_structured_recovery",
+                            question=_root_goal_from_recipe(recipe),
+                            target_binding=_target_document_binding_from_recipe(recipe),
+                            recipe=recipe,
+                        )
+                    plans = self._model_finance_slot_bind_plans(
+                        task_id,
+                        run_id,
+                        recipe=recipe,
+                        facts=facts,
+                        compiled_program=compiled_program,
+                        ledger_ref=ledger_record.record_id,
+                    )
+                    if not plans:
+                        return
             else:
                 self.journal.append(
                     task_id=task_id,
@@ -6927,8 +7128,6 @@ def _finance_slot_bind_followup_feedback(
         return []
     next_action = slot_bind.get("next_action")
     next_action = next_action if isinstance(next_action, dict) else {}
-    if not next_action:
-        return []
     verification = state.get("numeric_verification")
     verification = verification if isinstance(verification, dict) else {}
     if verification.get("status") == "passed":
@@ -6938,11 +7137,20 @@ def _finance_slot_bind_followup_feedback(
     if normalized not in {"needs_more_evidence", "need_more_evidence", "missing_slots", "failed", "continue"}:
         return []
     tool = _string_value(next_action.get("tool")) or _string_value(next_action.get("name"))
+    suggested_tools: list[str] = []
+    if tool:
+        suggested_tools.append(tool)
+    if SEC_EDGAR_FINANCIALS_TOOL_NAME in recipe.allowed_tools:
+        suggested_tools.append(SEC_EDGAR_FINANCIALS_TOOL_NAME)
+    if "retrieval.run" in recipe.allowed_tools:
+        suggested_tools.append("retrieval.run")
+    if TOOL_DISCOVERY_NAME in recipe.allowed_tools:
+        suggested_tools.append(TOOL_DISCOVERY_NAME)
     return _ordered_unique(
         [
             "finance_slot_bind_followup",
             f"finance_slot_bind_decision:{decision}",
-            *([f"next_tool:{tool}"] if tool else []),
+            *[f"next_tool:{name}" for name in _ordered_unique(suggested_tools)[:4]],
             *[f"missing_slot:{slot}" for slot in missing_slots[:8]],
         ]
     )
@@ -8614,8 +8822,17 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "kind": "tool",
                     "name": SEC_EDGAR_FINANCIALS_TOOL_NAME,
                     "side_effect_class": "network",
-                    "use_when": "standardized SEC/XBRL financial statement candidates are useful for line-item, period, unit, or statement binding",
-                    "payload_requirements": ["identifier: ticker, CIK, or company identifier", "statement: optional income_statement/balance_sheet/cash_flow_statement", "form: optional"],
+                    "use_when": (
+                        "standardized SEC/XBRL financial statement candidates are needed for filing line-item, period, unit, "
+                        "or statement binding; prefer this before PDF/table conversion for standard income statement, "
+                        "balance sheet, cash-flow, inventory, assets, PP&E, revenue, net income, capex, or OCF slots"
+                    ),
+                    "payload_requirements": [
+                        "identifier: ticker, CIK, or company identifier",
+                        "statement: optional income_statement/balance_sheet/cash_flow_statement",
+                        "form: optional 10-K/10-Q",
+                        "fiscal_year: optional target FY when known",
+                    ],
                     "host_boundary": "uses EdgarTools under network:fetch policy; the model still chooses facts and formulas",
                 }
             )
@@ -8801,6 +9018,7 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                             "For finance capability or benchmark tasks with named entities, events, periods, or documents, assume the task is solvable; use retrieval to resolve tickers, CIKs, filings, exhibits, aliases, and source URLs instead of asking the user.",
                             "Choose source families semantically: official filings, issuer IR/releases/transcripts, exchange disclosures, market data, or reputable news as appropriate.",
                             "For SEC/filing tasks, target ticker/CIK, form type, accession/period, exhibit/proxy/8-K/10-Q/10-K/DEF 14A when relevant.",
+                            "For SEC filing formula or comparison tasks, call sec.edgar.financials for the required income_statement, balance_sheet, and/or cash_flow_statement slots before relying on noisy PDF/table extraction.",
                             "For formula or comparison tasks, compile all required input slots, bind period and line-item basis, then call calculator.compute or data.table.query for deterministic transforms.",
                             "Extract the facts needed for the answer; if a calculation is needed, call calculator.compute instead of mental arithmetic.",
                             "Finalize with direct answer, cited evidence ids, supported calculations, and limitations for any soft gaps.",
@@ -14573,7 +14791,11 @@ def _workspace_grounding(
         uri = _workspace_observation_uri(content, source=source, title=path)
         artifact_id = record.artifact_refs[0] if record.artifact_refs else f"artifact-{record.observation_ref or 'workspace-evidence-' + str(index)}"
         emit_full_text_evidence = text.strip() and not (
-            candidate_facts and source in {"tool:shell.exec", "tool:script.exec"}
+            candidate_facts
+            and (
+                source in {"tool:shell.exec", "tool:script.exec"}
+                or source in FINANCE_STRUCTURED_GROUNDING_OBSERVATION_SOURCES
+            )
         )
         if emit_full_text_evidence:
             evidence_id = f"workspace-evidence-{index}"
@@ -14740,10 +14962,15 @@ def _candidate_facts_from_json(value: object) -> list[JsonObject]:
     if not isinstance(value, dict):
         return []
     table_facts = _candidate_facts_from_table_payload(value)
+    inherited = _candidate_fact_inherited_fields(value)
     for key in ("facts", "candidate_facts", "candidateFacts", "finance_facts", "financeFacts", "records", "rows"):
         nested = value.get(key)
         if isinstance(nested, list):
-            nested_facts = [fact for item in nested for fact in _candidate_facts_from_json(item)]
+            nested_facts = [
+                {**inherited, **fact}
+                for item in nested
+                for fact in _candidate_facts_from_json(item)
+            ]
             return _dedupe_candidate_facts([*table_facts, *nested_facts])
     if "value" not in value and "val" not in value:
         return table_facts
@@ -14757,6 +14984,7 @@ def _candidate_facts_from_json(value: object) -> list[JsonObject]:
         "entityName": "entityName",
         "ticker": "ticker",
         "cik": "cik",
+        "taxonomy": "taxonomy",
         "concept": "concept",
         "label": "label",
         "line_item": "metric",
@@ -14778,6 +15006,15 @@ def _candidate_facts_from_json(value: object) -> list[JsonObject]:
         "end": "end",
         "frame": "frame",
         "accn": "accn",
+        "source": "source_kind",
+        "source_kind": "source_kind",
+        "sourceKind": "source_kind",
+        "source_uri": "source_uri",
+        "sourceUri": "source_uri",
+        "uri": "source_uri",
+        "source_title": "source_title",
+        "sourceTitle": "source_title",
+        "title": "source_title",
         "value": "value",
         "val": "value",
         "amount": "value",
@@ -14848,13 +15085,32 @@ def _candidate_facts_from_table_row(row: JsonObject, *, inherited: JsonObject) -
         ("entityName", "entityName"),
         ("ticker", "ticker"),
         ("cik", "cik"),
+        ("taxonomy", "taxonomy"),
         ("concept", "concept"),
         ("label", "label"),
         ("unit", "unit"),
         ("scale", "scale"),
+        ("fy", "fy"),
+        ("fiscal_year", "fy"),
+        ("fiscalYear", "fy"),
+        ("year", "fy"),
+        ("period", "period"),
+        ("fp", "fp"),
         ("form", "form"),
         ("filed", "filed"),
+        ("start", "start"),
+        ("end", "end"),
+        ("frame", "frame"),
         ("accn", "accn"),
+        ("source", "source_kind"),
+        ("source_kind", "source_kind"),
+        ("sourceKind", "source_kind"),
+        ("source_uri", "source_uri"),
+        ("sourceUri", "source_uri"),
+        ("uri", "source_uri"),
+        ("source_title", "source_title"),
+        ("sourceTitle", "source_title"),
+        ("title", "source_title"),
     ):
         value = row.get(raw_key)
         if value not in (None, ""):
@@ -14897,11 +15153,30 @@ def _candidate_fact_inherited_fields(value: JsonObject) -> JsonObject:
         ("entityName", "entityName"),
         ("ticker", "ticker"),
         ("cik", "cik"),
+        ("taxonomy", "taxonomy"),
         ("unit", "unit"),
         ("scale", "scale"),
+        ("fy", "fy"),
+        ("fiscal_year", "fy"),
+        ("fiscalYear", "fy"),
+        ("year", "fy"),
+        ("period", "period"),
+        ("fp", "fp"),
         ("form", "form"),
         ("filed", "filed"),
+        ("start", "start"),
+        ("end", "end"),
+        ("frame", "frame"),
         ("accn", "accn"),
+        ("source", "source_kind"),
+        ("source_kind", "source_kind"),
+        ("sourceKind", "source_kind"),
+        ("source_uri", "source_uri"),
+        ("sourceUri", "source_uri"),
+        ("uri", "source_uri"),
+        ("source_title", "source_title"),
+        ("sourceTitle", "source_title"),
+        ("title", "source_title"),
     ):
         raw_value = value.get(raw_key)
         if raw_value not in (None, ""):
@@ -14971,6 +15246,7 @@ def _candidate_fact_evidence_text(fact: JsonObject) -> str:
         "entityName",
         "ticker",
         "cik",
+        "taxonomy",
         "concept",
         "label",
         "metric",
@@ -14985,6 +15261,9 @@ def _candidate_fact_evidence_text(fact: JsonObject) -> str:
         "end",
         "frame",
         "accn",
+        "source_kind",
+        "source_uri",
+        "source_title",
         "value",
     ]
     parts = []
@@ -17674,6 +17953,122 @@ def _model_compiled_program_authorizes_numeric_preflight(program: JsonObject) ->
     if str(task_spec.get("domain") or "").strip().lower() == "finance" and evidence_specs and required_slots:
         return True
     return False
+
+
+def _finance_structured_recovery_already_attempted(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+) -> bool:
+    return any(
+        record.run_id == run_id
+        for record in journal.records(task_id=task_id, kind="finance_structured_evidence_recovery")
+    )
+
+
+def _finance_structured_recovery_identifier(
+    *,
+    question: str,
+    binding: JsonObject,
+    recipe: TaskRecipe,
+) -> str:
+    for key in ("ticker", "sec_ticker", "cik", "company", "issuer"):
+        value = _string_value(binding.get(key))
+        if value:
+            return value
+    metadata = dict(recipe.metadata)
+    execution_metadata = _execution_metadata(recipe)
+    identity = resolve_issuer_identity(question, {**metadata, **execution_metadata, **binding})
+    for value in (identity.ticker, identity.cik, identity.company, identity.issuer):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _finance_structured_recovery_fiscal_year(
+    *,
+    question: str,
+    binding: JsonObject,
+    compiled_program: JsonObject,
+) -> int | None:
+    for value in (
+        binding.get("doc_period"),
+        binding.get("period"),
+        binding.get("fiscal_year"),
+        _json_object(compiled_program.get("task_spec")).get("period"),
+        _json_object(compiled_program.get("task_spec")).get("fiscal_year"),
+    ):
+        year = _year_from_text(value)
+        if year is not None:
+            return year
+    return _year_from_text(question)
+
+
+def _year_from_text(value: object) -> int | None:
+    if isinstance(value, int) and 1900 <= value <= 2099:
+        return value
+    text = str(value or "")
+    match = re.search(r"\b(?:FY|fiscal\s+year\s*)?((?:19|20)\d{2})\b", text, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _finance_structured_recovery_form(*, binding: JsonObject) -> str:
+    form = _string_value(binding.get("doc_type")) or _string_value(binding.get("form"))
+    form = (form or "10-K").upper()
+    if form in {"10K", "10-K/A"}:
+        return "10-K"
+    if form in {"10Q", "10-Q/A"}:
+        return "10-Q"
+    return form or "10-K"
+
+
+def _finance_structured_recovery_statements(
+    *,
+    compiled_program: JsonObject,
+    missing_slots: list[str],
+) -> list[str]:
+    texts: list[str] = [*missing_slots]
+    for requirement in _slot_requirements_for_slot_bind(compiled_program):
+        texts.extend(str(value) for value in requirement.values() if value not in (None, "", [], {}))
+    for spec_key in ("evidence_specs", "transform_specs"):
+        for spec in list(compiled_program.get(spec_key) or []):
+            if isinstance(spec, dict):
+                texts.extend(str(value) for value in spec.values() if value not in (None, "", [], {}))
+    joined = " ".join(texts).replace("_", " ").replace("-", " ").lower()
+    statements: list[str] = []
+    if any(term in joined for term in ("revenue", "sales", "net income", "operating income", "margin", "income statement")):
+        statements.append("income_statement")
+    if any(
+        term in joined
+        for term in (
+            "operating cash flow",
+            "cash provided by operating activities",
+            "cash flow",
+            "capital expenditure",
+            "capex",
+            "purchases of property",
+            "cash flow statement",
+        )
+    ):
+        statements.append("cash_flow_statement")
+    if any(
+        term in joined
+        for term in (
+            "asset",
+            "assets",
+            "property plant",
+            "pp&e",
+            "ppe",
+            "balance sheet",
+            "liabilities",
+            "equity",
+        )
+    ):
+        statements.append("balance_sheet")
+    if not statements and str(_json_object(compiled_program.get("task_spec")).get("domain") or "").lower() == "finance":
+        statements.extend(["income_statement", "cash_flow_statement", "balance_sheet"])
+    return _ordered_unique(statements)[:3]
 
 
 FINANCE_SLOT_BIND_FACT_LIMIT = 64

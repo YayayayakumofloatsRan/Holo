@@ -138,6 +138,19 @@ finance capability. The first implementation checkpoint adds
 `kernel_v3/finance/open_components.py`, registering `finance.toolchain.describe`,
 `sec.edgar.company_filings`, `sec.edgar.financials`, `document.docling.convert`,
 and `market.openbb.fetch` as host-policy-bound optional component tools.
+The 2026-06-18 mature-loop follow-up is tracked in
+`docs/KERNEL_V3_AGENT_LOOP_FOLLOWUP_2026-06-18_ZH.md`. The latest live
+debug-row evidence is `financebench_id_00499` at offset 2:
+`.state/kernel_v3/bench/finance/fb_debug50_o002_l001_after_structured_noise_guard_20260618.jsonl`
+passed `1/1` with `numeric_within_tolerance`, `sec.edgar.financials=3`,
+`calculator.compute=4`, `formula_trace_count=4`, verifier gate passed,
+synthesis gate passed, and matched numerics `5.1%`, `19.8%`, and `12.4%`.
+This is a single live debug-row capability result, not a debug50/test100 score.
+The underlying fix is agent-loop/tool-context generalization: SEC structured
+facts keep authoritative provenance through candidate facts and `FinanceFact`
+metadata; failed `finance.slot_bind` can trigger structured SEC evidence
+recovery and rerun model binding; structured tool payloads no longer leak CIKs
+or JSON identifiers into natural-language fact extraction.
 The 2026-06-17 follow-up tool-surface iteration is recorded in
 `docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md`. It adds
 `kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return
