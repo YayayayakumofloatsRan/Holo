@@ -161,6 +161,11 @@ preflight engine. `finance_agent_loop_contract` and
 model; targeted structural tests pass (`41` deep-loop tests, `50`
 finance-open/readiness/profile tests, `310` finance-engine tests). This is
 architecture/tool-loop evidence, not a new FinanceBench/FAB/FinQA score.
+The subsequent code/interface audit further separates strict loop execution
+from legacy formula planning: in `finance-capability`, evaluator feedback no
+longer calls legacy `plan_finance_formula(...)`; it only reports model-visible
+tool requirements from question requirements and observed tool state. The wider
+regression passes (`91` loop/tool/profile tests and `311` finance-engine tests).
 The 2026-06-17 follow-up tool-surface iteration is recorded in
 `docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md`. It adds
 `kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return

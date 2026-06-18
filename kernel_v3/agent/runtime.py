@@ -6932,11 +6932,29 @@ class _RecipeEvaluator:
                     None,
                     transform_work,
                 )
-            if _finance_formula_work_required_before_final(
+            strict_tool_work = _strict_finance_loop_tool_feedback(
                 self.journal,
+                context,
                 recipe=self.recipe,
-                context=context,
                 artifact_store=self.artifact_store,
+            )
+            if strict_tool_work:
+                return _feedback(
+                    run_id,
+                    self.calls,
+                    "continue",
+                    None,
+                    None,
+                    strict_tool_work,
+                )
+            if (
+                not _strict_single_agent_tool_loop_enabled(self.recipe)
+                and _finance_formula_work_required_before_final(
+                    self.journal,
+                    recipe=self.recipe,
+                    context=context,
+                    artifact_store=self.artifact_store,
+                )
             ):
                 return _feedback(
                     run_id,
@@ -7255,6 +7273,63 @@ def _finance_execution_program_transform_feedback(
             "finance_execution_program_transform_required",
             *[f"transform:{name}" for name in transform_names if name],
             *[f"missing_slot:{slot}" for slot in missing_slots[:8]],
+        ]
+    )
+
+
+def _strict_finance_loop_tool_feedback(
+    journal: JournalStore | None,
+    context: ContextBundle,
+    *,
+    recipe: TaskRecipe,
+    artifact_store: ArtifactStore | None,
+) -> list[str]:
+    """Return strict-loop tool feedback without invoking legacy formula planning."""
+
+    if journal is None or not _strict_single_agent_tool_loop_enabled(recipe):
+        return []
+    if recipe.mode != "retrieval_answer":
+        return []
+    task_id = str(context.state.get("task_id") or "")
+    run_id = str(context.state.get("run_id") or "")
+    if not task_id or not run_id:
+        return []
+    evidence, _, _ = _retrieval_and_toolchain_grounding(
+        journal,
+        task_id,
+        run_id,
+        recipe=recipe,
+        artifact_store=artifact_store,
+    )
+    if not evidence:
+        return []
+    requirements = _finance_question_requirements_for_recipe(recipe)
+    categories = set(_string_list(requirements.get("required_tool_categories")))
+    risk_flags = set(_string_list(requirements.get("risk_flags")))
+    missing: list[str] = []
+    traces = _calculator_formula_traces(journal, task_id=task_id, run_id=run_id)
+    arithmetic_required = bool(
+        {"arithmetic", "table_operations"}.intersection(categories)
+        or {"requires_calculator", "requires_table_sort"}.intersection(risk_flags)
+    )
+    if arithmetic_required and CALCULATOR_TOOL_NAME in recipe.allowed_tools and not traces:
+        missing.append("finance_loop_tool_required:calculator.compute")
+    verification_required = bool("numeric_verification" in categories or "requires_verifier" in risk_flags)
+    verification = _latest_finance_numeric_verification_payload(journal, task_id=task_id, run_id=run_id)
+    verification_status = str(verification.get("status") or "").strip().casefold()
+    if (
+        verification_required
+        and FINANCE_VERIFY_NUMERIC_TOOL_NAME in recipe.allowed_tools
+        and verification_status not in {"passed", "not_applicable"}
+    ):
+        missing.append("finance_loop_tool_required:finance.verify_numeric")
+    if not missing:
+        return []
+    return _ordered_unique(
+        [
+            "strict_single_agent_tool_loop_pending",
+            "legacy_formula_planner:not_used",
+            *missing,
         ]
     )
 
@@ -10679,6 +10754,13 @@ def _single_agent_tool_loop_finalizer_preflight_blocked(recipe: TaskRecipe | Non
         return False
     if explicit is False:
         return True
+    return _strict_single_agent_tool_loop_enabled(recipe)
+
+
+def _strict_single_agent_tool_loop_enabled(recipe: TaskRecipe | None) -> bool:
+    if recipe is None or recipe.mode != "retrieval_answer":
+        return False
+    loop = _agent_loop_metadata(recipe)
     if _truthy(loop.get("single_agent_tool_loop")):
         return True
     if _recipe_requests_deep_agent_loop(recipe) and _llm_semantic_judgment_required(recipe):

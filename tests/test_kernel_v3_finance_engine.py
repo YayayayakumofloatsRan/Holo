@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from kernel_v3.agent import AgentRuntime
+import kernel_v3.agent.runtime as runtime_module
 from kernel_v3.agent.contracts import FinalAnswer, SemanticIntake
 from kernel_v3.agent.execution_profile import execution_profile, execution_profile_runtime_metadata
 from kernel_v3.agent.runtime import (
@@ -14380,6 +14381,69 @@ def test_host_semantic_fallbacks_are_disabled_by_default_and_in_finance_capabili
     assert _host_semantic_fallbacks_enabled(default_recipe) is False
     assert _host_semantic_fallbacks_enabled(legacy_recipe) is True
     assert _host_semantic_fallbacks_enabled(strict_recipe) is False
+
+
+def test_strict_finance_loop_feedback_does_not_call_legacy_formula_planner(monkeypatch) -> None:
+    def fail_if_legacy_formula_planner_runs(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("strict finance loop must not call legacy plan_finance_formula")
+
+    monkeypatch.setattr(runtime_module, "plan_finance_formula", fail_if_legacy_formula_planner_runs)
+    journal = JournalStore.in_memory()
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            **execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "goal": "Calculate TestCo FY2024 net margin.",
+        },
+    )
+    task_id = "task-strict-loop-no-legacy-formula-planner"
+    run_id = "run-1"
+    evidence = _finance_evidence(
+        evidence_id="evidence-net-margin",
+        title="TestCo 2024 10-K",
+        uri="https://www.sec.gov/Archives/testco-2024.htm",
+        text=(
+            "entityName=TestCo metric=revenue label=Revenue unit=USD fy=2024 form=10-K value=200 "
+            "entityName=TestCo metric=net income label=Net income unit=USD fy=2024 form=10-K value=50"
+        ),
+    )
+    citation = _finance_citation(evidence, citation_id="cite-net-margin")
+    journal.append(task_id=task_id, run_id=run_id, step_id="step-1", kind="retrieval_evidence", data=evidence.to_dict())
+    journal.append(task_id=task_id, run_id=run_id, step_id="step-1", kind="retrieval_citation", data=citation.to_dict())
+    evaluator = _RecipeEvaluator(
+        recipe,
+        journal=journal,
+        artifact_store=ArtifactStore.in_memory(),
+    )
+    context = ContextBundle(
+        context_id="ctx-strict-loop-no-legacy-formula-planner",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": task_id, "run_id": run_id},
+        token_budget={},
+    )
+    observation = Observation(
+        observation_id="obs-premature-response",
+        run_id=run_id,
+        kind="respond_result",
+        status="ok",
+        source="respond",
+        content={"text": "TestCo FY2024 net margin was 25%."},
+        observed_at_ms=1,
+        action_id="act-premature-response",
+        tool_call_id=None,
+    )
+
+    feedback = evaluator.evaluate(context, observation)
+
+    assert feedback.status == "continue"
+    assert "strict_single_agent_tool_loop_pending" in feedback.missing_evidence
+    assert "legacy_formula_planner:not_used" in feedback.missing_evidence
+    assert "finance_loop_tool_required:calculator.compute" in feedback.missing_evidence
+    assert "finance_loop_tool_required:finance.verify_numeric" in feedback.missing_evidence
+    assert not journal.records(task_id=task_id, kind="finance_formula_plan")
+    assert not journal.records(task_id=task_id, kind="observation")
 
 
 def test_non_strict_finance_preflight_skips_host_formula_without_explicit_legacy_flag() -> None:

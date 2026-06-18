@@ -1712,6 +1712,13 @@ calculator formula traces、numeric verifier gate 和 final synthesis gate 均�
 - `_synthesize_retrieval_final(...)` 在 strict loop 下只写
   `finance_fact_ledger` 和 `finance_numeric_preflight(status=skipped,
   reason=single_agent_tool_loop_contract)`，不会再调用隐藏 numeric preflight。
+- 后续代码审查继续切断 legacy 干扰：`_RecipeEvaluator` 在 strict single-agent
+  loop 下不再调用 legacy `plan_finance_formula(...)` 来决定是否阻止 final。
+  strict 路径只根据模型可见 `finance_question_requirements`、真实 evidence、
+  已有 calculator / verifier observations 和 model-compiled execution program
+  发出工具需求反馈，例如 `finance_loop_tool_required:calculator.compute`、
+  `finance_loop_tool_required:finance.verify_numeric`。旧公式规划器只允许非
+  strict/legacy 路径使用。
 
 涉及代码：
 
@@ -1745,6 +1752,8 @@ calculator formula traces、numeric verifier gate 和 final synthesis gate 均�
 - deep loop structural set: `41 passed in 3.67s`
 - finance open-components/readiness/profile set: `50 passed in 5.24s`
 - finance engine structural set: `310 passed in 8.45s`
+- strict legacy-separation follow-up: targeted tests passed; wider regression
+  passed with `91` loop/tool/profile tests and `311` finance-engine tests.
 
 说明：这是 agent-loop 合同和工具接口边界修复，不是 FinanceBench/FAB/FinQA
 准确率。下一步应在 debug50 类型簇做小批 live runs，检查模型是否真正把
