@@ -487,6 +487,12 @@ def test_assistant_turn_prompt_exposes_visible_and_deferred_tool_surface() -> No
     assert surface["deferred_tools"][0]["name"] == "sec.edgar.financials"
     assert surface["deferred_tools"][0]["schema_available_via"] == "tool.discovery"
     assert "input_schema" not in surface["deferred_tools"][0]
+    numeric_protocol = prompt["numeric_verification_protocol"]
+    assert numeric_protocol["schema"] == "holo.kernel_v3.numeric_verification_protocol.v1"
+    assert numeric_protocol["decision_owner"] == "model"
+    assert "calculator.compute" in numeric_protocol["available_numeric_tools"]
+    assert "ratios" in numeric_protocol["applies_to"]
+    assert "mental arithmetic" in numeric_protocol["finalization_guidance"]
 
 
 def test_assistant_turn_prompt_expands_context_requested_deferred_tool() -> None:

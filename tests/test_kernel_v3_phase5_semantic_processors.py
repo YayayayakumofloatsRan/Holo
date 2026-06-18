@@ -158,6 +158,21 @@ def test_phase5_processor_system_prompt_guides_visible_text_style_without_overri
     assert "unless the next clause" not in lowered
 
 
+def test_phase5_system_and_planner_prompts_expose_general_numeric_tool_protocol():
+    system_lowered = PROCESSOR_SYSTEM_PROMPT.lower()
+    planner_lowered = PLANNER_PROMPT_CONTRACT.lower()
+
+    assert "any task that derives" in system_lowered
+    assert "calculator.compute" in system_lowered
+    assert "data.table.query" in system_lowered
+    assert "math.sympy.compute" in system_lowered
+    assert "calendar.days_between" in system_lowered
+    assert "mental arithmetic" in planner_lowered
+    assert "general numeric verification protocol" in planner_lowered
+    assert "any domain" in planner_lowered
+    assert "calculator.compute" in planner_lowered
+
+
 def test_phase5_user_visible_text_contracts_avoid_generic_agreement_prefaces():
     combined = "\n".join([PROCESSOR_SYSTEM_PROMPT, PLANNER_PROMPT_CONTRACT, SYNTHESIZER_PROMPT_CONTRACT]).lower()
 

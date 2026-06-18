@@ -178,6 +178,14 @@ verification tool sequence: retrieve/parse authoritative evidence, use
 `data.table.query` for deterministic derived values, and use
 `finance.verify_numeric` before finalizing material numeric claims. Targeted
 prompt/contract structural tests pass; this is not a new live benchmark score.
+A subsequent 2026-06-18 correction lifts the same idea out of finance-only
+prompting into Holo's general system prompt and `assistant.turn` payload:
+`numeric_verification_protocol` is now model-visible for every single-agent
+turn, and tells the model to use `calculator.compute`, `data.table.query`,
+`math.sympy.compute`, `calendar.days_between`, or domain verifier tools for
+material derived numbers across domains. This preserves model-owned tool
+choice while making calculator-based verification part of Holo's general
+reasoning context.
 The 2026-06-17 follow-up tool-surface iteration is recorded in
 `docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md`. It adds
 `kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return

@@ -279,6 +279,14 @@ For multi-part research, metadata.capability_args may contain a list of payloads
 for one capability, for example {"retrieval.run":[{"query":"official filing revenue"},{"query":"issuer investor relations margin"}]}.
 The host will expand each payload into one bounded tool proposal and still
 validate policy, budgets, evidence, and termination.
+For any domain, if the task asks to calculate, verify, compare, rank, convert
+units, express a percentage or bps difference, compute a ratio/multiple/CAGR/
+margin/average/growth rate, count fiscal/calendar days, or otherwise derive a
+material number, include calculator.compute or the more specific numeric tool
+in required_capabilities so the agent loop can verify the result with tools
+instead of mental arithmetic. Use data.table.query for table aggregation or
+ranking, math.sympy.compute for symbolic/high-precision math, and
+calendar.days_between for date intervals when semantically appropriate.
 For retrieval-heavy work in any domain, include a model-owned generic
 metadata.retrieval_strategy under the retrieval.run payload when useful. This
 strategy is not a domain template; it is the model's current research plan. It
@@ -394,6 +402,14 @@ Standard tool interface:
 - For calculator.compute, use payload.expression, variables, unit,
   formula_name, input_fact_ids, and diagnostics. Use it when the current
   observations expose all required numeric inputs and the task needs arithmetic.
+- General numeric verification protocol: for any domain, when the answer
+  depends on a derived or checked number, first identify the formula and input
+  values, then call calculator.compute, data.table.query, math.sympy.compute,
+  or calendar.days_between as appropriate. Use the tool observation as the
+  numeric basis for final_answer. Do not finalize a material numeric conclusion
+  from mental arithmetic while an appropriate numeric tool is available. If the
+  input values are unsupported, retrieve/parse/query the missing inputs or
+  state the gap rather than inventing a checked result.
 - For finance.slot_bind, use the observed finance facts/evidence to bind the
   model-selected entity, period, line item, unit, and formula slots before a
   derived finance answer. It is the model-owned bridge from evidence to

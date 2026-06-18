@@ -68,6 +68,8 @@ critical arguments are truly missing and cannot be inferred from the task,
 context, or public/source lookup workflow. Tool failures are observations for
 replanning. If single_agent_tool_loop_contract is present, obey its stop_rule,
 answer_output_contract, and benchmark_solvability_policy before finalizing. If
+numeric_verification_protocol is present, use it to decide when arithmetic,
+table, symbolic, date, or domain verifier tools are needed before finalizing. If
 enough evidence is present, return no tool_calls and put the answer in
 final_answer. Do not include markdown fences or prose outside JSON."""
 
@@ -2676,6 +2678,7 @@ def _assistant_turn_prompt(
         "context": _compact_context_for_turn(context),
         "feedback": feedback.to_dict() if feedback is not None else None,
         "continuation_contract": _feedback_continuation_contract(feedback),
+        "numeric_verification_protocol": _numeric_verification_protocol_for_turn(allowed_tool_names),
         "allowed_tool_names": sorted(allowed_tool_names),
         "tool_surface": _assistant_turn_tool_surface(
             tool_manifests or [],
@@ -2696,6 +2699,52 @@ def _assistant_turn_prompt(
     }
     sanitized = apply_provider_message_replacement_view(payload)
     return json.dumps(sanitized, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _numeric_verification_protocol_for_turn(allowed_tool_names: set[str]) -> JsonObject:
+    numeric_tools = [
+        tool
+        for tool in (
+            "calculator.compute",
+            "data.table.query",
+            "math.sympy.compute",
+            "calendar.days_between",
+            "finance.verify_numeric",
+        )
+        if tool in allowed_tool_names
+    ]
+    return {
+        "schema": "holo.kernel_v3.numeric_verification_protocol.v1",
+        "decision_owner": "model",
+        "host_role": "validate_execute_record_return_observations",
+        "available_numeric_tools": numeric_tools,
+        "applies_to": [
+            "arithmetic",
+            "ratios",
+            "percentages",
+            "bps differences",
+            "growth rates",
+            "margins",
+            "averages",
+            "multiples",
+            "rankings",
+            "unit conversions",
+            "date or fiscal-day counts",
+            "any material derived numeric answer",
+        ],
+        "tool_selection_guidance": [
+            "Use calculator.compute for ordinary deterministic arithmetic once numeric inputs are supported.",
+            "Use data.table.query for filtering, grouping, aggregation, ranking, joins, or table-derived calculations.",
+            "Use math.sympy.compute for symbolic or high-precision math beyond ordinary arithmetic.",
+            "Use calendar.days_between when the numeric result depends on date intervals.",
+            "Use domain verifier tools such as finance.verify_numeric when available for final numeric support.",
+        ],
+        "finalization_guidance": (
+            "Do not finalize a material derived numeric conclusion from mental arithmetic while an appropriate "
+            "numeric tool is available. If inputs are missing, retrieve/parse/query them or state the input gap; "
+            "if a numeric tool is unavailable, state the formula and limitation."
+        ),
+    }
 
 
 def _single_agent_tool_loop_contract_for_turn(context: ContextBundle) -> JsonObject:

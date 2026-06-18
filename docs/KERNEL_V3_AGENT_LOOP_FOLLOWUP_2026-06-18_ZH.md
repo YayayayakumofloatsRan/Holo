@@ -1854,3 +1854,52 @@ HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
 说明：这是 prompt/contract structural regression，不是 live benchmark pass。
 下一步需要重新跑 live 单题来确认模型是否实际调用
 `finance.slot_bind` / `calculator.compute` / `finance.verify_numeric`。
+
+## 13. General numeric verification protocol
+
+时间点：2026-06-18 CST。用户指出上一节仍然过于 finance-specific，正确方向
+不是继续给某道题补规则，而是把“数值验证需要计算器/表格/符号/日期工具”
+作为 Holo 通用 agent prompt 上下文，让模型自己决定何时调用。
+
+本轮调整：
+
+- `kernel_v3/processors/providers.py`
+  - provider system prompt 新增通用 numeric verification 原则：任何任务只要
+    需要 derive/check/compare/rank/explain material numbers，就把数值验证视为
+    tool work，而不是 mental arithmetic。
+  - 可用工具包括 `calculator.compute`、`data.table.query`、
+    `math.sympy.compute`、`calendar.days_between`，以及 domain verifier。
+- `kernel_v3/processors/contracts.py`
+  - `semantic.intake` 合同现在要求任何领域的 compute / compare / rank /
+    unit conversion / percentage / bps / ratio / CAGR / margin / average /
+    growth / day-count 任务把 `calculator.compute` 或更具体数值工具纳入
+    `required_capabilities`。
+  - `planner.propose` 的 Standard tool interface 新增
+    `General numeric verification protocol`，说明模型应先识别 formula 和 inputs，
+    再调用 calculator/table/sympy/calendar 工具，最后基于工具 observation final。
+- `kernel_v3/deep_loop.py`
+  - 每次 `assistant.turn` prompt payload 都新增
+    `numeric_verification_protocol`，即使没有 finance-specific contract 也会出现。
+  - 该协议列出当前 allowed numeric tools，并说明：
+    ordinary arithmetic -> `calculator.compute`；
+    table filtering/ranking/aggregation -> `data.table.query`；
+    symbolic/high precision -> `math.sympy.compute`；
+    date intervals -> `calendar.days_between`；
+    domain support -> verifier tools such as `finance.verify_numeric`。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_processor_system_prompt_guides_visible_text_style_without_overriding_host_control \
+  tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_system_and_planner_prompts_expose_general_numeric_tool_protocol \
+  tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_finance_prompt_names_numeric_verification_tool_sequence \
+  tests/test_kernel_v3_deep_agent_loop.py::test_assistant_turn_prompt_exposes_visible_and_deferred_tool_surface \
+  tests/test_kernel_v3_deep_agent_loop.py::test_assistant_turn_prompt_exposes_strict_finance_single_agent_loop_contract -q
+```
+
+结果：`5 passed in 1.43s`。
+
+说明：这是通用 prompt/context 能力修复，不是 host 代算、题目规则或 live
+benchmark 成绩。下一步重新跑 live 单题，观察模型是否因通用协议主动进入
+`calculator.compute` / verifier 路径。
