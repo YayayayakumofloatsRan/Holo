@@ -340,6 +340,8 @@ def test_finance_agent_loop_contract_is_generic_and_covers_debug50_task_families
     assert contract["schema"] == FINANCE_AGENT_LOOP_CONTRACT_SCHEMA
     assert contract["decision_owner"] == "model"
     assert contract["host_role"] == "schema_policy_execution_journal_verifier_only"
+    assert "model-requested tool calls" in contract["tool_execution_boundary"]
+    assert "must not create hidden finance tool results" in contract["finalization_boundary"]
     assert [phase["phase"] for phase in contract["core_loop"]] == [
         "task_compile",
         "evidence_acquire",

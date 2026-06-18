@@ -21,6 +21,7 @@ from kernel_v3.deep_loop import (
     _finance_slot_bind_followup_scaffold_turn,
     _workbench_followup_scaffold_turn,
 )
+from kernel_v3.finance.tool_catalog import finance_agent_loop_contract
 from kernel_v3.journal import JournalStore
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors.contracts import ProcessorStreamEvent
@@ -679,6 +680,55 @@ def test_assistant_turn_prompt_expands_finance_requirement_category_tools() -> N
         assert tool_name in visible_by_name
     assert visible_by_name["data.table.query"]["visibility_reason"] == "context_requested"
     assert "data.table.query" in surface["context_requested_tools"]
+
+
+def test_assistant_turn_prompt_exposes_strict_finance_single_agent_loop_contract() -> None:
+    finance_loop_contract = finance_agent_loop_contract()
+    context = ContextBundle(
+        context_id="ctx-finance-strict-loop-contract",
+        thread_key="thread-finance-strict-loop-contract",
+        event_ids=[],
+        memory_refs=[],
+        state={
+            "task_id": "task-finance-strict-loop-contract",
+            "run_id": "run-finance-strict-loop-contract",
+            "agent_runtime_directive": {
+                "finance_agent_loop_contract": finance_loop_contract,
+                "finance_question_requirements": {
+                    "schema": "holo.kernel_v3.finance_question_requirements.v1",
+                    "required_tool_categories": ["arithmetic", "numeric_verification"],
+                    "risk_flags": ["requires_verifier"],
+                    "gold_or_reference_values_used": False,
+                },
+            },
+        },
+        token_budget=8192,
+    )
+
+    prompt = json.loads(
+        _assistant_turn_prompt(
+            context,
+            None,
+            allowed_tool_names={"calculator.compute", "finance.verify_numeric"},
+            tool_manifests=[],
+        )
+    )
+
+    loop_contract = prompt["single_agent_tool_loop_contract"]
+    assert loop_contract["schema"] == "holo.kernel_v3.single_agent_tool_loop_contract.v1"
+    assert loop_contract["decision_owner"] == "model"
+    assert loop_contract["host_role"] == "validate_execute_record_verify_gate_only"
+    assert loop_contract["required_tool_categories"] == ["arithmetic", "numeric_verification"]
+    assert loop_contract["risk_flags"] == ["requires_verifier"]
+    assert "model-requested tool_calls inside this loop" in loop_contract["tool_use_boundary"]
+    assert "must not create hidden finance tool results" in loop_contract["finalizer_boundary"]
+    assert any(
+        "calculator.compute or data.table.query" in item
+        for item in loop_contract["required_for_finance_numeric_answers"]
+    )
+    context_contract = prompt["context"]["state"]["agent_runtime_directive"]["finance_agent_loop_contract"]
+    assert context_contract["finalization_boundary"].startswith("The host finalizer may synthesize")
+    assert "debug50" not in json.dumps(loop_contract).lower()
 
 
 def test_streaming_planner_expands_context_requested_deferred_native_tool() -> None:

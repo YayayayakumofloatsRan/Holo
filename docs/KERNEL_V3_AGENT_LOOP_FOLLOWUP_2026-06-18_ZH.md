@@ -1686,3 +1686,68 @@ HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
 debug50/test100 准确率。它证明本轮 agent loop 已经把一个此前反复失败的
 FinanceBench 类型推进到可验证闭环：结构化 SEC 工具事实、模型 slot binding、
 calculator formula traces、numeric verifier gate 和 final synthesis gate 均可贯通。
+
+## 11. Strict single-agent tool-loop boundary checkpoint
+
+时间点：2026-06-18 CST。用户要求对照成熟 TypeScript agent-loop 项目后，
+停止继续依赖 finalizer / preflight 的隐藏金融补算路径，先把单 agent loop
+和工具链接口收束成稳定合同。
+
+本轮结论：
+
+- `finance-capability` 的默认合同现在是严格 single-agent tool loop：
+  检索、SEC/XBRL、文档解析、slot binding、表格操作、calculator 和
+  numeric verifier 必须作为模型请求的 `tool_calls` 出现在 loop 内。
+- finalizer 的角色降级为从 loop 观测结果合成、校验和拒绝 unsupported answer；
+  它默认不再创建隐藏的 `finance.slot_bind`、`calculator.compute` 或 SEC
+  recovery 结果来补齐模型没做完的公式题。
+- 兼容路径仍存在，但必须显式设置
+  `agent_loop.finalizer_numeric_preflight=true`，用于老结构测试，不作为
+  finance-capability 默认做题路径。
+- `finance_agent_loop_contract()` 新增 `tool_execution_boundary` 和
+  `finalization_boundary`，并通过 runtime compact、provider prompt 和
+  `assistant.turn.single_agent_tool_loop_contract` 暴露给模型。模型每轮都能看到：
+  金融数值答案需要在 final answer 前通过 evidence / slot bind / calculator
+  或 table query / verifier 形成可观察工具结果。
+- `_synthesize_retrieval_final(...)` 在 strict loop 下只写
+  `finance_fact_ledger` 和 `finance_numeric_preflight(status=skipped,
+  reason=single_agent_tool_loop_contract)`，不会再调用隐藏 numeric preflight。
+
+涉及代码：
+
+- `kernel_v3/agent/execution_profile.py`
+- `kernel_v3/agent/runtime.py`
+- `kernel_v3/deep_loop.py`
+- `kernel_v3/finance/tool_catalog.py`
+- `tests/test_kernel_v3_deep_agent_loop.py`
+- `tests/test_kernel_v3_finance_engine.py`
+- `tests/test_kernel_v3_finance_open_components.py`
+
+结构验证：
+
+```bash
+.venv/bin/python -m py_compile \
+  kernel_v3/deep_loop.py \
+  kernel_v3/agent/runtime.py \
+  kernel_v3/finance/tool_catalog.py
+
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_finance_open_components.py \
+  tests/test_kernel_v3_finance_tool_readiness.py \
+  tests/test_kernel_v3_execution_profile.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
+```
+
+结果：
+
+- `py_compile` passed
+- deep loop structural set: `41 passed in 3.67s`
+- finance open-components/readiness/profile set: `50 passed in 5.24s`
+- finance engine structural set: `310 passed in 8.45s`
+
+说明：这是 agent-loop 合同和工具接口边界修复，不是 FinanceBench/FAB/FinQA
+准确率。下一步应在 debug50 类型簇做小批 live runs，检查模型是否真正把
+`sec.edgar.financials`、`document.*`、`finance.slot_bind`、
+`calculator.compute`、`data.table.query` 和 `finance.verify_numeric` 组合成
+loop 内闭环，而不是依赖 finalizer 兜底。

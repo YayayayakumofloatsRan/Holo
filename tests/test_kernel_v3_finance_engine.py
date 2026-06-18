@@ -6848,6 +6848,8 @@ def test_finance_capability_planner_directive_preserves_full_open_tool_surface()
     assert install_summary["host_rule"].startswith("Prefer installed components")
     loop_contract = compact["finance_agent_loop_contract"]
     assert loop_contract["schema"] == FINANCE_AGENT_LOOP_CONTRACT_SCHEMA
+    assert "model-requested tool calls" in loop_contract["tool_execution_boundary"]
+    assert "must not create hidden finance tool results" in loop_contract["finalization_boundary"]
     assert [item["phase"] for item in loop_contract["core_loop"]][:3] == [
         "task_compile",
         "evidence_acquire",
@@ -6890,6 +6892,7 @@ def test_finance_capability_provider_compact_preserves_one_shot_tool_surface() -
     assert "toolchain_install_summary" in compact
     assert compact["toolchain_install_summary"]["host_rule"].startswith("Prefer installed components")
     assert compact["finance_agent_loop_contract"]["schema"] == FINANCE_AGENT_LOOP_CONTRACT_SCHEMA
+    assert "must not create hidden finance tool results" in compact["finance_agent_loop_contract"]["finalization_boundary"]
     assert "debug50" not in json.dumps(compact["finance_agent_loop_contract"]).lower()
     assert compact["llm_first_finance_template"]["standard_tool_interface"]["planner_action"].startswith(
         "Return planner.propose JSON"
@@ -12143,11 +12146,16 @@ def test_finance_capability_model_compiled_transform_authorizes_calculator_prefl
         ),
     ]
     citations = [_finance_citation(item, citation_id=f"cite-{index}") for index, item in enumerate(evidence, start=1)]
+    execution_metadata = execution_profile_runtime_metadata(execution_profile("finance-capability"))
+    execution_metadata["agent_loop"] = {
+        **dict(execution_metadata["agent_loop"]),
+        "finalizer_numeric_preflight": True,
+    }
     recipe = task_recipe(
         "retrieval_answer",
         metadata={
             "goal": "Calculate FY2024 DIO in days.",
-            "execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-capability")),
+            "execution_metadata": execution_metadata,
         },
     )
 
@@ -12178,6 +12186,60 @@ def test_finance_capability_model_compiled_transform_authorizes_calculator_prefl
         "finfact-844cae959a62",
     }
     assert Decimal(trace["result_value"]).quantize(Decimal("0.01")) == Decimal("80.30")
+
+
+def test_finance_capability_finalizer_blocks_hidden_numeric_preflight_by_default() -> None:
+    journal = JournalStore.in_memory()
+    runtime = _runtime_with_synthesizer(
+        journal,
+        answer="Retailer FY2024 DIO is 80.3 days, supported by cite-1, cite-2, and cite-3.",
+        citation_refs=["cite-1", "cite-2", "cite-3"],
+        used_evidence=["evidence-1", "evidence-2", "evidence-3"],
+    )
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-1",
+            text="entityName=Retailer ticker=RTL metric=inventory unit=USD fy=2023 form=10-K value=200",
+        ),
+        _finance_evidence(
+            evidence_id="evidence-2",
+            text="entityName=Retailer ticker=RTL metric=inventory unit=USD fy=2024 form=10-K value=240",
+        ),
+        _finance_evidence(
+            evidence_id="evidence-3",
+            text="entityName=Retailer ticker=RTL metric=cost of sales unit=USD fy=2024 form=10-K value=1000",
+        ),
+    ]
+    citations = [_finance_citation(item, citation_id=f"cite-{index}") for index, item in enumerate(evidence, start=1)]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "Calculate FY2024 DIO in days.",
+            "execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-capability")),
+        },
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-finance-capability-strict-loop",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(evidence=evidence, citations=citations),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert final is None
+    assert failure is not None
+    assert failure.reason == "finance_numeric_verification_failed"
+    preflight = journal.records(task_id="task-finance-capability-strict-loop", kind="finance_numeric_preflight")
+    assert preflight[-1].data["status"] == "skipped"
+    assert preflight[-1].data["reason"] == "single_agent_tool_loop_contract"
+    assert preflight[-1].data["contract"]["tool_execution_boundary"].startswith("finalizer must not create")
+    assert journal.records(task_id="task-finance-capability-strict-loop", kind="finance_fact_ledger")
+    assert not journal.records(task_id="task-finance-capability-strict-loop", kind="finance_formula_plan")
+    observations = journal.records(task_id="task-finance-capability-strict-loop", kind="observation")
+    assert not any(record.data.get("source") == f"tool:{CALCULATOR_TOOL_NAME}" for record in observations)
 
 
 def test_retrieval_finalization_repairs_unsupported_finance_numbers_without_calculator_trace() -> None:

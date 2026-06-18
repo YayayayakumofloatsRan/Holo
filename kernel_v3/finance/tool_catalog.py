@@ -172,6 +172,16 @@ def finance_agent_loop_contract() -> JsonObject:
                 "typical_tools": ["document.docling.convert", "data.table.query", "script.exec", "calculator.compute"],
             },
         ],
+        "tool_execution_boundary": (
+            "All retrieval, source parsing, slot binding, table operations, deterministic calculations, "
+            "and numeric verification needed for the answer must be represented as model-requested tool calls "
+            "inside the agent loop."
+        ),
+        "finalization_boundary": (
+            "The host finalizer may synthesize from observed loop outputs and may reject unsupported answers, "
+            "but it must not create hidden finance tool results, bind missing slots, or compute missing formulas "
+            "after final_answer."
+        ),
         "stop_invariants": [
             "do not finalize numeric answers without source-backed facts or explicit assumptions",
             "do not finalize formula questions without FormulaTrace unless the answer is a justified non-applicability judgment",

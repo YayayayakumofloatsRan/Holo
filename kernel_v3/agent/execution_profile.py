@@ -69,6 +69,14 @@ def execution_profile_runtime_metadata(profile: ExecutionProfile) -> JsonObject:
             "max_steps": profile.max_agent_steps,
             "max_tool_calls": profile.max_agent_tool_calls,
             "runtime_backend": _agent_loop_runtime_backend(profile.profile_id),
+            "single_agent_tool_loop": profile.profile_id == "finance-capability",
+            "strict_tool_result_pairing": profile.profile_id == "finance-capability",
+            "finalizer_numeric_preflight": profile.profile_id != "finance-capability",
+            "finalizer_role": (
+                "verify_gate_and_synthesize_from_loop_outputs"
+                if profile.profile_id == "finance-capability"
+                else "legacy_scaffold_allowed"
+            ),
         },
         "retrieval": {
             "max_queries": profile.max_queries,

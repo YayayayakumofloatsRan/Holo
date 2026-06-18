@@ -2670,6 +2670,7 @@ def _assistant_turn_prompt(
     )
     payload = {
         "contract": ASSISTANT_TURN_PROMPT_CONTRACT,
+        "single_agent_tool_loop_contract": _single_agent_tool_loop_contract_for_turn(context),
         "context": _compact_context_for_turn(context),
         "feedback": feedback.to_dict() if feedback is not None else None,
         "continuation_contract": _feedback_continuation_contract(feedback),
@@ -2693,6 +2694,50 @@ def _assistant_turn_prompt(
     }
     sanitized = apply_provider_message_replacement_view(payload)
     return json.dumps(sanitized, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _single_agent_tool_loop_contract_for_turn(context: ContextBundle) -> JsonObject:
+    state = context.state if isinstance(context.state, dict) else {}
+    directive = state.get("agent_runtime_directive") if isinstance(state.get("agent_runtime_directive"), dict) else {}
+    finance_contract = (
+        directive.get("finance_agent_loop_contract")
+        if isinstance(directive.get("finance_agent_loop_contract"), dict)
+        else {}
+    )
+    finance_requirements = (
+        directive.get("finance_question_requirements")
+        if isinstance(directive.get("finance_question_requirements"), dict)
+        else {}
+    )
+    if not finance_contract and not finance_requirements:
+        return {}
+    return {
+        "schema": "holo.kernel_v3.single_agent_tool_loop_contract.v1",
+        "decision_owner": "model",
+        "host_role": "validate_execute_record_verify_gate_only",
+        "tool_use_boundary": (
+            "All retrieval, slot binding, table operations, calculator calls, and numeric verification "
+            "needed for the final answer must appear as model-requested tool_calls inside this loop."
+        ),
+        "finalizer_boundary": (
+            "The host finalizer may synthesize from observed loop outputs and reject unsupported answers, "
+            "but it must not create hidden finance tool results or compute missing formulas after final_answer."
+        ),
+        "required_for_finance_numeric_answers": [
+            "source-backed facts in observations or artifact reads",
+            "finance.slot_bind when line-item, period, or fact selection is nontrivial",
+            "calculator.compute or data.table.query for deterministic transforms",
+            "finance.verify_numeric when numeric verification is available",
+        ],
+        "stop_rule": (
+            "Return final_answer only after required evidence, formula traces, and verification observations "
+            "are present, or after stating explicit non-applicability or evidence limitations."
+        ),
+        "gold_reference_visibility": "benchmark gold/reference material is never model-visible",
+        "finance_contract_schema": finance_contract.get("schema"),
+        "required_tool_categories": _json_string_list(finance_requirements.get("required_tool_categories")),
+        "risk_flags": _json_string_list(finance_requirements.get("risk_flags")),
+    }
 
 
 def _assistant_turn_tool_surface(

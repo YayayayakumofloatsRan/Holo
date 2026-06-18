@@ -151,6 +151,16 @@ facts keep authoritative provenance through candidate facts and `FinanceFact`
 metadata; failed `finance.slot_bind` can trigger structured SEC evidence
 recovery and rerun model binding; structured tool payloads no longer leak CIKs
 or JSON identifiers into natural-language fact extraction.
+The same follow-up now records the strict single-agent tool-loop boundary:
+`finance-capability` defaults to `agent_loop.single_agent_tool_loop=true`, the
+model must request retrieval, SEC/document parsing, slot binding, table work,
+calculator, and numeric-verifier calls inside the loop before finalizing, and
+the host finalizer is a verifier/synthesis gate rather than a hidden numeric
+preflight engine. `finance_agent_loop_contract` and
+`assistant.turn.single_agent_tool_loop_contract` expose that boundary to the
+model; targeted structural tests pass (`41` deep-loop tests, `50`
+finance-open/readiness/profile tests, `310` finance-engine tests). This is
+architecture/tool-loop evidence, not a new FinanceBench/FAB/FinQA score.
 The 2026-06-17 follow-up tool-surface iteration is recorded in
 `docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md`. It adds
 `kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return

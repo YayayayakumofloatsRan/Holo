@@ -1030,13 +1030,22 @@ class AgentRuntime:
         synthesizer_mode: str,
     ) -> tuple[FinalAnswer | None, FailureReport | None]:
         if _finance_numeric_verifier_required(recipe):
-            self._run_finance_numeric_preflight(
-                task_id,
-                run_id,
-                recipe=recipe,
-                evidence=evidence,
-                citations=citations,
-            )
+            if _single_agent_tool_loop_finalizer_preflight_blocked(recipe):
+                self._append_finance_single_agent_loop_finalization_context(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    evidence=evidence,
+                    citations=citations,
+                )
+            else:
+                self._run_finance_numeric_preflight(
+                    task_id,
+                    run_id,
+                    recipe=recipe,
+                    evidence=evidence,
+                    citations=citations,
+                )
             report = _report_with_finance_fact_context(
                 report,
                 recipe=recipe,
@@ -1548,6 +1557,55 @@ class AgentRuntime:
         final = self._append_final(final)
         self._maybe_propose_research_memory(final, recipe=recipe)
         return final, None
+
+    def _append_finance_single_agent_loop_finalization_context(
+        self,
+        task_id: str,
+        run_id: str,
+        *,
+        recipe: TaskRecipe,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+    ) -> None:
+        facts, ledger_record = self._append_finance_fact_ledger(
+            task_id,
+            run_id,
+            evidence=evidence,
+            citations=citations,
+            purpose="single_agent_loop_finalization_context",
+            question=_root_goal_from_recipe(recipe),
+            target_binding=_target_document_binding_from_recipe(recipe),
+            recipe=recipe,
+            compile_program=False,
+        )
+        self.journal.append(
+            task_id=task_id,
+            run_id=run_id,
+            step_id=None,
+            kind="finance_numeric_preflight",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.finance_numeric_preflight.v1",
+                    "status": "skipped",
+                    "reason": "single_agent_tool_loop_contract",
+                    "semantic_decision_owner": "model",
+                    "host_role": "fact_ledger_provenance_verifier_and_gate_only",
+                    "ledger_ref": ledger_record.record_id,
+                    "fact_count": len(facts),
+                    "formula_trace_count": len(_calculator_formula_traces(self.journal, task_id=task_id, run_id=run_id)),
+                    "contract": {
+                        "loop_runtime": _agent_loop_metadata(recipe).get("runtime_backend"),
+                        "single_agent_tool_loop": True,
+                        "tool_execution_boundary": (
+                            "finalizer must not create slot_bind, calculator, retrieval, or SEC tool results; "
+                            "required finance computations must already exist as model-requested tool calls in the agent loop"
+                        ),
+                    },
+                }
+            ),
+            feedback_ref=ledger_record.record_id,
+            state_delta={"finance_numeric_preflight": "skipped_single_agent_loop"},
+        )
 
     def _append_synthesis_gate_result(
         self,
@@ -3348,6 +3406,7 @@ class AgentRuntime:
         question: str = "",
         target_binding: JsonObject | None = None,
         recipe: TaskRecipe | None = None,
+        compile_program: bool = True,
     ):
         facts = build_finance_fact_ledger(evidence=evidence, citations=citations)
         binding = target_document_binding_from_metadata(target_binding, question=question)
@@ -3404,7 +3463,7 @@ class AgentRuntime:
             ),
             state_delta={"claim_count": len(claims)},
         )
-        if question and facts_for_compile:
+        if compile_program and question and facts_for_compile:
             plan = plan_finance_formula(question=question, facts=facts_for_compile, existing_traces=[])
             compiled = compile_finance_task_program_model_first(
                 question=question,
@@ -10602,6 +10661,31 @@ def _finance_formula_preflight_scaffold_enabled(recipe: TaskRecipe | None) -> bo
     return isinstance(llm_judgment, dict) and str(llm_judgment.get("host_semantic_fallback") or "") == "scaffold_only"
 
 
+def _single_agent_tool_loop_finalizer_preflight_blocked(recipe: TaskRecipe | None) -> bool:
+    """Return True when finalization must not execute hidden finance tools.
+
+    Finance-capability is the Kernel v3 single-agent harness lane. The loop may
+    call SEC, slot binding, calculator, and verifier tools, but the retrieval
+    finalizer must not create new finance tool results after the model has
+    stopped. This keeps problem solving inside the Claude-Code-style
+    tool_use/tool_result loop instead of a benchmark-specific postprocessor.
+    """
+
+    if recipe is None or recipe.mode != "retrieval_answer":
+        return False
+    loop = _agent_loop_metadata(recipe)
+    explicit = loop.get("finalizer_numeric_preflight")
+    if explicit is True:
+        return False
+    if explicit is False:
+        return True
+    if _truthy(loop.get("single_agent_tool_loop")):
+        return True
+    if _recipe_requests_deep_agent_loop(recipe) and _llm_semantic_judgment_required(recipe):
+        return True
+    return False
+
+
 def _finance_capability_has_executable_retrieval_context(recipe: TaskRecipe) -> bool:
     if not _llm_semantic_judgment_required(recipe):
         return False
@@ -10803,6 +10887,9 @@ def _report_with_toolchain_grounding(
 
 def _agent_loop_metadata(recipe: TaskRecipe) -> JsonObject:
     value = _execution_metadata(recipe).get("agent_loop")
+    if isinstance(value, dict):
+        return dict(value)
+    value = recipe.metadata.get("agent_loop")
     return dict(value) if isinstance(value, dict) else {}
 
 
@@ -11167,6 +11254,8 @@ def _compact_finance_agent_loop_contract_for_prompt(value: object) -> JsonObject
             for item in list(value.get("task_family_workflows") or [])[:6]
             if isinstance(item, dict)
         ],
+        "tool_execution_boundary": _text_preview(value.get("tool_execution_boundary"), limit=260),
+        "finalization_boundary": _text_preview(value.get("finalization_boundary"), limit=260),
         "stop_invariants": _string_list(value.get("stop_invariants"))[:6],
     }
 
