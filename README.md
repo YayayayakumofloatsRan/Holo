@@ -36,8 +36,18 @@ SEC/EDGAR/document search for public filing evidence, `data.table.query` and
 counts, and `finance.verify_numeric` for final material numeric claims when
 available. `finance.toolchain.describe` now returns the same
 `one_shot_loop_contract` and `coverage_families`. The latest v4 structural
-checks pass `22` tests; this is architecture readiness, not a FinanceBench/FQA
+checks pass `25` tests; this is architecture readiness, not a FinanceBench/FQA
 accuracy claim.
+
+Kernel v4 now also has a no-gold finance task entrypoint in
+`kernel_v4/finance_runner.py`. `FinanceQuestionSpec.from_mapping(...)` accepts
+FinanceBench/FQA/FinQA-style rows, keeps the question and optional supplied
+context, strips gold/reference/scoring fields out of the model-visible packet,
+and records only a host-side excluded-field audit list. `run_finance_question`
+builds the full finance tool registry and runs the packet through
+`SingleAgentLoop(finance_mode=True)`, so provided-context FQA/FinQA rows and
+public-filing FinanceBench rows enter the same v4 loop without legacy slot
+gates.
 
 Holo Kernel v3 remains in the repository as the prior harness line: a
 host-owned agent harness where models propose structured decisions and the host

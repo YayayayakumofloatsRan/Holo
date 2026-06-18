@@ -13,6 +13,7 @@ from kernel_v4.contracts import (
     ToolCall,
     ToolMessage,
 )
+from kernel_v4.finance_runner import FinanceQuestionSpec, build_finance_registry, run_finance_question
 from kernel_v4.loop import SingleAgentLoop
 from kernel_v4.monitoring import WorkflowConsoleMonitor
 from kernel_v4.providers import DeepSeekChatProvider, OpenAICompatibleChatProvider
@@ -27,10 +28,13 @@ __all__ = [
     "ModelEvent",
     "SingleAgentLoop",
     "DeepSeekChatProvider",
+    "FinanceQuestionSpec",
     "OpenAICompatibleChatProvider",
     "ToolCall",
     "ToolMessage",
     "ToolRegistry",
     "WorkflowObserver",
     "WorkflowConsoleMonitor",
+    "build_finance_registry",
+    "run_finance_question",
 ]

@@ -51,6 +51,7 @@ Kernel v4 的 Python 对应实现：
 - `kernel_v4/finance_tools.py`：成熟金融工具后端适配，不引入 `finance.slot_bind`。
 - `kernel_v4/providers.py`：OpenAI-compatible / DeepSeek live provider，支持原生 function tool schema、provider-native `tool_choice` 强制工具、streaming tool-call delta 解析和 v4 工具名回映射。
 - `kernel_v4/live_smoke.py`：最小 live provider smoke 入口，可用 `--force-tool calculator.compute` 验证真实 provider 工具闭环；默认只强制第 1 个模型 turn，后续 turn 恢复模型自主回答。
+- `kernel_v4/finance_runner.py`：FB/FQA/FinQA no-gold task packet 和 finance runner 入口，把题面、provided context、source policy、安全 metadata 传入 `SingleAgentLoop(finance_mode=True)`。
 
 ## 运行时控制与可视化
 
@@ -127,6 +128,21 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 
 这仍然遵守 v4 边界：模型选择事实、公式、工具和最终可答状态；host 只做 schema validation、tool execution、artifact/context 管理和 workflow lifecycle 记录。
 
+## FB/FQA no-gold 任务入口
+
+本轮新增 `kernel_v4/finance_runner.py`，补齐 v4 从 benchmark/user row 到单 agent loop 的入口层：
+
+- `FinanceQuestionSpec.from_mapping(...)` 接受 FinanceBench/FQA/FinQA 风格 row。
+- 模型可见 packet 只包含 `question`、可选 `provided_context`、`source_policy`、安全 metadata、solver contract。
+- `answer`、`reference`、`gold_*`、`expected_*`、`rubric`、`annotation`、`program`、`scoring` 等 gold/reference/scoring 字段不会进入模型 prompt。
+- 被排除字段名仅保存在 host-side `FinanceQuestionSpec.excluded_gold_reference_fields`，用于审计；模型 prompt 只看到 `excluded_gold_reference_field_count`。
+- FQA/FinQA 的 `oracle_context` / `provided_context` / `context` / table/snippet 会作为 supplied context 进入 packet，后续由模型调用 `provided_context.parse`。
+- FinanceBench public filing 题可以只带 question/source metadata 进入同一入口，由模型调用 SEC/EDGAR/document/table/calculator/verifier 工具。
+- `build_finance_registry(...)` 统一注册 v4 finance surface；`allow_network=False` 可用于 FQA/FinQA provided-context no-network 结构路径，`allow_network=True` 用于 public filing live path。
+- `run_finance_question(...)` 将 no-gold packet 交给 `SingleAgentLoop(finance_mode=True)`，不加载 legacy `finance.slot_bind`、FactLedger 或 SlotFrame gate。
+
+这一步不是 scorer，也不读取 gold sidecar。它只解决 v4 入口层是否能理论上承载 FB/FQA 题面、上下文和工具链的问题。
+
 ## 测试结果
 
 本次提交前执行的是结构测试，不代表 FinanceBench/FQA 真实做题能力：
@@ -149,9 +165,9 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 FB/FQA 理论闭环合同补齐后，最新结构测试为：
 
 ```text
-.venv/bin/python -m py_compile kernel_v4/__init__.py kernel_v4/contracts.py kernel_v4/context.py kernel_v4/tooling.py kernel_v4/prompts.py kernel_v4/loop.py kernel_v4/finance_tools.py kernel_v4/providers.py kernel_v4/live_smoke.py tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_live_provider.py
-.venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_monitoring.py -q
-22 passed
+.venv/bin/python -m py_compile kernel_v4/__init__.py kernel_v4/finance_runner.py kernel_v4/contracts.py kernel_v4/context.py kernel_v4/tooling.py kernel_v4/prompts.py kernel_v4/loop.py kernel_v4/finance_tools.py kernel_v4/providers.py kernel_v4/live_smoke.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_live_provider.py
+.venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_monitoring.py tests/test_kernel_v4_finance_runner.py -q
+25 passed
 ```
 
 测试覆盖：
@@ -175,6 +191,9 @@ FB/FQA 理论闭环合同补齐后，最新结构测试为：
 - `finance.toolchain.describe` 暴露 public filing、provided context、table/ranking、finance transform、fiscal date、market data、numeric verification 工具族，并确认没有 `finance.slot_bind`。
 - provider stream queue 有 hard timeout；producer 没有投递 chunk/sentinel 时，主协程会在 `timeout_seconds` 后失败返回。
 - provider/model stream 异常会被 `SingleAgentLoop` 收敛成 `LoopResult(status="failed")` 和实时 `loop_failed` 事件，不再炸穿 CLI。
+- `FinanceQuestionSpec` 会排除 gold/reference/scoring 字段值和字段名，只保留 host-side excluded-field audit。
+- `run_finance_question` 会把 no-gold task packet、finance prompt 和完整 finance tool surface 一起传给模型。
+- no-network FQA/FInQA surface 仍包含 `provided_context.parse`、`data.table.query`、`calculator.compute`、`finance.verify_numeric`、`tool.discovery`、`artifact.read`。
 
 已完成的最小 live smoke：
 
@@ -182,6 +201,16 @@ FB/FQA 理论闭环合同补齐后，最新结构测试为：
 .venv/bin/python -m kernel_v4.live_smoke --model deepseek-chat --max-turns 3 --max-tool-calls 4
 {"status": "completed", "answer": "v4 live provider ok.", ...}
 ```
+
+2026-06-18 最新一次最小 live provider smoke 在提升网络权限后通过：
+
+```text
+.venv/bin/python -m kernel_v4.live_smoke --model deepseek-chat --timeout-seconds 10 --max-retries 0 --max-turns 2 --max-tool-calls 2 --show-workflow
+1.66s t1 loop_completed answer_chars=20
+{"status": "completed", "answer": "v4 live provider ok.", "tool_call_count": 0, "turn_count": 1, ...}
+```
+
+这仍然只是 live provider/loop 链路证据，不是 FinanceBench/FQA 做题成绩。
 
 已完成的 provider-native 工具闭环 smoke：
 

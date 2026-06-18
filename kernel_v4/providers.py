@@ -5,6 +5,7 @@ import hashlib
 import http.client
 import json
 import os
+import queue
 import re
 import threading
 import time
@@ -119,9 +120,8 @@ class OpenAICompatibleChatProvider:
         )
         text_parts: list[str] = []
         tool_deltas: dict[int, _StreamingToolCallBuilder] = {}
-        chunk_queue: asyncio.Queue[object] = asyncio.Queue()
+        chunk_queue: queue.Queue[object] = queue.Queue()
         sentinel = object()
-        loop = asyncio.get_running_loop()
         producer_thread = threading.Thread(
             target=_produce_sse_chunks,
             args=(
@@ -131,7 +131,6 @@ class OpenAICompatibleChatProvider:
                     payload,
                     self.timeout_seconds,
                 ),
-                loop,
                 chunk_queue,
                 sentinel,
             ),
@@ -140,13 +139,12 @@ class OpenAICompatibleChatProvider:
         producer_thread.start()
         deadline = time.monotonic() + self.timeout_seconds
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise RuntimeError(f"{self.name} stream queue exceeded {self.timeout_seconds}s without completion")
-            try:
-                queued = await asyncio.wait_for(chunk_queue.get(), timeout=remaining)
-            except asyncio.TimeoutError as exc:
-                raise RuntimeError(f"{self.name} stream queue exceeded {self.timeout_seconds}s without completion") from exc
+            queued = await _get_thread_queue_item(
+                chunk_queue,
+                deadline=deadline,
+                provider_name=self.name,
+                timeout_seconds=self.timeout_seconds,
+            )
             if queued is sentinel:
                 break
             if isinstance(queued, BaseException):
@@ -672,28 +670,33 @@ def _retryable_provider_error(message: str) -> bool:
 
 def _produce_sse_chunks(
     chunks: Iterable[JsonObject],
-    loop: asyncio.AbstractEventLoop,
-    queue: asyncio.Queue[object],
+    chunk_queue: queue.Queue[object],
     sentinel: object,
 ) -> None:
     try:
         for chunk in chunks:
-            _safe_threadsafe_queue_put(loop, queue, chunk)
+            chunk_queue.put(chunk)
     except BaseException as exc:  # noqa: BLE001 - provider errors cross the thread boundary as observations.
-        _safe_threadsafe_queue_put(loop, queue, exc)
+        chunk_queue.put(exc)
     finally:
-        _safe_threadsafe_queue_put(loop, queue, sentinel)
+        chunk_queue.put(sentinel)
 
 
-def _safe_threadsafe_queue_put(
-    loop: asyncio.AbstractEventLoop,
-    queue: asyncio.Queue[object],
-    item: object,
-) -> None:
-    try:
-        loop.call_soon_threadsafe(queue.put_nowait, item)
-    except RuntimeError:
-        return
+async def _get_thread_queue_item(
+    chunk_queue: queue.Queue[object],
+    *,
+    deadline: float,
+    provider_name: str,
+    timeout_seconds: int,
+) -> object:
+    while True:
+        try:
+            return chunk_queue.get_nowait()
+        except queue.Empty:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{provider_name} stream queue exceeded {timeout_seconds}s without completion")
+            await asyncio.sleep(min(0.05, remaining))
 
 
 def _optional_int(value: object) -> int | None:
