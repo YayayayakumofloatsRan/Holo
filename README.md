@@ -186,6 +186,16 @@ turn, and tells the model to use `calculator.compute`, `data.table.query`,
 material derived numbers across domains. This preserves model-owned tool
 choice while making calculator-based verification part of Holo's general
 reasoning context.
+The next prompt tightening makes the intended next action explicit: when
+`calculator.compute` is available and the supported inputs for a material
+derived value are known, the model should actively call `calculator.compute`;
+the calculator observation is the credibility boundary for a trustworthy
+numeric result, and final synthesis should wait for that observation.
+The immediate live retry on the same `financebench_id_00499` still failed
+(`failure_report_not_final_answer`): gates no longer passed the unchecked
+answer, but the model still did not convert compiled transform requirements
+into `calculator.compute` / FormulaTrace tool calls. This is diagnostic
+evidence, not benchmark progress.
 The 2026-06-17 follow-up tool-surface iteration is recorded in
 `docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md`. It adds
 `kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return

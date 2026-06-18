@@ -69,7 +69,9 @@ context, or public/source lookup workflow. Tool failures are observations for
 replanning. If single_agent_tool_loop_contract is present, obey its stop_rule,
 answer_output_contract, and benchmark_solvability_policy before finalizing. If
 numeric_verification_protocol is present, use it to decide when arithmetic,
-table, symbolic, date, or domain verifier tools are needed before finalizing. If
+table, symbolic, date, or domain verifier tools are needed before finalizing.
+When calculator.compute is available and supported numeric inputs are known,
+call calculator.compute to make the derived result trustworthy before final_answer. If
 enough evidence is present, return no tool_calls and put the answer in
 final_answer. Do not include markdown fences or prose outside JSON."""
 
@@ -2734,11 +2736,17 @@ def _numeric_verification_protocol_for_turn(allowed_tool_names: set[str]) -> Jso
         ],
         "tool_selection_guidance": [
             "Use calculator.compute for ordinary deterministic arithmetic once numeric inputs are supported.",
+            "If calculator.compute is available and the task needs a material derived number, actively call calculator.compute before final_answer; the calculator observation is the trustworthy numeric basis.",
             "Use data.table.query for filtering, grouping, aggregation, ranking, joins, or table-derived calculations.",
             "Use math.sympy.compute for symbolic or high-precision math beyond ordinary arithmetic.",
             "Use calendar.days_between when the numeric result depends on date intervals.",
             "Use domain verifier tools such as finance.verify_numeric when available for final numeric support.",
         ],
+        "mandatory_next_action_when_inputs_known": (
+            "When supported input values for a required derived number are present and calculator.compute is allowed, "
+            "the next assistant turn should call calculator.compute with expression, variables, unit, formula_name, "
+            "and input_fact_ids when available. Final synthesis should wait for the calculator observation."
+        ),
         "finalization_guidance": (
             "Do not finalize a material derived numeric conclusion from mental arithmetic while an appropriate "
             "numeric tool is available. If inputs are missing, retrieve/parse/query them or state the input gap; "

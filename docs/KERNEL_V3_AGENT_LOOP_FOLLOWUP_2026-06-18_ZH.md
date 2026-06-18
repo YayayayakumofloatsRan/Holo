@@ -1886,6 +1886,10 @@ HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
     symbolic/high precision -> `math.sympy.compute`；
     date intervals -> `calendar.days_between`；
     domain support -> verifier tools such as `finance.verify_numeric`。
+  - 后续 prompt 收紧进一步明确：当 `calculator.compute` 可用且 material derived
+    value 的输入值已经有证据支撑时，模型应主动调用 `calculator.compute`；
+    calculator observation 是可信数值结果的 credibility boundary，final synthesis
+    应等待该 observation，而不是继续心算或直接生成答案。
 
 结构验证：
 
@@ -1903,3 +1907,55 @@ HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
 说明：这是通用 prompt/context 能力修复，不是 host 代算、题目规则或 live
 benchmark 成绩。下一步重新跑 live 单题，观察模型是否因通用协议主动进入
 `calculator.compute` / verifier 路径。
+
+live 复测：
+
+```bash
+HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
+  --dataset .state/kernel_v3/bench/finance/financebench_150_doc_retrieval.jsonl \
+  --dev-gold .state/kernel_v3/bench/finance/financebench_150_doc_retrieval.gold.jsonl \
+  --offset 2 --limit 1 --parallel 1 \
+  --output .state/kernel_v3/bench/finance/fb_debug50_o002_l001_general_numeric_protocol_20260618.jsonl \
+  --summary-output .state/kernel_v3/bench/finance/fb_debug50_o002_l001_general_numeric_protocol_20260618.summary.json \
+  --online --planner model --evaluator model --synthesizer model \
+  --semantic-intake model --turn-router model \
+  --execution-profile finance-capability --mission off \
+  --research-profile finance_fundamentals --research-depth deep \
+  --live-retrieval --live-search-strategy adaptive --agent-loop-streaming \
+  --max-agent-steps 20 --max-agent-tool-calls 40 \
+  --max-agent-artifact-bytes 2500000 \
+  --live-max-network-fetches 12 --live-download-byte-budget 80000000 \
+  --live-timeout-seconds 45 --context-profile provider --profile balanced \
+  --thinking disabled --reasoning-effort low --model deepseek-v4-flash \
+  --generation-mode auto --latency-target quality --response-language en \
+  --progress-events --thread-prefix fb-single-general-numeric-20260618
+```
+
+结果：
+
+- `financebench_id_00499`: `status=failed`
+- reason: `failure_report_not_final_answer`
+- `average_total_tokens=331,193`
+- `sec.edgar.financials=9`
+- `document.docling.convert=1`
+- `artifact.read=16`
+- `slot_frame_present_rate=1.0`
+- `calculator_call_count=0`
+- `formula_trace_count=0`
+- `transform_plan_count=0`
+- `finance_verify_numeric_tool_used_rate=0.0`
+- `verifier_gate_pass_rate=0.0`
+- `synthesis_gate_pass_rate=0.0`
+
+结论：
+
+- 通用 numeric prompt 有效果的一面：gate 不再把缺 calculator/FormulaTrace 的
+  qualitative answer 误判为 passed；最终以 failure_report 失败。
+- 仍未解决的问题：模型没有把可见 facts + compiled transform specs 转成
+  `calculator.compute` tool call。它在 `task.compile`/slot frame 之后仍然没有
+  产生 formula request / calculator payload。
+- 这说明下一层问题不是“模型不知道需要验证”，而是 loop context 中
+  `compiled_task_program`、`slot_frame`、`numeric_verification_protocol` 和
+  tool surface 之间的 action selection linkage 还不够强。后续应继续保持
+  model-owned decision，但把这些上下文更直接地送到下一轮 assistant.turn，
+  让模型看到“现在该调用 calculator.compute 的具体 payload schema 和输入候选”。

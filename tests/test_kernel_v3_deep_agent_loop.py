@@ -492,6 +492,13 @@ def test_assistant_turn_prompt_exposes_visible_and_deferred_tool_surface() -> No
     assert numeric_protocol["decision_owner"] == "model"
     assert "calculator.compute" in numeric_protocol["available_numeric_tools"]
     assert "ratios" in numeric_protocol["applies_to"]
+    assert "mandatory_next_action_when_inputs_known" in numeric_protocol
+    assert any(
+        "actively call calculator.compute" in guidance
+        and "trustworthy numeric basis" in guidance
+        for guidance in numeric_protocol["tool_selection_guidance"]
+    )
+    assert "Final synthesis should wait" in numeric_protocol["mandatory_next_action_when_inputs_known"]
     assert "mental arithmetic" in numeric_protocol["finalization_guidance"]
 
 

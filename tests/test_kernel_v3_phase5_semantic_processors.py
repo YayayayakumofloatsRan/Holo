@@ -164,11 +164,16 @@ def test_phase5_system_and_planner_prompts_expose_general_numeric_tool_protocol(
 
     assert "any task that derives" in system_lowered
     assert "calculator.compute" in system_lowered
+    assert "actively call calculator.compute" in system_lowered
+    assert "credibility boundary" in system_lowered
+    assert "trustworthy numeric result" in system_lowered
     assert "data.table.query" in system_lowered
     assert "math.sympy.compute" in system_lowered
     assert "calendar.days_between" in system_lowered
     assert "mental arithmetic" in planner_lowered
     assert "general numeric verification protocol" in planner_lowered
+    assert "make the numeric result trustworthy" in planner_lowered
+    assert "intended next action" in planner_lowered
     assert "any domain" in planner_lowered
     assert "calculator.compute" in planner_lowered
 

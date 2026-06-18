@@ -402,14 +402,19 @@ Standard tool interface:
 - For calculator.compute, use payload.expression, variables, unit,
   formula_name, input_fact_ids, and diagnostics. Use it when the current
   observations expose all required numeric inputs and the task needs arithmetic.
+  If calculator.compute is available and a material derived number is needed,
+  actively call it to make the numeric result trustworthy; do not rely on mental arithmetic
+  or raw-source-number substitution once inputs are known.
 - General numeric verification protocol: for any domain, when the answer
   depends on a derived or checked number, first identify the formula and input
   values, then call calculator.compute, data.table.query, math.sympy.compute,
   or calendar.days_between as appropriate. Use the tool observation as the
-  numeric basis for final_answer. Do not finalize a material numeric conclusion
-  from mental arithmetic while an appropriate numeric tool is available. If the
-  input values are unsupported, retrieve/parse/query the missing inputs or
-  state the gap rather than inventing a checked result.
+  numeric basis for final_answer. The intended next action after supported
+  inputs are visible is a calculator/table/sympy/calendar tool call, not final
+  synthesis. Do not finalize a material numeric conclusion from mental
+  arithmetic while an appropriate numeric tool is available. If the input values
+  are unsupported, retrieve/parse/query the missing inputs or state the gap
+  rather than inventing a checked result.
 - For finance.slot_bind, use the observed finance facts/evidence to bind the
   model-selected entity, period, line item, unit, and formula slots before a
   derived finance answer. It is the model-owned bridge from evidence to
