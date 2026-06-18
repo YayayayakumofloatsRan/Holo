@@ -10,20 +10,28 @@ the active loop.
 
 The current v4 implementation lives in `kernel_v4/` with focused tests in
 `tests/test_kernel_v4_single_agent_loop.py`. The design record is
-`docs/KERNEL_V4_SINGLE_AGENT_LOOP_2026-06-18_ZH.md`.
+`docs/KERNEL_V4_SINGLE_AGENT_LOOP_2026-06-18_ZH.md`. The live provider adapter
+is `kernel_v4/providers.py`; a minimal DeepSeek/OpenAI-compatible smoke can be
+run with `python -m kernel_v4.live_smoke` when `DEEPSEEK_API_KEY` is present.
+For tool-loop verification, use
+`python -m kernel_v4.live_smoke --finance-tools --force-tool calculator.compute`.
 
-Holo Kernel v3 remains in the repository as the prior active harness line: a
+Holo Kernel v3 remains in the repository as the prior harness line: a
 host-owned agent harness where models propose structured decisions and the host
 validates, executes, journals, and verifies every state transition.
 
 This branch is intentionally separate from the older `holo_host` stage line.
 Historical stage documents and legacy runtime code remain in the repository for
-reference only. New kernel work should start from `kernel_v3/`,
-`tests/test_kernel_v3_*.py`, `docs/KERNEL_V3_*.md`, and `AGENTS.md`.
+reference only. New kernel-v4 work should start from `kernel_v4/`,
+`tests/test_kernel_v4_*.py`, and
+`docs/KERNEL_V4_SINGLE_AGENT_LOOP_2026-06-18_ZH.md`.
 
 ## Active Kernel
 
-- `kernel_v3/`: current host-owned agent harness.
+- `kernel_v4/`: current clean single-agent loop rewrite on branch
+  `kernel-v4`; this is the active path for live provider/tool-loop work.
+- `kernel_v3/`: prior host-owned agent harness retained for reference and
+  reusable mature tool wrappers.
 - `kernel_v3/loop.py`: generic `LoopControllerV3`; it must stay
   tool-name-agnostic.
 - `kernel_v3/agent/`: single-agent runtime, task recipes, semantic task graph,

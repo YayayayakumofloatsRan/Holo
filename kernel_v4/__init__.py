@@ -14,6 +14,7 @@ from kernel_v4.contracts import (
     ToolMessage,
 )
 from kernel_v4.loop import SingleAgentLoop
+from kernel_v4.providers import DeepSeekChatProvider, OpenAICompatibleChatProvider
 from kernel_v4.tooling import ToolRegistry
 
 __all__ = [
@@ -21,6 +22,8 @@ __all__ = [
     "LoopResult",
     "ModelEvent",
     "SingleAgentLoop",
+    "DeepSeekChatProvider",
+    "OpenAICompatibleChatProvider",
     "ToolCall",
     "ToolMessage",
     "ToolRegistry",

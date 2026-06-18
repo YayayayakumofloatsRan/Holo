@@ -47,6 +47,8 @@ Kernel v4 的 Python 对应实现：
 - `kernel_v4/contracts.py`：消息、工具调用、工具结果、模型事件、循环结果协议。
 - `kernel_v4/prompts.py`：通用单 agent prompt 和金融特调 prompt。
 - `kernel_v4/finance_tools.py`：成熟金融工具后端适配，不引入 `finance.slot_bind`。
+- `kernel_v4/providers.py`：OpenAI-compatible / DeepSeek live provider，支持原生 function tool schema、provider-native `tool_choice` 强制工具、streaming tool-call delta 解析和 v4 工具名回映射。
+- `kernel_v4/live_smoke.py`：最小 live provider smoke 入口，可用 `--force-tool calculator.compute` 验证真实 provider 工具闭环；默认只强制第 1 个模型 turn，后续 turn 恢复模型自主回答。
 
 ## 金融工具面
 
@@ -80,6 +82,13 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 5 passed
 ```
 
+接入 live provider 后，结构测试扩展为：
+
+```text
+.venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_live_provider.py -q
+12 passed
+```
+
 测试覆盖：
 
 - 工具结果能进入下一轮模型上下文。
@@ -87,12 +96,30 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 - 金融 prompt 明确删除本地 `FactLedger` / `SlotFrame` / slot-bind gate。
 - 大工具结果会 artifact 化并保持可读。
 - `tool.discovery` 返回工具合同而不是语义答案。
+- OpenAI-compatible provider 会把 v4 tools 转成原生 function tools。
+- provider 可以把 v4 工具名强制投射到 provider-native `tool_choice`。
+- streaming tool-call delta 能映射回 v4 原工具名。
+- provider packet preview 不暴露 API key。
+
+已完成的最小 live smoke：
+
+```text
+.venv/bin/python -m kernel_v4.live_smoke --model deepseek-chat --max-turns 3 --max-tool-calls 4
+{"status": "completed", "answer": "v4 live provider ok.", ...}
+```
+
+已完成的 provider-native 工具闭环 smoke：
+
+```text
+.venv/bin/python -m kernel_v4.live_smoke --model deepseek-chat --finance-tools --force-tool calculator.compute --max-turns 4 --max-tool-calls 8 --prompt "Use the forced calculator.compute tool to calculate 2+2. After the tool result, answer with the numeric result and say it came from calculator.compute."
+{"status": "completed", "answer": "The numeric result is **4**, and it came from **calculator.compute**.", "tool_call_count": 1, "turn_count": 2, ...}
+```
 
 ## 下一步
 
 下一步不是继续补 v3 闸门，而是把 live debug runner 接到 `SingleAgentLoop`：
 
-1. 接真实模型 provider。
+1. 用 `python -m kernel_v4.live_smoke --finance-tools --force-tool calculator.compute` 验证真实 provider 工具调用闭环。
 2. 接 live retrieval/SEC 网络权限。
 3. 让 FinanceBench debug item 通过 v4 loop 做一题。
 4. 用 live 结果验证 calculator 和 verifier 是否由模型主动调用。
