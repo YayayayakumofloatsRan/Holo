@@ -51,6 +51,7 @@ from kernel_v3.finance import (
     FormulaTrace,
     MARKET_OPENBB_FETCH_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
+    PROVIDED_CONTEXT_PARSE_TOOL_NAME,
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
     attach_target_binding_to_facts,
@@ -8992,6 +8993,25 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "host_boundary": "uses Trafilatura under network:fetch policy; returns extracted text candidates only",
                 }
             )
+        if PROVIDED_CONTEXT_PARSE_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": PROVIDED_CONTEXT_PARSE_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": (
+                        "provided benchmark/user report context contains pre_text/table/post_text, HTML tables, "
+                        "or copied markdown tables and must be converted into text_blocks and query-ready rows before table SQL or formula work"
+                    ),
+                    "payload_requirements": [
+                        "context: raw provided context string from the prompt or artifact",
+                        "context_format: optional auto/finqa/html/markdown/json",
+                        "table_name_prefix: optional safe table prefix for downstream data.table.query",
+                        "max_rows/max_chars: optional bounds",
+                    ],
+                    "host_boundary": "structures given context only; model still chooses relevant rows, formulas, and finance answer",
+                }
+            )
         if MARKET_OPENBB_FETCH_TOOL_NAME in recipe.allowed_tools:
             tool_selection.append(
                 {
@@ -14882,6 +14902,7 @@ TOOLCHAIN_GROUNDING_OBSERVATION_SOURCES = {
     f"tool:{SEC_EDGAR_FINANCIALS_TOOL_NAME}",
     f"tool:{DOCUMENT_DOCLING_CONVERT_TOOL_NAME}",
     f"tool:{DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME}",
+    f"tool:{PROVIDED_CONTEXT_PARSE_TOOL_NAME}",
     f"tool:{MARKET_OPENBB_FETCH_TOOL_NAME}",
     f"tool:{DATA_TABLE_QUERY_TOOL_NAME}",
     f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}",
@@ -15765,7 +15786,11 @@ def _workspace_observation_title(content: JsonObject, *, source: str) -> str:
     if source == f"tool:{MARKET_OPENBB_FETCH_TOOL_NAME}":
         route = _string_value(content.get("route"))
         return f"OpenBB market data: {route}" if route else "OpenBB market data"
-    if source in {f"tool:{DATA_TABLE_QUERY_TOOL_NAME}", f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}"}:
+    if source in {
+        f"tool:{PROVIDED_CONTEXT_PARSE_TOOL_NAME}",
+        f"tool:{DATA_TABLE_QUERY_TOOL_NAME}",
+        f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}",
+    }:
         return source.removeprefix("tool:")
     if source == "tool:workspace.search":
         query = content.get("query")
@@ -15795,7 +15820,11 @@ def _workspace_observation_uri(content: JsonObject, *, source: str, title: str) 
     if source == f"tool:{MARKET_OPENBB_FETCH_TOOL_NAME}":
         route = _string_value(content.get("route")) or "route"
         return f"openbb://{route}"
-    if source in {f"tool:{DATA_TABLE_QUERY_TOOL_NAME}", f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}"}:
+    if source in {
+        f"tool:{PROVIDED_CONTEXT_PARSE_TOOL_NAME}",
+        f"tool:{DATA_TABLE_QUERY_TOOL_NAME}",
+        f"tool:{MATH_SYMPY_COMPUTE_TOOL_NAME}",
+    }:
         return f"holo-tool://{source.removeprefix('tool:')}/{_short_hash(title)}"
     return f"workspace://{title}"
 

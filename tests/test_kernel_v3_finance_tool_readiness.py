@@ -13,6 +13,7 @@ from kernel_v3.finance import (
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     MARKET_OPENBB_FETCH_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
+    PROVIDED_CONTEXT_PARSE_TOOL_NAME,
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
 )
@@ -35,6 +36,7 @@ def test_finance_tool_readiness_audit_exposes_fb_fqa_tools_to_model(tmp_path) ->
         FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
         FINANCE_SLOT_BIND_TOOL_NAME,
         FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        PROVIDED_CONTEXT_PARSE_TOOL_NAME,
         DATA_TABLE_QUERY_TOOL_NAME,
         MATH_SYMPY_COMPUTE_TOOL_NAME,
         SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
@@ -76,6 +78,7 @@ def test_finance_tool_readiness_audit_local_smoke_executes_workbench_tools(tmp_p
     assert smoke[TOOL_DISCOVERY_NAME]["status"] == "ok"
     assert smoke[ARTIFACT_READ_NAME]["status"] == "ok"
     assert smoke[ARTIFACT_QUERY_NAME]["status"] == "ok"
+    assert smoke[PROVIDED_CONTEXT_PARSE_TOOL_NAME]["status"] == "ok"
     assert smoke[FINANCE_SLOT_BIND_TOOL_NAME]["status"] == "ok"
     assert smoke[CALCULATOR_TOOL_NAME]["status"] == "ok"
     assert smoke[FINANCE_VERIFY_NUMERIC_TOOL_NAME]["status"] == "ok"

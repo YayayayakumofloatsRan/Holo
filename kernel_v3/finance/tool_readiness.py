@@ -17,6 +17,7 @@ from kernel_v3.finance import (
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     MARKET_OPENBB_FETCH_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
+    PROVIDED_CONTEXT_PARSE_TOOL_NAME,
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
 )
@@ -41,6 +42,7 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
             SEC_EDGAR_FINANCIALS_TOOL_NAME,
             ARTIFACT_READ_NAME,
             ARTIFACT_QUERY_NAME,
+            PROVIDED_CONTEXT_PARSE_TOOL_NAME,
             DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
             DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
         ],
@@ -89,6 +91,7 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "purpose": "provided report text/table reasoning with reference program kept scoring-only",
         "required_tools": [
             TOOL_DISCOVERY_NAME,
+            PROVIDED_CONTEXT_PARSE_TOOL_NAME,
             CALCULATOR_TOOL_NAME,
             FINANCE_SLOT_BIND_TOOL_NAME,
             FINANCE_VERIFY_NUMERIC_TOOL_NAME,
@@ -101,6 +104,7 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "benchmark_families": ["FinQA", "FQA"],
         "purpose": "model-selected table filtering, aggregation, arithmetic, and formula trace generation",
         "required_tools": [
+            PROVIDED_CONTEXT_PARSE_TOOL_NAME,
             DATA_TABLE_QUERY_TOOL_NAME,
             FINANCE_SLOT_BIND_TOOL_NAME,
             CALCULATOR_TOOL_NAME,
@@ -117,6 +121,7 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
             FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
             ARTIFACT_READ_NAME,
             ARTIFACT_QUERY_NAME,
+            PROVIDED_CONTEXT_PARSE_TOOL_NAME,
             "workspace.list",
             "workspace.search",
             "file.read",
@@ -138,6 +143,7 @@ TOOL_COMPONENT_BINDINGS: dict[str, JsonObject] = {
     FINANCE_VERIFY_NUMERIC_TOOL_NAME: {"components": ["pydantic"], "install_policy": "holo_core"},
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME: {"components": ["edgartools"], "install_policy": "core_open_source"},
     SEC_EDGAR_FINANCIALS_TOOL_NAME: {"components": ["edgartools"], "install_policy": "core_open_source"},
+    PROVIDED_CONTEXT_PARSE_TOOL_NAME: {"components": ["pandas", "lxml", "beautifulsoup4"], "install_policy": "core_open_source"},
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME: {"components": ["docling"], "install_policy": "isolated_optional_heavy"},
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME: {"components": ["trafilatura"], "install_policy": "core_open_source"},
     MARKET_OPENBB_FETCH_TOOL_NAME: {"components": ["openbb"], "install_policy": "isolated_optional_heavy"},
@@ -443,7 +449,10 @@ def _local_smoke_checks(*, registry, gate: PolicyGate, artifact_store: ArtifactS
         (
             TOOL_DISCOVERY_NAME,
             {
-                "query": f"select:{FINANCE_SLOT_BIND_TOOL_NAME},{CALCULATOR_TOOL_NAME},{FINANCE_VERIFY_NUMERIC_TOOL_NAME}",
+                "query": (
+                    f"select:{PROVIDED_CONTEXT_PARSE_TOOL_NAME},{FINANCE_SLOT_BIND_TOOL_NAME},"
+                    f"{CALCULATOR_TOOL_NAME},{FINANCE_VERIFY_NUMERIC_TOOL_NAME}"
+                ),
                 "max_results": 8,
             },
         ),
@@ -454,6 +463,19 @@ def _local_smoke_checks(*, registry, gate: PolicyGate, artifact_store: ArtifactS
         (
             ARTIFACT_QUERY_NAME,
             {"artifact_id": artifact.artifact_id, "path": "facts", "query": "revenue", "max_matches": 4},
+        ),
+        (
+            PROVIDED_CONTEXT_PARSE_TOOL_NAME,
+            {
+                "context": (
+                    'pre_text: ["TestCo reported revenue and net income."]\n\n'
+                    'table: [["metric","FY2024"],["revenue","200"],["net income","50"]]\n\n'
+                    'post_text: ["Amounts are in USD millions."]'
+                ),
+                "context_format": "finqa",
+                "table_name_prefix": "finqa_context",
+                "max_rows": 20,
+            },
         ),
         (
             FINANCE_SLOT_BIND_TOOL_NAME,

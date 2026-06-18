@@ -23,6 +23,7 @@ from kernel_v3.finance import (
     finance_tool_surface_catalog,
     MARKET_OPENBB_FETCH_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
+    PROVIDED_CONTEXT_PARSE_TOOL_NAME,
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
     register_finance_tools,
@@ -61,6 +62,7 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
         DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
         DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
         MARKET_OPENBB_FETCH_TOOL_NAME,
+        PROVIDED_CONTEXT_PARSE_TOOL_NAME,
         DATA_TABLE_QUERY_TOOL_NAME,
         MATH_SYMPY_COMPUTE_TOOL_NAME,
     }
@@ -70,12 +72,53 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
         assert runtime.always_load is True
         assert runtime.max_result_size_chars is not None
     assert tool_runtime_spec_for_manifest(manifests[SEC_EDGAR_FINANCIALS_TOOL_NAME]).concurrency_safe is True
+    assert tool_runtime_spec_for_manifest(manifests[PROVIDED_CONTEXT_PARSE_TOOL_NAME]).concurrency_safe is True
     assert tool_runtime_spec_for_manifest(manifests[DATA_TABLE_QUERY_TOOL_NAME]).concurrency_safe is True
     assert tool_runtime_spec_for_manifest(manifests[DOCUMENT_DOCLING_CONVERT_TOOL_NAME]).concurrency_safe is False
     assert tool_runtime_spec_for_manifest(manifests[DOCUMENT_DOCLING_CONVERT_TOOL_NAME]).timeout_seconds == 120
     sec_schema = manifests[SEC_EDGAR_FINANCIALS_TOOL_NAME].input_schema
     assert sec_schema["fiscal_year"]["required"] is False
     assert sec_schema["period"]["aliases"] == ["target_period"]
+
+
+def test_provided_context_parse_returns_query_ready_finqa_table() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond(), artifact_store=ArtifactStore.in_memory())
+    action = CandidateAction(
+        action_id="act-provided-context-parse",
+        kind="tool",
+        name=PROVIDED_CONTEXT_PARSE_TOOL_NAME,
+        description="parse FinQA context",
+        score=1.0,
+        payload={
+            "context": (
+                'pre_text: ["American Express reported payment volume and transactions."]\n\n'
+                'table: [["metric","2008","2007"],["payment volume","6884","5828"],["transactions","55.2","50.1"]]\n\n'
+                'post_text: ["Amounts are illustrative."]'
+            ),
+            "context_format": "finqa",
+            "table_name_prefix": "finqa_context",
+        },
+        reasons=["need query-ready table rows"],
+        side_effect_class="read",
+    )
+
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-provided-context-parse",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "provided_context_parse"
+    assert observation.content["table_count"] == 1
+    table = observation.content["tables"][0]
+    assert table["name"] == "finqa_context_1"
+    assert table["columns"] == ["metric", "2008", "2007"]
+    assert table["rows"][0]["metric"] == "payment volume"
+    assert table["data_table_query_payload"]["rows"][1]["2008"] == "55.2"
+    assert observation.content["data_table_payloads"][0]["table_name"] == "finqa_context_1"
 
 
 def test_finance_slot_bind_tool_validates_model_selected_facts_and_returns_calculator_payload() -> None:
@@ -160,7 +203,7 @@ def test_finance_slot_bind_tool_validates_model_selected_facts_and_returns_calcu
 
 
 def test_finance_toolchain_describe_reports_component_install_status(monkeypatch) -> None:
-    installed = {"edgar", "trafilatura", "duckdb", "sympy"}
+    installed = {"edgar", "trafilatura", "pandas", "lxml", "bs4", "duckdb", "sympy"}
 
     def fake_find_spec(import_name: str):
         return object() if import_name in installed else None
@@ -192,6 +235,9 @@ def test_finance_toolchain_describe_reports_component_install_status(monkeypatch
     assert components["edgartools"]["installed"] is True
     assert components["docling"]["installed"] is False
     assert components["trafilatura"]["installed"] is True
+    assert components["pandas"]["installed"] is True
+    assert components["lxml"]["installed"] is True
+    assert components["beautifulsoup4"]["installed"] is True
     assert components["duckdb"]["installed"] is True
     assert components["sympy"]["installed"] is True
     assert components["openbb"]["install_hint"] == "pip install openbb"

@@ -290,6 +290,15 @@ data.table.query
 
 这不是做题规则，而是把题目给定表格变成工具可消费的结构化证据。
 
+2026-06-18 状态：接口已新增。`provided_context.parse` 已进入
+`finance-capability` allowed tools、planner/provider tool selection、
+`document_table_extraction` tool-category mapping、toolchain grounding 和
+`finance-tool-audit --execute-local-smoke` 门禁。它用 `pandas` / `lxml` /
+`beautifulsoup4` 将 FinQA 风格 `pre_text/table/post_text`、HTML table、
+Markdown pipe table 或 JSON context 转为 `text_blocks`、`tables` 和
+`data_table_payloads`。这关闭的是工具 ABI 缺口；FinQA/FQA 准确率仍必须通过
+live model run 另行验证。
+
 ### P0：LLM TransformSpec 主线化
 
 finance-capability 应以 model-first `task.compile` / `finance.slot_bind` / `TransformSpec`

@@ -190,8 +190,21 @@ precedence for custom paths. The 2026-06-18 readiness gate now treats
 that these tools are model-visible, policy
 allowed, executable by the host, and able to return bounded observations/artifact
 context for the strict single-agent loop. The latest local gate result was
-`status=ok`, `local_smoke_status=ok`, `allowed_tools_count=21`; this remains an
+`status=ok`, `local_smoke_status=ok`, `allowed_tools_count=22`; this remains an
 interface/execution check, not a benchmark score.
+The 2026-06-18 FB/FQA tool-coverage audit is recorded in
+`docs/KERNEL_V3_FB_FQA_TOOL_COVERAGE_2026-06-18_ZH.md`. It maps FinanceBench
+debug50/test100 and FinQA/FQA oracle-context task families to concrete tool
+requirements and closes the main FinQA/FQA tool ABI gap by adding
+`provided_context.parse`. The tool uses mature `pandas`/`lxml`/`beautifulsoup4`
+components to convert provided report context, HTML tables, markdown pipe tables,
+or JSON table snippets into `text_blocks`, query-ready `tables`, and
+`data_table_payloads` for `data.table.query`; host parsing remains structural
+only and LLM semantics remain model-owned. The updated readiness gate reports
+`status=ok`, `local_smoke_status=ok`, `allowed_tools_count=22`, focused
+open/readiness tests `32 passed`, structural loop/profile tests `92 passed`, and
+finance-engine tests `311 passed`. This is still not a live FinanceBench/FQA
+score.
 The no-gold debug50 requirements audit is now executable through
 `bench finance-requirements-audit --dataset data/bench/finance/financebench_doc_retrieval.jsonl --split debug50`.
 It reads question text and public metadata only, reports task families, risk

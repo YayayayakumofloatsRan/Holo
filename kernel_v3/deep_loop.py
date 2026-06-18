@@ -3107,7 +3107,7 @@ def _tools_for_requirement_categories(categories: list[object]) -> list[str]:
     mapping = {
         "source_acquisition": ["retrieval.run"],
         "structured_sec_facts": ["sec.edgar.financials"],
-        "document_table_extraction": ["document.docling.convert", "document.trafilatura.extract"],
+        "document_table_extraction": ["provided_context.parse", "document.docling.convert", "document.trafilatura.extract"],
         "table_operations": ["data.table.query"],
         "arithmetic": ["calculator.compute"],
         "numeric_verification": ["finance.verify_numeric"],

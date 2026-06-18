@@ -280,14 +280,16 @@ def finance_tool_surface_catalog() -> list[JsonObject]:
         _tool_family(
             family_id="document_table_conversion",
             purpose="PDF/HTML/XLSX/XBRL/CSV conversion, table preservation, chunking, and parser diagnostics",
-            holo_tools=["document.docling.convert", "document.trafilatura.extract", "retrieval.run", "script.exec"],
+            holo_tools=["provided_context.parse", "document.docling.convert", "document.trafilatura.extract", "retrieval.run", "script.exec"],
             current_status="wrapper_active_dependency_missing",
             mature_components=[
                 _component("docling", "docling", source="https://docling-project.github.io/docling/"),
                 _component("pandas", "pandas", source="https://pandas.pydata.org/docs/"),
+                _component("lxml", "lxml", source="https://lxml.de/lxmlhtml.html"),
+                _component("beautifulsoup4", "bs4", package="beautifulsoup4", source="https://beautiful-soup-4.readthedocs.io/en/latest/"),
             ],
-            selected_component="docling",
-            integration_decision="install_and_make_default_for_structured_document_conversion",
+            selected_component="docling_for_documents_pandas_lxml_bs4_for_provided_context",
+            integration_decision="provided_context.parse active for FinQA/FQA context-to-table; Docling remains isolated for heavy filing/PDF conversion",
             boundary="parser output is candidate evidence; FactLedger, citations, slot binding, and verifier remain mandatory",
         ),
         _tool_family(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.util
 import hashlib
@@ -35,6 +36,7 @@ SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME = "sec.edgar.company_filings"
 SEC_EDGAR_FINANCIALS_TOOL_NAME = "sec.edgar.financials"
 DOCUMENT_DOCLING_CONVERT_TOOL_NAME = "document.docling.convert"
 DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME = "document.trafilatura.extract"
+PROVIDED_CONTEXT_PARSE_TOOL_NAME = "provided_context.parse"
 MARKET_OPENBB_FETCH_TOOL_NAME = "market.openbb.fetch"
 DATA_TABLE_QUERY_TOOL_NAME = "data.table.query"
 MATH_SYMPY_COMPUTE_TOOL_NAME = "math.sympy.compute"
@@ -43,6 +45,7 @@ FINANCE_OPEN_COMPONENT_TOOL_NAMES = [
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
     SEC_EDGAR_FINANCIALS_TOOL_NAME,
+    PROVIDED_CONTEXT_PARSE_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     MARKET_OPENBB_FETCH_TOOL_NAME,
@@ -59,6 +62,7 @@ FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES = [
 ]
 
 FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES = [
+    PROVIDED_CONTEXT_PARSE_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
 ]
@@ -551,6 +555,43 @@ def register_finance_open_component_tools(
         ),
     )
     registry.register(
+        PROVIDED_CONTEXT_PARSE_TOOL_NAME,
+        lambda action: _execute_provided_context_parse(action, artifact_store=artifact_store),
+        manifest=ToolManifest(
+            name=PROVIDED_CONTEXT_PARSE_TOOL_NAME,
+            version="1",
+            resource_kind="provided_context",
+            operator_kind="parse_tables",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description=(
+                "Parse benchmark/user-provided report context into text blocks and query-ready tables. "
+                "Use for FinQA/FQA oracle_context or copied filing/table snippets before data.table.query."
+            ),
+            input_schema={
+                "context": {"type": "str", "required": True, "min_length": 1},
+                "context_format": {
+                    "type": "str",
+                    "required": False,
+                    "description": "Optional hint: auto, finqa, html, markdown, json.",
+                },
+                "table_name_prefix": {"type": "str", "required": False, "min_length": 1},
+                "max_rows": {"type": "int", "required": False, "min": 1, "max": 5000},
+                "max_chars": {"type": "int", "required": False, "min": 500, "max": 50000},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "timeout_seconds": 20,
+                "max_result_size_chars": 50000,
+                "result_persistence_policy": "auto",
+                "idempotent": True,
+            },
+        ),
+    )
+    registry.register(
         MARKET_OPENBB_FETCH_TOOL_NAME,
         lambda action: _execute_openbb_fetch(action, artifact_store=artifact_store),
         manifest=ToolManifest(
@@ -684,6 +725,27 @@ def _execute_toolchain_describe(action: CandidateAction) -> Observation:
                 package="trafilatura",
                 tools=[DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME],
                 source="https://trafilatura.readthedocs.io/en/latest/",
+            ),
+            _component_status(
+                component="pandas",
+                import_name="pandas",
+                package="pandas",
+                tools=[PROVIDED_CONTEXT_PARSE_TOOL_NAME, DATA_TABLE_QUERY_TOOL_NAME],
+                source="https://pandas.pydata.org/docs/",
+            ),
+            _component_status(
+                component="lxml",
+                import_name="lxml",
+                package="lxml",
+                tools=[PROVIDED_CONTEXT_PARSE_TOOL_NAME],
+                source="https://lxml.de/lxmlhtml.html",
+            ),
+            _component_status(
+                component="beautifulsoup4",
+                import_name="bs4",
+                package="beautifulsoup4",
+                tools=[PROVIDED_CONTEXT_PARSE_TOOL_NAME],
+                source="https://beautiful-soup-4.readthedocs.io/en/latest/",
             ),
             _component_status(
                 component="openbb",
@@ -1112,6 +1174,51 @@ def _execute_trafilatura_extract(
     )
 
 
+def _execute_provided_context_parse(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> Observation | ToolResult:
+    context = str(action.payload.get("context") or "")
+    if not context.strip():
+        return _observation(
+            action,
+            "blocked",
+            {"error": "missing_context", "reason": "provided_context.parse requires a non-empty context string"},
+            kind="provided_context_parse",
+        )
+    pandas, pandas_error = _import_component("pandas", package="pandas")
+    if pandas_error is not None:
+        return _observation(action, "failed", pandas_error, kind="provided_context_parse")
+    context_format = str(action.payload.get("context_format") or "auto").strip().lower() or "auto"
+    table_name_prefix = _safe_table_name(str(action.payload.get("table_name_prefix") or "provided_context_table"))
+    max_rows = _positive_int(action.payload.get("max_rows"), default=500, maximum=5000)
+    max_chars = _positive_int(action.payload.get("max_chars"), default=12000, maximum=50000)
+    try:
+        parsed = _parse_provided_context_to_tables(
+            context,
+            pandas=pandas,
+            context_format=context_format,
+            table_name_prefix=table_name_prefix,
+            max_rows=max_rows,
+            max_chars=max_chars,
+        )
+    except Exception as exc:
+        return _observation(action, "failed", _component_exception("provided_context_parse", exc), kind="provided_context_parse")
+    status = "ok" if parsed.get("text_blocks") or parsed.get("tables") else "blocked"
+    if status != "ok":
+        parsed["error"] = "no_parseable_context"
+        parsed["reason"] = "no text blocks or table-like structures were found"
+    return _artifact_tool_result(
+        action,
+        status,
+        parsed,
+        kind="provided_context_parse",
+        artifact_store=artifact_store,
+        artifact_kind="provided_context_parse_payload",
+    )
+
+
 def _execute_openbb_fetch(
     action: CandidateAction,
     *,
@@ -1296,6 +1403,311 @@ def _execute_sympy_compute(action: CandidateAction) -> Observation:
         },
         kind="sympy_compute",
     )
+
+
+def _parse_provided_context_to_tables(
+    context: str,
+    *,
+    pandas: Any,
+    context_format: str,
+    table_name_prefix: str,
+    max_rows: int,
+    max_chars: int,
+) -> JsonObject:
+    sections = _provided_context_sections(context)
+    text_blocks: list[JsonObject] = []
+    table_candidates: list[tuple[str, object]] = []
+    if sections:
+        for section, raw_value in sections:
+            parsed = _parse_context_literal(raw_value)
+            if section in {"pre_text", "post_text", "context", "text"}:
+                text_blocks.extend(_context_text_blocks(section, parsed, fallback=raw_value, max_chars=max_chars))
+            elif section in {"table", "tables"}:
+                table_candidates.extend(_context_table_candidates(section, parsed))
+    else:
+        parsed = _parse_context_literal(context)
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                normalized = _safe_context_section_name(key)
+                if normalized in {"pre_text", "post_text", "context", "text"}:
+                    text_blocks.extend(_context_text_blocks(normalized, value, fallback=str(value), max_chars=max_chars))
+                elif normalized in {"table", "tables"}:
+                    table_candidates.extend(_context_table_candidates(normalized, value))
+        elif isinstance(parsed, list) and _looks_like_matrix(parsed):
+            table_candidates.append(("json_matrix", parsed))
+        else:
+            text_blocks.extend(_context_text_blocks("context", parsed, fallback=context, max_chars=max_chars))
+    html_tables = _html_tables_from_context(context, pandas=pandas) if "<table" in context.casefold() else []
+    markdown_tables = _markdown_tables_from_context(context)
+    table_candidates.extend(("html_table", table) for table in html_tables)
+    table_candidates.extend(("markdown_table", table) for table in markdown_tables)
+    tables: list[JsonObject] = []
+    for index, (source_section, value) in enumerate(table_candidates, start=1):
+        table = _normal_table_from_value(
+            value,
+            name=f"{table_name_prefix}_{index}",
+            source_section=source_section,
+            max_rows=max_rows,
+        )
+        if table is not None:
+            tables.append(table)
+    data_table_payloads = [
+        {
+            "table_name": table["name"],
+            "rows": table.get("rows", []),
+            "sql_example": f"select * from {table['name']} limit 20",
+            "limit": min(20, max_rows),
+        }
+        for table in tables
+    ]
+    return {
+        "schema": "holo.kernel_v3.provided_context_parse_result.v1",
+        "component": "pandas+lxml+beautifulsoup4",
+        "context_format": context_format,
+        "text_blocks": text_blocks,
+        "text_block_count": len(text_blocks),
+        "tables": tables,
+        "table_count": len(tables),
+        "data_table_payloads": data_table_payloads,
+        "data_table_query_tool": DATA_TABLE_QUERY_TOOL_NAME,
+        "host_boundary": (
+            "provided_context.parse only structures given context into text/table candidates; "
+            "the model still chooses relevant rows, formulas, and finance conclusions"
+        ),
+        "semantic_decision_owner": "model",
+    }
+
+
+def _provided_context_sections(context: str) -> list[tuple[str, str]]:
+    pattern = re.compile(r"(?im)(?:^|\n)\s*(pre_text|post_text|table|tables|context|text)\s*:\s*")
+    matches = list(pattern.finditer(context))
+    sections: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        section = _safe_context_section_name(match.group(1))
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(context)
+        value = context[start:end].strip()
+        if value:
+            sections.append((section, value))
+    return sections
+
+
+def _parse_context_literal(text: object) -> object:
+    if not isinstance(text, str):
+        return text
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    if stripped[0] in "[{":
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            try:
+                return ast.literal_eval(stripped)
+            except (ValueError, SyntaxError):
+                return stripped
+    return stripped
+
+
+def _context_text_blocks(section: str, value: object, *, fallback: str, max_chars: int) -> list[JsonObject]:
+    values: list[object]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = list(value)
+    elif isinstance(value, str) and value.strip():
+        values = [value]
+    elif fallback.strip():
+        values = [fallback]
+    else:
+        values = []
+    blocks: list[JsonObject] = []
+    for index, item in enumerate(values, start=1):
+        text = _normalize_snippet(item if isinstance(item, str) else json.dumps(_json_sanitize(item), ensure_ascii=False))
+        if not text:
+            continue
+        blocks.append(
+            {
+                "section": section,
+                "index": index,
+                "text": _truncate(text, max_chars),
+                "text_chars": len(text),
+                "truncated": len(text) > max_chars,
+            }
+        )
+    return blocks
+
+
+def _context_table_candidates(section: str, value: object) -> list[tuple[str, object]]:
+    if _looks_like_matrix(value):
+        return [(section, value)]
+    if isinstance(value, dict):
+        candidates: list[tuple[str, object]] = []
+        for key, item in value.items():
+            if _looks_like_matrix(item) or _looks_like_records(item):
+                candidates.append((f"{section}.{key}", item))
+        return candidates
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if _looks_like_records(value):
+            return [(section, value)]
+        candidates = []
+        for index, item in enumerate(value, start=1):
+            if _looks_like_matrix(item) or _looks_like_records(item):
+                candidates.append((f"{section}.{index}", item))
+        return candidates
+    return []
+
+
+def _html_tables_from_context(context: str, *, pandas: Any) -> list[object]:
+    try:
+        frames = pandas.read_html(io.StringIO(context))
+    except Exception:
+        return []
+    return [frame for frame in frames[:12]]
+
+
+def _markdown_tables_from_context(context: str) -> list[list[list[str]]]:
+    tables: list[list[list[str]]] = []
+    current: list[list[str]] = []
+    for raw_line in context.splitlines():
+        line = raw_line.strip()
+        if "|" not in line:
+            if len(current) >= 2:
+                tables.append(current)
+            current = []
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        if all(re.fullmatch(r":?-{2,}:?", cell.replace(" ", "")) for cell in cells if cell):
+            continue
+        current.append(cells)
+    if len(current) >= 2:
+        tables.append(current)
+    return tables[:12]
+
+
+def _normal_table_from_value(value: object, *, name: str, source_section: str, max_rows: int) -> JsonObject | None:
+    if hasattr(value, "to_dict"):
+        try:
+            records = value.to_dict(orient="records")
+        except TypeError:
+            records = value.to_dict()
+        if isinstance(records, list):
+            rows = [_record(item) for item in records if isinstance(item, dict)]
+            columns = _ordered_columns_from_rows(rows)
+            return _table_payload(name=name, source_section=source_section, columns=columns, rows=rows, max_rows=max_rows)
+    if _looks_like_records(value):
+        rows = [_record(item) for item in list(value) if isinstance(item, dict)]  # type: ignore[arg-type]
+        columns = _ordered_columns_from_rows(rows)
+        return _table_payload(name=name, source_section=source_section, columns=columns, rows=rows, max_rows=max_rows)
+    if not _looks_like_matrix(value):
+        return None
+    matrix = [list(row) for row in value if isinstance(row, Sequence) and not isinstance(row, (str, bytes, bytearray))]  # type: ignore[union-attr]
+    if not matrix:
+        return None
+    max_width = max(len(row) for row in matrix)
+    normalized_matrix = [list(row) + [""] * (max_width - len(row)) for row in matrix]
+    header = [str(cell or "").strip() for cell in normalized_matrix[0]]
+    has_header = any(header) and len(normalized_matrix) > 1
+    original_columns = header if has_header else [f"col_{index}" for index in range(1, max_width + 1)]
+    columns = _safe_column_names(original_columns)
+    data_rows = normalized_matrix[1:] if has_header else normalized_matrix
+    rows = [
+        {columns[index]: _cell_value(row[index]) for index in range(max_width)}
+        for row in data_rows
+    ]
+    return _table_payload(
+        name=name,
+        source_section=source_section,
+        columns=columns,
+        rows=rows,
+        max_rows=max_rows,
+        original_columns=original_columns,
+        matrix_preview=[[str(cell) for cell in row] for row in normalized_matrix[:8]],
+    )
+
+
+def _table_payload(
+    *,
+    name: str,
+    source_section: str,
+    columns: list[str],
+    rows: list[JsonObject],
+    max_rows: int,
+    original_columns: list[str] | None = None,
+    matrix_preview: list[list[str]] | None = None,
+) -> JsonObject:
+    safe_name = _safe_table_name(name)
+    bounded_rows = rows[:max_rows]
+    payload: JsonObject = {
+        "name": safe_name,
+        "source_section": source_section,
+        "columns": columns,
+        "rows": bounded_rows,
+        "row_count": len(rows),
+        "rows_truncated": len(rows) > len(bounded_rows),
+        "data_table_query_payload": {"table_name": safe_name, "rows": bounded_rows},
+    }
+    if original_columns is not None:
+        payload["original_columns"] = original_columns
+    if matrix_preview is not None:
+        payload["matrix_preview"] = matrix_preview
+    return payload
+
+
+def _looks_like_matrix(value: object) -> bool:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+        and bool(value)
+        and all(isinstance(row, Sequence) and not isinstance(row, (str, bytes, bytearray)) for row in list(value)[:20])
+    )
+
+
+def _looks_like_records(value: object) -> bool:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+        and bool(value)
+        and all(isinstance(row, dict) for row in list(value)[:20])
+    )
+
+
+def _safe_context_section_name(value: object) -> str:
+    text = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().casefold()).strip("_")
+    return text or "context"
+
+
+def _safe_column_names(values: list[str]) -> list[str]:
+    result: list[str] = []
+    counts: dict[str, int] = {}
+    for index, value in enumerate(values, start=1):
+        base = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().casefold()).strip("_") or f"col_{index}"
+        count = counts.get(base, 0) + 1
+        counts[base] = count
+        result.append(base if count == 1 else f"{base}_{count}")
+    return result
+
+
+def _ordered_columns_from_rows(rows: list[JsonObject]) -> list[str]:
+    columns: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            text = str(key)
+            if text not in seen:
+                seen.add(text)
+                columns.append(text)
+    return columns
+
+
+def _cell_value(value: object) -> JsonValue:
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    return str(value)
 
 
 def isolated_component_status(component: str) -> JsonObject:

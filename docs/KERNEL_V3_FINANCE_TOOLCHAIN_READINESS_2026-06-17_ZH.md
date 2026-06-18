@@ -50,17 +50,29 @@ This document records the FB/FQA tool exposure and open-component readiness boun
 .venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_tool_readiness.py tests/test_kernel_v3_execution_profile.py -q
 ```
 
-结果：focused readiness tests `4 passed`，本地 finance-tool-audit smoke `status=ok` / `local_smoke_status=ok` / `allowed_tools_count=21`，结构回归 `91 passed`。这仍然只是工具接口和执行链路证据，不是 FinanceBench/FQA 分数。
+2026-06-18 后续题型覆盖审查见
+`docs/KERNEL_V3_FB_FQA_TOOL_COVERAGE_2026-06-18_ZH.md`。该审查确认
+FinQA/FQA 的 P0 缺口是 provided report context 到 query-ready table 的稳定 ABI，
+并新增 `provided_context.parse`：
+
+- 输入 FinQA 风格 `pre_text/table/post_text`、HTML table、Markdown pipe table 或 JSON context。
+- 输出 `text_blocks`、`tables`、`data_table_payloads` 和 artifact。
+- 使用成熟组件 `pandas` / `lxml` / `beautifulsoup4` 做结构化解析。
+- Host 只做结构化，不做语义选择；LLM 仍决定行列、公式和答案。
+
+更新后结果：focused open/readiness tests `32 passed`，本地 finance-tool-audit smoke
+`status=ok` / `local_smoke_status=ok` / `allowed_tools_count=22`，结构回归 `92 passed`，
+finance-engine tests `311 passed`。这仍然只是工具接口和执行链路证据，不是 FinanceBench/FQA 分数。
 
 ## 覆盖的 FB/FQA 工具类别
 
-- FinanceBench filing retrieval: `tool.discovery`, `retrieval.run`, `sec.edgar.company_filings`, `sec.edgar.financials`, `artifact.read`, `artifact.query`, `document.trafilatura.extract`, `document.docling.convert`
+- FinanceBench filing retrieval: `tool.discovery`, `retrieval.run`, `sec.edgar.company_filings`, `sec.edgar.financials`, `artifact.read`, `artifact.query`, `provided_context.parse`, `document.trafilatura.extract`, `document.docling.convert`
 - FinanceBench filing table extraction: `artifact.read`, `artifact.query`, `document.trafilatura.extract`, `document.docling.convert`, `data.table.query`, `workspace.write`, `shell.exec`, `script.exec`
 - FinanceBench numeric ratio reasoning: `finance.slot_bind`, `calculator.compute`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
 - FinanceBench market or macro context: `retrieval.run`, `market.openbb.fetch`, `calculator.compute`, `finance.verify_numeric`
-- FinQA/FQA report context numeric reasoning: `tool.discovery`, `calculator.compute`, `finance.slot_bind`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
-- FinQA/FQA table/program-like transforms: `data.table.query`, `finance.slot_bind`, `calculator.compute`, `math.sympy.compute`, `finance.verify_numeric`
-- Temporary workbench assembly: `tool.discovery`, `finance.toolchain.describe`, `artifact.read`, `artifact.query`, `workspace.list`, `workspace.search`, `file.read`, `workspace.write`, `shell.exec`, `script.exec`
+- FinQA/FQA report context numeric reasoning: `tool.discovery`, `provided_context.parse`, `calculator.compute`, `finance.slot_bind`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
+- FinQA/FQA table/program-like transforms: `provided_context.parse`, `data.table.query`, `finance.slot_bind`, `calculator.compute`, `math.sympy.compute`, `finance.verify_numeric`
+- Temporary workbench assembly: `tool.discovery`, `finance.toolchain.describe`, `artifact.read`, `artifact.query`, `provided_context.parse`, `workspace.list`, `workspace.search`, `file.read`, `workspace.write`, `shell.exec`, `script.exec`
 - Long-result artifact boundary: SEC/EDGAR, document extraction/conversion, OpenBB, and DuckDB table-query tools return bounded observations plus `artifact_id` / `artifact.read` hints while storing the full JSON tool payload in `ArtifactStore`.
 - Document evidence visibility: `document.docling.convert` now gives PDF URLs a lightweight PDF-reader path before heavy Docling, reports isolated worker failures as observations, and returns `focus_snippets` before truncated text. The snippets are only candidate evidence windows selected from model-provided/default finance terms; the LLM still chooses facts, line items, formulas, and conclusions.
 - Open-component evidence adapter: finance tool observations from Docling, Trafilatura, SEC EdgarTools, OpenBB, DuckDB, and SymPy can now enter the same synthetic `toolchain_grounding` evidence/citation path as workspace/script tools. This prevents successful model-called document tools from being discarded merely because no separate `retrieval.run` record exists.
