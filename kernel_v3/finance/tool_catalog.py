@@ -194,6 +194,8 @@ def finance_agent_loop_contract() -> JsonObject:
                 "entity/security and period basis",
                 "source-backed facts with evidence/citation refs",
                 "formula or transform expression when any calculation is used",
+                "calculator.compute FormulaTrace for derived finance numbers when the tool is available",
+                "finance.verify_numeric observation for final material numeric claims when the tool is available",
                 "computed result with unit and rounding basis",
                 "comparison or qualitative judgment when requested",
                 "limitations only for genuinely missing or non-applicable evidence",
@@ -208,6 +210,7 @@ def finance_agent_loop_contract() -> JsonObject:
         "stop_invariants": [
             "do not finalize numeric answers without source-backed facts or explicit assumptions",
             "do not finalize formula questions without FormulaTrace unless the answer is a justified non-applicability judgment",
+            "do not finalize finance calculation, ratio, efficiency, ranking, margin, growth, multiple, bps, or comparison answers without calculator.compute and finance.verify_numeric observations when those tools are available and inputs are present",
             "do not ask the user for benchmark details already present in prompt metadata",
             "treat parser/provider failures as observations for replanning unless policy, safety, or budget blocks apply",
             "do not stop at first retrieval/parser miss; replan across relevant allowed tool families while budget remains",

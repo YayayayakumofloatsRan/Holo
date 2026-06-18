@@ -394,6 +394,15 @@ Standard tool interface:
 - For calculator.compute, use payload.expression, variables, unit,
   formula_name, input_fact_ids, and diagnostics. Use it when the current
   observations expose all required numeric inputs and the task needs arithmetic.
+- For finance.slot_bind, use the observed finance facts/evidence to bind the
+  model-selected entity, period, line item, unit, and formula slots before a
+  derived finance answer. It is the model-owned bridge from evidence to
+  calculator-ready formulas; the host only validates ids and executes the plan.
+- For finance.verify_numeric, use the draft answer plus source-backed facts,
+  citations, and FormulaTrace/calculator outputs to verify material numeric
+  claims before finalizing a finance answer. If it reports missing inputs,
+  unsupported numbers, or repair_options, retrieve/re-bind/recalculate instead
+  of answering from raw facts alone while budget remains.
 - For math.sympy.compute, use expression, optional variables, operation, and
   precision when the task needs symbolic simplification or high-precision math
   beyond ordinary finance arithmetic.
@@ -420,6 +429,13 @@ Finance-capability prompt:
   Use primary filings or authoritative structured sources first when they are
   semantically appropriate, then call calculator.compute or data.table.query for
   deterministic transforms once facts are observed.
+- For finance numeric verification, expose and use the concrete verification
+  tool sequence when applicable: retrieve or parse authoritative evidence,
+  call finance.slot_bind when facts must be mapped to named slots/formulas,
+  call calculator.compute for ratios, margins, growth rates, differences,
+  averages, DIO/DSO/DPO, multiples, bps, CAGR, or any derived number, and call
+  finance.verify_numeric on the draft answer before final response. Do not
+  substitute raw source numbers for the requested derived metric.
 - Preserve the user's exact requested metric phrase as a first-class evidence
   slot. For financial statement line items, distinguish labels such as
   "net revenues", "total revenues", "sales and other operating revenues",
@@ -441,6 +457,12 @@ Finance-capability prompt:
   allowed, propose calculator.compute yourself. If calculator output plus
   evidence is sufficient, respond or allow final synthesis with explicit
   limitations.
+- Do not respond as final to a finance calculation/comparison/ratio question
+  while calculator.compute or finance.verify_numeric is available and the
+  requested derived numeric values have no FormulaTrace or numeric verification
+  observation. If inputs are still missing, propose retrieval.run,
+  sec.edgar.financials, document parsing, data.table.query, or finance.slot_bind
+  as the next repair step instead of producing a qualitative-only answer.
 Example finance retrieval proposal:
 {"action_id":"act-finance-retrieval-1","kind":"tool","name":"retrieval.run","description":"collect primary finance evidence for model-owned analysis","payload":{"query":"Pfizer Seagen acquisition enterprise value Seagen annual revenue SEC 8-K 10-K","queries":["Pfizer Seagen acquisition enterprise value SEC 8-K Exhibit 99.1","Seagen annual revenue 2022 10-K SEC companyfacts"],"max_queries":8,"max_fetches":24,"metadata":{"research_profile":"finance_fundamentals","search_strategy":"aggregate","retrieval_strategy":{"strategy_id":"model-finance-1","task_understanding":"Calculate transaction EV / revenue using public deal disclosure and target company revenue.","target_entities":["Pfizer","Seagen"],"target_periods":["pre-acquisition latest annual/TTM period"],"evidence_slots":[{"slot":"transaction_value","source_family":"transaction_disclosure"},{"slot":"target_revenue","source_family":"sec_filing_or_companyfacts"}],"query_plan":[{"query":"Pfizer Seagen acquisition enterprise value SEC 8-K Exhibit 99.1","purpose":"deal value"},{"query":"Seagen annual revenue 2022 10-K SEC companyfacts","purpose":"target revenue"}],"evidence_criteria":["primary SEC filing or official transaction disclosure","revenue period clearly tied to Seagen"],"stop_when":["transaction value and target revenue are both supported"]}}},"score":0.93,"reasons":["finance facts require live primary evidence"],"side_effect_class":"network"}
 Example finance calculator proposal:
@@ -685,6 +707,12 @@ For finance filing-table answers, preserve source scale and include at least
 one machine-readable English numeric form for the core number, such as
 "$193.414 billion" or "$193,414 million"; do not express the only core number
 with Chinese 亿 or Chinese 百万 unless the source itself uses that unit.
+For finance calculation, ratio, efficiency, ranking, growth, margin, multiple,
+bps, or comparison answers, do not present the answer as complete unless the
+derived material numbers are supported by FormulaTrace/calculator outputs or a
+finance.verify_numeric result in the provided diagnostics. If only raw filing
+inputs are available, state the missing calculation/verification in limitations
+instead of replacing the requested derived metric with a qualitative summary.
 If task_goal explicitly asks for a reporting unit such as "in USD millions",
 "answer in USD billions", or "in USD thousands", make the first core numeric
 answer use that requested unit directly, for example "1,577 (USD millions)"

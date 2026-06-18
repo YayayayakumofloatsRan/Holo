@@ -6902,6 +6902,12 @@ def test_finance_capability_provider_compact_preserves_one_shot_tool_surface() -
     assert "benchmark_solvability_policy" in compact["finance_agent_loop_contract"]
     assert "answer_output_contract" in compact["finance_agent_loop_contract"]
     assert "direct answer to the exact question" in compact["finance_agent_loop_contract"]["answer_output_contract"]["required_elements"]
+    assert "calculator.compute FormulaTrace for derived finance numbers when the tool is available" in compact["finance_agent_loop_contract"]["answer_output_contract"]["required_elements"]
+    assert "finance.verify_numeric observation for final material numeric claims when the tool is available" in compact["finance_agent_loop_contract"]["answer_output_contract"]["required_elements"]
+    assert any(
+        "calculator.compute and finance.verify_numeric observations" in item
+        for item in compact["finance_agent_loop_contract"]["stop_invariants"]
+    )
     assert "debug50" not in json.dumps(compact["finance_agent_loop_contract"]).lower()
     finance_template = compact["llm_first_finance_template"]
     assert finance_template["standard_tool_interface"]["planner_action"].startswith(
@@ -6958,6 +6964,8 @@ def test_finance_capability_assistant_turn_prompt_exposes_stop_and_answer_contra
     assert "assume the task is intended to be solvable" in contract["benchmark_solvability_policy"]
     assert "If a tool returns no result or fails while budget remains" in contract["stop_rule"]
     assert "direct answer to the exact question" in contract["answer_output_contract"]["required_elements"]
+    assert "calculator.compute FormulaTrace for derived finance numbers when the tool is available" in contract["answer_output_contract"]["required_elements"]
+    assert "finance.verify_numeric observation for final material numeric claims when the tool is available" in contract["answer_output_contract"]["required_elements"]
     assert "generic failure text when partial cited evidence can answer" in contract["answer_output_contract"]["forbidden_elements"]
 
 

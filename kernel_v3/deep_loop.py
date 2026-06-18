@@ -2728,8 +2728,9 @@ def _single_agent_tool_loop_contract_for_turn(context: ContextBundle) -> JsonObj
         "required_for_finance_numeric_answers": [
             "source-backed facts in observations or artifact reads",
             "finance.slot_bind when line-item, period, or fact selection is nontrivial",
-            "calculator.compute or data.table.query for deterministic transforms",
-            "finance.verify_numeric when numeric verification is available",
+            "calculator.compute or data.table.query for deterministic transforms after inputs are supported",
+            "finance.verify_numeric on the draft answer when numeric verification is available",
+            "do not substitute raw source numbers for a requested derived metric when the requested ratio, margin, growth rate, difference, average, DIO/DSO/DPO, multiple, bps, CAGR, ranking, or comparison still lacks FormulaTrace/calculator output",
         ],
         "benchmark_solvability_policy": (
             "For benchmark-like FB/FQA tasks with named entities, periods, filings, or provided context, "
@@ -2743,6 +2744,8 @@ def _single_agent_tool_loop_contract_for_turn(context: ContextBundle) -> JsonObj
                 "entity/security and period basis",
                 "source-backed facts with evidence/citation refs",
                 "formula or transform expression for calculations",
+                "calculator.compute FormulaTrace for derived finance numbers when the tool is available",
+                "finance.verify_numeric observation for final material numeric claims when the tool is available",
                 "computed result with unit and rounding basis",
                 "comparison or qualitative judgment when requested",
                 "limitations only for genuinely missing or non-applicable evidence",
@@ -2757,6 +2760,8 @@ def _single_agent_tool_loop_contract_for_turn(context: ContextBundle) -> JsonObj
         "stop_rule": (
             "Return final_answer only after required evidence, formula traces, and verification observations "
             "are present, or after stating explicit non-applicability or evidence limitations. "
+            "For finance calculation, ratio, efficiency, ranking, margin, growth, multiple, bps, or comparison tasks, "
+            "do not return final_answer without calculator.compute and finance.verify_numeric observations when those tools are available and inputs are present. "
             "If a tool returns no result or fails while budget remains, replan through another relevant allowed tool or artifact path before finalizing."
         ),
         "gold_reference_visibility": "benchmark gold/reference material is never model-visible",

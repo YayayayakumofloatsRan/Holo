@@ -1760,3 +1760,97 @@ calculator formula traces、numeric verifier gate 和 final synthesis gate 均�
 `sec.edgar.financials`、`document.*`、`finance.slot_bind`、
 `calculator.compute`、`data.table.query` 和 `finance.verify_numeric` 组合成
 loop 内闭环，而不是依赖 finalizer 兜底。
+
+## 12. Numeric verification prompt contract after live miss
+
+时间点：2026-06-18 CST。用户要求先做出一道题；随后对
+`financebench_id_00499` 做了当前 strict single-agent loop 的单题 live 复测：
+
+```bash
+HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
+  --dataset .state/kernel_v3/bench/finance/financebench_150_doc_retrieval.jsonl \
+  --dev-gold .state/kernel_v3/bench/finance/financebench_150_doc_retrieval.gold.jsonl \
+  --offset 2 --limit 1 --parallel 1 \
+  --output .state/kernel_v3/bench/finance/fb_debug50_o002_l001_current_single_20260618.jsonl \
+  --summary-output .state/kernel_v3/bench/finance/fb_debug50_o002_l001_current_single_20260618.summary.json \
+  --online --planner model --evaluator model --synthesizer model \
+  --semantic-intake model --turn-router model \
+  --execution-profile finance-capability --mission off \
+  --research-profile finance_fundamentals --research-depth deep \
+  --live-retrieval --live-search-strategy adaptive --agent-loop-streaming \
+  --max-agent-steps 12 --max-agent-tool-calls 24 \
+  --max-agent-artifact-bytes 2500000 \
+  --live-max-network-fetches 12 --live-download-byte-budget 80000000 \
+  --live-timeout-seconds 45 --context-profile provider --profile balanced \
+  --thinking disabled --reasoning-effort low --model deepseek-v4-flash \
+  --generation-mode auto --latency-target quality --response-language en \
+  --progress-events --thread-prefix fb-single-current-20260618
+```
+
+结果：
+
+- `status=failed`
+- `reason=numeric_outside_tolerance`
+- `retrieval_run_count=0`
+- `calculator_call_count=0`
+- `formula_trace_count=0`
+- `transform_plan_count=0`
+- `missing_slots=["operating_cash_flow","property_plant_and_equipment_net","net_income"]`
+- tool observations included `sec.edgar.financials`, `document.docling.convert`,
+  and `artifact.read`, so this was not "no tool call"; the missing part was the
+  numeric transform/verification tool chain.
+
+结论：
+
+- 模型拿到了 raw filing inputs，例如 capex、revenue、PPE、assets，但没有把
+  FY2022 capital-intensity task 转成比率公式输出。
+- 它给出了定性判断而没有输出 `capex/revenue`、`PPE/assets`、`ROA` 等
+  scorer 所需 derived numerics。
+- 更深层问题是 prompt/contract 没有足够明确地告诉 agent loop：
+  数值金融题必须使用哪些工具完成验证。
+
+本轮 prompt/contract 修复：
+
+- `kernel_v3/processors/contracts.py`
+  - 在 Standard tool interface 中显式描述：
+    `finance.slot_bind` 用于模型拥有的 slot/formula binding；
+    `calculator.compute` 用于 deterministic transforms；
+    `finance.verify_numeric` 用于 final material numeric claims。
+  - 在 Finance-capability prompt 中新增 concrete verification sequence：
+    authoritative evidence -> `finance.slot_bind` -> `calculator.compute` /
+    `data.table.query` -> `finance.verify_numeric` -> final response。
+  - 明确禁止用 raw source numbers 替代 requested derived metric。
+- `kernel_v3/deep_loop.py`
+  - `assistant.turn.single_agent_tool_loop_contract` 的
+    `required_for_finance_numeric_answers` 现在列出
+    `finance.slot_bind`、`calculator.compute`/`data.table.query`、
+    `finance.verify_numeric`。
+  - `stop_rule` 明确：当工具可用且输入已出现时，finance calculation /
+    ratio / efficiency / ranking / margin / growth / multiple / bps /
+    comparison 题不能缺 `calculator.compute` 和 `finance.verify_numeric`
+    observations 就 final。
+- `kernel_v3/processors/adapters.py`
+  - synthesizer prompt 也携带同一条规则：只有 raw filing inputs 而没有
+    FormulaTrace / verification 时，不得把 qualitative-only answer 当成完整答案。
+- `kernel_v3/finance/tool_catalog.py`
+  - runtime compact 的 `finance_agent_loop_contract` 同步暴露
+    `calculator.compute FormulaTrace` 和 `finance.verify_numeric observation`
+    为 final answer required elements。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_finance_prompt_exposes_numeric_verifier_tool_example \
+  tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_finance_prompt_names_numeric_verification_tool_sequence \
+  tests/test_kernel_v3_phase5_semantic_processors.py::test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_bodies \
+  tests/test_kernel_v3_finance_engine.py::test_finance_capability_provider_compact_preserves_one_shot_tool_surface \
+  tests/test_kernel_v3_finance_engine.py::test_finance_capability_assistant_turn_prompt_exposes_stop_and_answer_contract \
+  tests/test_kernel_v3_deep_agent_loop.py::test_assistant_turn_prompt_exposes_strict_finance_single_agent_loop_contract -q
+```
+
+结果：`6 passed in 1.58s`。
+
+说明：这是 prompt/contract structural regression，不是 live benchmark pass。
+下一步需要重新跑 live 单题来确认模型是否实际调用
+`finance.slot_bind` / `calculator.compute` / `finance.verify_numeric`。

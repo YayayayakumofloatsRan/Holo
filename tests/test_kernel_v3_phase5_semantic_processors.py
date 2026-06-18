@@ -200,6 +200,18 @@ def test_phase5_finance_prompt_exposes_numeric_verifier_tool_example():
     assert "a draft answer exists" in lowered
 
 
+def test_phase5_finance_prompt_names_numeric_verification_tool_sequence():
+    lowered = PLANNER_PROMPT_CONTRACT.lower()
+
+    assert "finance numeric verification" in lowered
+    assert "finance.slot_bind" in lowered
+    assert "calculator.compute" in lowered
+    assert "finance.verify_numeric" in lowered
+    assert "raw source numbers" in lowered
+    assert "requested derived metric" in lowered
+    assert "qualitative-only answer" in lowered
+
+
 def test_phase5_user_visible_text_guard_trims_only_stock_agreement_prefix():
     assert guard_user_visible_text("你说得对，这个 bug 在 prompt 层。") == "这个 bug 在 prompt 层。"
     assert guard_user_visible_text("You are right: this needs a host-side guard.") == "this needs a host-side guard."
@@ -1395,6 +1407,10 @@ def test_phase5_synthesizer_prompt_uses_evidence_and_citation_previews_not_raw_b
     assert "generic industry thresholds" in provider.last_prompt
     assert "comparison cutoffs" in provider.last_prompt
     assert "rule-of-thumb numbers" in provider.last_prompt
+    assert "finance.slot_bind" in provider.last_prompt
+    assert "calculator.compute" in provider.last_prompt
+    assert "finance.verify_numeric" in provider.last_prompt
+    assert "qualitative-only answer" in provider.last_prompt
     assert "capital intensity" in provider.last_prompt
     assert "source-backed threshold" in provider.last_prompt
     assert "begin with one short English core answer sentence" in provider.last_prompt

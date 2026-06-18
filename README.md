@@ -166,6 +166,18 @@ from legacy formula planning: in `finance-capability`, evaluator feedback no
 longer calls legacy `plan_finance_formula(...)`; it only reports model-visible
 tool requirements from question requirements and observed tool state. The wider
 regression passes (`91` loop/tool/profile tests and `311` finance-engine tests).
+The 2026-06-18 single-item live rerun
+`.state/kernel_v3/bench/finance/fb_debug50_o002_l001_current_single_20260618.jsonl`
+failed on `financebench_id_00499` with `numeric_outside_tolerance`: it acquired
+raw 3M FY2022 filing facts through SEC/document/artifact tools, but did not
+produce `calculator.compute`, FormulaTrace, transform-plan, or
+`finance.verify_numeric` observations for the requested derived ratios. The
+prompt/contract follow-up now explicitly tells the model the finance numeric
+verification tool sequence: retrieve/parse authoritative evidence, use
+`finance.slot_bind` for slot/formula binding, use `calculator.compute` or
+`data.table.query` for deterministic derived values, and use
+`finance.verify_numeric` before finalizing material numeric claims. Targeted
+prompt/contract structural tests pass; this is not a new live benchmark score.
 The 2026-06-17 follow-up tool-surface iteration is recorded in
 `docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md`. It adds
 `kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return

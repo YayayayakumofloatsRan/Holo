@@ -731,6 +731,17 @@ def test_assistant_turn_prompt_exposes_strict_finance_single_agent_loop_contract
         "calculator.compute or data.table.query" in item
         for item in loop_contract["required_for_finance_numeric_answers"]
     )
+    assert any(
+        "finance.verify_numeric on the draft answer" in item
+        for item in loop_contract["required_for_finance_numeric_answers"]
+    )
+    assert any(
+        "do not substitute raw source numbers" in item
+        for item in loop_contract["required_for_finance_numeric_answers"]
+    )
+    assert "calculator.compute FormulaTrace for derived finance numbers when the tool is available" in loop_contract["answer_output_contract"]["required_elements"]
+    assert "finance.verify_numeric observation for final material numeric claims when the tool is available" in loop_contract["answer_output_contract"]["required_elements"]
+    assert "calculator.compute and finance.verify_numeric observations" in loop_contract["stop_rule"]
     context_contract = prompt["context"]["state"]["agent_runtime_directive"]["finance_agent_loop_contract"]
     assert context_contract["finalization_boundary"].startswith("The host finalizer may synthesize")
     assert "debug50" not in json.dumps(loop_contract).lower()
