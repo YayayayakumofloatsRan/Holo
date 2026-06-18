@@ -33,7 +33,8 @@ from kernel_v3.agent.taskgraph import build_task_execution_plan, task_graph_from
 from kernel_v3.agent.workloop import WorkloopConfig, WorkloopEvaluator
 from kernel_v3.context import ArtifactStore, ContextPackCompiler, ProjectProfile, merge_context_budget
 from kernel_v3.contracts import CandidateAction, ContextBundle, Event, Feedback, JsonObject, Observation
-from kernel_v3.deep_loop import DeepAgentLoopController, ModelAssistantTurnPlanner
+from kernel_v3.deep_loop import ModelAssistantTurnPlanner
+from kernel_v3.mature_loop import MatureSingleAgentLoopController
 from kernel_v3.evaluator import Evaluator
 from kernel_v3.finance import (
     CALENDAR_DAYS_BETWEEN_TOOL_NAME,
@@ -8013,7 +8014,7 @@ def _composable_tool_timeout_seconds(recipe: TaskRecipe, *, key: str, default: i
 
 def _loop_controller_for_recipe(recipe: TaskRecipe):
     if _recipe_requests_deep_agent_loop(recipe):
-        return DeepAgentLoopController
+        return MatureSingleAgentLoopController
     return LangGraphLoopController if _recipe_requests_langgraph_loop(recipe) and langgraph_loop_available() else LoopControllerV3
 
 

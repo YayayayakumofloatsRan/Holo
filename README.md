@@ -196,6 +196,44 @@ The immediate live retry on the same `financebench_id_00499` still failed
 answer, but the model still did not convert compiled transform requirements
 into `calculator.compute` / FormulaTrace tool calls. This is diagnostic
 evidence, not benchmark progress.
+A follow-up live retry after the stronger calculator prompt still reported
+`calc=0`, `formula=0`, and `finance.verify_numeric=0`. The trace showed
+`max_network_fetches` from a final retrieval attempt ended the deep loop before
+local non-network tools could repair the answer. Kernel v3 now treats
+recoverable `max_network_fetches` inside deep tool batches as an observation
+and continuation signal when non-network tools remain available, matching the
+mature message-driven tool loop pattern: tool/guard results go back into the
+next model turn instead of becoming an immediate failure report.
+The next live retry exposed the adjacent budget problem: repeated
+`artifact.read/query` and SEC reads consumed the generic `max_tool_calls`
+budget before calculator/verifier tools appeared. Kernel v3 now preserves a
+small bounded recovery window for local numeric finalization tools
+(`calculator.compute`, `finance.slot_bind`, `finance.verify_numeric`,
+`data.table.query`, `math.sympy.compute`, `calendar.days_between`) after the
+generic tool budget is exhausted. This does not allow more evidence crawling;
+it only lets the model close an already-supported numeric answer with local
+deterministic tools.
+A later 2026-06-18 live probe showed that dynamically narrowing the next
+tool surface to only local numeric tools is the wrong abstraction: the model
+still produced no calculator/formula/verifier calls and a provider stream
+timeout led to no-progress termination. Kernel v3 now separates the live path
+from the old host name by introducing `kernel_v3/mature_loop.py` and routing
+`deep_agent_loop`/`assistant_turn` recipes to
+`MatureSingleAgentLoopController` (`runtime_backend=mature_single_agent_loop`).
+The mature loop keeps the full model-visible tool surface available, returns
+budget guards and provider/tool parse errors as observations, and uses bounded
+retry feedback instead of hiding tools from the model. Structural verification
+passes (`50` loop/runtime tests); this is architecture evidence, not a new
+FinanceBench/FQA score.
+The subsequent 3M FY2022 capital-intensity live failure was traced to
+evidence-to-slot binding rather than an impossible question: runtime state
+still missed `capital_expenditures` and `property_plant_and_equipment_net`,
+while the 3M 10-K raw fact ledger contained PP&E net text (`9,178`) and also
+showed false positives such as table-of-contents page numbers accepted as
+revenue/assets. `trace_metrics(...)` now emits diagnostic
+`problem_solving_flow` so stalled runs expose missing slots, repeated artifact
+loops, guard feedback, and whether calculator/verifier tools were reached.
+This is mature-loop observability, not benchmark progress.
 The 2026-06-17 follow-up tool-surface iteration is recorded in
 `docs/KERNEL_V3_FINANCE_TOOL_SURFACE_2026-06-17_ZH.md`. It adds
 `kernel_v3/finance/tool_catalog.py`, making `finance.toolchain.describe` return

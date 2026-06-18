@@ -1531,8 +1531,10 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
     calculator_tool_present = bool(calculator_observations)
     verifier_tool_present = bool(finance_verify_observations)
     toolchain_depth = int(retrieval_tool_present) + int(calculator_tool_present) + int(verifier_tool_present)
+    problem_solving_flow = _problem_solving_flow(records)
     return {
         "schema": "holo.kernel_v3.finance_trace_metrics.v1",
+        "problem_solving_flow": problem_solving_flow,
         "record_count": len(records),
         "processor_call_count": processor_usage.get("call_count", 0),
         "processor_error_count": processor_usage.get("failed_count", 0),
@@ -1661,6 +1663,246 @@ def trace_metrics(journal: JournalStore | None, *, task_id: str | None) -> JsonO
         "latest_failure_mode": retrieval.get("latest_failure_mode"),
         "latest_next_strategy_hint": retrieval.get("latest_next_strategy_hint"),
     }
+
+
+def _problem_solving_flow(records: list[object]) -> JsonObject:
+    steps: dict[str, JsonObject] = {}
+    latest_context_state: JsonObject = {}
+    latest_slot_frame: JsonObject = {}
+    latest_compiled_program: JsonObject = {}
+    latest_feedback: JsonObject = {}
+    latest_guard: JsonObject = {}
+    tool_counts: Counter[str] = Counter()
+    guard_counts: Counter[str] = Counter()
+    transition_counts: Counter[str] = Counter()
+
+    for record in records:
+        kind = str(getattr(record, "kind", "") or "")
+        step_id = str(getattr(record, "step_id", "") or "") or "final"
+        data = getattr(record, "data", None)
+        data = data if isinstance(data, dict) else {}
+        step = steps.setdefault(step_id, {"step_id": step_id})
+
+        if kind == "context":
+            state = data.get("state") if isinstance(data.get("state"), dict) else {}
+            latest_context_state = dict(state)
+            context_summary = _flow_context_summary(state)
+            if context_summary:
+                step["context"] = context_summary
+            continue
+
+        if kind == "action":
+            name = str(data.get("name") or "")
+            if data.get("kind") == "tool" and name:
+                tool_counts.update([name])
+                names = step.setdefault("action_tool_names", [])
+                if isinstance(names, list) and name not in names:
+                    names.append(name)
+            continue
+
+        if kind == "assistant_turn":
+            tool_calls = data.get("tool_calls") if isinstance(data.get("tool_calls"), list) else []
+            names = [
+                str(item.get("name"))
+                for item in tool_calls
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            ]
+            for name in names:
+                if name not in step.get("action_tool_names", []):
+                    tool_counts.update([name])
+            step["assistant_turn"] = {
+                "turn_id": data.get("turn_id"),
+                "runtime": data.get("loop_runtime"),
+                "stop_reason": data.get("stop_reason"),
+                "tool_call_count": len(tool_calls),
+                "tool_names": names[:12],
+                "final_answer_present": bool(data.get("final_answer")),
+                "message_preview": _preview(str(data.get("message") or ""), 240) if data.get("message") else None,
+            }
+            continue
+
+        if kind == "agent_loop_turn_result":
+            transition = str(data.get("transition") or "")
+            if transition:
+                transition_counts[transition] += 1
+            step["turn_result"] = {
+                "phase": data.get("phase"),
+                "transition": data.get("transition"),
+                "feedback_status": _json_object_value(data.get("feedback")).get("status"),
+                "guard_stop_reason": data.get("guard_stop_reason"),
+                "tool_kind_counts": _json_object_value(data.get("tool_kind_counts")),
+                "tool_status_counts": _json_object_value(data.get("tool_status_counts")),
+                "counters": _json_object_value(data.get("counters")),
+            }
+            continue
+
+        if kind == "feedback":
+            latest_feedback = dict(data)
+            step["feedback"] = {
+                "status": data.get("status"),
+                "stop_reason": data.get("stop_reason"),
+                "missing_evidence": _string_list(data.get("missing_evidence"))[:12],
+            }
+            continue
+
+        if kind == "guard":
+            latest_guard = dict(data)
+            reason = str(data.get("stop_reason") or "")
+            if reason:
+                guard_counts[reason] += 1
+            step["guard"] = {
+                "stop_reason": data.get("stop_reason"),
+                "continuation_allowed": data.get("continuation_allowed"),
+                "continuation_reason": data.get("continuation_reason"),
+                "tool_calls": data.get("tool_calls"),
+                "network_fetches": data.get("network_fetches"),
+                "remaining_budget_recovery_tools": _string_list(data.get("remaining_budget_recovery_tools"))[:12],
+            }
+            continue
+
+        if kind == "slot_frame":
+            latest_slot_frame = dict(data)
+            step["slot_frame"] = {
+                "task_type": data.get("task_type"),
+                "missing_slots": _string_list(data.get("missing_slots"))[:24],
+            }
+            continue
+
+        if kind == "compiled_task_program":
+            latest_compiled_program = dict(data)
+            step["compiled_task_program"] = {
+                "task_type": _compiled_task_type(data),
+                "missing_slots": _compiled_missing_slots(data)[:24],
+                "evidence_spec_count": _compiled_list_count(data, "evidence_specs"),
+                "transform_spec_count": _compiled_list_count(data, "transform_specs"),
+                "calculator_planned": _compiled_program_mentions_tool(data, "calculator.compute"),
+            }
+            continue
+
+        if kind == "finance_fact_ledger":
+            step["finance_fact_ledger"] = {
+                "fact_count": _int_value(data.get("fact_count")),
+                "primary_binding_status": _json_object_value(data.get("primary_source_numeric_binding")).get("status"),
+            }
+            continue
+
+        if kind == "transform_plan":
+            plans = step.setdefault("transform_plans", [])
+            if isinstance(plans, list):
+                plans.append(
+                    {
+                        "status": data.get("status"),
+                        "method": data.get("method"),
+                        "missing_slots": _string_list(data.get("missing_slots"))[:12],
+                    }
+                )
+            continue
+
+    ordered_steps = [steps[key] for key in sorted(steps, key=_flow_step_sort_key)]
+    selected_steps = ordered_steps[-24:]
+    latest_signals = _flow_latest_signals(
+        latest_context_state=latest_context_state,
+        latest_slot_frame=latest_slot_frame,
+        latest_compiled_program=latest_compiled_program,
+        latest_feedback=latest_feedback,
+        latest_guard=latest_guard,
+        tool_counts=tool_counts,
+    )
+    return {
+        "schema": "holo.kernel_v3.problem_solving_flow.v1",
+        "step_count": len(ordered_steps),
+        "steps": selected_steps,
+        "tool_counts": dict(tool_counts),
+        "guard_counts": dict(guard_counts),
+        "transition_counts": dict(transition_counts),
+        "latest_signals": latest_signals,
+        "host_boundary": (
+            "diagnostic trace only; it exposes model/tool-loop behavior but does not score or change the answer"
+        ),
+    }
+
+
+def _flow_context_summary(state: JsonObject) -> JsonObject:
+    toolchain = state.get("toolchain_state") if isinstance(state.get("toolchain_state"), dict) else {}
+    finance = state.get("finance_working_state") if isinstance(state.get("finance_working_state"), dict) else {}
+    replan = state.get("agent_replan_hints") if isinstance(state.get("agent_replan_hints"), dict) else {}
+    evidence = replan.get("latest_evidence_sufficiency") if isinstance(replan.get("latest_evidence_sufficiency"), dict) else {}
+    execution_program = replan.get("execution_program") if isinstance(replan.get("execution_program"), dict) else {}
+    tool_chain = execution_program.get("tool_chain_plan") if isinstance(execution_program.get("tool_chain_plan"), dict) else {}
+    return {
+        "toolchain_presence": _json_object_value(toolchain.get("toolchain_presence")),
+        "recent_tool_names": [
+            str(item.get("tool"))
+            for item in list(toolchain.get("recent_tool_actions") or [])[-8:]
+            if isinstance(item, dict) and item.get("tool")
+        ],
+        "repeated_tool_names": _string_list(toolchain.get("repeated_tool_names"))[:12],
+        "finance_missing_slots": _string_list(finance.get("missing_slots"))[:24],
+        "latest_evidence_missing": _string_list(evidence.get("missing"))[:12],
+        "latest_evidence_reason": evidence.get("reason"),
+        "execution_program_missing_slots": _string_list(execution_program.get("missing_slots"))[:24],
+        "tool_chain_next_tools": [
+            str(item.get("tool"))
+            for item in list(tool_chain.get("next_action_candidates") or [])[:8]
+            if isinstance(item, dict) and item.get("tool")
+        ],
+        "tool_chain_recommended_tools": [
+            str(item.get("tool"))
+            for item in list(tool_chain.get("recommended_steps") or [])[:8]
+            if isinstance(item, dict) and item.get("tool")
+        ],
+    }
+
+
+def _flow_latest_signals(
+    *,
+    latest_context_state: JsonObject,
+    latest_slot_frame: JsonObject,
+    latest_compiled_program: JsonObject,
+    latest_feedback: JsonObject,
+    latest_guard: JsonObject,
+    tool_counts: Counter[str],
+) -> JsonObject:
+    replan = latest_context_state.get("agent_replan_hints") if isinstance(latest_context_state.get("agent_replan_hints"), dict) else {}
+    latest_evidence = replan.get("latest_evidence_sufficiency") if isinstance(replan.get("latest_evidence_sufficiency"), dict) else {}
+    execution_program = replan.get("execution_program") if isinstance(replan.get("execution_program"), dict) else {}
+    missing_slots = _string_list(latest_slot_frame.get("missing_slots")) or _string_list(execution_program.get("missing_slots"))
+    transform_count = _compiled_list_count(latest_compiled_program, "transform_specs") or len(
+        [item for item in list(execution_program.get("transform_specs") or []) if isinstance(item, dict)]
+    )
+    flags: list[str] = []
+    if missing_slots:
+        flags.append("slots_still_missing")
+    if _string_list(latest_evidence.get("missing")):
+        flags.append("evidence_state_still_missing")
+    if transform_count and tool_counts.get("calculator.compute", 0) == 0:
+        flags.append("calculator_not_reached")
+    if tool_counts.get("artifact.read", 0) + tool_counts.get("artifact.query", 0) >= 8:
+        flags.append("artifact_loop_pressure")
+    if latest_guard.get("stop_reason"):
+        flags.append(f"latest_guard:{latest_guard.get('stop_reason')}")
+    return {
+        "flags": flags,
+        "latest_missing_slots": missing_slots[:24],
+        "latest_feedback_missing_evidence": _string_list(latest_feedback.get("missing_evidence"))[:12],
+        "latest_evidence_missing": _string_list(latest_evidence.get("missing"))[:12],
+        "transform_spec_count": transform_count,
+        "calculator_call_count": int(tool_counts.get("calculator.compute", 0)),
+        "artifact_read_or_query_count": int(tool_counts.get("artifact.read", 0) + tool_counts.get("artifact.query", 0)),
+        "latest_guard_stop_reason": latest_guard.get("stop_reason"),
+    }
+
+
+def _compiled_program_mentions_tool(program: JsonObject, tool_name: str) -> bool:
+    if not program:
+        return False
+    text = json.dumps(program, ensure_ascii=False)
+    return tool_name in text
+
+
+def _flow_step_sort_key(step_id: str) -> tuple[int, str]:
+    match = re.search(r"(\d+)", step_id)
+    return (int(match.group(1)) if match else 10**9, step_id)
 
 
 def _context_hygiene_metrics(records: list[object]) -> JsonObject:

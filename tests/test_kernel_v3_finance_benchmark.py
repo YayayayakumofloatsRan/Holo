@@ -1902,6 +1902,109 @@ def test_finance_trace_metrics_include_substrate_and_source_data() -> None:
     assert metrics["synthesis_gate_status"] == "passed"
     assert metrics["synthesis_gate_attempt_count"] == 2
     assert metrics["synthesis_gate_repaired"] is True
+    flow = metrics["problem_solving_flow"]
+    assert flow["schema"] == "holo.kernel_v3.problem_solving_flow.v1"
+    assert flow["tool_counts"]["retrieval.run"] == 1
+    assert flow["tool_counts"]["calculator.compute"] == 2
+    assert flow["latest_signals"]["latest_missing_slots"] == ["cogs"]
+    assert flow["latest_signals"]["calculator_call_count"] == 2
+    assert "slots_still_missing" in flow["latest_signals"]["flags"]
+    assert any(
+        step["step_id"] == "step-calc" and "calculator.compute" in step.get("action_tool_names", [])
+        for step in flow["steps"]
+    )
+
+
+def test_finance_trace_metrics_expose_problem_solving_flow_stalls() -> None:
+    journal = JournalStore.in_memory()
+    for index in range(8):
+        journal.append(
+            task_id="task-flow",
+            run_id="run-1",
+            step_id=f"step-{index + 1}",
+            kind="action",
+            data={"kind": "tool", "name": "artifact.read", "action_id": f"act-artifact-{index + 1}"},
+        )
+    journal.append(
+        task_id="task-flow",
+        run_id="run-1",
+        step_id="step-9",
+        kind="context",
+        data={
+            "context_id": "ctx-flow",
+            "state": {
+                "toolchain_state": {
+                    "toolchain_presence": {"artifact": True, "calculator": False},
+                    "recent_tool_actions": [{"tool": "artifact.read"}],
+                    "repeated_tool_names": ["artifact.read"],
+                },
+                "finance_working_state": {
+                    "missing_slots": ["capital_expenditures", "property_plant_and_equipment_net"],
+                },
+                "agent_replan_hints": {
+                    "latest_evidence_sufficiency": {
+                        "missing": ["retrieval_evidence", "citation_refs"],
+                        "reason": "missing_retrieval_evidence",
+                    },
+                    "execution_program": {
+                        "missing_slots": ["capital_expenditures", "property_plant_and_equipment_net"],
+                        "transform_specs": [{"name": "capex_to_revenue"}],
+                        "tool_chain_plan": {
+                            "recommended_steps": [{"tool": "calculator.compute"}],
+                            "next_action_candidates": [{"tool": "retrieval.run"}],
+                        },
+                    },
+                },
+            },
+        },
+    )
+    journal.append(
+        task_id="task-flow",
+        run_id="run-1",
+        step_id="step-10",
+        kind="slot_frame",
+        data={
+            "task_type": "compute",
+            "missing_slots": ["capital_expenditures", "property_plant_and_equipment_net"],
+        },
+    )
+    journal.append(
+        task_id="task-flow",
+        run_id="run-1",
+        step_id="step-11",
+        kind="feedback",
+        data={"status": "continue", "missing_evidence": ["tool_budget_guard:max_tool_calls"]},
+    )
+    journal.append(
+        task_id="task-flow",
+        run_id="run-1",
+        step_id="step-12",
+        kind="guard",
+        data={"stop_reason": "max_tool_calls", "tool_calls": 40},
+    )
+
+    metrics = trace_metrics(journal, task_id="task-flow")
+
+    flow = metrics["problem_solving_flow"]
+    flags = set(flow["latest_signals"]["flags"])
+    assert {
+        "slots_still_missing",
+        "evidence_state_still_missing",
+        "calculator_not_reached",
+        "artifact_loop_pressure",
+        "latest_guard:max_tool_calls",
+    }.issubset(flags)
+    assert flow["latest_signals"]["latest_missing_slots"] == [
+        "capital_expenditures",
+        "property_plant_and_equipment_net",
+    ]
+    assert flow["latest_signals"]["latest_feedback_missing_evidence"] == ["tool_budget_guard:max_tool_calls"]
+    assert flow["latest_signals"]["latest_evidence_missing"] == ["retrieval_evidence", "citation_refs"]
+    assert flow["latest_signals"]["transform_spec_count"] == 1
+    assert flow["latest_signals"]["calculator_call_count"] == 0
+    assert flow["latest_signals"]["artifact_read_or_query_count"] == 8
+    assert flow["guard_counts"] == {"max_tool_calls": 1}
+    assert flow["steps"][-4]["context"]["tool_chain_recommended_tools"] == ["calculator.compute"]
 
 
 def test_finance_trace_metrics_include_verify_numeric_tool_observation() -> None:

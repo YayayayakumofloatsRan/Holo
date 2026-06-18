@@ -502,6 +502,132 @@ def test_assistant_turn_prompt_exposes_visible_and_deferred_tool_surface() -> No
     assert "mental arithmetic" in numeric_protocol["finalization_guidance"]
 
 
+def test_assistant_turn_prompt_keeps_full_tool_surface_for_numeric_recovery() -> None:
+    context = ContextBundle(
+        context_id="ctx-tool-surface-recovery",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-tool-surface-recovery", "run_id": "run-1"},
+        token_budget=4096,
+    )
+    feedback = Feedback(
+        feedback_id="fb-tool-budget",
+        run_id="run-1",
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=[
+            "tool_budget_guard:max_tool_calls",
+            "continue_only_with_local_numeric_finalization_tools_if_semantically_possible",
+        ],
+    )
+    manifests = [
+        ToolManifest(
+            name="artifact.read",
+            version="1",
+            resource_kind="artifact",
+            operator_kind="read",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Read stored artifact payloads.",
+            input_schema={"artifact_id": {"type": "str", "required": True}},
+            runtime={"always_load": True, "read_only": True},
+        ),
+        ToolManifest(
+            name="artifact.query",
+            version="1",
+            resource_kind="artifact",
+            operator_kind="query",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Query stored artifacts.",
+            input_schema={"artifact_id": {"type": "str", "required": True}},
+            runtime={"always_load": True, "read_only": True},
+        ),
+        ToolManifest(
+            name="calculator.compute",
+            version="1",
+            resource_kind="math",
+            operator_kind="calculate",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Evaluate deterministic arithmetic formulas.",
+            input_schema={"expression": {"type": "str", "required": True}},
+            runtime={"always_load": True, "read_only": True},
+        ),
+        ToolManifest(
+            name="finance.verify_numeric",
+            version="1",
+            resource_kind="finance",
+            operator_kind="verify",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Verify numeric claims against finance facts and formula traces.",
+            input_schema={"answer": {"type": "str", "required": True}},
+            runtime={"always_load": True, "read_only": True},
+        ),
+        ToolManifest(
+            name="data.table.query",
+            version="1",
+            resource_kind="data",
+            operator_kind="query",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description="Run table operations over known local data.",
+            input_schema={"sql": {"type": "str", "required": True}},
+            runtime={"always_load": True, "read_only": True},
+        ),
+    ]
+
+    prompt = json.loads(
+        _assistant_turn_prompt(
+            context,
+            feedback,
+            allowed_tool_names={
+                "artifact.read",
+                "artifact.query",
+                "calculator.compute",
+                "finance.verify_numeric",
+                "data.table.query",
+            },
+            tool_manifests=manifests,
+        )
+    )
+
+    assert prompt["tool_surface_control"]["mode"] == "full_surface_with_budget_feedback"
+    assert prompt["tool_surface_control"]["full_tool_surface_remains_visible"] is True
+    assert prompt["continuation_contract"]["tool_surface_mode"] == "full_surface_with_budget_feedback"
+    assert prompt["continuation_contract"]["full_tool_surface_remains_visible"] is True
+    assert prompt["continuation_contract"]["budget_guard_observations_expected_for_exhausted_paths"] is True
+    assert set(prompt["allowed_tool_names"]) == {
+        "artifact.read",
+        "artifact.query",
+        "calculator.compute",
+        "data.table.query",
+        "finance.verify_numeric",
+    }
+    visible_names = {item["name"] for item in prompt["tool_surface"]["visible_tools"]}
+    deferred_names = {item["name"] for item in prompt["tool_surface"]["deferred_tools"]}
+    assert {
+        "artifact.read",
+        "artifact.query",
+        "calculator.compute",
+        "data.table.query",
+        "finance.verify_numeric",
+    }.issubset(visible_names | deferred_names)
+    assert prompt["numeric_verification_protocol"]["available_numeric_tools"] == [
+        "calculator.compute",
+        "data.table.query",
+        "finance.verify_numeric",
+    ]
+
+
 def test_assistant_turn_prompt_expands_context_requested_deferred_tool() -> None:
     context = ContextBundle(
         context_id="ctx-tool-surface-context-request",
@@ -918,6 +1044,94 @@ def test_streaming_planner_expands_finance_requirement_category_native_tools() -
     exposed = set(provider.parameters[0]["native_tool_name_map"].values())
     assert {"tool.discovery", "calculator.compute", "data.table.query"}.issubset(exposed)
     assert "data.table.query" not in {item["name"] for item in provider.parameters[0]["native_tool_deferred"]}
+
+
+def test_streaming_planner_keeps_full_native_tool_surface_for_numeric_recovery() -> None:
+    provider = _CaptureNativeToolSurfaceProvider()
+    planner = ModelAssistantTurnPlanner(
+        fabric=ProcessorFabric(providers={"streaming": provider}),
+        provider="streaming",
+        model="stream-model",
+        allowed_tool_names={"artifact.read", "artifact.query", "calculator.compute", "finance.verify_numeric"},
+        tool_manifests=[
+            ToolManifest(
+                name="artifact.read",
+                version="1",
+                resource_kind="artifact",
+                operator_kind="read",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Read stored artifact payloads.",
+                input_schema={"artifact_id": {"type": "str", "required": True}},
+                runtime={"always_load": True, "read_only": True},
+            ),
+            ToolManifest(
+                name="artifact.query",
+                version="1",
+                resource_kind="artifact",
+                operator_kind="query",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Query stored artifacts.",
+                input_schema={"artifact_id": {"type": "str", "required": True}},
+                runtime={"always_load": True, "read_only": True},
+            ),
+            ToolManifest(
+                name="calculator.compute",
+                version="1",
+                resource_kind="math",
+                operator_kind="calculate",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Evaluate deterministic arithmetic formulas.",
+                input_schema={"expression": {"type": "str", "required": True}},
+                runtime={"always_load": True, "read_only": True},
+            ),
+            ToolManifest(
+                name="finance.verify_numeric",
+                version="1",
+                resource_kind="finance",
+                operator_kind="verify",
+                side_effect_class="read",
+                permissions_required=[],
+                enabled=True,
+                description="Verify numeric claims against finance facts and formula traces.",
+                input_schema={"answer": {"type": "str", "required": True}},
+                runtime={"always_load": True, "read_only": True},
+            ),
+        ],
+        use_streaming=True,
+    )
+    context = ContextBundle(
+        context_id="ctx-native-recovery",
+        thread_key="thread",
+        event_ids=[],
+        memory_refs=[],
+        state={"task_id": "task-native-recovery", "run_id": "run-1"},
+        token_budget=4096,
+    )
+    feedback = Feedback(
+        feedback_id="fb-tool-budget",
+        run_id="run-1",
+        status="continue",
+        stop_reason=None,
+        answer=None,
+        missing_evidence=[
+            "tool_budget_guard:max_tool_calls",
+            "continue_only_with_local_numeric_finalization_tools_if_semantically_possible",
+        ],
+    )
+
+    stream = planner.stream_turn(context, feedback, step_id="step-1")
+    assert stream is not None
+    list(stream.events)
+
+    exposed = set(provider.parameters[0]["native_tool_name_map"].values())
+    assert exposed == {"artifact.read", "artifact.query", "calculator.compute", "finance.verify_numeric"}
+    assert provider.parameters[0].get("native_tool_deferred") == []
 
 
 def test_streaming_loop_executes_pending_workbench_followup_before_model_turn() -> None:
@@ -1506,6 +1720,235 @@ def test_deep_agent_loop_returns_parse_errors_as_observations_for_replanning() -
     ][0]
     assert batch.data["content"]["results"][0]["tool_call_id"] == "call-bad"
     assert batch.data["content"]["results"][0]["status"] == "failed"
+
+
+def test_deep_agent_loop_network_budget_guard_does_not_stop_local_tool_repair() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "retrieval.run",
+        _read_tool("retrieval"),
+        manifest=ToolManifest(
+            name="retrieval.run",
+            version="1",
+            resource_kind="web",
+            operator_kind="retrieve",
+            side_effect_class="network",
+            permissions_required=["network:fetch"],
+            enabled=True,
+            description="Fetch public evidence.",
+            input_schema={
+                "query": {"type": "str", "required": True},
+                "default_network_fetch_cost": 1,
+            },
+            runtime={"concurrency_safe": True, "read_only": True},
+        ),
+    )
+    registry.register("calculator.compute", _read_tool("calculator"))
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-network-over-budget",
+                message="try more retrieval",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-retrieval",
+                        name="retrieval.run",
+                        arguments={"query": "extra source"},
+                        reason="attempt one more source",
+                        side_effect_class="network",
+                    )
+                ],
+            ),
+            AssistantTurn(
+                turn_id="turn-local-calculator-repair",
+                message="network is exhausted; use local calculation",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-calculator",
+                        name="calculator.compute",
+                        arguments={"expression": "a / b", "variables": {"a": "10", "b": "2"}},
+                        reason="verify derived number with local calculator",
+                        side_effect_class="read",
+                    )
+                ],
+            ),
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}),
+        tool_registry=registry,
+        evaluator=FakeEvaluator(
+            [
+                {
+                    "status": "final_answer_ready",
+                    "stop_reason": "completed",
+                    "answer": "calculated locally",
+                    "missing_evidence": [],
+                },
+            ]
+        ),
+        max_steps=4,
+        max_tool_calls=4,
+        max_network_fetches=0,
+    )
+
+    result = loop.run("finish with local calculation after network budget is exhausted")
+
+    assert result.status == "completed"
+    assert result.answer == "calculated locally"
+    assert [action.name for action in registry.executed_actions] == ["calculator.compute"]
+    assert len(planner.calls) == 2
+    guards = journal.records(task_id=result.task_id, kind="guard")
+    assert guards[0].data["stop_reason"] == "max_network_fetches"
+    feedbacks = journal.records(task_id=result.task_id, kind="feedback")
+    assert feedbacks[0].data["status"] == "continue"
+    assert "local" in " ".join(feedbacks[0].data["missing_evidence"])
+    transitions = [
+        record.data["transition"]
+        for record in journal.records(task_id=result.task_id, kind="agent_loop_turn_result")
+    ]
+    assert "continue_guard" in transitions
+
+
+def test_deep_agent_loop_tool_call_budget_reserves_local_numeric_finalization() -> None:
+    registry = ToolRegistry()
+    registry.register("artifact.query", _read_tool("artifact"))
+    registry.register("calculator.compute", _read_tool("calculator"))
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-tool-budget-overrun",
+                message="try one more artifact query",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-artifact-query",
+                        name="artifact.query",
+                        arguments={"artifact_id": "artifact-1", "query": "net income"},
+                        reason="attempt another evidence read",
+                    )
+                ],
+            ),
+            AssistantTurn(
+                turn_id="turn-budget-reserved-calculator",
+                message="use reserved numeric finalization",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-calculator",
+                        name="calculator.compute",
+                        arguments={"expression": "a / b", "variables": {"a": "10", "b": "2"}},
+                        reason="verify derived number with local calculator",
+                    )
+                ],
+            ),
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("calculated after tool budget guard"),
+        max_steps=4,
+        max_tool_calls=0,
+    )
+
+    result = loop.run("finish with calculator after generic tool budget is exhausted")
+
+    assert result.status == "completed"
+    assert result.answer == "calculated after tool budget guard"
+    assert [action.name for action in registry.executed_actions] == ["calculator.compute"]
+    guards = journal.records(task_id=result.task_id, kind="guard")
+    assert guards[0].data["stop_reason"] == "max_tool_calls"
+    assert guards[0].data["continuation_reason"] == "general_tool_budget_exhausted_but_numeric_finalization_tools_remain"
+    assert guards[0].data["remaining_budget_recovery_tools"] == ["calculator.compute"]
+    feedbacks = journal.records(task_id=result.task_id, kind="feedback")
+    assert feedbacks[0].data["status"] == "continue"
+    assert "local_numeric_finalization" in " ".join(feedbacks[0].data["missing_evidence"])
+    transitions = [
+        record.data["transition"]
+        for record in journal.records(task_id=result.task_id, kind="agent_loop_turn_result")
+    ]
+    assert "continue_guard" in transitions
+
+
+def test_deep_agent_loop_retries_parse_error_after_tool_budget_guard() -> None:
+    registry = ToolRegistry()
+    registry.register("artifact.query", _read_tool("artifact"))
+    registry.register("calculator.compute", _read_tool("calculator"))
+    journal = JournalStore.in_memory()
+    planner = FakeTurnPlanner(
+        [
+            AssistantTurn(
+                turn_id="turn-tool-budget-overrun",
+                message="try one more artifact query",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-artifact-query",
+                        name="artifact.query",
+                        arguments={"artifact_id": "artifact-1", "query": "net income"},
+                        reason="attempt another evidence read",
+                    )
+                ],
+            ),
+            AssistantTurn(
+                turn_id="turn-provider-parse-error",
+                message=None,
+                tool_calls=[],
+                parse_errors=[
+                    ToolCallParseError(
+                        tool_call_id="provider-timeout",
+                        error="deepseek stream read exceeded 30s",
+                        raw_preview='{"error":"TimeoutError"}',
+                    )
+                ],
+            ),
+            AssistantTurn(
+                turn_id="turn-budget-reserved-calculator",
+                message="use reserved numeric finalization",
+                tool_calls=[
+                    ToolCallRequest(
+                        tool_call_id="call-calculator",
+                        name="calculator.compute",
+                        arguments={"expression": "a / b", "variables": {"a": "10", "b": "2"}},
+                        reason="verify derived number with local calculator",
+                    )
+                ],
+            ),
+        ]
+    )
+    loop = DeepAgentLoopController(
+        journal=journal,
+        context_compiler=ContextCompiler(),
+        planner=planner,
+        policy_gate=PolicyGate(permission="read_write"),
+        tool_registry=registry,
+        evaluator=FakeEvaluator.final_answer("calculated after provider retry"),
+        max_steps=5,
+        max_tool_calls=0,
+    )
+
+    result = loop.run("finish with calculator after tool budget guard and provider parse error")
+
+    assert result.status == "completed"
+    assert result.answer == "calculated after provider retry"
+    assert [action.name for action in registry.executed_actions] == ["calculator.compute"]
+    transitions = [
+        record.data["transition"]
+        for record in journal.records(task_id=result.task_id, kind="agent_loop_turn_result")
+    ]
+    assert "continue_guard" in transitions
+    assert "continue_provider_retry" in transitions
+    feedbacks = journal.records(task_id=result.task_id, kind="feedback")
+    assert any(
+        "retry_full_tool_surface_after_provider_parse_error" in record.data["missing_evidence"]
+        for record in feedbacks
+    )
 
 
 def test_deep_agent_loop_consumes_streamed_tool_call_delta() -> None:

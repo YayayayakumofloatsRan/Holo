@@ -1908,6 +1908,85 @@ HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
 benchmark 成绩。下一步重新跑 live 单题，观察模型是否因通用协议主动进入
 `calculator.compute` / verifier 路径。
 
+### 2026-06-18 参考成熟项目后的 guard/loop 改造
+
+参考项目的核心模式是 message-driven tool loop：
+
+- 模型输出 `tool_use` 后，host 执行工具；
+- 成功、失败、拒绝、取消都包装成 `tool_result` / observation 回到下一轮；
+- 只有没有 tool_use 时才进入完成/恢复判断；
+- 普通读取、搜索、fetch 失败不应杀掉整个 batch，只有强依赖的执行类错误才取消兄弟工具；
+- 下一轮输入应包含 previous messages + assistant tool_use + tool_results。
+
+本次 live retry 暴露 Holo 的偏差：`financebench_id_00499` 在 stronger
+calculator prompt 后仍然 `calc=0` / `formula=0` / `finance.verify_numeric=0`，
+trace 显示最后一次 `retrieval.run` 被 `max_network_fetches` guard 阻止后，
+deep loop 直接进入 failure report，没有把 guard observation 回灌给模型，
+也没有给 `calculator.compute`、`data.table.query`、`artifact.read`、
+`finance.verify_numeric` 这些本地非 network 工具继续修复的机会。
+
+已落地改造：
+
+- `kernel_v3/deep_loop.py`
+  - 对 deep tool batch 内的 `max_network_fetches` 做可恢复处理；
+  - 如果仍存在非 network enabled tools，并且没有触达 `max_steps`，则记录
+    guard，但生成 `continue` feedback；
+  - feedback 明确提示 `network_fetch_budget_exhausted` 和
+    `continue_with_local_non_network_tools_if_semantically_possible`；
+  - agent loop transition 记录为 `continue_guard`；
+  - 第一层修复仍让 `max_tool_calls`、`max_steps`、artifact bytes 等边界保持原语义；
+    后续 live 复测证明 `max_tool_calls` 也需要一个本地 numeric finalization
+    恢复窗口，见下方第二层改造。
+- `tests/test_kernel_v3_deep_agent_loop.py`
+  - 新增
+    `test_deep_agent_loop_network_budget_guard_does_not_stop_local_tool_repair`，
+    模拟网络工具被 guard 阻止后，下一轮仍能调用本地 `calculator.compute`
+    并完成。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+```
+
+结果：`42 passed in 3.63s`。
+
+说明：这是 agent loop 控制流修复，不是 benchmark 分数；下一步需要重新 live
+验证同一题是否从 `calc=0` 前进到 calculator / FormulaTrace / verifier 路径。
+
+live 复测结果：仍失败，`calc=0`、`formula=0`、`finance.verify_numeric=0`。
+但失败层发生变化：这次主要触发 `max_tool_calls`，模型把 40 次普通工具预算耗在
+`artifact.read` / `artifact.query` / `sec.edgar.financials` 上，最后没有预算留给
+calculator/verifier。该结果说明 network guard 修复不够，generic tool budget
+也会压死本地 numeric finalization。
+
+第二层改造：
+
+- `kernel_v3/deep_loop.py`
+  - 保留 `max_tool_calls` 作为普通工具硬预算；
+  - 但为本地 deterministic/numeric finalization tools 增加小的 bounded recovery
+    window，当前包含：
+    `calculator.compute`、`finance.slot_bind`、`finance.verify_numeric`、
+    `data.table.query`、`math.sympy.compute`、`calendar.days_between`；
+  - 不允许 `artifact.read` / `artifact.query` / retrieval / SEC 继续突破预算；
+  - 若 `max_tool_calls` 被普通工具触发且 numeric finalization tools 仍可用，
+    记录 guard，生成 `continue` feedback：
+    `continue_only_with_local_numeric_finalization_tools_if_semantically_possible`；
+  - 最多额外允许 8 次恢复工具调用，避免无限循环。
+- `tests/test_kernel_v3_deep_agent_loop.py`
+  - 新增
+    `test_deep_agent_loop_tool_call_budget_reserves_local_numeric_finalization`，
+    覆盖普通 artifact 查询被 `max_tool_calls` 阻止后，下一轮仍能执行
+    `calculator.compute`。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+```
+
+结果：`43 passed in 3.62s`。
+
 live 复测：
 
 ```bash
@@ -1959,3 +2038,197 @@ HOLO_V3_LIVE_MODEL=1 .venv/bin/python -m kernel_v3.cli bench finance \
   tool surface 之间的 action selection linkage 还不够强。后续应继续保持
   model-owned decision，但把这些上下文更直接地送到下一轮 assistant.turn，
   让模型看到“现在该调用 calculator.compute 的具体 payload schema 和输入候选”。
+
+## 10. Mature single-agent loop rewrite checkpoint
+
+时间点：2026-06-18 13:08 CST。
+
+用户明确要求停止在旧 host 上继续小修小补，优先照搬成熟项目的 agent loop
+语义，用 Python 在 Kernel v3 中改写成新的单 agent loop 边界。本轮对照的本地
+成熟项目仍是：
+
+```text
+/mnt/d/COURSES/人工智能算法实践/code-main/code-main
+```
+
+本轮确认成熟项目的关键语义不是金融专用逻辑，而是通用 host-loop 合同：
+
+- 模型只通过 assistant turn 产生 tool use / final answer；
+- host 对每个 tool use 做校验、执行、记录，并把成功或失败都作为 tool result /
+  observation 回灌到下一轮；
+- unknown tool、schema 错误、tool 执行异常、stream fallback、provider parse
+  error 不应让 host 直接崩掉，而应成为模型可见的错误观察；
+- streaming executor 根据工具并发安全属性调度；普通 read/network 失败不应取消
+  无关 sibling，shell/write/destructive 类失败才触发更强取消；
+- tool surface 应保持完整、模型可见，预算 guard 是 observation，不是 host
+  通过 prompt 隐藏工具面来替模型决策。
+
+对刚才失败路径的直接复盘：
+
+- 曾尝试过把 `max_tool_calls` 后的下一轮工具面缩窄为
+  `calculator.compute` / `finance.verify_numeric` 等本地 numeric tools。
+- live 结果显示该方向不成立：`calc=0`、`formula=0`、`finance.verify_numeric=0`，
+  且 provider stream timeout 后很快进入 repeated no-progress。
+- 这违背成熟项目语义：工具选择应由 LLM 在完整工具面上完成，host 只返回 guard /
+  error observations，并允许模型继续 replanning。
+
+已落地改造：
+
+- 新增 `kernel_v3/mature_loop.py`，定义
+  `MatureSingleAgentLoopController` 作为新的 Kernel v3 mature 单 agent loop
+  入口，`runtime_backend=mature_single_agent_loop`。
+- `kernel_v3/agent/runtime.py` 中，`finance-capability` 等仍以
+  `deep_agent_loop` / `assistant_turn` 作为兼容配置触发词，但实际返回
+  `MatureSingleAgentLoopController`，live 路径与旧 host 名义边界分离。
+- `ModelAssistantTurnPlanner` 和 `_assistant_turn_prompt(...)` 不再根据 recovery
+  feedback 动态缩窄 `allowed_tool_names`。native tool surface、prompt
+  `allowed_tool_names`、`tool_surface.visible/deferred` 都保持完整 registry 工具面。
+- 原 `tool_surface_override` 被替换为 `tool_budget_recovery_context`：
+  记录 full surface remains visible、preferred local recovery tools、budget
+  exhausted categories；它是模型可见上下文，不是 host 隐藏接口。
+- `continuation_contract` 从“只能调用 allowed_next_tools”改为
+  `full_surface_with_budget_feedback`：模型仍可选择任意 allowed tool，但超出已耗尽
+  预算的路径会收到 host guard observation。
+- provider/stream parse error 在本地 numeric recovery 后不再直接失败，而是生成
+  `retry_full_tool_surface_after_provider_parse_error` feedback 并继续下一轮。
+
+结构验证：
+
+```bash
+.venv/bin/python -m py_compile kernel_v3/mature_loop.py kernel_v3/agent/runtime.py kernel_v3/deep_loop.py
+.venv/bin/python -m pytest tests/test_kernel_v3_langgraph_loop.py tests/test_kernel_v3_deep_agent_loop.py -q
+```
+
+结果：
+
+- `50 passed in 3.92s`
+
+新增/更新覆盖：
+
+- finance-capability 的 loop controller 选择现在落到
+  `MatureSingleAgentLoopController`，而不是旧 `DeepAgentLoopController`。
+- recovery feedback 下，assistant prompt 仍保留完整 allowed tool names 和完整
+  visible/deferred tool surface。
+- streaming native tool surface 在 numeric recovery 下仍暴露 artifact/calculator/
+  verifier 等全量 allowed tools。
+- `max_tool_calls` guard 后如果下一轮 provider/parse error，loop 记录
+  `continue_provider_retry`，随后仍可执行 `calculator.compute` 完成。
+
+说明：
+
+- 这是架构边界和 agent-loop 合同修复，不是新的 FinanceBench / FinQA /
+  FinAgent 分数。
+- 下一步 live debug50 前，必须先使用新的 `mature_single_agent_loop` 路径跑单题，
+  检查日志里是否真的出现完整 tool surface、tool-result continuation、guard
+  observation 回灌，以及 calculator/verifier 是否由模型主动调用。
+
+## 11. 3M capital-intensity live failure root cause
+
+时间点：2026-06-18 13:30 CST。
+
+本节回答一个更精确的问题：在 `financebench_id_00499` 这道 3M FY2022
+capital-intensity 题里，到底是“题目证据确实缺”，还是“状态机/绑定层没有把已有
+证据变成可计算输入”。
+
+结论：
+
+- 对模型当轮可见的 compute-ready state 来说，确实缺：
+  `slot_frame ledger-128765` 和 `compiled_task_program ledger-128764` 都记录
+  `missing_slots=["capital_expenditures","property_plant_and_equipment_net"]`。
+- 对源文件/已下载材料来说，不应该缺：同一份 3M FY2022 10-K 已经进入
+  `finance_fact_ledger ledger-128759`，其中 raw facts 有 PP&E net 候选，但没有
+  被正确 period-bind；capex 则没有被正确抽成 `1,749`。
+- 因此模型没有调用 `calculator.compute` 的直接原因是“没有可靠绑定后的输入”；
+  但系统仍然有问题，因为 evidence -> fact -> slot -> compute-ready 的状态推进
+  没有完成，而且还产生了明显 false positive。
+
+本次 live 结果：
+
+- result:
+  `.state/kernel_v3/bench/finance/fb_debug50_o002_l001_mature_loop_20260618.jsonl`
+- summary:
+  `.state/kernel_v3/bench/finance/fb_debug50_o002_l001_mature_loop_20260618.summary.json`
+- item: `financebench_id_00499`
+- status: `failed`
+- reason: `numeric_outside_tolerance`
+- tokens: `407,063`
+- `finance_fact_count=242`
+- `compiled_transform_spec_count=8`
+- `missing_slots=["capital_expenditures","property_plant_and_equipment_net"]`
+- `calculator_call_count=0`
+- `formula_trace_count=0`
+- `finance_verify_numeric_tool_call_count=0`
+- `transform_plan_count=0`
+- tool observations: `artifact.read=29`, `sec.edgar.financials=7`,
+  `document.docling.convert=1`, `sec.edgar.company_filings=1`
+
+关键证据：
+
+- `ledger-128759` 中存在 PP&E net raw candidate：
+  `fact_id=finfact-natural-e7748c110555`，`metric="property plant and equipment net"`，
+  raw `9,178`，context 包含
+  `Property, plant and equipment — net 9,178 9,429` 和
+  `Total assets $ 46,455 $ 47,072`。但它的 `fiscal_year=null`，
+  `target_document_binding_accepted=false`，reason 为
+  `target_period_missing_or_mismatch`。
+- 同一 ledger 没有正确的 capex `1,749` / `1749000000` 命中。capex 候选主要是
+  CIK/文档编号噪声、`3M` 被数值化、environmental capital projects `$317
+  million`，以及非目标年度聚合 `$646 million`。
+- OCF 真值 `5,591` 出现在 cash-flow context：
+  `Net cash provided by (used in) operating activities $ 5,591 $ 7,454`，但对应 fact
+  被标成 `accounts payable` 且 period 未绑定；系统反而接受了
+  `operating cash flow = 1,863 million`，这是“cash flows provided by operating
+  activities decreased $1,863 million”的同比下降额。
+- revenue/assets 有 false positive：`revenue=59` 和 `assets=63` 来自 Table of
+  Contents 的页码 `Note 2. Revenue 59`、`Goodwill and Intangible Assets 63`，
+  却被 target-period gate 误接受。
+
+判断：
+
+- 这不是题目不可解；3M 10-K 公开材料有足够信息。
+- 这也不是单纯“LLM 不愿意调用 calculator”；当时 slot 状态没有给出可靠
+  `capital_expenditures` 和 `property_plant_and_equipment_net`，模型不计算在局部上
+  是合理的。
+- 真正问题在通用状态机/绑定层：
+  1. natural/table extraction 没有可靠识别财报表格行和年度列；
+  2. fact ledger 没有把 raw text candidate 提升为 slot candidate；
+  3. false positives 可以进入 accepted facts；
+  4. compiled transform specs 存在，但没有生成 model-visible
+     compute-ready transition；
+  5. verifier/synthesis gate 没有强制阻断“没有 calculator/FormulaTrace 的数值型
+     capital-intensity final answer”。
+
+已补充的可观测性改造：
+
+- `kernel_v3/bench/finance.py` 的 `trace_metrics(...)` 现在包含
+  `problem_solving_flow`，这是诊断 trace，不参与 scoring，也不改变答案。
+- 它按 step 暴露：
+  - context 中的 `toolchain_state`、`finance_working_state`、evidence sufficiency；
+  - action / assistant_turn 中实际调用过的工具；
+  - guard / feedback / turn_result；
+  - latest signals，如 `slots_still_missing`、`calculator_not_reached`、
+    `artifact_loop_pressure`、`latest_guard:max_tool_calls`。
+- 测试覆盖：
+
+```bash
+.venv/bin/python -m py_compile kernel_v3/bench/finance.py
+.venv/bin/python -m pytest \
+  tests/test_kernel_v3_langgraph_loop.py \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_trace_metrics_include_substrate_and_source_data \
+  tests/test_kernel_v3_finance_benchmark.py::test_finance_trace_metrics_expose_problem_solving_flow_stalls -q
+```
+
+结果：
+
+- `52 passed in 3.93s`
+
+下一步优化方向：
+
+- 不应该继续加全局大预算。更大的无差别预算只会让模型继续读 artifact。
+- 应该修 `evidence -> slot` 的通用桥：
+  - 表格行/列绑定；
+  - fiscal period inference；
+  - page-number / delta / charge / CIK 等数值噪声过滤；
+  - missing slot candidate surfacing；
+  - slot complete 后显式进入 calculator/verifier phase。

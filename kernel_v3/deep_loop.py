@@ -77,6 +77,15 @@ final_answer. Do not include markdown fences or prose outside JSON."""
 
 
 _MAX_PROVIDER_TOOL_RESULT_CONTINUATIONS = 16
+_TOOL_CALL_BUDGET_RECOVERY_ALLOWANCE = 8
+_TOOL_CALL_BUDGET_RECOVERY_TOOL_NAMES = {
+    "calculator.compute",
+    "finance.slot_bind",
+    "finance.verify_numeric",
+    "data.table.query",
+    "math.sympy.compute",
+    "calendar.days_between",
+}
 
 
 @dataclass(frozen=True)
@@ -272,6 +281,7 @@ class ModelAssistantTurnPlanner:
                 result.setdefault("tool_choice", "auto")
             return result
 
+        stream_timeout_seconds = _assistant_stream_timeout_seconds(context, feedback)
         stream_parameters = stream_parameters_for(requested_tool_names)
         provider_messages = [{"role": "user", "content": prompt}]
 
@@ -292,6 +302,7 @@ class ModelAssistantTurnPlanner:
                 step_id=step_id,
                 provider=self.provider,
                 model=self.model,
+                timeout_seconds=stream_timeout_seconds,
                 parameters=stream_parameters_for(
                     continuation_requested_tool_names,
                     continuation=True,
@@ -311,6 +322,7 @@ class ModelAssistantTurnPlanner:
                 step_id=step_id,
                 provider=self.provider,
                 model=self.model,
+                timeout_seconds=stream_timeout_seconds,
                 parameters=stream_parameters,
             ),
             tool_name_map=mutable_tool_name_map,
@@ -501,7 +513,74 @@ class DeepAgentLoopController(LoopControllerV3):
                     ],
                 )
                 batch_guard_reason = self._tool_batch_guard_stop_reason(aggregate)
+                if self._can_continue_after_parse_error_batch(
+                    current_feedback,
+                    execution_items=execution_items,
+                    step_index=step_index,
+                ):
+                    current_feedback = self._recoverable_parse_error_feedback(task.run_id, current_feedback)
+                    self._append_feedback_record(task, current_feedback, step_id=step_id, observation=aggregate)
+                    self._append_agent_loop_turn_result(
+                        task,
+                        turn=turn,
+                        feedback=current_feedback,
+                        step_id=step_id,
+                        phase=step_phase,
+                        transition="continue_provider_retry",
+                        observation=step_observation,
+                        execution_items=step_execution_items,
+                        tool_calls=tool_calls,
+                        network_fetches=network_fetches,
+                        total_artifact_bytes=total_artifact_bytes,
+                    )
+                    continue
                 if batch_guard_reason is not None:
+                    if self._can_continue_after_tool_batch_guard(
+                        batch_guard_reason,
+                        step_index=step_index,
+                        tool_calls=tool_calls,
+                    ):
+                        current_feedback = self._recoverable_network_guard_feedback(
+                            task.run_id,
+                            batch_guard_reason,
+                        )
+                        self._append_feedback_record(task, current_feedback, step_id=step_id, observation=aggregate)
+                        if batch_guard_reason == "max_tool_calls":
+                            self._append_tool_budget_recovery_context(
+                                task,
+                                step_id=step_id,
+                                reason=batch_guard_reason,
+                            )
+                        self._append_guard(
+                            task,
+                            batch_guard_reason,
+                            step_id=step_id,
+                            data={
+                                "tool_batch_count": len(execution_items),
+                                "tool_calls": tool_calls,
+                                "network_fetches": network_fetches,
+                                "source": "deep_tool_batch_result",
+                                "continuation_allowed": True,
+                                "continuation_reason": self._guard_continuation_reason(batch_guard_reason),
+                                "remaining_non_network_tools": self._non_network_tool_names(),
+                                "remaining_budget_recovery_tools": self._tool_call_budget_recovery_tool_names(),
+                            },
+                        )
+                        self._append_agent_loop_turn_result(
+                            task,
+                            turn=turn,
+                            feedback=current_feedback,
+                            step_id=step_id,
+                            phase=step_phase,
+                            transition="continue_guard",
+                            observation=step_observation,
+                            execution_items=step_execution_items,
+                            guard_stop_reason=batch_guard_reason,
+                            tool_calls=tool_calls,
+                            network_fetches=network_fetches,
+                            total_artifact_bytes=total_artifact_bytes,
+                        )
+                        continue
                     current_feedback = self._limit_feedback(task.run_id, batch_guard_reason)
                     self._append_feedback_record(task, current_feedback, step_id=step_id, observation=aggregate)
                     self._append_guard(
@@ -641,6 +720,28 @@ class DeepAgentLoopController(LoopControllerV3):
                 return turn
         action = planner.propose(context, feedback)
         return _assistant_turn_from_action(action)
+
+    def _pre_execution_guard(
+        self,
+        action: CandidateAction,
+        *,
+        manifest: ToolManifest | None,
+        tool_calls: int,
+        network_fetches: int,
+    ) -> str | None:
+        reason = super()._pre_execution_guard(
+            action,
+            manifest=manifest,
+            tool_calls=tool_calls,
+            network_fetches=network_fetches,
+        )
+        if reason == "max_tool_calls" and self._is_tool_call_budget_recovery_action(
+            action,
+            manifest=manifest,
+            tool_calls=tool_calls,
+        ):
+            return None
+        return reason
 
     def _try_execute_streaming_turn(
         self,
@@ -1792,6 +1893,46 @@ class DeepAgentLoopController(LoopControllerV3):
             state_delta={"feedback_status": feedback.status},
         )
 
+    def _append_tool_budget_recovery_context(self, task: TaskState, *, step_id: str, reason: str) -> None:
+        preferred_recovery_tools = self._tool_call_budget_recovery_tool_names()
+        self.journal.append(
+            task_id=task.task_id,
+            run_id=task.run_id,
+            step_id=step_id,
+            kind="tool_context_update",
+            data=redact_journal_data(
+                {
+                    "schema": "holo.kernel_v3.tool_context_update.v1",
+                    "update_id": f"tool-budget-recovery-{step_id}",
+                    "update_type": "tool_budget_recovery_context",
+                    "tool": "deep_agent_loop",
+                    "status": "active",
+                    "hints": {
+                        "mode": "full_surface_with_budget_feedback",
+                        "trigger_reason": reason,
+                        "full_tool_surface_remains_visible": True,
+                        "preferred_local_recovery_tools": preferred_recovery_tools,
+                        "budget_exhausted_categories": ["general_tool_calls"],
+                        "next_turn_contract": (
+                            "Expose the normal tool surface again. The host may return guard observations for calls "
+                            "that still exceed exhausted budgets; the model should choose a viable local calculation, "
+                            "table, slot-bind, verifier, or evidence-reuse path when enough inputs are already observed."
+                        ),
+                    },
+                    "host_boundary": (
+                        "mature message-driven tool loop state: guard results are model-visible observations; "
+                        "the runtime does not hide registered tools from the model as a recovery shortcut"
+                    ),
+                }
+            ),
+            event_ref=self._last_ref(task.task_id, "event_ref"),
+            state_delta={
+                "tool_context_update": "tool_budget_recovery_context",
+                "tool_surface_mode": "full_surface_with_budget_feedback",
+                "stop_reason": reason,
+            },
+        )
+
     def _append_agent_loop_turn_result(
         self,
         task: TaskState,
@@ -1907,6 +2048,129 @@ class DeepAgentLoopController(LoopControllerV3):
             return None
         content = observation.content if isinstance(observation.content, dict) else {}
         return _host_budget_guard_reason_from_batch_payload(content)
+
+    def _can_continue_after_tool_batch_guard(self, reason: str, *, step_index: int, tool_calls: int) -> bool:
+        if reason not in {"max_network_fetches", "max_tool_calls"}:
+            return False
+        if self.max_steps is not None and step_index >= self.max_steps:
+            return False
+        if reason == "max_network_fetches":
+            return bool(self._non_network_tool_names())
+        if self.max_tool_calls is not None and tool_calls >= self.max_tool_calls + _TOOL_CALL_BUDGET_RECOVERY_ALLOWANCE:
+            return False
+        return bool(self._tool_call_budget_recovery_tool_names())
+
+    def _recoverable_network_guard_feedback(self, run_id: str, reason: str) -> Feedback:
+        if reason == "max_tool_calls":
+            missing_evidence = [
+                f"tool_budget_guard:{reason}",
+                "general_tool_call_budget_exhausted",
+                "continue_only_with_local_numeric_finalization_tools_if_semantically_possible",
+                "use_calculator_table_slot_bind_or_domain_verifier_before_failure_report",
+            ]
+        else:
+            missing_evidence = [
+                f"network_budget_guard:{reason}",
+                "network_fetch_budget_exhausted",
+                "continue_with_local_non_network_tools_if_semantically_possible",
+                "use_existing_observations_artifacts_calculator_table_or_domain_verifier_before_failure_report",
+            ]
+        return Feedback(
+            feedback_id=f"fb-{run_id}-{reason}-local-tool-recovery",
+            run_id=run_id,
+            status="continue",
+            stop_reason=None,
+            answer=None,
+            missing_evidence=missing_evidence,
+        )
+
+    def _can_continue_after_parse_error_batch(
+        self,
+        feedback: Feedback | None,
+        *,
+        execution_items: list[_ToolExecutionItem],
+        step_index: int,
+    ) -> bool:
+        if self.max_steps is not None and step_index >= self.max_steps:
+            return False
+        if not _feedback_requests_local_numeric_finalization(feedback):
+            return False
+        if not execution_items:
+            return False
+        return all(_execution_item_is_parse_error(item) for item in execution_items)
+
+    def _recoverable_parse_error_feedback(self, run_id: str, prior_feedback: Feedback | None) -> Feedback:
+        missing_evidence = [
+            "provider_stream_or_tool_call_parse_error",
+            "retry_full_tool_surface_after_provider_parse_error",
+            "tool_budget_guard:max_tool_calls",
+            "general_tool_call_budget_exhausted",
+            "continue_only_with_local_numeric_finalization_tools_if_semantically_possible",
+            "use_calculator_table_slot_bind_or_domain_verifier_before_failure_report",
+        ]
+        if prior_feedback is not None:
+            missing_evidence.extend(str(item) for item in prior_feedback.missing_evidence if str(item))
+        return Feedback(
+            feedback_id=f"fb-{run_id}-provider-parse-error-local-tool-retry",
+            run_id=run_id,
+            status="continue",
+            stop_reason=None,
+            answer=None,
+            missing_evidence=_ordered_unique_strings(missing_evidence),
+        )
+
+    def _non_network_tool_names(self) -> list[str]:
+        names: list[str] = []
+        for manifest in self.tool_registry.manifests():
+            if not manifest.enabled:
+                continue
+            if manifest.name.startswith("__"):
+                continue
+            if manifest.side_effect_class == "network":
+                continue
+            names.append(manifest.name)
+        return sorted(names)
+
+    def _tool_call_budget_recovery_tool_names(self) -> list[str]:
+        names: list[str] = []
+        for manifest in self.tool_registry.manifests():
+            if not self._is_budget_recovery_manifest(manifest):
+                continue
+            names.append(manifest.name)
+        return sorted(names)
+
+    def _is_tool_call_budget_recovery_action(
+        self,
+        action: CandidateAction,
+        *,
+        manifest: ToolManifest | None,
+        tool_calls: int,
+    ) -> bool:
+        if self.max_tool_calls is None:
+            return False
+        if tool_calls >= self.max_tool_calls + _TOOL_CALL_BUDGET_RECOVERY_ALLOWANCE:
+            return False
+        if action.kind != "tool":
+            return False
+        if action.side_effect_class not in {"none", "read"}:
+            return False
+        if manifest is None or not self._is_budget_recovery_manifest(manifest):
+            return False
+        return True
+
+    def _is_budget_recovery_manifest(self, manifest: ToolManifest) -> bool:
+        if not manifest.enabled:
+            return False
+        if manifest.name not in _TOOL_CALL_BUDGET_RECOVERY_TOOL_NAMES:
+            return False
+        if manifest.side_effect_class == "network":
+            return False
+        return True
+
+    def _guard_continuation_reason(self, reason: str) -> str:
+        if reason == "max_tool_calls":
+            return "general_tool_budget_exhausted_but_numeric_finalization_tools_remain"
+        return "network_budget_exhausted_but_non_network_tools_available"
 
     def _execution_items_guard_stop_reason(self, execution_items: list[_ToolExecutionItem]) -> str | None:
         for item in execution_items:
@@ -2670,6 +2934,12 @@ def _assistant_turn_prompt(
     allowed_tool_names: set[str],
     tool_manifests: list[ToolManifest] | None = None,
 ) -> str:
+    allowed_tool_names = set(allowed_tool_names)
+    tool_surface_control = _tool_surface_control_for_turn(
+        context,
+        feedback,
+        allowed_tool_names=allowed_tool_names,
+    )
     requested_tool_names = _context_requested_tool_names(
         context,
         allowed_tool_names=allowed_tool_names,
@@ -2679,9 +2949,13 @@ def _assistant_turn_prompt(
         "single_agent_tool_loop_contract": _single_agent_tool_loop_contract_for_turn(context),
         "context": _compact_context_for_turn(context),
         "feedback": feedback.to_dict() if feedback is not None else None,
-        "continuation_contract": _feedback_continuation_contract(feedback),
+        "continuation_contract": _feedback_continuation_contract(
+            feedback,
+            allowed_tool_names=allowed_tool_names,
+        ),
         "numeric_verification_protocol": _numeric_verification_protocol_for_turn(allowed_tool_names),
         "allowed_tool_names": sorted(allowed_tool_names),
+        "tool_surface_control": tool_surface_control,
         "tool_surface": _assistant_turn_tool_surface(
             tool_manifests or [],
             allowed_tool_names=allowed_tool_names,
@@ -2701,6 +2975,67 @@ def _assistant_turn_prompt(
     }
     sanitized = apply_provider_message_replacement_view(payload)
     return json.dumps(sanitized, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _tool_surface_control_for_turn(
+    context: ContextBundle,
+    feedback: Feedback | None,
+    *,
+    allowed_tool_names: set[str],
+) -> JsonObject:
+    del context
+    if not _feedback_requests_local_numeric_finalization(feedback):
+        return {
+            "schema": "holo.kernel_v3.tool_surface_control.v1",
+            "mode": "normal",
+            "allowed_tool_names": sorted(allowed_tool_names),
+        }
+    preferred_recovery_tools = sorted(name for name in allowed_tool_names if name in _TOOL_CALL_BUDGET_RECOVERY_TOOL_NAMES)
+    return {
+        "schema": "holo.kernel_v3.tool_surface_control.v1",
+        "mode": "full_surface_with_budget_feedback",
+        "trigger": "recoverable_max_tool_calls_guard",
+        "allowed_tool_names": sorted(allowed_tool_names),
+        "full_tool_surface_remains_visible": True,
+        "preferred_local_recovery_tools": preferred_recovery_tools,
+        "budget_exhausted_categories": ["general_tool_calls"],
+        "host_rule": (
+            "The runtime keeps the normal tool surface visible. Host budget guards may return error observations "
+            "for calls that still exceed exhausted budgets; use observed evidence plus local deterministic tools "
+            "when semantically possible, or identify the exact remaining input gap."
+        ),
+    }
+
+
+def _assistant_stream_timeout_seconds(context: ContextBundle, feedback: Feedback | None) -> int | None:
+    if _feedback_requests_local_numeric_finalization(feedback):
+        return 120
+    budget = context.state.get("agent_recipe") if isinstance(context.state, dict) else {}
+    if isinstance(budget, dict):
+        metadata = budget.get("metadata")
+        if isinstance(metadata, dict):
+            processor_budget = metadata.get("processor_budget")
+            if isinstance(processor_budget, dict):
+                value = processor_budget.get("assistant_turn_timeout_seconds")
+                try:
+                    parsed = int(value)
+                except (TypeError, ValueError):
+                    parsed = 0
+                if parsed > 0:
+                    return parsed
+    return None
+
+
+def _feedback_requests_local_numeric_finalization(feedback: Feedback | None) -> bool:
+    if feedback is None or feedback.status != "continue":
+        return False
+    markers = {str(item).strip().casefold() for item in feedback.missing_evidence if str(item).strip()}
+    normalized = {item.replace("_", " ").replace("-", " ") for item in markers}
+    return (
+        "tool_budget_guard:max_tool_calls" in markers
+        or "continue only with local numeric finalization tools if semantically possible" in normalized
+        or "use calculator table slot bind or domain verifier before failure report" in normalized
+    )
 
 
 def _numeric_verification_protocol_for_turn(allowed_tool_names: set[str]) -> JsonObject:
@@ -2949,11 +3284,17 @@ def _compact_tool_schema_value(value: object, *, depth: int) -> object:
     return str(value)[:220]
 
 
-def _feedback_continuation_contract(feedback: Feedback | None) -> JsonObject:
+def _feedback_continuation_contract(
+    feedback: Feedback | None,
+    *,
+    allowed_tool_names: set[str] | None = None,
+) -> JsonObject:
     if feedback is None or feedback.status != "continue":
         return {}
+    allowed = set(allowed_tool_names or set())
     missing = [str(item) for item in feedback.missing_evidence if str(item)]
     normalized = {item.lower().replace("_", " ").replace("-", " ") for item in missing}
+    local_numeric_only = _feedback_requests_local_numeric_finalization(feedback)
     requires_tool = any(
         marker in normalized
         for marker in (
@@ -2968,16 +3309,32 @@ def _feedback_continuation_contract(feedback: Feedback | None) -> JsonObject:
             "calculator required before final",
             "transform work required",
         )
-    )
-    return {
-        "feedback_status": "continue",
-        "must_not_finalize_without_new_tool_observation": requires_tool,
-        "missing_evidence": missing[:24],
-        "instruction": (
+    ) or local_numeric_only
+    if local_numeric_only:
+        next_tools = sorted(name for name in allowed if name in _TOOL_CALL_BUDGET_RECOVERY_TOOL_NAMES)
+        instruction = (
+            "The general tool-call budget guard was observed. The full tool surface remains visible, but calls "
+            "that still exceed exhausted budgets may return host guard observations. If enough inputs are already "
+            "supported, prefer local deterministic tools such as calculator.compute, data.table.query, "
+            "finance.slot_bind, finance.verify_numeric, math.sympy.compute, or calendar.days_between; otherwise "
+            "state the exact missing input or choose another viable allowed tool path."
+        )
+    else:
+        next_tools = []
+        instruction = (
             "Choose one or more allowed tool_calls now. Do not return final_answer until the missing work is resolved by new observations."
             if requires_tool
             else "Continue reasoning from feedback; prefer tool_calls when evidence, computation, or verification is still missing."
-        ),
+        )
+    return {
+        "feedback_status": "continue",
+        "must_not_finalize_without_new_tool_observation": requires_tool,
+        "tool_surface_mode": "full_surface_with_budget_feedback" if local_numeric_only else "normal",
+        "preferred_local_recovery_tools": next_tools,
+        "full_tool_surface_remains_visible": True,
+        "budget_guard_observations_expected_for_exhausted_paths": local_numeric_only,
+        "missing_evidence": missing[:24],
+        "instruction": instruction,
     }
 
 
