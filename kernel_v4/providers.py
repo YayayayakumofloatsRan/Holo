@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import http.client
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -117,12 +119,32 @@ class OpenAICompatibleChatProvider:
         )
         text_parts: list[str] = []
         tool_deltas: dict[int, _StreamingToolCallBuilder] = {}
-        for chunk in self._post_sse_json_with_retries(
-            self._completion_url(),
-            self._api_key(),
-            payload,
-            self.timeout_seconds,
-        ):
+        chunk_queue: asyncio.Queue[object] = asyncio.Queue()
+        sentinel = object()
+        loop = asyncio.get_running_loop()
+        producer_thread = threading.Thread(
+            target=_produce_sse_chunks,
+            args=(
+                self._post_sse_json_with_retries(
+                    self._completion_url(),
+                    self._api_key(),
+                    payload,
+                    self.timeout_seconds,
+                ),
+                loop,
+                chunk_queue,
+                sentinel,
+            ),
+            daemon=True,
+        )
+        producer_thread.start()
+        while True:
+            queued = await chunk_queue.get()
+            if queued is sentinel:
+                break
+            if isinstance(queued, BaseException):
+                raise queued
+            chunk = queued if isinstance(queued, dict) else {}
             for choice in _choices(chunk):
                 delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
                 content = delta.get("content")
@@ -133,11 +155,17 @@ class OpenAICompatibleChatProvider:
                     index = _tool_delta_index(raw_tool)
                     builder = tool_deltas.setdefault(index, _StreamingToolCallBuilder(index=index))
                     builder.apply(raw_tool)
+                    call = builder.take_if_complete(name_map=name_map)
+                    if call is not None:
+                        yield ModelEvent(event_type="tool_call", tool_call=call)
                 finish_reason = choice.get("finish_reason")
                 if isinstance(finish_reason, str) and finish_reason:
                     break
         for index in sorted(tool_deltas):
-            call = tool_deltas[index].to_tool_call(name_map=name_map)
+            builder = tool_deltas[index]
+            if builder.emitted:
+                continue
+            call = builder.to_tool_call(name_map=name_map)
             if call is not None:
                 yield ModelEvent(event_type="tool_call", tool_call=call)
         yield ModelEvent(
@@ -317,6 +345,7 @@ class _StreamingToolCallBuilder:
     tool_call_id: str = ""
     name: str = ""
     arguments: str = ""
+    emitted: bool = False
 
     def apply(self, delta: JsonObject) -> None:
         call_id = delta.get("id")
@@ -341,6 +370,25 @@ class _StreamingToolCallBuilder:
             parsed = {"_raw_arguments": self.arguments, "_parse_error": "json_decode_error"}
         if not isinstance(parsed, dict):
             parsed = {"value": parsed}
+        return ToolCall(
+            tool_call_id=self.tool_call_id or f"tool-call-{self.index}",
+            name=real_name,
+            input=parsed,
+        )
+
+    def take_if_complete(self, *, name_map: dict[str, str]) -> ToolCall | None:
+        if self.emitted or not self.name:
+            return None
+        try:
+            parsed = json.loads(self.arguments or "{}")
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            parsed = {"value": parsed}
+        real_name = name_map.get(self.name, self.name)
+        if not real_name:
+            return None
+        self.emitted = True
         return ToolCall(
             tool_call_id=self.tool_call_id or f"tool-call-{self.index}",
             name=real_name,
@@ -613,6 +661,21 @@ def _retryable_provider_error(message: str) -> bool:
             "connection reset",
         )
     )
+
+
+def _produce_sse_chunks(
+    chunks: Iterable[JsonObject],
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[object],
+    sentinel: object,
+) -> None:
+    try:
+        for chunk in chunks:
+            loop.call_soon_threadsafe(queue.put_nowait, chunk)
+    except BaseException as exc:  # noqa: BLE001 - provider errors cross the thread boundary as observations.
+        loop.call_soon_threadsafe(queue.put_nowait, exc)
+    finally:
+        loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
 
 def _optional_int(value: object) -> int | None:

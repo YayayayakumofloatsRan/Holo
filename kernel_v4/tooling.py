@@ -4,11 +4,12 @@ import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from kernel_v4.context import ToolUseContext, tool_message_from_result
 from kernel_v4.contracts import JsonObject, LoopEvent, ToolCall, ToolManifest, ToolMessage, now_ms
+from kernel_v4.runtime import ContextEdit
 
 ToolExecutorFn = Callable[[JsonObject, ToolUseContext], Any | Awaitable[Any]]
 
@@ -29,12 +30,19 @@ class ToolRegistry:
     def get(self, name: str) -> ToolDefinition | None:
         return self._tools.get(name)
 
-    def manifests(self, *, include_deferred: bool = False) -> list[ToolManifest]:
-        return [
-            tool.manifest
-            for tool in self._tools.values()
-            if tool.manifest.enabled and (include_deferred or not tool.manifest.should_defer or tool.manifest.always_load)
-        ]
+    def manifests(self, *, include_deferred: bool = False, include_names: set[str] | None = None) -> list[ToolManifest]:
+        include_names = include_names or set()
+        manifests: list[ToolManifest] = []
+        for tool in self._tools.values():
+            manifest = tool.manifest
+            if not manifest.enabled:
+                continue
+            if include_deferred or not manifest.should_defer or manifest.always_load:
+                manifests.append(manifest)
+                continue
+            if manifest.name in include_names:
+                manifests.append(replace(manifest, should_defer=False, always_load=True))
+        return manifests
 
     def all_manifests(self) -> list[ToolManifest]:
         return [tool.manifest for tool in self._tools.values() if tool.manifest.enabled]
@@ -133,10 +141,21 @@ class ToolRegistry:
                 continue
             rows.append({"score": score, **manifest.summary()})
         rows.sort(key=lambda item: (-float(item["score"]), str(item["name"])))
+        selected = rows[:max_results]
+        discovered = set(_string_list(context.metadata.get("discovered_tool_names")))
+        discovered.update(str(row["name"]) for row in selected if isinstance(row.get("name"), str))
+        context.apply_edit(
+            ContextEdit(
+                operation="metadata.set",
+                key="discovered_tool_names",
+                value=sorted(discovered),
+                source="tool.discovery",
+            )
+        )
         return {
             "schema": "holo.kernel_v4.tool_discovery_result.v1",
             "query": query,
-            "tools": rows[:max_results],
+            "tools": selected,
             "host_boundary": "tool discovery returns contracts only; the model chooses the next concrete tool call",
         }
 
@@ -338,6 +357,12 @@ def _positive_int(value: object, *, default: int, upper: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, min(parsed, upper))
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
 
 
 def _cancelled_tool_message(call: ToolCall, context: ToolUseContext, *, reason: str) -> ToolMessage:

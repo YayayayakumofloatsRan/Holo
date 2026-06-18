@@ -17,7 +17,13 @@ For tool-loop verification, use
 `python -m kernel_v4.live_smoke --finance-tools --force-tool calculator.compute`.
 For real-time loop inspection, add `--show-workflow`; v4 now exposes
 abort/cancel, context edits, and tool-result lifecycle events through
-`WorkflowObserver`.
+`WorkflowObserver` and renders them through `WorkflowConsoleMonitor`. The
+default workflow display is compact for human monitoring; pass
+`--workflow-format jsonl` for machine-readable events. The streaming executor
+now starts complete streamed tool calls before the model stream ends, and
+`tool.discovery` can expand deferred tools into the next provider-native tool
+surface. For a narrow tool-loop smoke, use `--calculator-only --tool-choice
+none --force-tool calculator.compute`.
 
 Holo Kernel v3 remains in the repository as the prior harness line: a
 host-owned agent harness where models propose structured decisions and the host

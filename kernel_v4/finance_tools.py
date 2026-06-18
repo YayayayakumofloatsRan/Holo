@@ -85,6 +85,21 @@ def register_finance_tool_surface(
     return registry
 
 
+def register_calculator_tool_surface(registry: ToolRegistry) -> ToolRegistry:
+    """Register only the mature calculator tool for focused tool-loop smoke tests."""
+
+    v3_registry = V3ToolRegistry.with_builtin_respond()
+    register_finance_tools(v3_registry)
+    for v3_manifest in v3_registry.manifests():
+        if v3_manifest.name != "calculator.compute":
+            continue
+        registry.register(
+            _from_v3_manifest(v3_manifest),
+            _v3_tool_executor(v3_registry=v3_registry, manifest_name=v3_manifest.name),
+        )
+    return registry
+
+
 def finance_tool_names() -> list[str]:
     return [
         V4_FINANCE_TOOLCHAIN_DESCRIBE,

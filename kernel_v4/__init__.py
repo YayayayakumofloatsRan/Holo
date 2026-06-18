@@ -14,6 +14,7 @@ from kernel_v4.contracts import (
     ToolMessage,
 )
 from kernel_v4.loop import SingleAgentLoop
+from kernel_v4.monitoring import WorkflowConsoleMonitor
 from kernel_v4.providers import DeepSeekChatProvider, OpenAICompatibleChatProvider
 from kernel_v4.runtime import AbortController, ContextEdit, WorkflowObserver
 from kernel_v4.tooling import ToolRegistry
@@ -31,4 +32,5 @@ __all__ = [
     "ToolMessage",
     "ToolRegistry",
     "WorkflowObserver",
+    "WorkflowConsoleMonitor",
 ]

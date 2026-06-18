@@ -28,6 +28,14 @@ class SingleAgentLoopConfig:
     extra_system_prompt: str | None = None
 
 
+@dataclass
+class _CollectedAssistantTurn:
+    assistant: AssistantMessage
+    tool_results: list[ChatMessage]
+    tool_call_count: int
+    budget_exceeded: bool = False
+
+
 class SingleAgentLoop:
     """Reference-style single-agent tool loop.
 
@@ -106,7 +114,7 @@ class SingleAgentLoop:
                 context,
                 max_tool_result_chars=self.config.max_tool_result_chars,
             )
-            visible_tools = self.tools.manifests()
+            visible_tools = self.tools.manifests(include_names=_discovered_tool_names(context))
             request_context = {
                 "schema": "holo.kernel_v4.model_request_context.v1",
                 "run_id": context.run_id,
@@ -129,7 +137,7 @@ class SingleAgentLoop:
                 },
             )
 
-            assistant = await self._collect_assistant_turn(
+            collected = await self._collect_assistant_turn(
                 messages=visible_messages,
                 tools=visible_tools,
                 system_prompt=system_prompt,
@@ -137,24 +145,27 @@ class SingleAgentLoop:
                 runtime_context=context,
                 turn_index=turn_index,
                 events=events,
+                remaining_tool_calls=self.config.max_tool_calls - tool_call_count,
             )
+            assistant = collected.assistant
+            if collected.budget_exceeded:
+                return _failed_result(
+                    context,
+                    events,
+                    reason="max_tool_calls_exceeded",
+                    turn_index=turn_index,
+                    tool_call_count=tool_call_count + collected.tool_call_count,
+                )
             context.messages.append(assistant.as_chat_message())
+            context.messages.extend(collected.tool_results)
+            tool_call_count += collected.tool_call_count
             if context.abort_signal.aborted:
-                if assistant.tool_calls:
-                    executor = StreamingToolExecutor(self.tools, context, turn_index=turn_index)
-                    for call in assistant.tool_calls:
-                        executor.add_tool_call(call)
-                        events.extend(executor.pop_events())
-                    tool_results = await executor.drain_remaining()
-                    events.extend(executor.pop_events())
-                    for result in tool_results:
-                        context.messages.append(result.as_chat_message())
                 return _aborted_result(
                     context,
                     events,
                     reason=context.abort_signal.reason or "cancelled",
                     turn_index=turn_index,
-                    tool_call_count=tool_call_count + len(assistant.tool_calls),
+                    tool_call_count=tool_call_count,
                 )
             if not assistant.tool_calls:
                 _emit(
@@ -173,24 +184,6 @@ class SingleAgentLoop:
                     turn_count=turn_index,
                 )
 
-            if tool_call_count + len(assistant.tool_calls) > self.config.max_tool_calls:
-                return _failed_result(
-                    context,
-                    events,
-                    reason="max_tool_calls_exceeded",
-                    turn_index=turn_index,
-                    tool_call_count=tool_call_count,
-                )
-            tool_call_count += len(assistant.tool_calls)
-
-            executor = StreamingToolExecutor(self.tools, context, turn_index=turn_index)
-            for call in assistant.tool_calls:
-                executor.add_tool_call(call)
-                events.extend(executor.pop_events())
-            tool_results = await executor.drain_remaining()
-            events.extend(executor.pop_events())
-            for result in tool_results:
-                context.messages.append(result.as_chat_message())
             if context.abort_signal.aborted:
                 return _aborted_result(
                     context,
@@ -218,9 +211,13 @@ class SingleAgentLoop:
         runtime_context: ToolUseContext,
         turn_index: int,
         events: list[LoopEvent],
-    ) -> AssistantMessage:
+        remaining_tool_calls: int,
+    ) -> _CollectedAssistantTurn:
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        tool_results: list[ChatMessage] = []
+        budget_exceeded = False
+        executor = StreamingToolExecutor(self.tools, runtime_context, turn_index=turn_index)
         async for event in self.model.stream(
             messages=messages,
             tools=tools,
@@ -238,6 +235,16 @@ class SingleAgentLoop:
                     data={"chars": len(event.text)},
                 )
             elif event.event_type == "tool_call" and event.tool_call is not None:
+                if len(tool_calls) >= remaining_tool_calls:
+                    budget_exceeded = True
+                    _emit(
+                        runtime_context,
+                        events,
+                        event_type="tool_budget_exceeded",
+                        turn_index=turn_index,
+                        data={"max_new_tool_calls": remaining_tool_calls, "tool": event.tool_call.name},
+                    )
+                    continue
                 tool_calls.append(event.tool_call)
                 _emit(
                     runtime_context,
@@ -246,12 +253,28 @@ class SingleAgentLoop:
                     turn_index=turn_index,
                     data={"tool_call_id": event.tool_call.tool_call_id, "tool": event.tool_call.name},
                 )
+                executor.add_tool_call(event.tool_call)
+                events.extend(executor.pop_events())
             elif event.event_type == "message_stop":
                 _emit(runtime_context, events, event_type="assistant_message_stop", turn_index=turn_index, data={})
-        return AssistantMessage(
-            content="".join(text_parts).strip(),
-            tool_calls=tuple(tool_calls),
-            metadata={"created_at_ms": now_ms()},
+            completed = await executor.drain_completed()
+            events.extend(executor.pop_events())
+            tool_results.extend(result.as_chat_message() for result in completed)
+            if runtime_context.abort_signal.aborted:
+                await executor.cancel_remaining(reason=runtime_context.abort_signal.reason or "cancelled")
+                break
+        remaining = await executor.drain_remaining()
+        events.extend(executor.pop_events())
+        tool_results.extend(result.as_chat_message() for result in remaining)
+        return _CollectedAssistantTurn(
+            assistant=AssistantMessage(
+                content="".join(text_parts).strip(),
+                tool_calls=tuple(tool_calls),
+                metadata={"created_at_ms": now_ms()},
+            ),
+            tool_results=tool_results,
+            tool_call_count=len(tool_calls),
+            budget_exceeded=budget_exceeded,
         )
 
 
@@ -327,3 +350,10 @@ def _coerce_model_event(value) -> ModelEvent:
             metadata=dict(value.get("metadata") or {}),
         )
     raise TypeError(f"unsupported model event: {type(value).__name__}")
+
+
+def _discovered_tool_names(context: ToolUseContext) -> set[str]:
+    value = context.metadata.get("discovered_tool_names")
+    if not isinstance(value, list):
+        return set()
+    return {str(item) for item in value if isinstance(item, str) and item}

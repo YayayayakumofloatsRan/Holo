@@ -291,3 +291,91 @@ def test_kernel_v4_context_edit_is_visible_to_next_model_turn() -> None:
     assert workflow["context_edit_count"] >= 1
     assert "company" in workflow["context_metadata_keys"]
     assert any(edit["operation"] == "metadata.set" for edit in workflow["context_edits_recent"])
+
+
+def test_kernel_v4_starts_streamed_tool_before_model_stream_finishes() -> None:
+    async def run_case() -> tuple[object, bool]:
+        registry = ToolRegistry()
+        tool_started = asyncio.Event()
+
+        async def slow_tool(payload, context: ToolUseContext):
+            del payload, context
+            tool_started.set()
+            await asyncio.sleep(0)
+            return {"ok": True}
+
+        class BlockingAfterToolCallModel:
+            def __init__(self) -> None:
+                self.tool_started_before_stream_end = False
+                self.turn_count = 0
+
+            async def stream(self, *, messages, tools, system_prompt, context):
+                del messages, tools, system_prompt, context
+                self.turn_count += 1
+                if self.turn_count > 1:
+                    yield ModelEvent(event_type="text_delta", text="final")
+                    yield ModelEvent(event_type="message_stop")
+                    return
+                yield ModelEvent(
+                    event_type="tool_call",
+                    tool_call=ToolCall(tool_call_id="call-slow", name="slow.read", input={}),
+                )
+                await asyncio.wait_for(tool_started.wait(), timeout=1)
+                self.tool_started_before_stream_end = True
+                yield ModelEvent(event_type="text_delta", text="after tool started")
+                yield ModelEvent(event_type="message_stop")
+
+        registry.register(
+            ToolManifest(name="slow.read", description="Slow read.", input_schema={}),
+            slow_tool,
+        )
+        model = BlockingAfterToolCallModel()
+        result = await SingleAgentLoop(model=model, tools=registry).run("read slowly")
+        return result, model.tool_started_before_stream_end
+
+    result, tool_started_before_stream_end = asyncio.run(run_case())
+
+    assert result.status == "completed"
+    assert tool_started_before_stream_end is True
+    event_names = [event.event_type for event in result.events]
+    assert event_names.index("tool_start") < event_names.index("assistant_message_stop")
+
+
+def test_kernel_v4_tool_discovery_expands_deferred_tool_surface_next_turn() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolManifest(
+            name="sec.edgar.financials",
+            description="Retrieve SEC financial facts.",
+            input_schema={"ticker": {"type": "str", "required": True}},
+            should_defer=True,
+            always_load=False,
+        ),
+        lambda payload, context: {"unused": True},
+    )
+    model = ScriptedModel(
+        [
+            [
+                ModelEvent(
+                    event_type="tool_call",
+                    tool_call=ToolCall(
+                        tool_call_id="call-discover",
+                        name="tool.discovery",
+                        input={"query": "sec edgar financials", "max_results": 5},
+                    ),
+                ),
+                ModelEvent(event_type="message_stop"),
+            ],
+            [ModelEvent(event_type="text_delta", text="done"), ModelEvent(event_type="message_stop")],
+        ]
+    )
+
+    result = asyncio.run(SingleAgentLoop(model=model, tools=registry).run("find sec tool"))
+
+    assert result.status == "completed"
+    first_tools = {tool.name for tool in model.requests[0]["tools"]}
+    second_tools = {tool.name for tool in model.requests[1]["tools"]}
+    assert "sec.edgar.financials" not in first_tools
+    assert "sec.edgar.financials" in second_tools
+    second_context = model.requests[1]["context"]
+    assert "sec.edgar.financials" in second_context["workflow"]["context_edits_recent"][-1]["value"]
