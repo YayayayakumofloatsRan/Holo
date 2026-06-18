@@ -4,7 +4,7 @@ import asyncio
 
 from kernel_v4.contracts import ChatMessage, ModelEvent, ToolCall, ToolManifest
 from kernel_v4.context import ToolUseContext
-from kernel_v4.finance_tools import register_finance_tool_surface
+from kernel_v4.finance_tools import finance_tool_names, register_finance_tool_surface
 from kernel_v4.loop import SingleAgentLoop, SingleAgentLoopConfig
 from kernel_v4.runtime import AbortController, ContextEdit
 from kernel_v4.tooling import ToolRegistry
@@ -98,6 +98,54 @@ def test_kernel_v4_finance_prompt_explicitly_removes_local_gates() -> None:
     system_prompt = str(model.requests[0]["system_prompt"])
     assert "There is no local FactLedger, SlotFrame, or finance.slot_bind gate" in system_prompt
     assert "call calculator.compute or data.table.query instead of mental arithmetic" in system_prompt
+    assert "Benchmark gold/reference answers are never part of your context" in system_prompt
+    assert "Public-filing questions: use sec.edgar.company_filings" in system_prompt
+    assert "Provided-context FQA/FinQA questions: use provided_context.parse before external retrieval" in system_prompt
+    assert "calendar.days_between for actual day counts" in system_prompt
+    assert "Do not stop merely because one tool failed" in system_prompt
+    assert "tool.discovery with a focused query" in system_prompt
+
+
+def test_kernel_v4_finance_toolchain_describe_covers_fb_fqa_tool_families() -> None:
+    registry = ToolRegistry()
+    register_finance_tool_surface(registry, allow_network=True)
+    registry.install_core_tools()
+
+    tool_names = {manifest.name for manifest in registry.all_manifests()}
+    assert set(finance_tool_names()).issubset(tool_names)
+    assert {"artifact.read", "tool.discovery"}.issubset(tool_names)
+    assert "finance.slot_bind" not in tool_names
+
+    message = asyncio.run(
+        registry.execute(
+            ToolCall(tool_call_id="call-describe", name="finance.toolchain.describe", input={}),
+            ToolUseContext(run_id="run-finance-describe", thread_key="test"),
+        )
+    )
+
+    assert message.is_error is False
+    content = message.content
+    assert isinstance(content, dict)
+    assert content["schema"] == "holo.kernel_v4.finance_toolchain.v1"
+    assert content["decision_owner"] == "model"
+    assert "finance.slot_bind" in content["removed_legacy_gates"]
+    contract = content["one_shot_loop_contract"]
+    assert contract["host_role"] == "validate_execute_record_compact_only"
+    assert "model-requested tool calls" in contract["tool_use_boundary"]
+    assert "Gold/reference answers are not model context" in contract["no_gold_policy"]
+    assert "finance.verify_numeric" in contract["stop_rule"]
+    coverage = {item["family"]: set(item["primary_tools"]) for item in content["coverage_families"]}
+    assert {"sec.edgar.financials", "document.search.hybrid", "artifact.read"}.issubset(
+        coverage["public_filing_evidence"]
+    )
+    assert {"provided_context.parse", "data.table.query", "calculator.compute"}.issubset(
+        coverage["provided_context_fqa_finqa"]
+    )
+    assert {"calendar.days_between", "calculator.compute"}.issubset(coverage["fiscal_dates"])
+    assert {"calculator.compute", "data.table.query", "math.sympy.compute"}.issubset(
+        coverage["finance_transforms"]
+    )
+    assert coverage["numeric_verification"] == {"finance.verify_numeric"}
 
 
 def test_kernel_v4_large_tool_result_is_artifact_readable() -> None:
@@ -209,6 +257,20 @@ def test_kernel_v4_workflow_events_are_exposed_while_loop_runs() -> None:
     assert "tool_start" in workflow_events
     assert "tool_result" in workflow_events
     assert "loop_completed" in workflow_events
+
+
+def test_kernel_v4_model_stream_error_returns_failed_result() -> None:
+    class FailingModel:
+        async def stream(self, *, messages, tools, system_prompt, context):
+            del messages, tools, system_prompt, context
+            raise RuntimeError("provider timed out")
+            yield  # pragma: no cover
+
+    result = asyncio.run(SingleAgentLoop(model=FailingModel(), tools=ToolRegistry()).run("hello"))
+
+    assert result.status == "failed"
+    assert result.reason == "model_stream_error:RuntimeError:provider timed out"
+    assert any(event.event_type == "loop_failed" and event.data["reason"] == result.reason for event in result.events)
 
 
 def test_kernel_v4_abort_cancels_running_tool_with_synthetic_result() -> None:

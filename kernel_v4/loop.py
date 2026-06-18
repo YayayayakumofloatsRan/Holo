@@ -137,16 +137,25 @@ class SingleAgentLoop:
                 },
             )
 
-            collected = await self._collect_assistant_turn(
-                messages=visible_messages,
-                tools=visible_tools,
-                system_prompt=system_prompt,
-                context=request_context,
-                runtime_context=context,
-                turn_index=turn_index,
-                events=events,
-                remaining_tool_calls=self.config.max_tool_calls - tool_call_count,
-            )
+            try:
+                collected = await self._collect_assistant_turn(
+                    messages=visible_messages,
+                    tools=visible_tools,
+                    system_prompt=system_prompt,
+                    context=request_context,
+                    runtime_context=context,
+                    turn_index=turn_index,
+                    events=events,
+                    remaining_tool_calls=self.config.max_tool_calls - tool_call_count,
+                )
+            except Exception as exc:  # noqa: BLE001 - provider/model failures must not tear down the host CLI.
+                return _failed_result(
+                    context,
+                    events,
+                    reason=_model_stream_error_reason(exc),
+                    turn_index=turn_index,
+                    tool_call_count=tool_call_count,
+                )
             assistant = collected.assistant
             if collected.budget_exceeded:
                 return _failed_result(
@@ -296,6 +305,13 @@ def _failed_result(
         tool_call_count=tool_call_count,
         turn_count=turn_index,
     )
+
+
+def _model_stream_error_reason(exc: Exception) -> str:
+    message = str(exc).replace("\n", " ").strip()
+    if len(message) > 300:
+        message = message[:297] + "..."
+    return f"model_stream_error:{type(exc).__name__}:{message}"
 
 
 def _aborted_result(

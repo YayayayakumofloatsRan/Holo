@@ -100,6 +100,33 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 
 当前实现复用 v3 已经接好的成熟工具 wrapper 作为后端，包括 EdgarTools、Docling、Trafilatura、BM25/DuckDB/Pandas/SymPy、calculator 和 numeric verifier，但不复用 v3 agent runtime/evaluator/slot gate。
 
+## FB/FQA 理论闭环合同补齐
+
+2026-06-18 后续补齐的重点是 prompt/toolchain contract，而不是按题打补丁：
+
+- 通用系统 prompt 明确说明 provider 可见工具面可能是 partial surface；如果模型需要的已注册工具没有显示，应该先调用 `tool.discovery` 查询合同，下一轮再调用具体工具。
+- 金融 prompt 明确区分 public-filing task、provided-context FQA/FinQA task、market-data task、fiscal-date task、table/ranking task、finance transform task、numeric verification task。
+- FinanceBench 风格 public filing 题优先用 `sec.edgar.company_filings` / `sec.edgar.financials`，必要时用 `document.docling.convert`、`document.search.hybrid`、`artifact.read` 找 exact line item/table/note evidence。
+- FQA/FinQA provided context 题优先用 `provided_context.parse` 把 oracle/context/report/table/snippet 转成文本块和 query-ready tables，再让模型选择 `data.table.query` / `calculator.compute` 完成表格选择、聚合、计算。
+- DIO/DSO/DPO、growth、margin、bps、average balance、multiple、ranking、comparison 等派生数值要求模型调用 `calculator.compute` 或 `data.table.query`，不依赖心算。
+- 财年/日期题暴露 `calendar.days_between`，但 host 不替模型决定公式是否用 365、actual fiscal days 或 inclusive day count。
+- 最终 material numeric finance claims 在 `finance.verify_numeric` 可用时应由模型主动调用 verifier；verifier 是 loop 内工具，不是 hidden finalizer。
+- prompt 明确禁止 benchmark id/gold/reference/cache lookup；模型上下文只允许使用用户题面和工具观察。
+- stop rule 改为“可解且预算仍在时继续换源/换工具”，避免一个工具失败后过早输出 generic failure。
+- final answer contract 要求直接回答问题，并列出公式、输入、期间、单位、方法选择、计算结果、舍入、比较方向、业务语境和 citation/provenance。
+
+`finance.toolchain.describe` 也同步返回 `one_shot_loop_contract` 和 `coverage_families`，把上述能力映射到具体工具族：
+
+- `public_filing_evidence`
+- `provided_context_fqa_finqa`
+- `table_ranking_aggregation`
+- `finance_transforms`
+- `fiscal_dates`
+- `market_data`
+- `numeric_verification`
+
+这仍然遵守 v4 边界：模型选择事实、公式、工具和最终可答状态；host 只做 schema validation、tool execution、artifact/context 管理和 workflow lifecycle 记录。
+
 ## 测试结果
 
 本次提交前执行的是结构测试，不代表 FinanceBench/FQA 真实做题能力：
@@ -119,6 +146,14 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 2 passed
 ```
 
+FB/FQA 理论闭环合同补齐后，最新结构测试为：
+
+```text
+.venv/bin/python -m py_compile kernel_v4/__init__.py kernel_v4/contracts.py kernel_v4/context.py kernel_v4/tooling.py kernel_v4/prompts.py kernel_v4/loop.py kernel_v4/finance_tools.py kernel_v4/providers.py kernel_v4/live_smoke.py tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_live_provider.py
+.venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_monitoring.py -q
+22 passed
+```
+
 测试覆盖：
 
 - 工具结果能进入下一轮模型上下文。
@@ -136,6 +171,10 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 - streamed tool_call 会在模型流结束前启动工具执行。
 - tool.discovery 发现到的 deferred tool 会在下一轮进入 provider-visible tool surface。
 - compact workflow monitor 会聚合文本增量，避免实时监控刷屏；JSONL 模式仍保留完整事件。
+- finance prompt 包含 FB/FQA/FinQA 题型覆盖、tool.discovery、no-gold、calculator/table/calendar/verifier 和 no-early-stop 合同。
+- `finance.toolchain.describe` 暴露 public filing、provided context、table/ranking、finance transform、fiscal date、market data、numeric verification 工具族，并确认没有 `finance.slot_bind`。
+- provider stream queue 有 hard timeout；producer 没有投递 chunk/sentinel 时，主协程会在 `timeout_seconds` 后失败返回。
+- provider/model stream 异常会被 `SingleAgentLoop` 收敛成 `LoopResult(status="failed")` 和实时 `loop_failed` 事件，不再炸穿 CLI。
 
 已完成的最小 live smoke：
 
@@ -159,6 +198,16 @@ assistant_tool_call -> tool_queued -> tool_start -> tool_lifecycle(completed) ->
 ```
 
 这个 live workflow 是架构联通证据，不是 FinanceBench/FQA 做题成绩；是否最终答对仍以后续 live benchmark 为准。
+
+本轮补齐后，20 秒 provider timeout smoke 的结果是失败但稳定退出：
+
+```text
+.venv/bin/python -m kernel_v4.live_smoke --model deepseek-chat --timeout-seconds 20 --max-retries 0 --max-turns 2 --max-tool-calls 2 --show-workflow
+20.02s t1 loop_failed reason=model_stream_error:RuntimeError:deepseek stream queue exceeded 20s without completion
+{"status": "failed", "reason": "model_stream_error:RuntimeError:deepseek stream queue exceeded 20s without completion", ...}
+```
+
+这不是 live capability 通过结果；它只证明 provider 卡住时 v4 会按边界失败返回，并保持实时监控可见。
 
 compact 监控输出示例：
 

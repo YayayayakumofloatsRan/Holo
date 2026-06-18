@@ -138,8 +138,15 @@ class OpenAICompatibleChatProvider:
             daemon=True,
         )
         producer_thread.start()
+        deadline = time.monotonic() + self.timeout_seconds
         while True:
-            queued = await chunk_queue.get()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{self.name} stream queue exceeded {self.timeout_seconds}s without completion")
+            try:
+                queued = await asyncio.wait_for(chunk_queue.get(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(f"{self.name} stream queue exceeded {self.timeout_seconds}s without completion") from exc
             if queued is sentinel:
                 break
             if isinstance(queued, BaseException):
@@ -671,11 +678,22 @@ def _produce_sse_chunks(
 ) -> None:
     try:
         for chunk in chunks:
-            loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            _safe_threadsafe_queue_put(loop, queue, chunk)
     except BaseException as exc:  # noqa: BLE001 - provider errors cross the thread boundary as observations.
-        loop.call_soon_threadsafe(queue.put_nowait, exc)
+        _safe_threadsafe_queue_put(loop, queue, exc)
     finally:
-        loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+        _safe_threadsafe_queue_put(loop, queue, sentinel)
+
+
+def _safe_threadsafe_queue_put(
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[object],
+    item: object,
+) -> None:
+    try:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+    except RuntimeError:
+        return
 
 
 def _optional_int(value: object) -> int | None:

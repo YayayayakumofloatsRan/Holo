@@ -184,13 +184,92 @@ def _finance_toolchain_describe(payload: JsonObject, context: ToolUseContext) ->
         "schema": "holo.kernel_v4.finance_toolchain.v1",
         "architecture": "single_agent_reference_style_loop",
         "removed_legacy_gates": ["FactLedger", "SlotFrame", "finance.slot_bind", "host semantic slot completion gate"],
+        "one_shot_loop_contract": {
+            "decision_owner": "model",
+            "host_role": "validate_execute_record_compact_only",
+            "tool_use_boundary": (
+                "All finance evidence retrieval, parsing, transformation, calculation, and verification must happen "
+                "through model-requested tool calls inside this loop; the host does not create hidden finance answers."
+            ),
+            "benchmark_solvability_policy": (
+                "Assume FinanceBench/FQA/FinQA-style tasks are intended to be solvable from public filings, supplied "
+                "context, or allowed tools. Continue with another source/tool strategy while budget remains."
+            ),
+            "no_gold_policy": "Gold/reference answers are not model context and must not be inferred from benchmark ids.",
+            "stop_rule": (
+                "Finalize only after observed evidence supports the answer, required arithmetic has a calculator/table "
+                "observation when tools are available, and final material numeric claims have been verified when "
+                "finance.verify_numeric is available; otherwise call the next relevant tool or state a precise blocker."
+            ),
+            "answer_output_contract": {
+                "required_elements": [
+                    "direct answer to the exact question",
+                    "source-backed inputs with line item labels, periods, units, dates, and artifact/source ids",
+                    "formula and methodological choices such as average versus ending balance or fiscal day basis",
+                    "calculator.compute or data.table.query observation for derived finance numbers when available",
+                    "finance.verify_numeric observation for final material numeric claims when available",
+                    "comparison direction and business-context reasoning without hard-coded thresholds",
+                ],
+                "forbidden_elements": [
+                    "generic failure text when partial cited evidence can answer",
+                    "hard-coded threshold substituted for finance judgment",
+                    "benchmark-id lookup or cached gold answer",
+                    "mental arithmetic for material derived finance numbers when calculator.compute is available",
+                ],
+            },
+        },
+        "coverage_families": [
+            {
+                "family": "public_filing_evidence",
+                "when": "FinanceBench-style public-company questions requiring filing facts, exact line items, or SEC/XBRL facts.",
+                "primary_tools": [
+                    SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
+                    SEC_EDGAR_FINANCIALS_TOOL_NAME,
+                    DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+                    DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
+                    "artifact.read",
+                ],
+            },
+            {
+                "family": "provided_context_fqa_finqa",
+                "when": "FQA/FinQA prompts containing supplied report context, oracle_context, copied tables, CSV, HTML, or markdown snippets.",
+                "primary_tools": [PROVIDED_CONTEXT_PARSE_TOOL_NAME, DATA_TABLE_QUERY_TOOL_NAME, "calculator.compute"],
+            },
+            {
+                "family": "table_ranking_aggregation",
+                "when": "Questions requiring joins, filtering, sorting, ranking, grouping, or aggregation over observed rows.",
+                "primary_tools": [DATA_TABLE_QUERY_TOOL_NAME, "calculator.compute"],
+            },
+            {
+                "family": "finance_transforms",
+                "when": "Ratios, margins, DIO/DSO/DPO, growth, bps, averages, multiples, and comparisons.",
+                "primary_tools": ["calculator.compute", DATA_TABLE_QUERY_TOOL_NAME, MATH_SYMPY_COMPUTE_TOOL_NAME],
+            },
+            {
+                "family": "fiscal_dates",
+                "when": "Actual fiscal day counts, period lengths, and date-difference transforms.",
+                "primary_tools": [CALENDAR_DAYS_BETWEEN_TOOL_NAME, "calculator.compute"],
+            },
+            {
+                "family": "market_data",
+                "when": "Prices, market data, or allowlisted market/fundamental routes not answered by filings or supplied context.",
+                "primary_tools": [MARKET_OPENBB_FETCH_TOOL_NAME],
+            },
+            {
+                "family": "numeric_verification",
+                "when": "Final material finance numeric claims before answer delivery.",
+                "primary_tools": ["finance.verify_numeric"],
+            },
+        ],
         "tool_protocol": [
             "Use SEC/EDGAR or retrieval tools for authoritative evidence.",
             "Use document conversion and document.search.hybrid for long filings or tables.",
             "Use provided_context.parse for FinQA/FQA supplied contexts.",
             "Use data.table.query for table filtering, grouping, ranking, and aggregation.",
+            "Use calendar.days_between for model-selected fiscal date differences.",
             "Use calculator.compute for deterministic arithmetic once you have observed inputs.",
             "Use finance.verify_numeric before final material finance numeric claims when available.",
+            "Use tool.discovery when a needed registered tool is not visible in the current provider tool surface.",
         ],
         "available_tools": finance_tool_names(),
         "decision_owner": "model",

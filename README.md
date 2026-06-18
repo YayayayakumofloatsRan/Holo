@@ -25,6 +25,20 @@ now starts complete streamed tool calls before the model stream ends, and
 surface. For a narrow tool-loop smoke, use `--calculator-only --tool-choice
 none --force-tool calculator.compute`.
 
+The 2026-06-18 FB/FQA theoretical-closure checkpoint strengthens the v4
+one-shot finance contract rather than adding per-question rules. The finance
+prompt now names the public-filing, provided-context FQA/FinQA, table/ranking,
+finance-transform, fiscal-date, market-data, and numeric-verification task
+families; it instructs the model to use `tool.discovery` for hidden deferred
+tools, `provided_context.parse` for supplied FQA/FinQA contexts,
+SEC/EDGAR/document search for public filing evidence, `data.table.query` and
+`calculator.compute` for derived values, `calendar.days_between` for date
+counts, and `finance.verify_numeric` for final material numeric claims when
+available. `finance.toolchain.describe` now returns the same
+`one_shot_loop_contract` and `coverage_families`. The latest v4 structural
+checks pass `22` tests; this is architecture readiness, not a FinanceBench/FQA
+accuracy claim.
+
 Holo Kernel v3 remains in the repository as the prior harness line: a
 host-owned agent harness where models propose structured decisions and the host
 validates, executes, journals, and verifies every state transition.

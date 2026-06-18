@@ -4,6 +4,8 @@ import asyncio
 import json
 from unittest import mock
 
+import pytest
+
 from kernel_v4.contracts import ChatMessage, ModelEvent, ToolManifest
 from kernel_v4.providers import DeepSeekChatProvider, OpenAICompatibleChatProvider, openai_native_tool_surface_v4
 
@@ -173,6 +175,30 @@ def test_openai_compatible_provider_stream_maps_native_tool_call_to_v4_name(monk
     assert tool_events[0].tool_call.input == {"expression": "2+2"}
     assert any(event.event_type == "text_delta" and event.text == "checking " for event in events)
     assert events[-1].event_type == "message_stop"
+
+
+def test_openai_compatible_provider_stream_queue_has_hard_timeout(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_PROVIDER_KEY", "secret-key")
+    provider = OpenAICompatibleChatProvider(
+        base_url="https://provider.example/v1",
+        api_key_env="TEST_PROVIDER_KEY",
+        model="test-model",
+        timeout_seconds=1,
+        max_retries=0,
+    )
+
+    def stuck_producer(*_args, **_kwargs):
+        return None
+
+    with mock.patch("kernel_v4.providers._produce_sse_chunks", side_effect=stuck_producer):
+        with pytest.raises(RuntimeError, match="stream queue exceeded 1s"):
+            asyncio.run(
+                _collect(
+                    provider,
+                    messages=[ChatMessage(role="user", content="hello")],
+                    tools=[],
+                )
+            )
 
 
 def test_provider_packet_preview_does_not_expose_api_key(monkeypatch) -> None:
