@@ -1,8 +1,20 @@
-# Holo Kernel v3
+# Holo Kernel v4 / v3
 
-Holo Kernel v3 is the active branch of this repository: a host-owned agent
-harness where models propose structured decisions and the host validates,
-executes, journals, and verifies every state transition.
+Kernel v4 work has started on branch `kernel-v4`. It is a clean Python rewrite
+of the mature single-agent tool loop pattern from the user-provided reference
+framework: model emits tool calls, host executes tools, tool results are fed
+back into the next model turn, and oversized tool results are moved behind
+artifacts. v4 deliberately excludes multi-agent/sub-agent work and excludes the
+v3 finance semantic gates (`FactLedger`, `SlotFrame`, `finance.slot_bind`) from
+the active loop.
+
+The current v4 implementation lives in `kernel_v4/` with focused tests in
+`tests/test_kernel_v4_single_agent_loop.py`. The design record is
+`docs/KERNEL_V4_SINGLE_AGENT_LOOP_2026-06-18_ZH.md`.
+
+Holo Kernel v3 remains in the repository as the prior active harness line: a
+host-owned agent harness where models propose structured decisions and the host
+validates, executes, journals, and verifies every state transition.
 
 This branch is intentionally separate from the older `holo_host` stage line.
 Historical stage documents and legacy runtime code remain in the repository for

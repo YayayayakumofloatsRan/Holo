@@ -1,0 +1,27 @@
+"""Kernel v4 single-agent harness.
+
+Kernel v4 is a clean Python rewrite of the mature single-agent query loop
+shape: model emits tool_use blocks, host executes tools, tool_results are
+fed back into the next model turn. Domain logic lives in prompts and tools,
+not in local semantic gates.
+"""
+
+from kernel_v4.contracts import (
+    AssistantMessage,
+    LoopResult,
+    ModelEvent,
+    ToolCall,
+    ToolMessage,
+)
+from kernel_v4.loop import SingleAgentLoop
+from kernel_v4.tooling import ToolRegistry
+
+__all__ = [
+    "AssistantMessage",
+    "LoopResult",
+    "ModelEvent",
+    "SingleAgentLoop",
+    "ToolCall",
+    "ToolMessage",
+    "ToolRegistry",
+]

@@ -1,0 +1,99 @@
+# Kernel v4 单 Agent 循环改写记录
+
+日期：2026-06-18
+
+分支：`kernel-v4`
+
+## 结论
+
+Kernel v4 走新的架构线：参考用户提供的成熟 TypeScript 项目，把核心单 agent loop 用 Python 改写一遍。v4 第一阶段不做多 agent、不做子 agent、不做 v3 的金融语义状态机。
+
+目标是先得到一个干净、通用、可审查的循环：
+
+1. 模型输出文本和 `tool_call`。
+2. Host 按工具协议执行。
+3. Tool result 立即回灌到下一轮模型上下文。
+4. 大工具结果转为 artifact，模型可用 `artifact.read` 读取。
+5. 工具发现由 `tool.discovery` 提供合同，不由本地逻辑替模型决定下一步。
+6. 循环退出只由模型最终回答、预算、硬错误或明确阻塞决定。
+
+## 删除的 v3 闸门
+
+v4 active loop 不加载这些金融语义闸门：
+
+- `FactLedger`
+- `SlotFrame`
+- `finance.slot_bind`
+- 本地 “missing slots 必须补齐后才能计算” gate
+- host 侧任务编译后强制补槽状态机
+
+它们不是“降级为辅助”，而是不进入 v4 单 agent 主循环。v4 的原则是：模型看到检索/SEC/文档搜索/表格/上下文解析结果后，可以直接选择输入并调用 `calculator.compute`、`data.table.query`、`finance.verify_numeric`。
+
+## 参考框架对应关系
+
+用户提供的参考项目关键部件：
+
+- `query.ts`：主 query loop。
+- `StreamingToolExecutor.ts`：流式工具执行，支持并发安全工具并行、非并发工具独占。
+- `ToolUseContext`：携带消息、工具、权限、进行中工具、上下文修改。
+- `toolResultStorage.ts`：大工具结果持久化和上下文替换。
+- `toolSearch.ts`：工具发现和 deferred tool surface。
+
+Kernel v4 的 Python 对应实现：
+
+- `kernel_v4/loop.py`：`SingleAgentLoop`。
+- `kernel_v4/tooling.py`：`ToolRegistry`、`StreamingToolExecutor`、`tool.discovery`、`artifact.read`。
+- `kernel_v4/context.py`：`ToolUseContext`、大 tool result artifact replacement。
+- `kernel_v4/contracts.py`：消息、工具调用、工具结果、模型事件、循环结果协议。
+- `kernel_v4/prompts.py`：通用单 agent prompt 和金融特调 prompt。
+- `kernel_v4/finance_tools.py`：成熟金融工具后端适配，不引入 `finance.slot_bind`。
+
+## 金融工具面
+
+v4 金融模式暴露普通工具，不暴露本地语义闸门：
+
+- `finance.toolchain.describe`
+- `sec.edgar.company_filings`
+- `sec.edgar.financials`
+- `document.docling.convert`
+- `document.trafilatura.extract`
+- `document.search.hybrid`
+- `provided_context.parse`
+- `market.openbb.fetch`
+- `data.table.query`
+- `math.sympy.compute`
+- `calendar.days_between`
+- `calculator.compute`
+- `finance.verify_numeric`
+- `artifact.read`
+- `tool.discovery`
+
+当前实现复用 v3 已经接好的成熟工具 wrapper 作为后端，包括 EdgarTools、Docling、Trafilatura、BM25/DuckDB/Pandas/SymPy、calculator 和 numeric verifier，但不复用 v3 agent runtime/evaluator/slot gate。
+
+## 测试结果
+
+本次提交前执行的是结构测试，不代表 FinanceBench/FQA 真实做题能力：
+
+```text
+.venv/bin/python -m py_compile kernel_v4/__init__.py kernel_v4/contracts.py kernel_v4/context.py kernel_v4/tooling.py kernel_v4/prompts.py kernel_v4/loop.py kernel_v4/finance_tools.py tests/test_kernel_v4_single_agent_loop.py
+.venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py -q
+5 passed
+```
+
+测试覆盖：
+
+- 工具结果能进入下一轮模型上下文。
+- v4 金融工具面不含 `finance.slot_bind`。
+- 金融 prompt 明确删除本地 `FactLedger` / `SlotFrame` / slot-bind gate。
+- 大工具结果会 artifact 化并保持可读。
+- `tool.discovery` 返回工具合同而不是语义答案。
+
+## 下一步
+
+下一步不是继续补 v3 闸门，而是把 live debug runner 接到 `SingleAgentLoop`：
+
+1. 接真实模型 provider。
+2. 接 live retrieval/SEC 网络权限。
+3. 让 FinanceBench debug item 通过 v4 loop 做一题。
+4. 用 live 结果验证 calculator 和 verifier 是否由模型主动调用。
+5. 再扩展到 debug50 类型分组测试。
