@@ -765,7 +765,10 @@ def register_artifact_tools(
             side_effect_class="read",
             permissions_required=[],
             enabled=True,
-            description="Query a host-exposed artifact blob by JSON path, table-row search, or bounded text search.",
+            description=(
+                "Legacy low-level raw artifact query by JSON path or text lines. "
+                "For finance filing/table evidence search, prefer document.search.hybrid when available."
+            ),
             input_schema={
                 "artifact_id": {
                     "type": "str",

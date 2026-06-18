@@ -195,7 +195,7 @@ def _candidate(result: JsonObject) -> _ToolResultCandidate | None:
 
 def _replacement_for(candidate: _ToolResultCandidate) -> JsonObject:
     read_hint = (
-        "Full or richer tool output is available through artifact.query or artifact.read using one of artifact_refs; prefer artifact.query to narrow long JSON/table/text artifacts."
+        "Use document.search.hybrid on artifact_refs for long documents or tables; use artifact.read for full JSON. artifact.query is legacy-only raw inspection."
         if candidate.artifact_refs
         else "Full output was omitted from model-visible context; rerun or request a narrower tool call if needed."
     )

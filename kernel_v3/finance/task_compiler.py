@@ -1039,6 +1039,7 @@ def _compact_tool_chain_for_model(plan: JsonObject) -> JsonObject:
                 {"name": "sec.edgar.company_filings", "use_for": "official SEC filing discovery through EdgarTools"},
                 {"name": "sec.edgar.financials", "use_for": "standardized SEC/XBRL statement candidates through EdgarTools"},
                 {"name": "document.docling.convert", "use_for": "URL document/table conversion through Docling"},
+                {"name": "document.search.hybrid", "use_for": "open-source retrieval over converted filing/context artifacts; prefer over artifact.query for evidence slots"},
                 {"name": "document.trafilatura.extract", "use_for": "webpage/HTML main-text extraction through Trafilatura"},
                 {"name": "market.openbb.fetch", "use_for": "allowlisted market/fundamental data routes through OpenBB"},
                 {"name": "data.table.query", "use_for": "DuckDB/Pandas read-only SQL over model-provided evidence rows"},
@@ -2082,6 +2083,11 @@ def _tool_chain_plan(
                 "name": "document.docling.convert",
                 "use_for": "use Docling for URL document/table conversion when filing/PDF/HTML structure is needed beyond snippets",
                 "host_boundary": "only http(s) sources are accepted; local files must go through workspace tools",
+            },
+            {
+                "name": "document.search.hybrid",
+                "use_for": "use open-source retrieval over converted filing/context artifacts for missing slots, line items, fiscal periods, and table row candidates",
+                "host_boundary": "returns retrieval candidates only; model-owned finance.slot_bind and calculator/verifier calls remain mandatory",
             },
             {
                 "name": "document.trafilatura.extract",

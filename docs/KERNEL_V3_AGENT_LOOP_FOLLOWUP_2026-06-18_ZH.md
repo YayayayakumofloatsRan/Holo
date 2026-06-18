@@ -1050,6 +1050,12 @@ FinanceBench/FinQA accuracy。当前 UbuntuHolo 环境里 live key/model 变量�
 上下文膨胀和重复读取。本轮继续按成熟 agent loop 的工作台思想补齐：
 artifact 不是只能读全文，而应支持模型 one-shot 做有界结构查询。
 
+2026-06-18 14:00 更新：本节记录的是当时的中间状态。后续第 12 节已将
+FinanceBench/FinQA 文档证据搜索主路径从 `artifact.query` 替换为
+`document.search.hybrid`，并把 `artifact.query` 降级为 legacy-only raw inspection
+fallback。当前 agent loop 不再主动给 provider continuation 暴露
+`artifact_query_hint`。
+
 本轮新增：
 
 - `artifact.query` 工具，由 `register_artifact_tools(...)` 注册，默认 always-load、
@@ -1107,6 +1113,10 @@ loop 的临时工作台查询接口。
 AgentRuntime / planner allowed surface 会把它暴露给模型。成熟 agent loop 的要求不是
 “工具注册在 registry 里”，而是模型 one-shot 时能看到可调用 schema，并且
 `tool.discovery` 也认为它是 allowed tool。
+
+2026-06-18 14:00 更新：本节是历史暴露链路记录。当前 FB/FQA 必需工具面已经改为
+`document.search.hybrid`；`artifact.query` 仍可被 host 执行和 smoke 验证，但不再是
+finance document retrieval workbench 的推荐入口。
 
 本轮补齐：
 
@@ -2232,3 +2242,100 @@ capital-intensity 题里，到底是“题目证据确实缺”，还是“状�
   - page-number / delta / charge / CIK 等数值噪声过滤；
   - missing slot candidate surfacing；
   - slot complete 后显式进入 calculator/verifier phase。
+
+## 12. Open-source document workbench checkpoint
+
+时间点：2026-06-18 14:00 CST。
+
+用户明确要求：不要继续依赖不成熟的自研底层查询工具；应果断改用成熟开源组件，
+尤其要替换 live trace 中反复出现、效果很弱的 `artifact.read/query` 证据搜索路径。
+
+本轮结论：
+
+- `artifact.read` 仍保留为低层 artifact 全量/预览读取工具；
+- `artifact.query` 已降级为 legacy-only raw inspection fallback，不再作为 FB/FQA
+  文档证据搜索的主路径；
+- 新增 `document.search.hybrid`，作为模型可见的首选文档检索工具，用于在已转换的
+  SEC filing、Docling 输出、retrieval report 或完整工具结果 artifact 上搜索 line
+  item、period row、table candidates 和 missing evidence slots；
+- 当前可运行后端使用已安装的开源 `rank-bm25`，避免继续维护手写 substring/JSON-line
+  搜索逻辑；
+- Haystack、LlamaIndex、Qdrant client、Docling 源码已 shallow clone 到
+  `.holo_components/src/`，作为下一步 backend 替换/增强的隔离组件源，不进入 git
+  提交，也不污染主 venv。
+
+本地 clone 状态：
+
+- `.holo_components/src/haystack` at `fbf9ca5`
+- `.holo_components/src/llama_index` at `9f66e8a`
+- `.holo_components/src/qdrant-client` at `326adef`
+- `.holo_components/src/docling` at `f847b6c`
+
+已落地代码：
+
+- `kernel_v3/finance/open_components.py` 注册并执行 `document.search.hybrid`；
+  该工具读取 artifact payload，构造文本 chunk，使用 `rank_bm25.BM25Okapi`
+  排序，返回 matches、matched aliases、period signals、numeric values 和
+  noise flags。
+- `kernel_v3/finance/tool_catalog.py` 新增 `document_retrieval_workbench` family，
+  并将 `rank_bm25` 标记为 active core component；Haystack/LlamaIndex/Qdrant
+  标记为 staged mature components。
+- `kernel_v3/finance/tool_readiness.py` 将 FB/FQA filing retrieval/table
+  extraction/temporary workbench 的必需查询工具改为 `document.search.hybrid`。
+  `artifact.query` 只保留 `legacy_fallback_only` binding 和本地 smoke 保护。
+- `kernel_v3/agent/runtime.py`、`kernel_v3/deep_loop.py`、
+  `kernel_v3/processors/contracts.py`、`kernel_v3/capabilities.py`、
+  `kernel_v3/finance/task_compiler.py` 均已把首选文档检索入口改为
+  `document.search.hybrid`。
+- provider tool-result continuation 和 tool-context update 现在主动给模型
+  `document_search_hint` 与 `artifact_read_hint`；不再主动给
+  `artifact_query_hint`。
+
+结构验证：
+
+```bash
+.venv/bin/python -m py_compile \
+  kernel_v3/finance/open_components.py \
+  kernel_v3/finance/__init__.py \
+  kernel_v3/finance/tool_catalog.py \
+  kernel_v3/finance/tool_readiness.py \
+  kernel_v3/agent/runtime.py \
+  kernel_v3/deep_loop.py \
+  kernel_v3/processors/contracts.py \
+  kernel_v3/tool_use.py \
+  kernel_v3/capabilities.py \
+  kernel_v3/finance/task_compiler.py \
+  kernel_v3/tool_result_budget.py
+
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_tool_readiness.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_engine.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_tool_use.py -q
+.venv/bin/python -m pytest tests/test_kernel_v3_langgraph_loop.py -q
+.venv/bin/python -m kernel_v3.cli bench finance-tool-audit \
+  --workspace-root /tmp/holo-finance-tool-audit \
+  --execute-local-smoke \
+  --format json
+```
+
+结果：
+
+- `34 passed in 4.30s`
+- `46 passed in 3.77s`
+- `312 passed in 10.75s`
+- `17 passed in 0.43s`
+- `4 passed in 0.65s`
+- CLI smoke: `status=ok`, `local_smoke_status=ok`,
+  `fb_fqa_required_tool_complete=true`, `allowed_tools_count=24`；
+  `document.search.hybrid` registered / provider-visible / planner-prompt-visible /
+  policy-allowed，binding component `rank_bm25`，required missing components none。
+
+说明：
+
+- 这是开源工具面/agent-loop 接口改造，不是新的 FinanceBench、FinQA、FAB/FinAgent
+  live accuracy 分数。
+- 当前 runtime 已实际使用开源 `rank-bm25`；Haystack/Qdrant/LlamaIndex/Docling 源码
+  已就位，但完整 pipeline backend 还需要后续单独切换和隔离 worker 测试。
+- 下一步 live debug50 前，应先用工具审计确认 `document.search.hybrid` 出现在
+  model-visible surface，再跑单题 live，检查模型是否从 repeated artifact reads
+  转向 open-source retrieval -> slot binding -> calculator/verifier。

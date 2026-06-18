@@ -41,6 +41,7 @@ from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+    DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES,
     FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES,
@@ -4893,7 +4894,7 @@ def _finance_workbench_state_for_prompt(
         phase = "task_compile"
     next_action_options: list[str] = []
     if phase in {"evidence_acquire", "evidence_replan"}:
-        next_action_options.extend(["retrieval.run", "sec.edgar.financials", "document.docling.convert"])
+        next_action_options.extend(["retrieval.run", "sec.edgar.financials", "document.docling.convert", "document.search.hybrid"])
     if phase in {"ledger_bind", "ledger_bind_or_transform_compute"}:
         next_action_options.extend(["bind candidate facts to missing slots", "retrieve remaining missing slots"])
     if phase == "ledger_bind_or_transform_compute":
@@ -4907,6 +4908,7 @@ def _finance_workbench_state_for_prompt(
         next_action_options.append("sec.edgar.financials")
     if "document_table_extraction" in requirement_tools:
         next_action_options.append("document.docling.convert")
+        next_action_options.append("document.search.hybrid")
     if "table_operations" in requirement_tools:
         next_action_options.append("data.table.query")
     if "arithmetic" in requirement_tools:
@@ -9003,6 +9005,25 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                     "host_boundary": "uses Trafilatura under network:fetch policy; returns extracted text candidates only",
                 }
             )
+        if DOCUMENT_SEARCH_HYBRID_TOOL_NAME in recipe.allowed_tools:
+            tool_selection.append(
+                {
+                    "kind": "tool",
+                    "name": DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
+                    "side_effect_class": "read",
+                    "use_when": (
+                        "a converted filing/context artifact must be searched for line items, table rows, fiscal-period columns, "
+                        "or missing evidence slots; prefer this over artifact.query for FinanceBench/FQA document evidence"
+                    ),
+                    "payload_requirements": [
+                        "artifact_id: full_payload_artifact_id or artifact_id from Docling/SEC/retrieval/provided_context output",
+                        "query: evidence need or line item",
+                        "focus_terms/slot_names: optional aliases for missing slots",
+                        "fiscal_year/period: optional target period",
+                    ],
+                    "host_boundary": "uses open-source retrieval components; returns candidates, not slot bindings or answers",
+                }
+            )
         if PROVIDED_CONTEXT_PARSE_TOOL_NAME in recipe.allowed_tools:
             tool_selection.append(
                 {
@@ -9176,12 +9197,13 @@ def _planner_directive(recipe: TaskRecipe) -> JsonObject:
                             "planner_action": "Return planner.propose JSON with kind=tool/respond/ask_user, name, payload, reasons, side_effect_class.",
                             "tool.discovery": "Use when unsure which currently allowed tool contract or input schema fits the next step.",
                             "artifact.read": "Use when a compact observation references an artifact and the bounded preview/body is needed for the next reasoning step.",
-                            "artifact.query": "Use before broad artifact.read when a long JSON/table/text artifact can be narrowed by path, row terms, or line search.",
+                            "artifact.query": "Legacy low-level fallback for raw artifact inspection only; do not prefer it for finance filing evidence search.",
                             "retrieval.run": "Use payload.query plus metadata.retrieval_strategy for query plan, source family plan, evidence criteria, fallback moves, and stop_when.",
                             "sec.edgar.company_filings": "Use EdgarTools-backed filing discovery when official SEC issuer filings are the right source family.",
                             "sec.edgar.financials": "Use EdgarTools-backed SEC/XBRL statement candidates when line-item and period binding need structured filing facts.",
                             "document.docling.convert": "Use Docling-backed conversion for URL documents whose table/text structure matters.",
                             "document.trafilatura.extract": "Use Trafilatura-backed extraction for webpage/HTML main text when snippets are noisy or table-like text is embedded in pages.",
+                            "document.search.hybrid": "Use open-source document retrieval over converted artifacts for finance line items, fiscal periods, table rows, and missing slot candidates; prefer this over artifact.query.",
                             "market.openbb.fetch": "Use allowlisted OpenBB routes only when market/fundamental data outside filing text is semantically relevant.",
                             "data.table.query": "Use DuckDB/Pandas over evidence rows when the task needs table filtering, grouping, joining, ranking, or aggregation.",
                             "finance.slot_bind": "Use after finance facts are visible to submit model-owned slot bindings, period/line-item basis, and formula_requests for host validation.",

@@ -7,6 +7,7 @@
 # - sec.edgar.company_filings
 # - sec.edgar.financials
 edgartools==5.36.0
+rank-bm25==0.2.2
 pandas==3.0.3
 pydantic==2.13.4
 rich==15.0.0

@@ -253,13 +253,14 @@ allowed by host policy; they are not long regressions and must not be reported
 as benchmark accuracy. Repo-local workers under `.holo_components/` are
 auto-discovered when present, with environment variables still taking
 precedence for custom paths. The 2026-06-18 readiness gate now treats
-`tool.discovery`, `artifact.read`, `artifact.query`, `finance.slot_bind`, and
-`finance.verify_numeric` as first-class pre-live requirements: smoke mode verifies
-that these tools are model-visible, policy
+`document.search.hybrid` as the first-class FB/FQA document evidence search
+entry, backed in the main venv by open-source `rank-bm25`; `artifact.query` is
+kept only as a legacy raw-inspection fallback. Smoke mode verifies that
+discovery, artifact read/search, slot binding, calculator, verifier, table,
+SymPy, calendar, and document extraction tools are model-visible, policy
 allowed, executable by the host, and able to return bounded observations/artifact
-context for the strict single-agent loop. The latest local gate result was
-`status=ok`, `local_smoke_status=ok`, `allowed_tools_count=23`; this remains an
-interface/execution check, not a benchmark score.
+context for the strict single-agent loop. This remains an interface/execution
+check, not a benchmark score.
 The 2026-06-18 FB/FQA tool-coverage audit is recorded in
 `docs/KERNEL_V3_FB_FQA_TOOL_COVERAGE_2026-06-18_ZH.md`. It maps FinanceBench
 debug50/test100 and FinQA/FQA oracle-context task families to concrete tool
@@ -542,24 +543,25 @@ to avoid context-budget inflation on small tool outputs. Targeted structural
 tests pass (`36` deep-loop tests, `16` tool/provider tests, `61` finance
 benchmark harness tests). This is agent-loop/tool-result contract readiness,
 not a live FinanceBench or FinQA score.
-The following mature-loop checkpoint upgrades the artifact workbench from
-whole-blob reads to bounded queries. `artifact.query` is now an always-loaded,
-read-only, concurrency-safe tool that can select JSON paths, search JSON
-subtrees or table-row lists, and search text artifact lines without forcing the
-model to pull an entire SEC filing, table extraction, retrieval report, or full
-tool-result JSON into context. Provider full-result hints now include
-`artifact_query_hint`, replacement hints prefer `artifact.query` before broad
-`artifact.read`, and the finance loop standard tool interface/capability
-catalog describe the new path. Targeted structural tests pass (`81` loop/tool/
-finance-open-component tests, `11` processor usage tests, `61` finance benchmark
-harness tests). This is P0 workbench readiness, not a live finance score.
-The follow-up closes the exposure path: retrieval, workspace-answer, and
-workspace-write recipes now include `artifact.query`; planner allowed-tool sets
-and `tool.discovery` allowed manifests include it alongside `artifact.read`.
-Finance runtime tests confirm the tool is present in recipe allowed tools,
-runtime manifests, and model-planner allowed sets. Targeted structural tests
-pass (`92` tool/deep/provider/finance-open/processor tests, `3` finance-engine
-planner tests, `61` finance benchmark harness tests). This is model-visible
+The following mature-loop checkpoint originally upgraded the artifact workbench
+from whole-blob reads to bounded raw queries, but that path has now been
+superseded for finance evidence search. As of the 2026-06-18 open-source
+document workbench checkpoint, provider full-result hints and tool-context
+updates prefer `document.search.hybrid`, not `artifact_query_hint`; replacement
+hints tell the model to use `document.search.hybrid` for long documents/tables
+and `artifact.read` for full JSON. `artifact.query` remains registered, smoke
+tested, read-only, and concurrency-safe for legacy raw JSON/text inspection, but
+it is no longer the preferred model-facing retrieval workbench.
+The exposure path is now: retrieval, workspace-answer, workspace-write, and
+finance-capability recipes expose the open-source-backed document search tool;
+planner allowed-tool sets, standard tool interface, capability catalog, FB/FQA
+tool readiness, and finance task compiler all name `document.search.hybrid` as
+the preferred artifact evidence search entry. Targeted structural tests pass
+(`34` finance open/readiness tests, `46` deep-loop tests, `312` finance-engine
+tests, `17` tool-use tests, `4` LangGraph loop tests). The CLI
+`bench finance-tool-audit --execute-local-smoke` path also reports `status=ok`,
+`local_smoke_status=ok`, `fb_fqa_required_tool_complete=true`, and
+`allowed_tools_count=24`. This is model-visible
 tool-surface readiness, not a live finance score.
 The next finance tool-runtime P0 checkpoint makes those tool contracts executable
 rather than merely descriptive. `retrieval.run`, SEC/EDGAR, Trafilatura, OpenBB,

@@ -127,7 +127,13 @@ def finance_agent_loop_contract() -> JsonObject:
                     "bind one or more facts/disclosures to slots",
                     "answer with citation and unit/period basis",
                 ],
-                "typical_tools": ["retrieval.run", "sec.edgar.financials", "document.docling.convert", "document.trafilatura.extract"],
+                "typical_tools": [
+                    "retrieval.run",
+                    "sec.edgar.financials",
+                    "document.docling.convert",
+                    "document.search.hybrid",
+                    "document.trafilatura.extract",
+                ],
             },
             {
                 "family": "defined_formula_numeric_calculation",
@@ -138,7 +144,15 @@ def finance_agent_loop_contract() -> JsonObject:
                     "call calculator.compute or data.table.query for deterministic arithmetic",
                     "verify numeric claims before synthesis",
                 ],
-                "typical_tools": ["retrieval.run", "sec.edgar.financials", "finance.slot_bind", "data.table.query", "calculator.compute", "finance.verify_numeric"],
+                "typical_tools": [
+                    "retrieval.run",
+                    "sec.edgar.financials",
+                    "document.search.hybrid",
+                    "finance.slot_bind",
+                    "data.table.query",
+                    "calculator.compute",
+                    "finance.verify_numeric",
+                ],
             },
             {
                 "family": "computed_business_judgment",
@@ -149,7 +163,14 @@ def finance_agent_loop_contract() -> JsonObject:
                     "use LLM business judgment to decide relevance/health/profile",
                     "cite both numeric support and business-context evidence",
                 ],
-                "typical_tools": ["retrieval.run", "sec.edgar.financials", "finance.slot_bind", "calculator.compute", "finance.verify_numeric"],
+                "typical_tools": [
+                    "retrieval.run",
+                    "sec.edgar.financials",
+                    "document.search.hybrid",
+                    "finance.slot_bind",
+                    "calculator.compute",
+                    "finance.verify_numeric",
+                ],
             },
             {
                 "family": "driver_attribution_or_bridge_adjustment",
@@ -159,7 +180,13 @@ def finance_agent_loop_contract() -> JsonObject:
                     "query/rank table rows if needed",
                     "synthesize the driver conclusion from cited components",
                 ],
-                "typical_tools": ["retrieval.run", "document.docling.convert", "data.table.query", "calculator.compute"],
+                "typical_tools": [
+                    "retrieval.run",
+                    "document.docling.convert",
+                    "document.search.hybrid",
+                    "data.table.query",
+                    "calculator.compute",
+                ],
             },
             {
                 "family": "table_ranking_or_comparison",
@@ -169,7 +196,13 @@ def finance_agent_loop_contract() -> JsonObject:
                     "query/rank/aggregate rows with data.table.query or calculator.compute",
                     "map the extreme or comparison result back to cited row evidence",
                 ],
-                "typical_tools": ["document.docling.convert", "data.table.query", "script.exec", "calculator.compute"],
+                "typical_tools": [
+                    "document.docling.convert",
+                    "document.search.hybrid",
+                    "data.table.query",
+                    "script.exec",
+                    "calculator.compute",
+                ],
             },
         ],
         "tool_execution_boundary": (
@@ -307,7 +340,14 @@ def finance_tool_surface_catalog() -> list[JsonObject]:
         _tool_family(
             family_id="document_table_conversion",
             purpose="PDF/HTML/XLSX/XBRL/CSV conversion, table preservation, chunking, and parser diagnostics",
-            holo_tools=["provided_context.parse", "document.docling.convert", "document.trafilatura.extract", "retrieval.run", "script.exec"],
+            holo_tools=[
+                "provided_context.parse",
+                "document.docling.convert",
+                "document.search.hybrid",
+                "document.trafilatura.extract",
+                "retrieval.run",
+                "script.exec",
+            ],
             current_status="wrapper_active_dependency_missing",
             mature_components=[
                 _component("docling", "docling", source="https://docling-project.github.io/docling/"),
@@ -318,6 +358,24 @@ def finance_tool_surface_catalog() -> list[JsonObject]:
             selected_component="docling_for_documents_pandas_lxml_bs4_for_provided_context",
             integration_decision="provided_context.parse active for FinQA/FQA context-to-table; Docling remains isolated for heavy filing/PDF conversion",
             boundary="parser output is candidate evidence; FactLedger, citations, slot binding, and verifier remain mandatory",
+        ),
+        _tool_family(
+            family_id="document_retrieval_workbench",
+            purpose="replace weak artifact text search with mature document retrieval over converted filing/context artifacts",
+            holo_tools=["document.search.hybrid", "document.docling.convert", "provided_context.parse"],
+            current_status="open_source_wrapped_active",
+            mature_components=[
+                _component("rank_bm25", "rank_bm25", package="rank-bm25", source="https://github.com/dorianbrown/rank_bm25"),
+                _component("haystack", "haystack", package="haystack-ai", source="https://github.com/deepset-ai/haystack"),
+                _component("llama-index", "llama_index", source="https://github.com/run-llama/llama_index"),
+                _component("qdrant-client", "qdrant_client", source="https://github.com/qdrant/qdrant-client"),
+            ],
+            selected_component="rank_bm25_now_haystack_qdrant_next",
+            integration_decision=(
+                "document.search.hybrid is the finance evidence retrieval entrypoint; "
+                "artifact.query is a low-level legacy fallback for raw artifact inspection only"
+            ),
+            boundary="retrieval candidates do not bind facts; the model still calls finance.slot_bind and calculator/verifier tools",
         ),
         _tool_family(
             family_id="market_macro_fundamental_data",

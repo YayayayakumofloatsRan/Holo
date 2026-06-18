@@ -8,6 +8,7 @@ from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+    DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_SLOT_BIND_TOOL_NAME,
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
@@ -31,7 +32,7 @@ def test_finance_tool_readiness_audit_exposes_fb_fqa_tools_to_model(tmp_path) ->
     required = {
         TOOL_DISCOVERY_NAME,
         ARTIFACT_READ_NAME,
-        ARTIFACT_QUERY_NAME,
+        DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
         "retrieval.run",
         CALCULATOR_TOOL_NAME,
         FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
@@ -73,6 +74,13 @@ def test_finance_tool_readiness_audit_exposes_fb_fqa_tools_to_model(tmp_path) ->
         if category["category_id"] == "financebench_filing_table_extraction"
     )
     assert PROVIDED_CONTEXT_PARSE_TOOL_NAME in table_category["required_tools"]
+    assert DOCUMENT_SEARCH_HYBRID_TOOL_NAME in table_category["required_tools"]
+    assert ARTIFACT_QUERY_NAME not in table_category["required_tools"]
+    assert (
+        tool_readiness.TOOL_COMPONENT_BINDINGS[ARTIFACT_QUERY_NAME]["install_policy"]
+        == "legacy_fallback_only"
+    )
+    assert tools[DOCUMENT_SEARCH_HYBRID_TOOL_NAME]["component_binding"]["install_policy"] == "core_open_source"
     assert tools[DOCUMENT_DOCLING_CONVERT_TOOL_NAME]["component_binding"]["install_policy"] == "isolated_optional_heavy"
     assert tools[MARKET_OPENBB_FETCH_TOOL_NAME]["component_binding"]["install_policy"] == "isolated_optional_heavy"
     assert tools[DATA_TABLE_QUERY_TOOL_NAME]["component_binding"]["component_status"] == "ok"
@@ -88,6 +96,7 @@ def test_finance_tool_readiness_audit_local_smoke_executes_workbench_tools(tmp_p
     assert smoke[TOOL_DISCOVERY_NAME]["status"] == "ok"
     assert smoke[ARTIFACT_READ_NAME]["status"] == "ok"
     assert smoke[ARTIFACT_QUERY_NAME]["status"] == "ok"
+    assert smoke[DOCUMENT_SEARCH_HYBRID_TOOL_NAME]["status"] == "ok"
     assert smoke[PROVIDED_CONTEXT_PARSE_TOOL_NAME]["status"] == "ok"
     assert smoke[FINANCE_SLOT_BIND_TOOL_NAME]["status"] == "ok"
     assert smoke[CALCULATOR_TOOL_NAME]["status"] == "ok"

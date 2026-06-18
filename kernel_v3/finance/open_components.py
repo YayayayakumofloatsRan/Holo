@@ -37,6 +37,7 @@ SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME = "sec.edgar.company_filings"
 SEC_EDGAR_FINANCIALS_TOOL_NAME = "sec.edgar.financials"
 DOCUMENT_DOCLING_CONVERT_TOOL_NAME = "document.docling.convert"
 DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME = "document.trafilatura.extract"
+DOCUMENT_SEARCH_HYBRID_TOOL_NAME = "document.search.hybrid"
 PROVIDED_CONTEXT_PARSE_TOOL_NAME = "provided_context.parse"
 MARKET_OPENBB_FETCH_TOOL_NAME = "market.openbb.fetch"
 DATA_TABLE_QUERY_TOOL_NAME = "data.table.query"
@@ -50,6 +51,7 @@ FINANCE_OPEN_COMPONENT_TOOL_NAMES = [
     PROVIDED_CONTEXT_PARSE_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
+    DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
     MARKET_OPENBB_FETCH_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
@@ -66,6 +68,7 @@ FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES = [
 
 FINANCE_OPEN_COMPONENT_READ_TOOL_NAMES = [
     PROVIDED_CONTEXT_PARSE_TOOL_NAME,
+    DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
     CALENDAR_DAYS_BETWEEN_TOOL_NAME,
@@ -555,6 +558,52 @@ def register_finance_open_component_tools(
                 "max_result_size_chars": 30000,
                 "result_persistence_policy": "auto",
                 "idempotent": False,
+            },
+        ),
+    )
+    registry.register(
+        DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
+        lambda action: _execute_document_search_hybrid(action, artifact_store=artifact_store),
+        manifest=ToolManifest(
+            name=DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
+            version="1",
+            resource_kind="document",
+            operator_kind="hybrid_search",
+            side_effect_class="read",
+            permissions_required=[],
+            enabled=True,
+            description=(
+                "Search a converted/document artifact with mature open-source retrieval components. "
+                "Use this instead of artifact.query for finance evidence discovery in long filings, "
+                "tables, and Docling/SEC payload artifacts."
+            ),
+            input_schema={
+                "artifact_id": {"type": "str", "required": True, "min_length": 1},
+                "query": {"type": "str", "required": True, "min_length": 1},
+                "focus_terms": {
+                    "type": "list[str]",
+                    "required": False,
+                    "description": "Model-selected line-item aliases or table labels to boost during retrieval.",
+                },
+                "slot_names": {
+                    "type": "list[str]",
+                    "required": False,
+                    "description": "Optional missing slot names such as capital_expenditures or ppe_net.",
+                },
+                "fiscal_year": {"type": "int", "required": False, "min": 1900, "max": 2100},
+                "period": {"type": "str", "required": False, "min_length": 1, "aliases": ["target_period"]},
+                "max_matches": {"type": "int", "required": False, "min": 1, "max": 50},
+                "max_chars": {"type": "int", "required": False, "min": 1000, "max": 50000},
+                "chunk_lines": {"type": "int", "required": False, "min": 1, "max": 12},
+            },
+            runtime={
+                "concurrency_safe": True,
+                "read_only": True,
+                "always_load": True,
+                "timeout_seconds": 30,
+                "max_result_size_chars": 50000,
+                "result_persistence_policy": "auto",
+                "idempotent": True,
             },
         ),
     )
@@ -1215,6 +1264,408 @@ def _execute_trafilatura_extract(
         artifact_store=artifact_store,
         artifact_kind="trafilatura_extract_payload",
     )
+
+
+def _execute_document_search_hybrid(
+    action: CandidateAction,
+    *,
+    artifact_store: ArtifactStore | None = None,
+) -> Observation | ToolResult:
+    if artifact_store is None:
+        return _observation(
+            action,
+            "blocked",
+            {
+                "error": "missing_artifact_store",
+                "reason": "document.search.hybrid requires host artifact access",
+            },
+            kind="document_hybrid_search",
+        )
+    artifact_id = str(action.payload.get("artifact_id") or "").strip()
+    query = str(action.payload.get("query") or "").strip()
+    if not artifact_id or not query:
+        return _observation(
+            action,
+            "blocked",
+            {
+                "error": "missing_artifact_or_query",
+                "reason": "provide artifact_id and query",
+                "artifact_id": artifact_id or None,
+            },
+            kind="document_hybrid_search",
+        )
+    ref = artifact_store.get(artifact_id)
+    if ref is None:
+        return _observation(
+            action,
+            "failed",
+            {"error": "artifact_not_found", "artifact_id": artifact_id},
+            kind="document_hybrid_search",
+        )
+    max_matches = _positive_int(action.payload.get("max_matches"), default=12, maximum=50)
+    max_chars = _positive_int(action.payload.get("max_chars"), default=20000, maximum=50000)
+    chunk_lines = _positive_int(action.payload.get("chunk_lines"), default=4, maximum=12)
+    if artifact_store.has_blob(artifact_id):
+        payload = artifact_store.read_blob(
+            artifact_id,
+            record_access=True,
+            access_context={
+                "tool": DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
+                "action_id": action.action_id,
+                "artifact_id": artifact_id,
+            },
+        )
+        raw_text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else str(payload)
+        text, extraction = _document_search_text_from_artifact_payload(raw_text)
+    else:
+        text = str(ref.metadata.get("preview") or "")
+        extraction = {"mode": "artifact_metadata_preview", "blob_available": False}
+    if not text.strip():
+        return _observation(
+            action,
+            "blocked",
+            {
+                "error": "empty_artifact_text",
+                "artifact": ref.to_dict(),
+                "extraction": extraction,
+            },
+            kind="document_hybrid_search",
+        )
+
+    rank_bm25, rank_error = _import_component("rank_bm25", package="rank-bm25")
+    query_tokens, query_aliases = _document_search_query_tokens(action.payload)
+    chunks = _document_search_chunks(text, chunk_lines=chunk_lines)
+    matches = _rank_document_search_chunks(
+        chunks,
+        query_tokens=query_tokens,
+        query_aliases=query_aliases,
+        rank_bm25=rank_bm25,
+        max_matches=max_matches,
+        max_chars=max_chars,
+        fiscal_year=_optional_int(action.payload.get("fiscal_year")),
+        period=str(action.payload.get("period") or action.payload.get("target_period") or "").strip(),
+    )
+    status = "ok" if matches else "blocked"
+    content: JsonObject = {
+        "schema": "holo.kernel_v3.document_hybrid_search_result.v1",
+        "component": "rank_bm25",
+        "component_status": "ok" if rank_error is None else "fallback_lexical",
+        "component_error": rank_error,
+        "open_source_component_policy": {
+            "active_now": ["rank-bm25"],
+            "source_clones": [
+                ".holo_components/src/haystack",
+                ".holo_components/src/llama_index",
+                ".holo_components/src/qdrant-client",
+                ".holo_components/src/docling",
+            ],
+            "next_backend_targets": ["haystack", "qdrant-client", "llama-index"],
+        },
+        "artifact": ref.to_dict(),
+        "artifact_id": artifact_id,
+        "query": query,
+        "query_aliases": query_aliases[:40],
+        "extraction": extraction,
+        "chunk_count": len(chunks),
+        "matches": matches,
+        "match_count": len(matches),
+        "legacy_replacement_for": "artifact.query",
+        "semantic_decision_owner": "model",
+        "host_boundary": (
+            "document.search.hybrid returns open-source retrieval candidates only; "
+            "the model must still bind slots, choose periods, and request calculator/verifier tools."
+        ),
+    }
+    if status != "ok":
+        content["reason"] = "no_matching_chunks"
+    return _artifact_tool_result(
+        action,
+        status,
+        content,
+        kind="document_hybrid_search",
+        artifact_store=artifact_store,
+        artifact_kind="document_hybrid_search_payload",
+    )
+
+
+def _document_search_text_from_artifact_payload(raw_text: str) -> tuple[str, JsonObject]:
+    parsed = _parse_context_literal(raw_text)
+    if isinstance(parsed, Mapping):
+        parts: list[str] = []
+        preferred_keys = ("text", "markdown", "content", "preview")
+        for key in preferred_keys:
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value)
+        snippets = parsed.get("focus_snippets")
+        if isinstance(snippets, list):
+            for item in snippets[:80]:
+                if isinstance(item, Mapping) and isinstance(item.get("snippet"), str):
+                    parts.append(str(item.get("snippet")))
+        for key in ("records", "tables", "text_blocks", "data_table_payloads"):
+            value = parsed.get(key)
+            _collect_document_search_strings(value, parts, max_parts=500)
+        if not parts:
+            _collect_document_search_strings(parsed, parts, max_parts=500)
+        text = "\n".join(part for part in parts if str(part).strip())
+        return text, {
+            "mode": "json_payload",
+            "top_level_keys": sorted(str(key) for key in list(parsed.keys())[:40]),
+            "text_chars": len(text),
+            "blob_available": True,
+        }
+    return raw_text, {
+        "mode": "raw_text",
+        "text_chars": len(raw_text),
+        "blob_available": True,
+    }
+
+
+def _collect_document_search_strings(value: object, parts: list[str], *, max_parts: int, depth: int = 0) -> None:
+    if len(parts) >= max_parts or depth > 6:
+        return
+    if isinstance(value, str):
+        text = re.sub(r"\s+", " ", value).strip()
+        if len(text) >= 12:
+            parts.append(text[:5000])
+        return
+    if isinstance(value, Mapping):
+        for key, item in list(value.items())[:100]:
+            if len(parts) >= max_parts:
+                break
+            if isinstance(item, (str, Mapping, list, tuple)):
+                if isinstance(item, str) and str(key).casefold() in {"id", "artifact_id", "hash", "schema"}:
+                    continue
+                _collect_document_search_strings(item, parts, max_parts=max_parts, depth=depth + 1)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in list(value)[:300]:
+            if len(parts) >= max_parts:
+                break
+            _collect_document_search_strings(item, parts, max_parts=max_parts, depth=depth + 1)
+
+
+def _document_search_query_tokens(payload: JsonObject) -> tuple[list[str], list[str]]:
+    aliases: list[str] = []
+    raw_items: list[str] = [str(payload.get("query") or "")]
+    for key in ("focus_terms", "slot_names"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            raw_items.append(value)
+        elif isinstance(value, list):
+            raw_items.extend(str(item) for item in value[:40])
+    fiscal_year = _optional_int(payload.get("fiscal_year"))
+    period = str(payload.get("period") or payload.get("target_period") or "").strip()
+    if fiscal_year is not None:
+        raw_items.extend([str(fiscal_year), f"FY{fiscal_year}", f"fiscal {fiscal_year}"])
+    if period:
+        raw_items.append(period)
+    for item in raw_items:
+        cleaned = " ".join(str(item or "").replace("_", " ").replace("-", " ").split())
+        if not cleaned:
+            continue
+        aliases.append(cleaned)
+        aliases.extend(_document_finance_aliases(cleaned))
+    ordered_aliases = _ordered_unique_strings(aliases)
+    tokens: list[str] = []
+    for alias in ordered_aliases:
+        tokens.extend(_document_search_tokenize(alias))
+    return _ordered_unique_strings(tokens), ordered_aliases
+
+
+def _document_finance_aliases(text: str) -> list[str]:
+    normalized = _period_tokenize(text)
+    aliases: list[str] = []
+    if "capitalexpenditure" in normalized or "capex" in normalized:
+        aliases.extend([
+            "capital expenditures",
+            "capex",
+            "purchases of property plant and equipment",
+            "purchase of property plant and equipment",
+            "additions to property plant and equipment",
+            "investing activities",
+        ])
+    if "propertyplantandequipment" in normalized or normalized in {"ppe", "ppenet"}:
+        aliases.extend([
+            "property plant and equipment net",
+            "property, plant and equipment - net",
+            "property, plant and equipment — net",
+            "pp&e net",
+            "ppe net",
+        ])
+    if "operatingcashflow" in normalized or "cashflowfromoperations" in normalized:
+        aliases.extend([
+            "net cash provided by operating activities",
+            "cash flows provided by operating activities",
+            "operating activities",
+        ])
+    if "revenue" in normalized or "netsales" in normalized:
+        aliases.extend(["net sales", "revenue", "sales"])
+    if "totalassets" in normalized or normalized == "assets":
+        aliases.extend(["total assets", "assets"])
+    if "netincome" in normalized or "netearnings" in normalized:
+        aliases.extend(["net income", "net earnings"])
+    return aliases
+
+
+def _document_search_chunks(text: str, *, chunk_lines: int) -> list[JsonObject]:
+    raw_lines = [re.sub(r"\s+", " ", line).strip() for line in str(text or "").splitlines()]
+    lines = [line for line in raw_lines if line]
+    if len(lines) < 4:
+        lines = [
+            item.strip()
+            for item in re.split(r"(?<=[.;:])\s+|\s{3,}", re.sub(r"\s+", " ", str(text or "")).strip())
+            if item.strip()
+        ]
+    if not lines:
+        return []
+    chunk_lines = max(1, min(12, chunk_lines))
+    step = max(1, chunk_lines // 2)
+    chunks: list[JsonObject] = []
+    seen: set[str] = set()
+    for start in range(0, len(lines), step):
+        selected = lines[start : start + chunk_lines]
+        if not selected:
+            continue
+        chunk_text = "\n".join(selected)
+        key = hashlib.sha1(chunk_text.encode("utf-8", errors="ignore")).hexdigest()
+        if key in seen:
+            continue
+        seen.add(key)
+        chunks.append(
+            {
+                "chunk_id": f"chunk-{len(chunks) + 1}",
+                "start_line": start + 1,
+                "end_line": start + len(selected),
+                "text": chunk_text,
+                "tokens": _document_search_tokenize(chunk_text),
+            }
+        )
+        if len(chunks) >= 2500:
+            break
+    return chunks
+
+
+def _rank_document_search_chunks(
+    chunks: list[JsonObject],
+    *,
+    query_tokens: list[str],
+    query_aliases: list[str],
+    rank_bm25: Any,
+    max_matches: int,
+    max_chars: int,
+    fiscal_year: int | None,
+    period: str,
+) -> list[JsonObject]:
+    if not chunks or not query_tokens:
+        return []
+    tokenized = [list(chunk.get("tokens") or []) for chunk in chunks]
+    scores: list[float]
+    if rank_bm25 is not None:
+        try:
+            bm25 = rank_bm25.BM25Okapi(tokenized)
+            scores = [float(score) for score in bm25.get_scores(query_tokens)]
+        except Exception:
+            scores = _lexical_document_search_scores(tokenized, query_tokens)
+    else:
+        scores = _lexical_document_search_scores(tokenized, query_tokens)
+    target_tokens = _period_target_tokens(fiscal_year=fiscal_year, period=period)
+    scored: list[tuple[float, JsonObject]] = []
+    for index, chunk in enumerate(chunks):
+        text = str(chunk.get("text") or "")
+        score = scores[index] if index < len(scores) else 0.0
+        matched_aliases = [alias for alias in query_aliases if alias and alias.casefold() in text.casefold()]
+        if matched_aliases:
+            score += min(5.0, 0.75 * len(matched_aliases))
+        if target_tokens and _text_matches_period_target(text, target_tokens):
+            score += 2.0
+        noise_flags = _document_search_noise_flags(text)
+        if "table_of_contents_like" in noise_flags:
+            score -= 1.5
+        if score > 0:
+            enriched = dict(chunk)
+            enriched["score"] = round(score, 6)
+            enriched["matched_aliases"] = matched_aliases[:16]
+            enriched["period_signals"] = _document_search_period_signals(text)
+            enriched["numeric_values"] = _document_search_numeric_values(text)
+            enriched["noise_flags"] = noise_flags
+            enriched.pop("tokens", None)
+            scored.append((score, enriched))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    matches: list[JsonObject] = []
+    used_chars = 0
+    for rank, (_, chunk) in enumerate(scored[: max_matches * 3], start=1):
+        text = str(chunk.get("text") or "")
+        remaining = max_chars - used_chars
+        if remaining <= 0:
+            break
+        clipped = _truncate(text, min(remaining, 3000))
+        used_chars += len(clipped)
+        match = dict(chunk)
+        match["rank"] = rank
+        match["text"] = clipped
+        match["truncated"] = len(clipped) < len(text)
+        matches.append(match)
+        if len(matches) >= max_matches:
+            break
+    return matches
+
+
+def _lexical_document_search_scores(tokenized: list[list[str]], query_tokens: list[str]) -> list[float]:
+    query_set = set(query_tokens)
+    return [float(sum(1 for token in tokens if token in query_set)) for tokens in tokenized]
+
+
+def _document_search_tokenize(text: str) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", str(text or "").casefold())
+        if len(token) > 1 or token.isdigit()
+    ]
+
+
+def _document_search_noise_flags(text: str) -> list[str]:
+    lowered = str(text or "").casefold()
+    flags: list[str] = []
+    note_count = len(re.findall(r"\bnote\s+\d+\b", lowered))
+    if "table of contents" in lowered or (note_count >= 2 and re.search(r"\b(revenue|assets|income|cash flows?)\s+\d{1,3}\b", lowered)):
+        flags.append("table_of_contents_like")
+    if re.search(r"\b(decreased|increased|change[ds]?|compared to)\b", lowered):
+        flags.append("delta_or_variance_language")
+    if re.search(r"\baccession|cik|commission file number\b", lowered):
+        flags.append("identifier_noise_possible")
+    return flags
+
+
+def _document_search_period_signals(text: str) -> list[str]:
+    signals = re.findall(r"\b(?:FY\s*)?(?:19|20)\d{2}\b", str(text or ""), flags=re.IGNORECASE)
+    signals.extend(re.findall(r"\b(?:year|years)\s+ended\s+[A-Za-z]+\s+\d{1,2},\s+(?:19|20)\d{2}\b", str(text or ""), flags=re.IGNORECASE))
+    return _ordered_unique_strings(signals)[:16]
+
+
+def _document_search_numeric_values(text: str) -> list[JsonObject]:
+    values: list[JsonObject] = []
+    pattern = re.compile(r"(?P<raw>\(?\$?\s?-?\d{1,3}(?:,\d{3})*(?:\.\d+)?\)?\s?(?:million|billion|%)?)", re.IGNORECASE)
+    for match in pattern.finditer(str(text or "")):
+        raw = match.group("raw").strip()
+        if not raw or raw in {"(", ")"}:
+            continue
+        values.append({"raw": raw, "start": match.start(), "end": match.end()})
+        if len(values) >= 32:
+            break
+    return values
+
+
+def _ordered_unique_strings(values: Sequence[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            result.append(text)
+    return result
 
 
 def _execute_provided_context_parse(

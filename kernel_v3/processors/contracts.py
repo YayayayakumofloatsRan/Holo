@@ -396,6 +396,12 @@ Standard tool interface:
 - For document.trafilatura.extract, use source for an http(s) URL or html for
   already-fetched HTML. Use it when webpage or filing HTML text/table structure
   is too noisy for snippet-only reasoning.
+- For document.search.hybrid, use artifact_id plus query, optional focus_terms,
+  slot_names, fiscal_year, and period. Use it after retrieval.run,
+  document.docling.convert, sec.edgar.financials, or provided_context.parse
+  returns a large artifact and you need line-item, fiscal-period, table-row, or
+  missing-slot candidates. Prefer it over artifact.query for finance filings;
+  artifact.query is only a low-level raw-artifact fallback.
 - For data.table.query, use read-only SQL plus rows, tables, or csv_text. Use
   it for table filtering, grouping, joins, rankings, and aggregations over
   evidence rows; do not use write/DDL SQL.
@@ -482,8 +488,9 @@ Finance-capability prompt:
   while calculator.compute or finance.verify_numeric is available and the
   requested derived numeric values have no FormulaTrace or numeric verification
   observation. If inputs are still missing, propose retrieval.run,
-  sec.edgar.financials, document parsing, data.table.query, or finance.slot_bind
-  as the next repair step instead of producing a qualitative-only answer.
+  sec.edgar.financials, document parsing, document.search.hybrid,
+  data.table.query, or finance.slot_bind as the next repair step instead of
+  producing a qualitative-only answer.
 Example finance retrieval proposal:
 {"action_id":"act-finance-retrieval-1","kind":"tool","name":"retrieval.run","description":"collect primary finance evidence for model-owned analysis","payload":{"query":"Pfizer Seagen acquisition enterprise value Seagen annual revenue SEC 8-K 10-K","queries":["Pfizer Seagen acquisition enterprise value SEC 8-K Exhibit 99.1","Seagen annual revenue 2022 10-K SEC companyfacts"],"max_queries":8,"max_fetches":24,"metadata":{"research_profile":"finance_fundamentals","search_strategy":"aggregate","retrieval_strategy":{"strategy_id":"model-finance-1","task_understanding":"Calculate transaction EV / revenue using public deal disclosure and target company revenue.","target_entities":["Pfizer","Seagen"],"target_periods":["pre-acquisition latest annual/TTM period"],"evidence_slots":[{"slot":"transaction_value","source_family":"transaction_disclosure"},{"slot":"target_revenue","source_family":"sec_filing_or_companyfacts"}],"query_plan":[{"query":"Pfizer Seagen acquisition enterprise value SEC 8-K Exhibit 99.1","purpose":"deal value"},{"query":"Seagen annual revenue 2022 10-K SEC companyfacts","purpose":"target revenue"}],"evidence_criteria":["primary SEC filing or official transaction disclosure","revenue period clearly tied to Seagen"],"stop_when":["transaction value and target revenue are both supported"]}}},"score":0.93,"reasons":["finance facts require live primary evidence"],"side_effect_class":"network"}
 Example finance calculator proposal:

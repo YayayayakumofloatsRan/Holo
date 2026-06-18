@@ -12,6 +12,7 @@ from kernel_v3.finance import (
     CALENDAR_DAYS_BETWEEN_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+    DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
     FINANCE_AGENT_LOOP_CONTRACT_SCHEMA,
     FINANCE_OPEN_COMPONENT_NETWORK_TOOL_NAMES,
@@ -61,6 +62,7 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
         SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
         SEC_EDGAR_FINANCIALS_TOOL_NAME,
         DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+        DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
         DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
         MARKET_OPENBB_FETCH_TOOL_NAME,
         PROVIDED_CONTEXT_PARSE_TOOL_NAME,
@@ -74,6 +76,7 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
         assert runtime.always_load is True
         assert runtime.max_result_size_chars is not None
     assert tool_runtime_spec_for_manifest(manifests[SEC_EDGAR_FINANCIALS_TOOL_NAME]).concurrency_safe is True
+    assert tool_runtime_spec_for_manifest(manifests[DOCUMENT_SEARCH_HYBRID_TOOL_NAME]).concurrency_safe is True
     assert tool_runtime_spec_for_manifest(manifests[PROVIDED_CONTEXT_PARSE_TOOL_NAME]).concurrency_safe is True
     assert tool_runtime_spec_for_manifest(manifests[DATA_TABLE_QUERY_TOOL_NAME]).concurrency_safe is True
     assert tool_runtime_spec_for_manifest(manifests[CALENDAR_DAYS_BETWEEN_TOOL_NAME]).concurrency_safe is True
@@ -82,6 +85,64 @@ def test_finance_register_exposes_mature_component_tools_with_host_boundaries() 
     sec_schema = manifests[SEC_EDGAR_FINANCIALS_TOOL_NAME].input_schema
     assert sec_schema["fiscal_year"]["required"] is False
     assert sec_schema["period"]["aliases"] == ["target_period"]
+
+
+def test_document_search_hybrid_uses_open_source_bm25_for_filing_artifacts() -> None:
+    artifact_store = ArtifactStore.in_memory()
+    artifact = artifact_store.write_blob(
+        kind="docling_conversion_payload",
+        mime_type="application/json",
+        payload=json.dumps(
+            {
+                "text": (
+                    "Table of Contents Note 2. Revenue 59 Note 4. Goodwill and Intangible Assets 63\n"
+                    "Consolidated Balance Sheet\n"
+                    "Property, plant and equipment 25,998 27,213\n"
+                    "Less: Accumulated depreciation (16,820) (17,784)\n"
+                    "Property, plant and equipment - net 9,178 9,429\n"
+                    "Total assets $ 46,455 $ 47,072\n"
+                    "Consolidated Statement of Cash Flows\n"
+                    "Net cash provided by operating activities $ 5,591 $ 7,454"
+                )
+            },
+            ensure_ascii=False,
+        ),
+        metadata={"purpose": "document_search_fixture"},
+    )
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond(), artifact_store=artifact_store)
+    action = CandidateAction(
+        action_id="act-document-search",
+        kind="tool",
+        name=DOCUMENT_SEARCH_HYBRID_TOOL_NAME,
+        description="search converted filing",
+        score=1.0,
+        payload={
+            "artifact_id": artifact.artifact_id,
+            "query": "property plant and equipment net FY2022",
+            "focus_terms": ["property plant and equipment net", "total assets"],
+            "slot_names": ["property_plant_and_equipment_net"],
+            "fiscal_year": 2022,
+            "max_matches": 3,
+        },
+        reasons=["need line-item candidates"],
+        side_effect_class="read",
+    )
+
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-document-search",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+    result = registry.execute_with_artifacts(action, policy_decision=decision)
+    observation = result.observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.kind == "document_hybrid_search"
+    assert observation.content["component"] == "rank_bm25"
+    assert observation.content["legacy_replacement_for"] == "artifact.query"
+    assert observation.content["match_count"] >= 1
+    assert "Property, plant and equipment" in json.dumps(observation.content["matches"], ensure_ascii=False)
 
 
 def test_provided_context_parse_returns_query_ready_finqa_table() -> None:
@@ -384,6 +445,7 @@ def test_finance_tool_surface_catalog_covers_required_one_shot_tool_families() -
         "network_fetch_crawl_browser",
         "sec_edgar_xbrl",
         "document_table_conversion",
+        "document_retrieval_workbench",
         "market_macro_fundamental_data",
         "calculator_math_stats",
         "table_dataframe_query",

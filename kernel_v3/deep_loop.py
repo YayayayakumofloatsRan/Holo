@@ -3552,7 +3552,12 @@ def _tools_for_requirement_categories(categories: list[object]) -> list[str]:
     mapping = {
         "source_acquisition": ["retrieval.run"],
         "structured_sec_facts": ["sec.edgar.financials"],
-        "document_table_extraction": ["provided_context.parse", "document.docling.convert", "document.trafilatura.extract"],
+        "document_table_extraction": [
+            "provided_context.parse",
+            "document.docling.convert",
+            "document.search.hybrid",
+            "document.trafilatura.extract",
+        ],
         "table_operations": ["data.table.query"],
         "arithmetic": ["calculator.compute", "calendar.days_between"],
         "numeric_verification": ["finance.verify_numeric"],
@@ -3568,8 +3573,8 @@ def _tools_for_requirement_risk_flags(risk_flags: list[object]) -> list[str]:
     mapping = {
         "needs_primary_filing": ["retrieval.run", "sec.edgar.company_filings"],
         "needs_structured_xbrl": ["sec.edgar.financials"],
-        "needs_table_rows": ["document.docling.convert", "data.table.query"],
-        "needs_bridge_reconciliation": ["document.docling.convert", "data.table.query"],
+        "needs_table_rows": ["document.docling.convert", "document.search.hybrid", "data.table.query"],
+        "needs_bridge_reconciliation": ["document.docling.convert", "document.search.hybrid", "data.table.query"],
         "needs_market_or_macro_context": ["market.openbb.fetch", "retrieval.run"],
         "requires_calculator": ["calculator.compute"],
         "requires_calendar_days": ["calendar.days_between"],
@@ -3797,11 +3802,11 @@ def _provider_tool_result_content(item: _ToolExecutionItem) -> JsonObject:
     }
     if tool_result_artifact_id:
         payload["tool_result_artifact_id"] = tool_result_artifact_id
-        payload["artifact_query_hint"] = {
-            "tool": "artifact.query",
+        payload["document_search_hint"] = {
+            "tool": "document.search.hybrid",
             "artifact_id": tool_result_artifact_id,
-            "path": "observation.content",
-            "purpose": "narrow full result before broad read",
+            "query": "missing facts",
+            "purpose": "preferred artifact search",
         }
         payload["artifact_read_hint"] = {
             "tool": "artifact.read",
@@ -3950,10 +3955,10 @@ def _tool_result_artifact_context_update(
         "source": observation.source,
         "status": observation.status,
         "hints": {
-            "artifact_query_hint": {
-                "tool": "artifact.query",
+            "document_search_hint": {
+                "tool": "document.search.hybrid",
                 "artifact_id": artifact_id,
-                "path": "observation.content",
+                "query": "missing facts",
             },
             "artifact_read_hint": {
                 "tool": "artifact.read",
