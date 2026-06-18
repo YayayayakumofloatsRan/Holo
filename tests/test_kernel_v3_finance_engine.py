@@ -11976,6 +11976,92 @@ def test_finance_capability_blocks_host_fallback_when_llm_numeric_judge_unavaila
     )
 
 
+def test_retrieval_finalization_repairs_proxy_answer_when_required_finance_slot_is_missing() -> None:
+    """Structural regression only: fake provider verifies the finalization gate contract, not benchmark skill."""
+    journal = JournalStore.in_memory()
+    fabric = ProcessorFabric(
+        providers={
+            "fake_json": FakeJsonProvider(
+                {
+                    "synthesizer.answer": [
+                        {
+                            "answer": "3M FY2018 net PP&E was $1.577 billion, supported by cite-ppne.",
+                            "citation_refs": ["cite-ppne"],
+                            "confidence": 0.75,
+                            "limitations": [],
+                            "used_evidence": ["evidence-ppne-purchases"],
+                        },
+                        {
+                            "answer": (
+                                "Not separately itemized; the provided evidence shows purchases of property, plant and "
+                                "equipment, but it does not provide the requested balance-sheet net PP&E line item. cite-ppne."
+                            ),
+                            "citation_refs": ["cite-ppne"],
+                            "confidence": 0.82,
+                            "limitations": ["property_plant_and_equipment_net is unresolved in the provided evidence"],
+                            "used_evidence": ["evidence-ppne-purchases"],
+                        },
+                    ]
+                }
+            )
+        },
+        router=ProcessorRouter(default_provider="fake_json", default_model="fake-json"),
+        journal=journal,
+    )
+    runtime = AgentRuntime(journal=journal, processor_fabric=fabric)
+    evidence = [
+        _finance_evidence(
+            evidence_id="evidence-ppne-purchases",
+            title="3M 2018 Form 10-K",
+            uri="https://www.sec.gov/Archives/edgar/data/66740/000155837019000470/mmm-20181231x10k.htm",
+            text=(
+                "entityName=3M Company ticker=MMM concept=PaymentsToAcquirePropertyPlantAndEquipment "
+                "metric=purchases of property, plant and equipment label=Payments to Acquire Property, Plant, and Equipment "
+                "unit=USD scale=millions fy=2018 form=10-K value=1577"
+            ),
+        )
+    ]
+    citations = [_finance_citation(evidence[0], citation_id="cite-ppne")]
+    recipe = task_recipe(
+        "retrieval_answer",
+        metadata={
+            "goal": "What was 3M's FY2018 property, plant and equipment, net?",
+            "execution_metadata": execution_profile_runtime_metadata(execution_profile("finance-fact-fast")),
+        },
+    )
+
+    final, failure = runtime._synthesize_retrieval_final(  # noqa: SLF001
+        "task-finance-missing-slot",
+        "run-1",
+        recipe=recipe,
+        report=_retrieval_report(
+            evidence=evidence,
+            citations=citations,
+            diagnostics={"missing_slots": ["property_plant_and_equipment_net"]},
+        ),
+        evidence=evidence,
+        citations=citations,
+        synthesizer_mode="model",
+    )
+
+    assert failure is None
+    assert final is not None
+    assert final.answer.startswith("Not separately itemized;")
+    assert "$1.577 billion" not in final.answer
+    synthesis_gates = journal.records(task_id="task-finance-missing-slot", kind="synthesis_gate_result")
+    missing_slot_gates = [
+        record for record in synthesis_gates
+        if record.data["diagnostics"].get("gate_id") == "missing_required_finance_slots_v1"
+    ]
+    assert [record.data["status"] for record in missing_slot_gates] == ["failed", "passed"]
+    assert (
+        missing_slot_gates[0].data["diagnostics"]["missing_slots"]
+        == ["property_plant_and_equipment_net"]
+    )
+    assert journal.records(task_id="task-finance-missing-slot", kind="finance_numeric_verification")[-1].data["status"] != "failed"
+    assert journal.records(task_id="task-finance-missing-slot", kind="agent_final_answer")
+
+
 def test_finance_capability_does_not_rewrite_semantic_clarification() -> None:
     intake = SemanticIntake(
         intake_id="intake-khc-clarify",
@@ -14586,6 +14672,7 @@ def _retrieval_report(
     evidence: list[EvidenceItem],
     citations: list[CitationItem],
     status: str = "sufficient",
+    diagnostics: dict | None = None,
 ) -> RetrievalReport:
     return RetrievalReport(
         report_id="report-1",
@@ -14599,4 +14686,5 @@ def _retrieval_report(
         evaluation_id="eval-1",
         artifact_refs=["artifact-1"],
         preview="SEC companyfacts evidence",
+        diagnostics=dict(diagnostics or {}),
     )

@@ -1414,3 +1414,65 @@ model-visible trace 中。
 准确率。下一步仍应回到 live debug50 类型簇，验证模型是否能利用
 `agent_trace.agent_loop_turn_result` 更稳定地从缺槽、失败工具、budget guard 中
 恢复。
+
+## 32. Mature-loop finalization missing-slot gate checkpoint
+
+用户继续强调优先照搬成熟 agent loop 的实现，不要把单题失败继续写成零散补丁。
+本轮回到 `financebench_id_04672` 的 live 失败复盘：系统已经看到目标题缺
+balance-sheet `property_plant_and_equipment_net`，但 finalization 仍允许合成答案
+把 cash-flow `Purchases of PP&E` 这类邻近值当成核心数字进入 numeric verifier。
+这不是 3M 规则问题，而是成熟 loop 的 terminal contract 缺口：final answer
+必须证明 required answer slots 已满足，或明确把答案降级为不可得/未单列。
+
+本轮补齐：
+
+- `AgentRuntime._synthesize_retrieval_final(...)` 在 processor 产出
+  `FinalAnswer` 后、质量检查和 numeric verifier 前新增
+  `missing_required_finance_slots_v1` gate。
+- gate 从 retrieval report diagnostics、retrieval workbench decision、
+  model/host slot frame、`finance.slot_bind`、`TransformPlan` 和 numeric
+  verification state 中收集 unresolved required finance slots。
+- 已由后续状态解决的槽位会被扣减：例如 ready `TransformPlan` 中的
+  `fiscal_days=365` 不再被早期 slot_frame 的缺槽快照误拦。
+- optional formula planner 的缺槽不会阻断 source-grounded explanation；
+  只有 report/workbench/model-owned required slot 或 slot_frame `required_slots`
+  明确指向的 answer slot 才能触发终止 gate。
+- 若初次合成在缺 required slot 时仍 headline proxy numeric answer，host 记录
+  failed synthesis gate，并让 LLM 进行一次 repair：未单列时必须以
+  `Not separately itemized;` 开头，证据不存在时必须以
+  `Not available in the provided evidence;` 开头；host 不替模型选择财务语义。
+- repair 通过后仍回到原有 final quality check、finance numeric verifier 和
+  synthesis gate 流程；host 只是 terminal contract / provenance gate。
+
+新增结构测试：
+
+- `test_retrieval_finalization_repairs_proxy_answer_when_required_finance_slot_is_missing`
+  使用 fake provider 只验证 loop contract：report 仍有
+  `property_plant_and_equipment_net` 缺槽时，第一次 proxy `$1.577 billion`
+  答案必须被拦截，repair 后输出 `Not separately itemized; ...`。
+
+结构验证：
+
+```bash
+.venv/bin/python -m pytest -q tests/test_kernel_v3_finance_engine.py
+.venv/bin/python -m pytest -q \
+  tests/test_kernel_v3_phase6_agent_runtime.py \
+  tests/test_kernel_v3_phase3_context_compiler.py \
+  tests/test_kernel_v3_deep_agent_loop.py \
+  tests/test_kernel_v3_loop_tool_dispatch.py \
+  tests/test_kernel_v3_retrieval_workbench.py
+.venv/bin/python -m py_compile \
+  kernel_v3/agent/runtime.py \
+  tests/test_kernel_v3_finance_engine.py
+```
+
+结果：
+
+- finance engine structural set: `304 passed in 8.61s`
+- runtime/context/deep-loop/workbench set: `92 passed in 10.99s`
+- `py_compile` passed
+
+说明：这是 mature-loop finalization 合同修复，不是 FinanceBench/FinQA/FAB 分数。
+没有新增可报告的 live accuracy。下一步仍应对 `financebench_id_04672` 或同类
+missing-slot 类型簇跑 live debug，确认模型在真实工具链中会继续检索或输出正确的
+不可得/未单列答案，而不是把 proxy number 当成答案。

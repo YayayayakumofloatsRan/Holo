@@ -573,6 +573,20 @@ FinanceBench/FinQA score. Structural validation passed (`41` targeted
 deep-loop/context tests, `34` context/tool/provider tests, `335`
 finance-engine/workloop tests, `52` finance-open/tool-readiness/provider/tool
 tests, plus `py_compile`).
+The next same-day mature-loop finalization checkpoint closes the generic defect
+behind the diagnostic `financebench_id_04672` failure. Finance finalization now
+treats unresolved required answer slots as a terminal gate: if retrieval/workbench
+or model-owned slot state still names a required finance slot, the first
+synthesized answer cannot headline a nearby/proxy number as final. The host
+records `missing_required_finance_slots_v1`, asks the model to repair the answer
+into an explicit "not separately itemized" / "not available in the provided
+evidence" limited answer, then continues through the existing quality and numeric
+verifier path. Resolved slots from later `slot_bind` or ready `TransformPlan`
+records are deducted, and optional formula-planner misses for source-grounded
+explanations do not block finalization. This is a mature agent-loop contract
+repair, not a FinanceBench/FinQA accuracy score. Structural validation passed
+(`304` finance engine tests, `92` runtime/context/deep-loop/workbench tests, plus
+`py_compile`).
 The debug50 architecture reset is recorded in
 `docs/KERNEL_V3_DEBUG50_REQUIREMENTS_AND_GENERIC_FINANCE_LOOP_2026-06-17_ZH.md`.
 It stops per-question patching, groups the first 50 FinanceBench debug prompts

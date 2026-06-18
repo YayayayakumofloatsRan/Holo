@@ -1234,6 +1234,47 @@ class AgentRuntime:
                 recipe=recipe,
             )
         final = _agent_final_from_processor(synthesized, task_id=task_id, run_id=run_id, trace_refs=_trace_refs(self.journal, task_id))
+        missing_slot_issues = _finance_missing_slot_gate_issues(
+            final,
+            recipe=recipe,
+            report=report,
+            journal=self.journal,
+        )
+        if missing_slot_issues:
+            missing_slots = _finance_missing_slot_issue_slots(missing_slot_issues)
+            self._append_synthesis_gate_result(
+                final,
+                recipe=recipe,
+                status="failed",
+                issues=missing_slot_issues,
+                diagnostics={
+                    "gate_id": "missing_required_finance_slots_v1",
+                    "source": "finance_missing_slot_gate",
+                    "missing_slots": missing_slots[:24],
+                    "policy": "do_not_finalize_proxy_numeric_answers_when_required_finance_slots_are_unresolved",
+                },
+            )
+            repaired_final = self._attempt_llm_finance_missing_slot_repair(
+                final,
+                missing_slot_issues,
+                recipe=recipe,
+                report=report,
+                evidence=evidence,
+                citations=citations,
+                synthesizer_mode=synthesizer_mode,
+                attempt="initial_final_answer_missing_required_slots",
+            )
+            if repaired_final is None:
+                return None, self._failure(
+                    task_id,
+                    run_id,
+                    "missing_required_finance_slots",
+                    missing_evidence=[f"missing_slot:{slot}" for slot in missing_slots[:24]]
+                    or ["required_finance_slot_evidence"],
+                    next_action="collect_required_finance_slot_evidence_or_answer_unavailable_without_proxy_numbers",
+                    recipe=recipe,
+                )
+            final = repaired_final
         quality_gaps = self._final_answer_quality_gaps(final, recipe=recipe) if synthesizer_mode == "model" else []
         self._append_final_quality_check(final, recipe=recipe, gaps=quality_gaps, attempt="initial")
         if quality_gaps and synthesizer_mode == "model":
@@ -1543,6 +1584,103 @@ class AgentRuntime:
             ),
             state_delta={"synthesis_gate_status": status},
         )
+
+    def _attempt_llm_finance_missing_slot_repair(
+        self,
+        answer: FinalAnswer,
+        issues: list[JsonObject],
+        *,
+        recipe: TaskRecipe,
+        report: RetrievalReport,
+        evidence: list[EvidenceItem],
+        citations: list[CitationItem],
+        synthesizer_mode: str,
+        attempt: str,
+    ) -> FinalAnswer | None:
+        if synthesizer_mode != "model" or self.processor_fabric is None:
+            return None
+        missing_slots = _finance_missing_slot_issue_slots(issues)
+        repair_report = replace(
+            report,
+            diagnostics={
+                **_json_object(report.diagnostics),
+                "finance_missing_slot_repair": {
+                    "schema": "holo.kernel_v3.finance_missing_slot_repair_context.v1",
+                    "attempt": attempt,
+                    "missing_slots": missing_slots[:24],
+                    "semantic_decision_owner": "model",
+                    "host_role": "finalization_contract_and_provenance_gate",
+                    "instruction": (
+                        "Required finance slots remain unresolved. Do not turn nearby or proxy line items into the answer. "
+                        "Either state that the requested line item is not separately itemized, or state that it is not available "
+                        "in the provided evidence."
+                    ),
+                },
+            },
+        )
+        repaired = self._synthesize(
+            answer.task_id,
+            answer.run_id,
+            report=repair_report,
+            evidence=evidence,
+            citations=citations,
+            synthesizer_mode=synthesizer_mode,
+            recipe=recipe,
+            retry_instruction=_finance_missing_slot_retry_instruction(missing_slots, recipe=recipe),
+        )
+        if repaired.status != "ok" or repaired.answer is None:
+            self._append_synthesis_gate_result(
+                answer,
+                recipe=recipe,
+                status="failed",
+                issues=[
+                    *issues[:16],
+                    {
+                        "code": "finance_missing_slot_repair_failed",
+                        "message": repaired.error or "synthesis_failed",
+                        "missing_slots": missing_slots[:24],
+                    },
+                ],
+                diagnostics={
+                    "gate_id": "missing_required_finance_slots_v1",
+                    "source": "finance_missing_slot_gate",
+                    "attempt": attempt,
+                    "missing_slots": missing_slots[:24],
+                    "repair_status": repaired.status,
+                    "repair_error": repaired.error,
+                    "policy": "do_not_finalize_proxy_numeric_answers_when_required_finance_slots_are_unresolved",
+                },
+            )
+            return None
+        repaired_final = _agent_final_from_processor(
+            repaired,
+            task_id=answer.task_id,
+            run_id=answer.run_id,
+            trace_refs=_trace_refs(self.journal, answer.task_id),
+        )
+        repaired_issues = _finance_missing_slot_gate_issues(
+            repaired_final,
+            recipe=recipe,
+            report=report,
+            journal=self.journal,
+        )
+        self._append_synthesis_gate_result(
+            repaired_final,
+            recipe=recipe,
+            status="passed" if not repaired_issues else "failed",
+            issues=repaired_issues,
+            diagnostics={
+                "gate_id": "missing_required_finance_slots_v1",
+                "source": "finance_missing_slot_gate",
+                "attempt": attempt,
+                "missing_slots": missing_slots[:24],
+                "repair_status": repaired.status,
+                "policy": "do_not_finalize_proxy_numeric_answers_when_required_finance_slots_are_unresolved",
+            },
+        )
+        if repaired_issues:
+            return None
+        return repaired_final
 
     def _finalize_workspace(
         self,
@@ -19174,6 +19312,322 @@ def _finance_answer_numeric_support_rate(verification) -> float | None:
         return None
     matched = list(getattr(verification, "matched_values", []) or [])
     return min(1.0, max(0.0, len(matched) / float(answer_numeric_count)))
+
+
+FINANCE_MISSING_SLOT_KEYS = (
+    "missing_slots",
+    "semantic_missing_slots",
+    "compiled_missing_slots",
+    "required_missing_slots",
+    "unfilled_slots",
+)
+FINANCE_MISSING_SLOT_ACKNOWLEDGEMENT_MARKERS = (
+    "not separately itemized",
+    "not available in the provided evidence",
+    "provided evidence does not contain",
+    "provided evidence does not disclose",
+    "cannot determine from the provided evidence",
+    "insufficient evidence",
+    "missing required",
+    "未单独列示",
+    "未在提供的证据中",
+    "证据不足",
+)
+
+
+def _finance_missing_slot_gate_issues(
+    answer: FinalAnswer,
+    *,
+    recipe: TaskRecipe,
+    report: RetrievalReport,
+    journal: JournalStore,
+) -> list[JsonObject]:
+    if not _finance_numeric_verifier_required(recipe):
+        return []
+    missing_slots = _finance_unresolved_required_slots(
+        journal,
+        task_id=answer.task_id,
+        run_id=answer.run_id,
+        report=report,
+    )
+    if not missing_slots:
+        return []
+    if _finance_answer_acknowledges_missing_required_slots(answer.answer):
+        return []
+    return [
+        {
+            "code": "missing_required_finance_slots",
+            "message": "Required finance slots remain unresolved, but the answer does not clearly state that the requested item is unavailable or not separately itemized.",
+            "missing_slots": missing_slots[:24],
+            "answer_preview": _text_preview(answer.answer, limit=360),
+        }
+    ]
+
+
+def _finance_unresolved_required_slots(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    report: RetrievalReport,
+) -> list[str]:
+    values: list[str] = []
+    diagnostics = _json_object(report.diagnostics)
+    values.extend(_finance_missing_slot_values_from_container(diagnostics))
+    for key in ("retrieval_workbench", "workbench", "finance_slot_bind_state"):
+        nested = _json_object(diagnostics.get(key))
+        if nested:
+            values.extend(_finance_missing_slot_values_from_container(nested))
+    required_slot_keys = {
+        _finance_slot_key(item)
+        for item in _finance_required_slot_names_from_journal(journal, task_id=task_id, run_id=run_id)
+        if _finance_slot_key(item)
+    }
+    for kind in (
+        "retrieval_workbench_decision",
+        "slot_frame",
+        "finance_slot_bind",
+        "transform_plan",
+        "finance_numeric_verification",
+    ):
+        record = _latest_journal_record(journal, task_id=task_id, run_id=run_id, kind=kind)
+        if record is None:
+            continue
+        data = _json_object(record.data)
+        if kind == "retrieval_workbench_decision":
+            values.extend(_workbench_missing_slots(data))
+        elif kind == "slot_frame":
+            values.extend(_finance_slot_frame_required_missing_slots(data))
+        elif kind == "transform_plan":
+            transform_missing = _finance_missing_slot_values_from_container(data)
+            if required_slot_keys:
+                values.extend(
+                    slot
+                    for slot in transform_missing
+                    if _finance_slot_key(slot) in required_slot_keys
+                )
+        else:
+            values.extend(_finance_missing_slot_values_from_container(data))
+    resolved_keys = {
+        _finance_slot_key(item)
+        for item in _finance_resolved_slot_values(
+            journal,
+            task_id=task_id,
+            run_id=run_id,
+            report=report,
+        )
+        if _finance_slot_key(item)
+    }
+    return _ordered_unique(
+        [
+            item
+            for item in (_normalize_missing_slot_value(value) for value in values)
+            if item
+            and _finance_missing_slot_is_answer_slot(item)
+            and _finance_slot_key(item) not in resolved_keys
+        ]
+    )
+
+
+def _finance_missing_slot_values_from_container(value: object) -> list[str]:
+    payload = _json_object(value)
+    if not payload:
+        return []
+    result: list[str] = []
+    for key in FINANCE_MISSING_SLOT_KEYS:
+        result.extend(_finance_missing_slot_values(payload.get(key)))
+    slot_bind = _json_object(payload.get("slot_bind"))
+    if slot_bind:
+        result.extend(_finance_missing_slot_values_from_container(slot_bind))
+    workbench = _json_object(payload.get("workbench"))
+    if workbench:
+        result.extend(_finance_missing_slot_values_from_container(workbench))
+    return result
+
+
+def _finance_required_slot_names_from_journal(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+) -> list[str]:
+    names: list[str] = []
+    for record in journal.records(task_id=task_id, kind="slot_frame"):
+        if record.run_id != run_id:
+            continue
+        names.extend(_finance_required_slot_names(record.data))
+    return _ordered_unique([item for item in (_normalize_missing_slot_value(value) for value in names) if item])
+
+
+def _finance_slot_frame_required_missing_slots(data: object) -> list[str]:
+    required_keys = {
+        _finance_slot_key(item)
+        for item in _finance_required_slot_names(data)
+        if _finance_slot_key(item)
+    }
+    if not required_keys:
+        return []
+    return [
+        slot
+        for slot in _finance_missing_slot_values_from_container(data)
+        if _finance_slot_key(slot) in required_keys
+    ]
+
+
+def _finance_required_slot_names(value: object) -> list[str]:
+    payload = _json_object(value)
+    required = payload.get("required_slots")
+    if not isinstance(required, list):
+        return []
+    names: list[str] = []
+    for item in required:
+        if isinstance(item, dict):
+            names.extend(_finance_missing_slot_values(item.get("name") or item.get("slot_name") or item.get("slot")))
+        elif isinstance(item, str):
+            names.append(item)
+    return names
+
+
+def _finance_resolved_slot_values(
+    journal: JournalStore,
+    *,
+    task_id: str,
+    run_id: str,
+    report: RetrievalReport,
+) -> list[str]:
+    values: list[str] = []
+    diagnostics = _json_object(report.diagnostics)
+    values.extend(_finance_resolved_slot_values_from_container(diagnostics))
+    for key in ("finance_working_state", "slot_frame", "slot_bind", "transform_plan", "finance_slot_bind_state"):
+        nested = _json_object(diagnostics.get(key))
+        if nested:
+            values.extend(_finance_resolved_slot_values_from_container(nested))
+    for kind in ("slot_frame", "finance_slot_bind", "transform_plan"):
+        records = [
+            record
+            for record in journal.records(task_id=task_id, kind=kind)
+            if record.run_id == run_id
+        ]
+        for record in records:
+            values.extend(_finance_resolved_slot_values_from_container(record.data))
+    return _ordered_unique([item for item in (_normalize_missing_slot_value(value) for value in values) if item])
+
+
+def _finance_resolved_slot_values_from_container(value: object) -> list[str]:
+    payload = _json_object(value)
+    if not payload:
+        return []
+    result: list[str] = []
+    filled_slots = payload.get("filled_slots")
+    if isinstance(filled_slots, list):
+        for item in filled_slots:
+            if isinstance(item, dict):
+                result.extend(_finance_missing_slot_values(item.get("slot_name") or item.get("name") or item.get("slot")))
+    bindings = payload.get("slot_bindings")
+    if isinstance(bindings, list):
+        for item in bindings:
+            if isinstance(item, dict):
+                result.extend(_finance_missing_slot_values(item.get("slot_name")))
+                result.extend(_finance_missing_slot_values(item.get("variable_name")))
+    status = str(payload.get("status") or payload.get("decision") or "").strip().casefold()
+    if status in {"ready", "passed", "ok", "sufficient"} and not _finance_missing_slot_values(payload.get("missing_slots")):
+        payload_body = _json_object(payload.get("payload"))
+        variables = _json_object(payload_body.get("variables"))
+        result.extend(str(key) for key in variables.keys() if str(key).strip())
+        result.extend(_finance_missing_slot_values(payload.get("output_attribute")))
+        result.extend(_finance_missing_slot_values(payload_body.get("output_attribute")))
+    for key in ("slot_frame", "slot_bind", "transform_plan", "workbench"):
+        nested = _json_object(payload.get(key))
+        if nested:
+            result.extend(_finance_resolved_slot_values_from_container(nested))
+    return result
+
+
+def _finance_missing_slot_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        for key in ("slot_name", "slot", "name", "attribute", "line_item", "metric"):
+            text = _string_value(value.get(key))
+            if text:
+                return [text]
+        return _finance_missing_slot_values_from_container(value)
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_finance_missing_slot_values(item))
+        return result
+    return []
+
+
+def _normalize_missing_slot_value(value: str) -> str:
+    text = " ".join(str(value or "").split()).strip(" :-")
+    if not text:
+        return ""
+    lowered = text.casefold()
+    if lowered in {"none", "n/a", "na", "not applicable", "null", "[]"}:
+        return ""
+    return text[:120]
+
+
+def _finance_slot_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
+
+
+def _finance_missing_slot_is_answer_slot(value: str) -> bool:
+    lowered = str(value or "").strip().casefold()
+    if not lowered:
+        return False
+    if lowered.startswith("llm_"):
+        return False
+    if lowered in {
+        "model_judgment_unavailable",
+        "task_compile_model_unavailable",
+        "task_compile_judgment",
+    }:
+        return False
+    if "task_compile_judgment" in lowered or "model_judgment" in lowered:
+        return False
+    return True
+
+
+def _finance_answer_acknowledges_missing_required_slots(answer: str) -> bool:
+    text = " ".join(str(answer or "").split()).strip()
+    text = re.sub(r"^(?:[-*]\s*|\d+[.)]\s*)+", "", text).strip()
+    head = text[:320].casefold()
+    return any(marker in head for marker in FINANCE_MISSING_SLOT_ACKNOWLEDGEMENT_MARKERS)
+
+
+def _finance_missing_slot_issue_slots(issues: list[JsonObject]) -> list[str]:
+    slots: list[str] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        slots.extend(_finance_missing_slot_values(issue.get("missing_slots")))
+    return _ordered_unique([item for item in (_normalize_missing_slot_value(slot) for slot in slots) if item])
+
+
+def _finance_missing_slot_retry_instruction(missing_slots: list[str], *, recipe: TaskRecipe) -> str:
+    payload = {
+        "repair_reason": "missing_required_finance_slots",
+        "root_goal": _root_goal_from_recipe(recipe),
+        "missing_slots": missing_slots[:24],
+        "contract": {
+            "semantic_decision_owner": "model",
+            "host_role": "finalization_gate_only",
+            "do_not": [
+                "Do not headline a nearby, component, cash-flow, or proxy line item as the requested answer.",
+                "Do not invent a numeric answer for an unresolved required slot.",
+                "Do not use a supported substitute number unless the answer clearly labels it as non-answer context.",
+            ],
+            "required_shape": [
+                "If the requested line item is not separately itemized, start the answer with: Not separately itemized;",
+                "If the requested fact is absent from the provided evidence, start the answer with: Not available in the provided evidence;",
+                "Use only provided citation_refs and used_evidence ids.",
+            ],
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 FINANCE_NUMERIC_JUDGE_FACT_LIMIT = 48
