@@ -6,7 +6,7 @@ This document records the FB/FQA tool exposure and open-component readiness boun
 
 ## 结论
 
-`bench finance-tool-audit` 是金融做题前的系统 preflight。它检查工具入口、模型可见性、host policy、provider prompt 压缩、成熟开源组件和临时工作台能力。
+`bench finance-tool-audit` 是金融做题前的系统 preflight。它检查工具入口、模型可见性、host policy、provider prompt 压缩、成熟开源组件、临时工作台能力，以及 tool discovery / artifact 回读 / slot binding / numeric verifier 的本地执行链路。
 
 它不是 FinanceBench 或 FinQA 成绩声明，不读取 benchmark gold/reference，不进行离线假测评。
 
@@ -31,15 +31,36 @@ This document records the FB/FQA tool exposure and open-component readiness boun
 
 这些命令是工具入口和组件状态检查，不是长回归，也不是金融做题成绩。
 
+## 2026-06-18 门禁收紧
+
+开跑 live debug50 前，readiness 门禁不再只检查“工具是否注册”。它还必须确认模型 one-shot 自组装工作台所需的闭环：
+
+- `tool.discovery` 在 provider compact payload 和 planner prompt 中可见，并可返回指定工具 schema。
+- `artifact.read` / `artifact.query` 在模型可见面和 host policy 中可用，并能读取本地 `ArtifactStore` fixture。
+- `finance.slot_bind` 能校验模型选择的 `FinanceFact` 和 formula request，返回 calculator-ready payload。
+- `finance.verify_numeric` 能对模型答案和可见事实执行 verifier，返回 observation。
+- 本地 smoke 还继续执行 calculator、DuckDB table query、SymPy、Trafilatura 和 `script.exec`。
+
+本次验证命令：
+
+```bash
+.venv/bin/python -m py_compile kernel_v3/finance/tool_readiness.py tests/test_kernel_v3_finance_tool_readiness.py
+.venv/bin/python -m pytest tests/test_kernel_v3_finance_tool_readiness.py -q
+.venv/bin/python -m kernel_v3.cli bench finance-tool-audit --execute-local-smoke --format json
+.venv/bin/python -m pytest tests/test_kernel_v3_deep_agent_loop.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_tool_readiness.py tests/test_kernel_v3_execution_profile.py -q
+```
+
+结果：focused readiness tests `4 passed`，本地 finance-tool-audit smoke `status=ok` / `local_smoke_status=ok` / `allowed_tools_count=21`，结构回归 `91 passed`。这仍然只是工具接口和执行链路证据，不是 FinanceBench/FQA 分数。
+
 ## 覆盖的 FB/FQA 工具类别
 
-- FinanceBench filing retrieval: `retrieval.run`, `sec.edgar.company_filings`, `sec.edgar.financials`, `document.trafilatura.extract`, `document.docling.convert`
-- FinanceBench filing table extraction: `document.trafilatura.extract`, `document.docling.convert`, `data.table.query`, `workspace.write`, `shell.exec`, `script.exec`
-- FinanceBench numeric ratio reasoning: `calculator.compute`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
+- FinanceBench filing retrieval: `tool.discovery`, `retrieval.run`, `sec.edgar.company_filings`, `sec.edgar.financials`, `artifact.read`, `artifact.query`, `document.trafilatura.extract`, `document.docling.convert`
+- FinanceBench filing table extraction: `artifact.read`, `artifact.query`, `document.trafilatura.extract`, `document.docling.convert`, `data.table.query`, `workspace.write`, `shell.exec`, `script.exec`
+- FinanceBench numeric ratio reasoning: `finance.slot_bind`, `calculator.compute`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
 - FinanceBench market or macro context: `retrieval.run`, `market.openbb.fetch`, `calculator.compute`, `finance.verify_numeric`
-- FinQA/FQA report context numeric reasoning: `calculator.compute`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
-- FinQA/FQA table/program-like transforms: `data.table.query`, `calculator.compute`, `math.sympy.compute`, `finance.verify_numeric`
-- Temporary workbench assembly: `workspace.list`, `workspace.search`, `file.read`, `workspace.write`, `shell.exec`, `script.exec`
+- FinQA/FQA report context numeric reasoning: `tool.discovery`, `calculator.compute`, `finance.slot_bind`, `finance.verify_numeric`, `data.table.query`, `math.sympy.compute`
+- FinQA/FQA table/program-like transforms: `data.table.query`, `finance.slot_bind`, `calculator.compute`, `math.sympy.compute`, `finance.verify_numeric`
+- Temporary workbench assembly: `tool.discovery`, `finance.toolchain.describe`, `artifact.read`, `artifact.query`, `workspace.list`, `workspace.search`, `file.read`, `workspace.write`, `shell.exec`, `script.exec`
 - Long-result artifact boundary: SEC/EDGAR, document extraction/conversion, OpenBB, and DuckDB table-query tools return bounded observations plus `artifact_id` / `artifact.read` hints while storing the full JSON tool payload in `ArtifactStore`.
 - Document evidence visibility: `document.docling.convert` now gives PDF URLs a lightweight PDF-reader path before heavy Docling, reports isolated worker failures as observations, and returns `focus_snippets` before truncated text. The snippets are only candidate evidence windows selected from model-provided/default finance terms; the LLM still chooses facts, line items, formulas, and conclusions.
 - Open-component evidence adapter: finance tool observations from Docling, Trafilatura, SEC EdgarTools, OpenBB, DuckDB, and SymPy can now enter the same synthetic `toolchain_grounding` evidence/citation path as workspace/script tools. This prevents successful model-called document tools from being discarded merely because no separate `retrieval.run` record exists.

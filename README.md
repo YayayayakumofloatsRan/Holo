@@ -184,7 +184,14 @@ commands verify whether FB/FQA-relevant tools are visible to the model and
 allowed by host policy; they are not long regressions and must not be reported
 as benchmark accuracy. Repo-local workers under `.holo_components/` are
 auto-discovered when present, with environment variables still taking
-precedence for custom paths.
+precedence for custom paths. The 2026-06-18 readiness gate now treats
+`tool.discovery`, `artifact.read`, `artifact.query`, `finance.slot_bind`, and
+`finance.verify_numeric` as first-class pre-live requirements: smoke mode verifies
+that these tools are model-visible, policy
+allowed, executable by the host, and able to return bounded observations/artifact
+context for the strict single-agent loop. The latest local gate result was
+`status=ok`, `local_smoke_status=ok`, `allowed_tools_count=21`; this remains an
+interface/execution check, not a benchmark score.
 The no-gold debug50 requirements audit is now executable through
 `bench finance-requirements-audit --dataset data/bench/finance/financebench_doc_retrieval.jsonl --split debug50`.
 It reads question text and public metadata only, reports task families, risk

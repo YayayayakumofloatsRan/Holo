@@ -8,6 +8,8 @@ from kernel_v3.finance import (
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
+    FINANCE_SLOT_BIND_TOOL_NAME,
+    FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     MARKET_OPENBB_FETCH_TOOL_NAME,
     MATH_SYMPY_COMPUTE_TOOL_NAME,
@@ -17,6 +19,7 @@ from kernel_v3.finance import (
 import kernel_v3.finance.tool_readiness as tool_readiness
 from kernel_v3.finance.tool_readiness import build_finance_tool_readiness_audit
 from kernel_v3.journal import JournalStore
+from kernel_v3.tool_use import ARTIFACT_QUERY_NAME, ARTIFACT_READ_NAME, TOOL_DISCOVERY_NAME
 
 
 def test_finance_tool_readiness_audit_exposes_fb_fqa_tools_to_model(tmp_path) -> None:
@@ -24,8 +27,13 @@ def test_finance_tool_readiness_audit_exposes_fb_fqa_tools_to_model(tmp_path) ->
 
     tools = {item["name"]: item for item in audit["tools"]}
     required = {
+        TOOL_DISCOVERY_NAME,
+        ARTIFACT_READ_NAME,
+        ARTIFACT_QUERY_NAME,
         "retrieval.run",
         CALCULATOR_TOOL_NAME,
+        FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
+        FINANCE_SLOT_BIND_TOOL_NAME,
         FINANCE_VERIFY_NUMERIC_TOOL_NAME,
         DATA_TABLE_QUERY_TOOL_NAME,
         MATH_SYMPY_COMPUTE_TOOL_NAME,
@@ -65,7 +73,12 @@ def test_finance_tool_readiness_audit_local_smoke_executes_workbench_tools(tmp_p
 
     assert audit["interface_status"] == "ok"
     assert audit["local_smoke_status"] == "ok"
+    assert smoke[TOOL_DISCOVERY_NAME]["status"] == "ok"
+    assert smoke[ARTIFACT_READ_NAME]["status"] == "ok"
+    assert smoke[ARTIFACT_QUERY_NAME]["status"] == "ok"
+    assert smoke[FINANCE_SLOT_BIND_TOOL_NAME]["status"] == "ok"
     assert smoke[CALCULATOR_TOOL_NAME]["status"] == "ok"
+    assert smoke[FINANCE_VERIFY_NUMERIC_TOOL_NAME]["status"] == "ok"
     assert smoke[DATA_TABLE_QUERY_TOOL_NAME]["status"] == "ok"
     assert smoke[MATH_SYMPY_COMPUTE_TOOL_NAME]["status"] == "ok"
     assert smoke[DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME]["status"] == "ok"

@@ -6,11 +6,13 @@ from pathlib import Path
 from kernel_v3.agent.execution_profile import execution_profile, execution_profile_runtime_metadata
 from kernel_v3.agent.runtime import AgentRuntime, _planner_directive, task_recipe
 from kernel_v3.contracts import CandidateAction, ContextBundle, JsonObject
+from kernel_v3.context import ArtifactStore
 from kernel_v3.finance import (
     CALCULATOR_TOOL_NAME,
     DATA_TABLE_QUERY_TOOL_NAME,
     DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
     DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
+    FINANCE_SLOT_BIND_TOOL_NAME,
     FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
     FINANCE_VERIFY_NUMERIC_TOOL_NAME,
     MARKET_OPENBB_FETCH_TOOL_NAME,
@@ -22,6 +24,7 @@ from kernel_v3.finance.open_components import isolated_component_status
 from kernel_v3.finance.tool_catalog import finance_toolchain_install_summary
 from kernel_v3.policy import PolicyGate
 from kernel_v3.processors.adapters import _compact_runtime_directive_for_provider, _planner_prompt
+from kernel_v3.tool_use import ARTIFACT_QUERY_NAME, ARTIFACT_READ_NAME, TOOL_DISCOVERY_NAME
 
 
 FINANCE_TOOL_READINESS_SCHEMA = "holo.kernel_v3.finance_tool_readiness.v1"
@@ -32,9 +35,12 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "benchmark_families": ["FinanceBench"],
         "purpose": "official filing discovery, source URL acquisition, SEC/XBRL statement candidates",
         "required_tools": [
+            TOOL_DISCOVERY_NAME,
             "retrieval.run",
             SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME,
             SEC_EDGAR_FINANCIALS_TOOL_NAME,
+            ARTIFACT_READ_NAME,
+            ARTIFACT_QUERY_NAME,
             DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
             DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
         ],
@@ -44,6 +50,8 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "benchmark_families": ["FinanceBench"],
         "purpose": "parse filing documents and tables before fact binding",
         "required_tools": [
+            ARTIFACT_READ_NAME,
+            ARTIFACT_QUERY_NAME,
             DOCUMENT_TRAFILATURA_EXTRACT_TOOL_NAME,
             DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
             DATA_TABLE_QUERY_TOOL_NAME,
@@ -57,6 +65,7 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "benchmark_families": ["FinanceBench"],
         "purpose": "DIO, turnover, margins, capital intensity, CAGR, basis-point and multi-input ratios",
         "required_tools": [
+            FINANCE_SLOT_BIND_TOOL_NAME,
             CALCULATOR_TOOL_NAME,
             FINANCE_VERIFY_NUMERIC_TOOL_NAME,
             DATA_TABLE_QUERY_TOOL_NAME,
@@ -79,7 +88,9 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "benchmark_families": ["FinQA", "FQA"],
         "purpose": "provided report text/table reasoning with reference program kept scoring-only",
         "required_tools": [
+            TOOL_DISCOVERY_NAME,
             CALCULATOR_TOOL_NAME,
+            FINANCE_SLOT_BIND_TOOL_NAME,
             FINANCE_VERIFY_NUMERIC_TOOL_NAME,
             DATA_TABLE_QUERY_TOOL_NAME,
             MATH_SYMPY_COMPUTE_TOOL_NAME,
@@ -91,6 +102,7 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "purpose": "model-selected table filtering, aggregation, arithmetic, and formula trace generation",
         "required_tools": [
             DATA_TABLE_QUERY_TOOL_NAME,
+            FINANCE_SLOT_BIND_TOOL_NAME,
             CALCULATOR_TOOL_NAME,
             MATH_SYMPY_COMPUTE_TOOL_NAME,
             FINANCE_VERIFY_NUMERIC_TOOL_NAME,
@@ -101,6 +113,10 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
         "benchmark_families": ["FinanceBench", "FinQA", "FQA"],
         "purpose": "model assembles a temporary workspace for parsers, normalized evidence, JSON facts, tables, and local checks",
         "required_tools": [
+            TOOL_DISCOVERY_NAME,
+            FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME,
+            ARTIFACT_READ_NAME,
+            ARTIFACT_QUERY_NAME,
             "workspace.list",
             "workspace.search",
             "file.read",
@@ -112,8 +128,13 @@ FB_FQA_TOOL_REQUIREMENTS: list[JsonObject] = [
 ]
 
 TOOL_COMPONENT_BINDINGS: dict[str, JsonObject] = {
+    TOOL_DISCOVERY_NAME: {"components": ["python"], "install_policy": "holo_core"},
+    ARTIFACT_READ_NAME: {"components": ["python"], "install_policy": "holo_core"},
+    ARTIFACT_QUERY_NAME: {"components": ["python"], "install_policy": "holo_core"},
     "retrieval.run": {"components": [], "install_policy": "holo_core"},
     CALCULATOR_TOOL_NAME: {"components": ["python_decimal"], "install_policy": "holo_core"},
+    FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME: {"components": ["python"], "install_policy": "holo_core"},
+    FINANCE_SLOT_BIND_TOOL_NAME: {"components": ["pydantic"], "install_policy": "holo_core"},
     FINANCE_VERIFY_NUMERIC_TOOL_NAME: {"components": ["pydantic"], "install_policy": "holo_core"},
     SEC_EDGAR_COMPANY_FILINGS_TOOL_NAME: {"components": ["edgartools"], "install_policy": "core_open_source"},
     SEC_EDGAR_FINANCIALS_TOOL_NAME: {"components": ["edgartools"], "install_policy": "core_open_source"},
@@ -269,7 +290,7 @@ def build_finance_tool_readiness_audit(
         for item in category_rows
         if item.get("status") != "ok"
     ]
-    local_smoke = _local_smoke_checks(registry=registry, gate=gate) if execute_local_smoke else []
+    local_smoke = _local_smoke_checks(registry=registry, gate=gate, artifact_store=runtime.artifact_store) if execute_local_smoke else []
     local_smoke_failures = [item for item in local_smoke if item.get("status") not in {"ok", "blocked_expected"}]
     interface_status = "ok" if not interface_failures else "failed"
     component_status = "ok" if not required_missing_components else ("failed" if critical_missing else "attention")
@@ -378,9 +399,83 @@ def _audit_context(*, recipe, directive: JsonObject) -> ContextBundle:
     )
 
 
-def _local_smoke_checks(*, registry, gate: PolicyGate) -> list[JsonObject]:
+def _local_smoke_checks(*, registry, gate: PolicyGate, artifact_store: ArtifactStore) -> list[JsonObject]:
+    local_facts = [
+        {
+            "fact_id": "fact-revenue",
+            "entity": "TestCo",
+            "ticker": "TCO",
+            "period": "FY2024",
+            "fiscal_year": 2024,
+            "metric": "revenue",
+            "value": "200",
+            "unit": "USD",
+            "scale": "millions",
+            "source_ref": "tool-readiness-source",
+            "evidence_ref": "evidence-revenue",
+            "citation_ref": "cite-revenue",
+            "metadata": {"line_item": "Revenue"},
+        },
+        {
+            "fact_id": "fact-net-income",
+            "entity": "TestCo",
+            "ticker": "TCO",
+            "period": "FY2024",
+            "fiscal_year": 2024,
+            "metric": "net income",
+            "value": "50",
+            "unit": "USD",
+            "scale": "millions",
+            "source_ref": "tool-readiness-source",
+            "evidence_ref": "evidence-net-income",
+            "citation_ref": "cite-net-income",
+            "metadata": {"line_item": "Net income"},
+        },
+    ]
+    artifact = artifact_store.write_blob(
+        kind="finance_tool_readiness_fixture",
+        mime_type="application/json",
+        payload=json.dumps({"facts": local_facts, "question": "What was TestCo FY2024 revenue?"}, sort_keys=True),
+        metadata={"purpose": "local_smoke_artifact_context_roundtrip"},
+    )
     checks = [
         (FINANCE_TOOLCHAIN_DESCRIBE_TOOL_NAME, {}),
+        (
+            TOOL_DISCOVERY_NAME,
+            {
+                "query": f"select:{FINANCE_SLOT_BIND_TOOL_NAME},{CALCULATOR_TOOL_NAME},{FINANCE_VERIFY_NUMERIC_TOOL_NAME}",
+                "max_results": 8,
+            },
+        ),
+        (
+            ARTIFACT_READ_NAME,
+            {"artifact_id": artifact.artifact_id, "mode": "preview", "max_chars": 1200},
+        ),
+        (
+            ARTIFACT_QUERY_NAME,
+            {"artifact_id": artifact.artifact_id, "path": "facts", "query": "revenue", "max_matches": 4},
+        ),
+        (
+            FINANCE_SLOT_BIND_TOOL_NAME,
+            {
+                "facts": local_facts,
+                "slot_bindings": [
+                    {"slot_name": "revenue", "variable_name": "revenue", "fact_id": "fact-revenue"},
+                    {"slot_name": "net_income", "variable_name": "net_income", "fact_id": "fact-net-income"},
+                ],
+                "formula_requests": [
+                    {
+                        "formula_name": "net_margin",
+                        "expression": "net_income / revenue",
+                        "variables": {"net_income": "net_income", "revenue": "revenue"},
+                        "unit": "percent",
+                    }
+                ],
+                "period_basis": [{"fact_id": "fact-revenue", "basis": "FY2024"}],
+                "line_item_basis": [{"fact_id": "fact-net-income", "basis": "net income"}],
+                "reason_summary": "local smoke slot binding for a model-selected finance formula",
+            },
+        ),
         (
             CALCULATOR_TOOL_NAME,
             {
@@ -388,6 +483,14 @@ def _local_smoke_checks(*, registry, gate: PolicyGate) -> list[JsonObject]:
                 "variables": {"beg": 20.976, "end": 23.451, "cogs": 106.206},
                 "unit": "days",
                 "formula_name": "DIO",
+            },
+        ),
+        (
+            FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+            {
+                "answer": "TestCo FY2024 revenue was 200 million and net income was 50 million.",
+                "facts": local_facts,
+                "question": "What were TestCo FY2024 revenue and net income?",
             },
         ),
         (
