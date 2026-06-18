@@ -384,8 +384,10 @@ class _StreamingToolCallBuilder:
     def take_if_complete(self, *, name_map: dict[str, str]) -> ToolCall | None:
         if self.emitted or not self.name:
             return None
+        if not self.arguments.strip():
+            return None
         try:
-            parsed = json.loads(self.arguments or "{}")
+            parsed = json.loads(self.arguments)
         except json.JSONDecodeError:
             return None
         if not isinstance(parsed, dict):

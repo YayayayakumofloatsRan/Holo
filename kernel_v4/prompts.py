@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from kernel_v4.contracts import ToolManifest
 
 
@@ -11,7 +13,10 @@ Architecture contract:
 - Use tools by emitting tool calls. The host will return tool results before your next turn.
 - Do not assume a hidden postprocessor will retrieve facts, bind slots, or compute formulas after you answer.
 - The visible tool list may be partial. If a needed registered tool is not visible, call tool.discovery with a focused query, inspect the returned contract, then call the concrete tool on the next turn.
+- Tool input schemas are part of the contract. Never call a tool with empty arguments when its schema has required fields; include each required field in the tool-call JSON.
+- Do not repeat the same successful read, parse, discovery, or retrieval tool call with the same input unless new information or a tool error justifies it. Use the observation you already have and move to the next evidence, transform, verification, or final-answer step.
 - If a material numeric answer depends on arithmetic and calculator.compute is available, call it.
+- After calculator.compute, data.table.query, math.sympy.compute, or finance.verify_numeric returns the needed result, finalize if the question is answerable; do not call more tools just to restate or reformat an already observed result.
 - If a large tool result was replaced by an artifact reference, call artifact.read when the preview is insufficient.
 - Continue working while the task is solvable and budget remains. Finalize only when the answer is supported by observed tool results or when a real blocker is explicit.
 """
@@ -25,7 +30,8 @@ FINANCE_SYSTEM_PROMPT = """Finance specialization:
 
 Task coverage:
 - Public-filing questions: use sec.edgar.company_filings to locate filings when needed, sec.edgar.financials for standardized XBRL/statement candidates, and document.docling.convert plus document.search.hybrid when exact filing text, tables, notes, or line labels are needed.
-- Provided-context FQA/FinQA questions: use provided_context.parse before external retrieval when the prompt supplies report context, tables, oracle_context, copied snippets, or CSV/HTML/markdown evidence. Then use data.table.query for table selection, joins, filters, aggregation, ranking, and normalization.
+- Provided-context FQA/FinQA questions: use provided_context.parse before external retrieval when the prompt supplies report context, tables, oracle_context, copied snippets, or CSV/HTML/markdown evidence. Then use returned text_blocks/tables directly, data.table.query for table selection/aggregation, and calculator.compute for derived arithmetic. Do not parse the same supplied context again after a successful parse unless the first result was unusable.
+- For provided_context.parse, the required input field is context. For calculator.compute, the required input field is expression. For data.table.query, the required input field is sql.
 - Market-data questions: use market.openbb.fetch only when the question asks for prices, market data, or non-filing fundamentals that are not answered by the supplied context or SEC filing evidence.
 - Fiscal-date questions: use calendar.days_between for actual day counts after evidence supplies the relevant dates; you still decide whether the formula should use 365, inclusive days, or actual fiscal days.
 - Algebraic or symbolic transforms: use math.sympy.compute when ordinary arithmetic is not enough; otherwise prefer calculator.compute.
@@ -64,8 +70,10 @@ def build_system_prompt(*, finance: bool = False, extra: str | None = None) -> s
 def tool_surface_prompt(manifests: list[ToolManifest]) -> str:
     lines = ["Available tools:"]
     for manifest in manifests:
+        schema_text = json.dumps(manifest.input_schema, ensure_ascii=False, sort_keys=True)
         lines.append(
             f"- {manifest.name}: {manifest.description} "
-            f"(side_effect={manifest.side_effect_class}, concurrency_safe={manifest.concurrency_safe})"
+            f"(side_effect={manifest.side_effect_class}, concurrency_safe={manifest.concurrency_safe}, "
+            f"input_schema={schema_text})"
         )
     return "\n".join(lines)

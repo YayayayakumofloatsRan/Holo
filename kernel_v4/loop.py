@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -115,6 +118,7 @@ class SingleAgentLoop:
                 max_tool_result_chars=self.config.max_tool_result_chars,
             )
             visible_tools = self.tools.manifests(include_names=_discovered_tool_names(context))
+            recent_tool_calls = _recent_tool_call_summary(context.messages)
             request_context = {
                 "schema": "holo.kernel_v4.model_request_context.v1",
                 "run_id": context.run_id,
@@ -123,6 +127,12 @@ class SingleAgentLoop:
                 "tool_surface": tool_surface_prompt(visible_tools),
                 "artifact_count": len(context.artifacts),
                 "workflow": context.workflow_context_summary(),
+                "recent_tool_calls": recent_tool_calls,
+                "repeat_tool_call_policy": (
+                    "Before calling a tool, compare against recent_tool_calls.successful. "
+                    "Do not repeat the same successful tool with the same input unless new evidence, changed input, "
+                    "or a prior tool error makes repetition necessary."
+                ),
                 "host_boundary": "host executes requested tools and returns tool results; model owns semantic decisions",
             }
             _emit(
@@ -275,9 +285,40 @@ class SingleAgentLoop:
         remaining = await executor.drain_remaining()
         events.extend(executor.pop_events())
         tool_results.extend(result.as_chat_message() for result in remaining)
+        assistant_content = "".join(text_parts).strip()
+        if not tool_calls and not budget_exceeded:
+            assistant_content, text_calls = _extract_text_tool_calls(
+                assistant_content,
+                tools=tools,
+                turn_index=turn_index,
+            )
+            for call in text_calls:
+                if len(tool_calls) >= remaining_tool_calls:
+                    budget_exceeded = True
+                    _emit(
+                        runtime_context,
+                        events,
+                        event_type="tool_budget_exceeded",
+                        turn_index=turn_index,
+                        data={"max_new_tool_calls": remaining_tool_calls, "tool": call.name},
+                    )
+                    continue
+                tool_calls.append(call)
+                _emit(
+                    runtime_context,
+                    events,
+                    event_type="assistant_tool_call",
+                    turn_index=turn_index,
+                    data={"tool_call_id": call.tool_call_id, "tool": call.name, "source": "text_tool_call_fallback"},
+                )
+                executor.add_tool_call(call)
+                events.extend(executor.pop_events())
+            text_results = await executor.drain_remaining()
+            events.extend(executor.pop_events())
+            tool_results.extend(result.as_chat_message() for result in text_results)
         return _CollectedAssistantTurn(
             assistant=AssistantMessage(
-                content="".join(text_parts).strip(),
+                content=assistant_content,
                 tool_calls=tuple(tool_calls),
                 metadata={"created_at_ms": now_ms()},
             ),
@@ -373,3 +414,131 @@ def _discovered_tool_names(context: ToolUseContext) -> set[str]:
     if not isinstance(value, list):
         return set()
     return {str(item) for item in value if isinstance(item, str) and item}
+
+
+def _recent_tool_call_summary(messages: list[ChatMessage], *, limit: int = 20) -> JsonObject:
+    tool_results: dict[str, ChatMessage] = {
+        message.tool_call_id: message
+        for message in messages
+        if message.role == "tool" and isinstance(message.tool_call_id, str) and message.tool_call_id
+    }
+    calls: list[JsonObject] = []
+    for message in messages:
+        if message.role != "assistant":
+            continue
+        for call in message.tool_calls:
+            input_text = _stable_json(call.input)
+            result = tool_results.get(call.tool_call_id)
+            status = "pending"
+            if result is not None:
+                status = "error" if result.metadata.get("is_error") else "success"
+            item: JsonObject = {
+                "tool_call_id": call.tool_call_id,
+                "tool": call.name,
+                "status": status,
+                "input_sha256": hashlib.sha256(input_text.encode("utf-8")).hexdigest(),
+                "input_preview": input_text[:500],
+            }
+            if result is not None:
+                item["result_preview"] = result.content[:1000]
+            calls.append(item)
+    recent = calls[-limit:]
+    successful = [item for item in recent if item["status"] == "success"]
+    seen: set[tuple[str, str]] = set()
+    duplicates: list[JsonObject] = []
+    for item in successful:
+        key = (str(item["tool"]), str(item["input_sha256"]))
+        if key in seen:
+            duplicates.append({"tool": item["tool"], "input_sha256": item["input_sha256"]})
+        seen.add(key)
+    return {
+        "recent": recent,
+        "successful": successful,
+        "duplicate_successful_inputs": duplicates,
+    }
+
+
+def _stable_json(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return str(value)
+
+
+_DSML_TOOL_BLOCK_RE = re.compile(r"<｜｜DSML｜｜tool_calls>(.*?)</｜｜DSML｜｜tool_calls>", re.DOTALL)
+_DSML_INVOKE_RE = re.compile(r"<｜｜DSML｜｜invoke\s+name=\"([^\"]+)\">(.*?)</｜｜DSML｜｜invoke>", re.DOTALL)
+_DSML_INVOKE_START_RE = re.compile(r"<｜｜DSML｜｜invoke\s+name=\"([^\"]+)\">", re.DOTALL)
+_DSML_INVOKE_END = "</｜｜DSML｜｜invoke>"
+
+
+def _extract_text_tool_calls(
+    text: str,
+    *,
+    tools: list,
+    turn_index: int,
+) -> tuple[str, list[ToolCall]]:
+    visible_tool_names = {str(tool.name) for tool in tools}
+    calls: list[ToolCall] = []
+
+    def replace_block(match: re.Match[str]) -> str:
+        block = match.group(1)
+        parsed = _parse_dsml_tool_block(block, visible_tool_names=visible_tool_names, turn_index=turn_index, offset=len(calls))
+        calls.extend(parsed)
+        return ""
+
+    cleaned = _DSML_TOOL_BLOCK_RE.sub(replace_block, text).strip()
+    return cleaned, calls
+
+
+def _parse_dsml_tool_block(
+    block: str,
+    *,
+    visible_tool_names: set[str],
+    turn_index: int,
+    offset: int,
+) -> list[ToolCall]:
+    outer = _DSML_INVOKE_START_RE.search(block)
+    if outer is None:
+        return []
+    tool_name = outer.group(1).strip()
+    if tool_name not in visible_tool_names:
+        return []
+    body = block[outer.end() :]
+    if _DSML_INVOKE_END in body:
+        body = body.rsplit(_DSML_INVOKE_END, 1)[0]
+    payload: JsonObject = {}
+    for key, raw_value in _DSML_INVOKE_RE.findall(body):
+        key = key.strip()
+        value = raw_value.strip()
+        if not key or key == tool_name:
+            continue
+        payload[key] = _parse_text_tool_value(value)
+    if not payload:
+        payload = _parse_text_tool_payload(body)
+    return [
+        ToolCall(
+            tool_call_id=f"text-tool-{turn_index}-{offset}",
+            name=tool_name,
+            input=payload,
+        )
+    ]
+
+
+def _parse_text_tool_value(value: str) -> object:
+    if not value:
+        return ""
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _parse_text_tool_payload(body: str) -> JsonObject:
+    stripped = _DSML_INVOKE_RE.sub("", body).strip()
+    if not stripped:
+        return {}
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return {"input": stripped}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}

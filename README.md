@@ -36,7 +36,7 @@ SEC/EDGAR/document search for public filing evidence, `data.table.query` and
 counts, and `finance.verify_numeric` for final material numeric claims when
 available. `finance.toolchain.describe` now returns the same
 `one_shot_loop_contract` and `coverage_families`. The latest v4 structural
-checks pass `25` tests; this is architecture readiness, not a FinanceBench/FQA
+checks pass `35` tests; this is architecture readiness, not a FinanceBench/FQA
 accuracy claim.
 
 Kernel v4 now also has a no-gold finance task entrypoint in
@@ -48,6 +48,17 @@ builds the full finance tool registry and runs the packet through
 `SingleAgentLoop(finance_mode=True)`, so provided-context FQA/FinQA rows and
 public-filing FinanceBench rows enter the same v4 loop without legacy slot
 gates.
+
+The executable no-gold single-task runner is `python -m kernel_v4.finance_run`.
+It accepts `--row-json`, `--row-file`, or `--row-jsonl`, supports `--dry-run`
+packet checks, live DeepSeek/OpenAI-compatible execution, compact/JSONL workflow
+monitoring, and bounded `--include-transcript` diagnostics. The provider stream
+parser now waits for function-call argument deltas before emitting a v4
+`ToolCall`; it no longer executes a tool just because the function name arrived
+before arguments. A 2026-06-18 no-gold provided-context mini finance live smoke
+completed through `provided_context.parse`, three `calculator.compute` calls,
+`finance.verify_numeric`, and final answer (`76.34 days`). This is live tool
+loop evidence, not a FinanceBench/FQA benchmark score.
 
 Holo Kernel v3 remains in the repository as the prior harness line: a
 host-owned agent harness where models propose structured decisions and the host

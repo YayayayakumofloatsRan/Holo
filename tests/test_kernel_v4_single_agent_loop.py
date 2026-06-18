@@ -101,9 +101,13 @@ def test_kernel_v4_finance_prompt_explicitly_removes_local_gates() -> None:
     assert "Benchmark gold/reference answers are never part of your context" in system_prompt
     assert "Public-filing questions: use sec.edgar.company_filings" in system_prompt
     assert "Provided-context FQA/FinQA questions: use provided_context.parse before external retrieval" in system_prompt
+    assert "use returned text_blocks/tables directly" in system_prompt
     assert "calendar.days_between for actual day counts" in system_prompt
     assert "Do not stop merely because one tool failed" in system_prompt
     assert "tool.discovery with a focused query" in system_prompt
+    assert "Do not repeat the same successful read, parse, discovery, or retrieval tool call" in system_prompt
+    assert "Never call a tool with empty arguments when its schema has required fields" in system_prompt
+    assert "For provided_context.parse, the required input field is context" in system_prompt
 
 
 def test_kernel_v4_finance_toolchain_describe_covers_fb_fqa_tool_families() -> None:
@@ -134,6 +138,7 @@ def test_kernel_v4_finance_toolchain_describe_covers_fb_fqa_tool_families() -> N
     assert "model-requested tool calls" in contract["tool_use_boundary"]
     assert "Gold/reference answers are not model context" in contract["no_gold_policy"]
     assert "finance.verify_numeric" in contract["stop_rule"]
+    assert any("do not repeat the same call" in item for item in content["tool_protocol"])
     coverage = {item["family"]: set(item["primary_tools"]) for item in content["coverage_families"]}
     assert {"sec.edgar.financials", "document.search.hybrid", "artifact.read"}.issubset(
         coverage["public_filing_evidence"]
@@ -353,6 +358,161 @@ def test_kernel_v4_context_edit_is_visible_to_next_model_turn() -> None:
     assert workflow["context_edit_count"] >= 1
     assert "company" in workflow["context_metadata_keys"]
     assert any(edit["operation"] == "metadata.set" for edit in workflow["context_edits_recent"])
+
+
+def test_kernel_v4_recent_successful_tool_calls_are_visible_to_next_model_turn() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolManifest(name="alpha.read", description="Read alpha.", input_schema={"query": {"type": "str"}}),
+        lambda payload, context: {"query": payload["query"], "ok": True},
+    )
+    model = ScriptedModel(
+        [
+            [
+                ModelEvent(
+                    event_type="tool_call",
+                    tool_call=ToolCall(tool_call_id="call-alpha", name="alpha.read", input={"query": "revenue"}),
+                ),
+                ModelEvent(event_type="message_stop"),
+            ],
+            [ModelEvent(event_type="text_delta", text="done"), ModelEvent(event_type="message_stop")],
+        ]
+    )
+
+    result = asyncio.run(SingleAgentLoop(model=model, tools=registry).run("read alpha"))
+
+    assert result.status == "completed"
+    second_context = model.requests[1]["context"]
+    assert "Do not repeat the same successful tool" in second_context["repeat_tool_call_policy"]
+    recent_tool_calls = second_context["recent_tool_calls"]
+    assert '"query": {"type": "str"}' in second_context["tool_surface"]
+    assert recent_tool_calls["successful"][0]["tool"] == "alpha.read"
+    assert recent_tool_calls["successful"][0]["status"] == "success"
+    assert '"query": "revenue"' in recent_tool_calls["successful"][0]["input_preview"]
+    assert '"ok": true' in recent_tool_calls["successful"][0]["result_preview"]
+
+
+def test_kernel_v4_duplicate_successful_tool_call_is_skipped_with_observation() -> None:
+    registry = ToolRegistry()
+    executions = 0
+
+    def read_alpha(payload, context):
+        nonlocal executions
+        del context
+        executions += 1
+        return {"query": payload["query"], "ok": True}
+
+    registry.register(
+        ToolManifest(name="alpha.read", description="Read alpha.", input_schema={"query": {"type": "str"}}),
+        read_alpha,
+    )
+    repeated_call = ToolCall(tool_call_id="call-alpha-2", name="alpha.read", input={"query": "revenue"})
+    model = ScriptedModel(
+        [
+            [
+                ModelEvent(
+                    event_type="tool_call",
+                    tool_call=ToolCall(tool_call_id="call-alpha-1", name="alpha.read", input={"query": "revenue"}),
+                ),
+                ModelEvent(event_type="message_stop"),
+            ],
+            [
+                ModelEvent(event_type="tool_call", tool_call=repeated_call),
+                ModelEvent(event_type="message_stop"),
+            ],
+            [ModelEvent(event_type="text_delta", text="done"), ModelEvent(event_type="message_stop")],
+        ]
+    )
+
+    result = asyncio.run(SingleAgentLoop(model=model, tools=registry).run("read alpha"))
+
+    assert result.status == "completed"
+    assert executions == 1
+    tool_messages = [message for message in result.messages if message.role == "tool"]
+    assert "duplicate_successful_tool_call" in tool_messages[1].content
+    assert tool_messages[1].metadata["is_error"] is True
+    assert tool_messages[1].metadata["duplicate_successful_tool_call"] is True
+
+
+def test_kernel_v4_blocked_tool_result_is_error_and_not_duplicate_success() -> None:
+    registry = ToolRegistry()
+    executions = 0
+
+    def blocked_read(payload, context):
+        nonlocal executions
+        del context
+        executions += 1
+        return {
+            "schema": "test.blocked_tool.v1",
+            "status": "blocked",
+            "content": {"error": "missing_required_field:query", "received": payload},
+        }
+
+    registry.register(
+        ToolManifest(name="alpha.read", description="Read alpha.", input_schema={"query": {"type": "str"}}),
+        blocked_read,
+    )
+    model = ScriptedModel(
+        [
+            [
+                ModelEvent(
+                    event_type="tool_call",
+                    tool_call=ToolCall(tool_call_id="call-alpha-1", name="alpha.read", input={}),
+                ),
+                ModelEvent(event_type="message_stop"),
+            ],
+            [
+                ModelEvent(
+                    event_type="tool_call",
+                    tool_call=ToolCall(tool_call_id="call-alpha-2", name="alpha.read", input={}),
+                ),
+                ModelEvent(event_type="message_stop"),
+            ],
+            [ModelEvent(event_type="text_delta", text="done"), ModelEvent(event_type="message_stop")],
+        ]
+    )
+
+    result = asyncio.run(SingleAgentLoop(model=model, tools=registry).run("read alpha"))
+
+    assert result.status == "completed"
+    assert executions == 2
+    tool_messages = [message for message in result.messages if message.role == "tool"]
+    assert len(tool_messages) == 2
+    assert all(message.metadata["is_error"] is True for message in tool_messages)
+    assert all("duplicate_successful_tool_call" not in message.content for message in tool_messages)
+
+
+def test_kernel_v4_dsml_text_tool_call_fallback_executes_tool() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolManifest(name="tool.discovery", description="Discover tools.", input_schema={"query": {"type": "str"}}),
+        lambda payload, context: {"query": payload["query"], "ok": True},
+    )
+    dsml = (
+        '<｜｜DSML｜｜tool_calls>\n'
+        '<｜｜DSML｜｜invoke name="tool.discovery">\n'
+        '<｜｜DSML｜｜invoke name="query">select:calculator.compute</｜｜DSML｜｜invoke>\n'
+        "</｜｜DSML｜｜invoke>\n"
+        "</｜｜DSML｜｜tool_calls>"
+    )
+    model = ScriptedModel(
+        [
+            [ModelEvent(event_type="text_delta", text=dsml), ModelEvent(event_type="message_stop")],
+            [ModelEvent(event_type="text_delta", text="done"), ModelEvent(event_type="message_stop")],
+        ]
+    )
+
+    result = asyncio.run(SingleAgentLoop(model=model, tools=registry).run("discover calculator"))
+
+    assert result.status == "completed"
+    assert result.tool_call_count == 1
+    assistant_messages = [message for message in result.messages if message.role == "assistant"]
+    assert assistant_messages[0].content == ""
+    assert assistant_messages[0].tool_calls[0].name == "tool.discovery"
+    assert assistant_messages[0].tool_calls[0].input == {"query": "select:calculator.compute"}
+    tool_messages = [message for message in result.messages if message.role == "tool"]
+    assert '"query": "select:calculator.compute"' in tool_messages[0].content
+    assert any(event.data.get("source") == "text_tool_call_fallback" for event in result.events)
 
 
 def test_kernel_v4_starts_streamed_tool_before_model_stream_finishes() -> None:

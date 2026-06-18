@@ -52,6 +52,7 @@ Kernel v4 的 Python 对应实现：
 - `kernel_v4/providers.py`：OpenAI-compatible / DeepSeek live provider，支持原生 function tool schema、provider-native `tool_choice` 强制工具、streaming tool-call delta 解析和 v4 工具名回映射。
 - `kernel_v4/live_smoke.py`：最小 live provider smoke 入口，可用 `--force-tool calculator.compute` 验证真实 provider 工具闭环；默认只强制第 1 个模型 turn，后续 turn 恢复模型自主回答。
 - `kernel_v4/finance_runner.py`：FB/FQA/FinQA no-gold task packet 和 finance runner 入口，把题面、provided context、source policy、安全 metadata 传入 `SingleAgentLoop(finance_mode=True)`。
+- `kernel_v4/finance_run.py`：可执行 no-gold 单题 runner，支持 `--row-json` / `--row-file` / `--row-jsonl`、dry-run、live provider、workflow monitor、bounded transcript diagnostics。
 
 ## 运行时控制与可视化
 
@@ -76,6 +77,9 @@ Kernel v4 的 Python 对应实现：
 - loop 在模型流消费期间持续 drain 已完成工具结果；模型流结束后再 drain remaining results，保持参考框架“streaming 中执行，turn 结束前补齐 tool_result”的核心语义。
 - `tool.discovery` 会把发现到的 deferred tools 写入 `ContextEdit(metadata.set: discovered_tool_names)`；下一轮 `ToolRegistry.manifests(...)` 会把这些工具真正暴露到 provider-native tool surface，而不是只放在文本说明里。
 - `live_smoke --show-workflow` 已能看到 `assistant_tool_call -> tool_queued -> tool_start -> tool_lifecycle(completed) -> assistant_message_stop -> tool_result` 的实时顺序。
+- Runtime context 现在包含 `recent_tool_calls`，包括最近工具名、输入 hash、输入预览、成功/失败状态和结果预览，帮助模型从成功工具结果推进，而不是在长 transcript 中迷路。
+- Tool execution 增加 duplicate-success guard：同一工具同一输入已经成功过时，host 不重复执行，而返回 `holo.kernel_v4.duplicate_successful_tool_call.v1` synthetic observation，提示模型使用上一条结果继续。这是防空转 loop guard，不替模型选择金融事实或答案。
+- 如果 provider 把工具调用写成 DSML 文本块而不是 native tool call，loop 会解析 `<｜｜DSML｜｜tool_calls>` 并把可见工具调用送入同一个 `StreamingToolExecutor`。
 
 这一步仍然没有改变核心思路：模型决定工具，host 只执行、记录、补齐生命周期、管理上下文。
 
@@ -140,6 +144,13 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 - FinanceBench public filing 题可以只带 question/source metadata 进入同一入口，由模型调用 SEC/EDGAR/document/table/calculator/verifier 工具。
 - `build_finance_registry(...)` 统一注册 v4 finance surface；`allow_network=False` 可用于 FQA/FinQA provided-context no-network 结构路径，`allow_network=True` 用于 public filing live path。
 - `run_finance_question(...)` 将 no-gold packet 交给 `SingleAgentLoop(finance_mode=True)`，不加载 legacy `finance.slot_bind`、FactLedger 或 SlotFrame gate。
+- `python -m kernel_v4.finance_run` 是当前可执行入口：
+  - `--row-json`：直接传一个 JSON row。
+  - `--row-file`：读取 JSON object 或 JSON object list。
+  - `--row-jsonl --index N`：读取 JSONL 第 N 行。
+  - `--dry-run`：只构造 no-gold packet summary，不调用 provider。
+  - `--show-workflow`：实时打印 compact 或 JSONL workflow。
+  - `--include-transcript`：失败时输出有界消息预览和工具错误，便于诊断。
 
 这一步不是 scorer，也不读取 gold sidecar。它只解决 v4 入口层是否能理论上承载 FB/FQA 题面、上下文和工具链的问题。
 
@@ -165,9 +176,9 @@ v4 金融模式暴露普通工具，不暴露本地语义闸门：
 FB/FQA 理论闭环合同补齐后，最新结构测试为：
 
 ```text
-.venv/bin/python -m py_compile kernel_v4/__init__.py kernel_v4/finance_runner.py kernel_v4/contracts.py kernel_v4/context.py kernel_v4/tooling.py kernel_v4/prompts.py kernel_v4/loop.py kernel_v4/finance_tools.py kernel_v4/providers.py kernel_v4/live_smoke.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_live_provider.py
-.venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_monitoring.py tests/test_kernel_v4_finance_runner.py -q
-25 passed
+.venv/bin/python -m py_compile kernel_v4/finance_run.py kernel_v4/loop.py kernel_v4/tooling.py kernel_v4/prompts.py kernel_v4/finance_runner.py
+.venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_monitoring.py -q
+35 passed
 ```
 
 测试覆盖：
@@ -194,6 +205,12 @@ FB/FQA 理论闭环合同补齐后，最新结构测试为：
 - `FinanceQuestionSpec` 会排除 gold/reference/scoring 字段值和字段名，只保留 host-side excluded-field audit。
 - `run_finance_question` 会把 no-gold task packet、finance prompt 和完整 finance tool surface 一起传给模型。
 - no-network FQA/FInQA surface 仍包含 `provided_context.parse`、`data.table.query`、`calculator.compute`、`finance.verify_numeric`、`tool.discovery`、`artifact.read`。
+- `finance_run` dry-run 不调用 provider，输出 no-gold task summary 且不泄漏 reference/rubric/gold program 值。
+- `finance_run --include-transcript` 输出有界 transcript preview，便于定位 live 工具参数、tool result 和 error recovery 问题。
+- `recent_tool_calls` runtime context 带成功结果预览；duplicate-success guard 防止同一成功工具输入反复执行。
+- DSML 文本工具调用 fallback 能把 `<｜｜DSML｜｜tool_calls>` 解析成标准 `ToolCall` 并执行。
+- 工具返回 `status=blocked/error/failed/...` 或结构化 `error` 时会进入 `is_error` lifecycle；失败结果不会被 duplicate-success guard 当成成功结果。
+- provider streaming parser 会等待 arguments delta 到达后才发出 `ToolCall`；如果 SSE 先给 function name、后给 arguments，不会再提前执行空参 `{}`。
 
 已完成的最小 live smoke：
 
@@ -211,6 +228,54 @@ FB/FQA 理论闭环合同补齐后，最新结构测试为：
 ```
 
 这仍然只是 live provider/loop 链路证据，不是 FinanceBench/FQA 做题成绩。
+
+2026-06-18 后续 live finance runner 诊断先暴露出两个基础设施问题：
+
+```text
+.venv/bin/python -m kernel_v4.finance_run --row-json '{...provided-context FQA smoke...}' --benchmark-family finqa --show-workflow --include-transcript
+status=failed
+reason=max_turns_exceeded
+observed_tools=provided_context.parse, tool.discovery, artifact.read, calculator.compute, data.table.query
+```
+
+当时诊断结论：
+
+- no-gold packet、live provider、workflow monitor、tool execution、duplicate guard、calculator 工具面都已联通。
+- 该 live smoke 没有完成答案，不能计为 FQA/FinQA accuracy。
+- transcript 显示 DeepSeek 在这条 task 上多次发出 native tool calls 但 arguments 为 `{}`，即使 assistant 文本声称要提供 `context` / `expression`。这暴露的是 provider/tool-argument reliability 和 finalization recovery 问题。
+- 进一步检查后发现关键根因不只是模型：provider streaming parser 在只收到 function name、尚未收到 arguments delta 时，把空字符串当 `{}` 解析并提前发出工具调用，导致 executor 执行空参工具。
+
+已完成修复：
+
+- `kernel_v4/providers.py` 的 streaming parser 现在必须看到非空 arguments 文本并能解析 JSON，才会提前发出 `ToolCall`；否则等到后续 delta 或 message stop。
+- `kernel_v4/tooling.py` 现在把 `status=blocked/error/failed/...` 和结构化 `error` 归入 `is_error` lifecycle，避免失败 observation 被当成成功结果参与 duplicate-success guard。
+- 对应测试新增：
+  - provider 等待 streamed tool arguments。
+  - blocked tool result 是 error，且不会触发 duplicate-success skip。
+
+修复后的最小 live calculator smoke：
+
+```text
+.venv/bin/python -m kernel_v4.live_smoke --model deepseek-chat --timeout-seconds 30 --max-retries 0 --max-turns 4 --max-tool-calls 6 --calculator-only --tool-choice auto --force-tool calculator.compute --force-tool-turns 1 --show-workflow --workflow-format compact --prompt 'Use calculator.compute to calculate 22.2135 / 106.206 * 365. Then answer with the numeric result rounded to two decimals.'
+tool_result ok tool=calculator.compute
+loop_completed
+{"status": "completed", "answer": "The result is **76.34152025**. Rounded to two decimals, that is **76.34**.", "tool_call_count": 1, "turn_count": 2, ...}
+```
+
+修复后的 no-gold mini finance live smoke：
+
+```text
+.venv/bin/python -m kernel_v4.finance_run --model deepseek-chat --timeout-seconds 120 --max-retries 1 --max-turns 8 --max-tool-calls 20 --show-workflow --workflow-format compact --include-transcript --row-json '{...mini-dio-live-no-gold...}'
+provided_context.parse -> ok
+calculator.compute -> ok
+calculator.compute -> ok
+calculator.compute -> ok
+finance.verify_numeric -> ok
+loop_completed
+{"status": "completed", "answer": "...76.34 days...", "tool_call_count": 5, "turn_count": 6, "gold_reference_material_included": false, "capability_claim": false, ...}
+```
+
+这条 mini finance live 只证明 v4 no-gold runner、provider streaming tool call、context parse、calculator、numeric verifier 和 finalization 的单题链路已闭环；它不是 FinanceBench/FQA 正式成绩。
 
 已完成的 provider-native 工具闭环 smoke：
 

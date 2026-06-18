@@ -265,6 +265,7 @@ def _finance_toolchain_describe(payload: JsonObject, context: ToolUseContext) ->
             "Use SEC/EDGAR or retrieval tools for authoritative evidence.",
             "Use document conversion and document.search.hybrid for long filings or tables.",
             "Use provided_context.parse for FinQA/FQA supplied contexts.",
+            "After provided_context.parse, document.search.hybrid, SEC/EDGAR, or artifact.read succeeds, do not repeat the same call with the same input unless the result was unusable; move to the next transform, verification, or final answer step.",
             "Use data.table.query for table filtering, grouping, ranking, and aggregation.",
             "Use calendar.days_between for model-selected fiscal date differences.",
             "Use calculator.compute for deterministic arithmetic once you have observed inputs.",

@@ -177,6 +177,66 @@ def test_openai_compatible_provider_stream_maps_native_tool_call_to_v4_name(monk
     assert events[-1].event_type == "message_stop"
 
 
+def test_openai_compatible_provider_waits_for_streamed_tool_arguments(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_PROVIDER_KEY", "secret-key")
+    provider = OpenAICompatibleChatProvider(
+        base_url="https://provider.example/v1",
+        api_key_env="TEST_PROVIDER_KEY",
+        model="test-model",
+        max_retries=0,
+    )
+    tool = ToolManifest(
+        name="calculator.compute",
+        description="Compute arithmetic.",
+        input_schema={"expression": {"type": "str", "required": True}},
+    )
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        body = json.loads(request.data.decode("utf-8"))
+        native_name = body["tools"][0]["function"]["name"]
+        return _SseResponse(
+            [
+                "data: "
+                + json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call-1",
+                                            "type": "function",
+                                            "function": {"name": native_name},
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                )
+                + "\n",
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"expression\\": \\"2+2\\"}"}}]},"finish_reason":"tool_calls"}]}\n',
+                "data: [DONE]\n",
+            ]
+        )
+
+    with mock.patch("kernel_v4.providers.urllib.request.urlopen", side_effect=fake_urlopen):
+        events = asyncio.run(
+            _collect(
+                provider,
+                messages=[ChatMessage(role="user", content="use calculator")],
+                tools=[tool],
+            )
+        )
+
+    tool_events = [event for event in events if event.event_type == "tool_call"]
+    assert len(tool_events) == 1
+    assert tool_events[0].tool_call is not None
+    assert tool_events[0].tool_call.input == {"expression": "2+2"}
+
+
 def test_openai_compatible_provider_stream_queue_has_hard_timeout(monkeypatch) -> None:
     monkeypatch.setenv("TEST_PROVIDER_KEY", "secret-key")
     provider = OpenAICompatibleChatProvider(

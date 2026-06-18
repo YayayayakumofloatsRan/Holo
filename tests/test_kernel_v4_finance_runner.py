@@ -49,6 +49,9 @@ def test_finance_question_spec_excludes_gold_reference_fields_from_prompt() -> N
     assert "subtract(120, 100)" not in message
     assert "expected_numeric" not in message
     assert "reference_answer" not in message
+    assert "never send empty arguments for tools with required fields" in message
+    assert "provided_context.parse use {'context': supplied_context_text}" in message
+    assert "do not repeat the same tool call with the same input" in message
     assert "gold_reference_material_included" in message
     assert "excluded_gold_reference_field_count" in message
     assert spec.excluded_gold_reference_fields == (

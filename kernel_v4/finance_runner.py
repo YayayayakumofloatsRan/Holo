@@ -135,9 +135,13 @@ class FinanceQuestionSpec:
             "excluded_gold_reference_field_count": len(self.excluded_gold_reference_fields),
             "solver_contract": [
                 "Use the question and supplied context/tools only; no benchmark gold/reference answer is provided.",
+                "When calling tools, include every required input field from the tool schema; never send empty arguments for tools with required fields.",
+                "For provided_context.parse use {'context': supplied_context_text}; for calculator.compute use {'expression': arithmetic_expression}; for data.table.query use {'sql': select_query}.",
                 "If supplied context exists, inspect it with provided_context.parse before external retrieval unless the task clearly requires public filings.",
+                "After a successful parse/retrieval/read observation, do not repeat the same tool call with the same input; use the observed text_blocks, tables, or evidence and move to calculation, verification, or final answer.",
                 "If filing evidence is required, use SEC/EDGAR or document tools and cite line items, periods, units, and source/artifact ids.",
                 "Use calculator.compute, data.table.query, calendar.days_between, math.sympy.compute, and finance.verify_numeric as needed.",
+                "After the needed calculation or verification succeeds, give the final answer instead of calling more tools only to restate the same result.",
                 "Do not finalize early while another available tool can resolve missing evidence or arithmetic.",
             ],
             "metadata": self.metadata,

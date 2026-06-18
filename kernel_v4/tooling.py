@@ -82,6 +82,26 @@ class ToolRegistry:
     async def execute(self, call: ToolCall, context: ToolUseContext) -> ToolMessage:
         if context.abort_signal.aborted:
             return _cancelled_tool_message(call, context, reason=context.abort_signal.reason or "cancelled")
+        duplicate = _find_previous_successful_tool_call(call, context)
+        if duplicate is not None:
+            return tool_message_from_result(
+                tool_call_id=call.tool_call_id,
+                name=call.name,
+                content={
+                    "schema": "holo.kernel_v4.duplicate_successful_tool_call.v1",
+                    "tool": call.name,
+                    "status": "skipped_duplicate_successful_call",
+                    "previous_tool_call_id": duplicate["previous_tool_call_id"],
+                    "previous_result_preview": duplicate["previous_result_preview"],
+                    "instruction": (
+                        "This same tool input already succeeded earlier in the conversation. "
+                        "Use the previous tool result and continue to the next evidence, transform, verification, or final answer step."
+                    ),
+                },
+                context=context,
+                is_error=True,
+                metadata={"duplicate_successful_tool_call": True, "previous_tool_call_id": duplicate["previous_tool_call_id"]},
+            )
         definition = self.get(call.name)
         if definition is None:
             return tool_message_from_result(
@@ -103,12 +123,15 @@ class ToolRegistry:
             result = definition.executor(dict(call.input), context)
             if inspect.isawaitable(result):
                 result = await result
+            is_error = _result_indicates_tool_error(result)
             return tool_message_from_result(
                 tool_call_id=call.tool_call_id,
                 name=call.name,
                 content=result,
                 context=context,
+                is_error=is_error,
                 max_inline_chars=definition.manifest.max_result_chars or 10**12,
+                metadata=({"tool_status": str(result.get("status"))} if isinstance(result, dict) and "status" in result else None),
             )
         except Exception as exc:  # noqa: BLE001 - tool failures are loop observations.
             return tool_message_from_result(
@@ -365,6 +388,72 @@ def _string_list(value: object) -> list[str]:
     return [str(item) for item in value if isinstance(item, str) and item]
 
 
+def _find_previous_successful_tool_call(call: ToolCall, context: ToolUseContext) -> JsonObject | None:
+    target_input = _stable_json(call.input)
+    previous_calls: dict[str, ToolCall] = {}
+    for message in context.messages:
+        if message.role == "assistant":
+            for previous in message.tool_calls:
+                previous_calls[previous.tool_call_id] = previous
+            continue
+        if message.role != "tool" or not message.tool_call_id:
+            continue
+        previous = previous_calls.get(message.tool_call_id)
+        if previous is None:
+            continue
+        if previous.name != call.name or _stable_json(previous.input) != target_input:
+            continue
+        if message.metadata.get("is_error"):
+            continue
+        return {
+            "previous_tool_call_id": previous.tool_call_id,
+            "previous_result_preview": message.content[:2000],
+        }
+    return None
+
+
+def _result_indicates_tool_error(result: object) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if "error" in result:
+        return True
+    status = _status_text(result.get("status"))
+    if _is_error_status(status):
+        return True
+    content = result.get("content")
+    if isinstance(content, dict):
+        if "error" in content:
+            return True
+        if _is_error_status(_status_text(content.get("status"))):
+            return True
+    return False
+
+
+def _status_text(value: object) -> str:
+    return str(value or "").casefold().strip()
+
+
+def _is_error_status(status: str) -> bool:
+    if not status:
+        return False
+    return status in {
+        "blocked",
+        "error",
+        "errored",
+        "failed",
+        "failure",
+        "cancelled",
+        "canceled",
+        "timeout",
+        "timed_out",
+        "invalid",
+        "denied",
+        "rejected",
+        "unavailable",
+        "missing_required_field",
+    }
+
+
 def _cancelled_tool_message(call: ToolCall, context: ToolUseContext, *, reason: str) -> ToolMessage:
     return tool_message_from_result(
         tool_call_id=call.tool_call_id,
@@ -387,3 +476,10 @@ def _score_manifest(query: str, haystack: str, name: str) -> float:
     hits = sum(1 for term in terms if term in haystack)
     exact = 2 if query in name.casefold() else 0
     return float(hits + exact)
+
+
+def _stable_json(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return str(value)
