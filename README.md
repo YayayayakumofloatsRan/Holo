@@ -5,7 +5,9 @@
 Kernel v4 is now saved as the current mature single-agent finance harness
 checkpoint on branch `kernel-v4`. Work is paused on additional testing and has
 shifted to final-report preparation. The report preparation record is
-`docs/FINAL_REPORT_PREP_2026-06-19_ZH.md`.
+`docs/FINAL_REPORT_PREP_2026-06-19_ZH.md`. The expanded final-report layout,
+PPT mapping, git-history timeline, and v3-to-v4 assessment are recorded in
+`docs/FINAL_REPORT_LAYOUT_AND_PROJECT_HISTORY_2026-06-19_ZH.md`.
 
 The current evidence should be reported with strict split language:
 

@@ -6,9 +6,18 @@
 
 状态：成熟版本检查点。当前暂停继续测试，进入最终报告材料整理、实验数据归档和系统发展脉络梳理阶段。
 
+配套文档：更详细的报告布局、PPT 映射和项目发展史评估见 `docs/FINAL_REPORT_LAYOUT_AND_PROJECT_HISTORY_2026-06-19_ZH.md`。
+
+写作风格约束：
+
+- 避免使用二元对照式套话。
+- 避免英文术语或中文概念连续堆叠成短句；代码名可以保留，但正文要解释其作用。
+- 报告正文优先使用“模型负责什么、宿主程序负责什么、实验如何验证”的完整句式。
+- Benchmark 数字必须带上集合边界和实验口径。
+
 ## 一句话定位
 
-Holo Kernel v4 是一个面向复杂金融研究任务的通用单 Agent harness。系统目标不是把 FinanceBench 题目写成规则表，而是构建一个稳定的模型驱动行动闭环：LLM 自主理解任务、发现和调用工具、读取证据、计算核验、形成答案；host 负责验证工具协议、执行工具、记录事件、管理上下文和保护安全边界。
+Holo Kernel v4 是一个面向复杂金融研究任务的通用单智能体运行框架。系统目标是构建稳定的模型驱动行动闭环：大模型自主理解任务、发现和调用工具、读取证据、计算核验、形成答案；宿主程序负责验证工具协议、执行工具、记录事件、管理上下文和保护安全边界，FinanceBench 题目不能被写成规则表或答案表。
 
 ## 与课程要求的对应关系
 
@@ -16,26 +25,26 @@ Holo Kernel v4 是一个面向复杂金融研究任务的通用单 Agent harness
 
 | 课程要求 | 本项目对应内容 |
 | --- | --- |
-| 真实问题 | 金融基本面研究和公开财报问答需要证据检索、表格理解、数值计算、公式选择和业务解释，不是一次普通 LLM 调用能稳定解决的任务。 |
-| Agent 主线 | Kernel v4 建立 `input -> understand -> decide -> act/tool -> observe -> verify -> final answer` 的闭环。 |
-| 技术复杂性 | 单 Agent loop、provider-native tool calling、streaming tool executor、artifact lifecycle、tool discovery、SEC/EDGAR/document/table/calculator/numeric verifier 工具面。 |
+| 真实问题 | 金融基本面研究和公开财报问答需要证据检索、表格理解、数值计算、公式选择和业务解释，单轮大模型回答很难稳定完成这些步骤。 |
+| 智能体主线 | Kernel v4 建立“输入、理解、决策、工具行动、观察、核验、最终答案”的闭环。 |
+| 技术复杂性 | 系统同时处理模型原生工具调用、流式工具执行、证据对象管理、工具发现、SEC/EDGAR 检索、文档读取、表格处理、计算器和数值核验。 |
 | 数据与评测 | FinanceBench public-filing tasks；gold/reference 只在每题完成后评分，不进入模型上下文。 |
-| 实验 | debug50、replay、strict remaining offsets；记录 pass/fail、turns、tool calls、token usage、cache hit、cost、failure reasons。 |
-| 失败分析 | 主要失败集中在 numeric tolerance、final-answer completeness、empty final answer、长题成本。 |
+| 实验 | 开发集合、回放集合和剩余严格集合分别记录通过情况、循环轮数、工具调用次数、token 用量、缓存命中率、成本和失败原因。 |
+| 失败分析 | 主要失败集中在数值容差、最终答案完整性、空最终答案和长题成本。 |
 | 边界与伦理 | 不泄露 benchmark gold，不用 fake test 做能力证明，不做答案打表；金融输出应被视为研究辅助，不构成投资建议。 |
 
 ## 从项目建议书到最终系统
 
-项目建议书中提出 Holo 的目标是搭建完整 Agent 行动闭环基座，并特化用于金融基本面研究。最初设想包括用户输入、短期记忆、长期记忆、检索工具、本地数据脚本、系统推理和 Agent loop 反馈。
+项目建议书中提出 Holo 的目标是搭建完整智能体行动闭环基座，并特化用于金融基本面研究。最初设想包括用户输入、短期记忆、长期记忆、检索工具、本地数据脚本、系统推理和行动循环反馈。
 
 实际迭代后，项目重点收敛为：
 
-1. 放弃 v3 中过重的金融语义闸门，重写一个通用单 Agent loop。
-2. 参考成熟开源 Agent 项目的核心思想：streaming tool execution、tool-use context、tool result lifecycle、tool discovery、abort/cancel、context edit。
-3. 将金融能力作为工具链和 prompt contract 暴露给模型，而不是由 host 打表或强行补槽。
+1. 放弃 v3 中过重的金融语义闸门，重写一个通用单智能体循环。
+2. 参考成熟开源智能体项目的核心思想，包括流式工具执行、工具调用上下文、工具结果生命周期、工具发现、取消控制和上下文编辑。
+3. 将金融能力作为工具链和系统提示合同暴露给模型，宿主程序不打表、不强行替模型补槽。
 4. 用 live benchmark 结果证明系统真实做题能力，并记录失败类型和成本。
 
-这条路线和建议书目标一致：Holo 的核心贡献不是一个静态金融问答脚本，而是一个可扩展的 LLM harness 基座。
+这条路线和建议书目标一致：Holo 的核心贡献是一个可扩展的大模型运行框架基座，金融问答脚本只是验证该基座能力的应用形态。
 
 ## 系统架构
 
@@ -43,47 +52,47 @@ Holo Kernel v4 是一个面向复杂金融研究任务的通用单 Agent harness
 
 Kernel v4 的主循环由以下组件组成：
 
-- `SingleAgentLoop`：单 Agent 行动循环，控制 turn、预算、finalization 和异常退出。
-- `OpenAICompatibleChatProvider` / `DeepSeekChatProvider`：把工具暴露成 provider-native function tools，并解析流式 tool-call delta。
-- `StreamingToolExecutor`：模型流式输出工具调用后，host 立即执行工具并记录生命周期。
-- `ToolUseContext`：保存 messages、metadata、artifacts、workflow context、in-progress tool ids。
-- `WorkflowObserver`：实时暴露 `model_start`、`assistant_tool_call`、`tool_start`、`tool_result`、`loop_completed/failed` 等事件。
-- `artifact.inspect/search/read`：把大文档和大工具结果转成可检索、可窗口读取的 artifact。
-- `tool.discovery` / `finance.workbench.open`：让模型按任务需要发现工具族和金融工作台，而不是把所有工具逻辑写死在 host。
+- `SingleAgentLoop`：单智能体行动循环，控制轮数、预算、最终回答和异常退出。
+- `OpenAICompatibleChatProvider` / `DeepSeekChatProvider`：把工具以模型服务支持的函数格式暴露，并解析流式工具调用。
+- `StreamingToolExecutor`：模型在输出过程中发起工具调用后，宿主程序立即执行工具并记录生命周期。
+- `ToolUseContext`：保存对话消息、运行元数据、证据对象、流程上下文和进行中的工具调用。
+- `WorkflowObserver`：实时暴露模型开始、工具调用、工具执行、工具结果、循环完成和循环失败等事件。
+- `artifact.inspect/search/read`：把大文档和大工具结果转成可检索、可按窗口读取的证据对象。
+- `tool.discovery` / `finance.workbench.open`：让模型按任务需要发现工具族和金融工具台，宿主程序只负责暴露能力和执行边界。
 
 ### 金融工具面
 
-当前金融能力主要来自：
+当前金融能力主要来自以下工具族：
 
-- SEC/EDGAR filing discovery and document expansion
-- company filing/document extraction
-- artifact search/read
-- provided context parser for FQA/FinQA-style rows
-- table query and transform
-- calculator and SymPy computation
-- fiscal date/day-count utility
-- numeric verifier
-- finance workbench profiles for inventory efficiency, gross margin, working capital, capital intensity, legal proceedings, shareholder vote results, cash-flow conversion, multi-company comparison 等
+- SEC/EDGAR 文件发现与文件展开，用于取得官方公开披露；
+- 公司文件和网页文档抽取，用于读取年报、季报、公告和代理投票材料；
+- 证据对象搜索和窗口读取，用于处理长文件和大工具结果；
+- FQA/FinQA 风格上下文解析，用于处理题目自带表格或文本；
+- 表格查询和转换，用于排序、聚合、筛选和派生指标计算；
+- 计算器与符号计算，用于公式替换、比例计算和单位换算；
+- 财年日期和天数工具，用于处理财年起止日和 period day count；
+- 数值核验器，用于检查最终答案中的关键数字；
+- 金融工具台模板，用于库存效率、毛利率、营运资本、资本密集度、法律事项、股东投票、现金流转换和多公司比较等题型。
 
-host 不预先计算 benchmark 答案；LLM 决定证据、公式和工具调用。host 只执行、记录、约束工具协议，并在最终答案前提示数值核验和覆盖检查。
+宿主程序不预先计算 benchmark 答案。大模型决定证据、公式和工具调用；宿主程序执行工具、记录过程、约束工具协议，并在最终答案前提示数值核验和覆盖检查。
 
 ## 关键实验协议
 
 硬约束：
 
-- live tests 才能作为金融能力证据。
-- fake/offline tests 只能作为结构、schema、compile 或 safety regression，不能作为做题能力证据。
+- 在线测试才能作为金融能力证据。
+- fake/offline tests 只能作为结构、协议、编译或安全回归，不能作为做题能力证据。
 - gold/reference/scoring material 不进入模型上下文。
-- 不使用答案表、题目打表或 hard-coded benchmark rule。
-- debug 和 test 必须区分；被人工分析过的题不能再当 clean held-out test。
+- 不使用答案表、题目打表或硬编码 benchmark 规则。
+- 开发集合和测试集合必须区分；被人工分析过的题不能再当干净留出测试。
 
 当前有效实验材料分三类：
 
-| 类型 | 说明 | 是否可当最终 clean test |
+| 类型 | 说明 | 是否可当最终干净测试 |
 | --- | --- | --- |
-| debug50 | offsets `0-49`，用于系统调试和能力建设。最佳记录 `50/50` live pass。 | 否 |
-| replay / inspected stream | 已用于失败分析或系统修复的题，包括 offsets `50-95` 和 replay failure offsets。 | 否 |
-| strict remaining offsets | offsets `96-149`，本轮冻结配置 live strict 分块跑完，共 `54` 道。 | 可以作为剩余 untouched pool 的严格证据，但不是完整 100 题测试。 |
+| debug50 | offsets `0-49`，用于系统调试和能力建设。最佳记录 `50/50` 在线通过。 | 否 |
+| 回放和已检查题 | 已用于失败分析或系统修复的题，包括 offsets `50-95` 和 replay failure offsets。 | 否 |
+| 剩余严格集合 | offsets `96-149`，本轮冻结配置在线分块跑完，共 `54` 道。 | 可以作为剩余未调试题的严格证据，但不能写成完整 100 题测试。 |
 
 ## 当前成熟版本关键数据
 
@@ -96,17 +105,17 @@ host 不预先计算 benchmark 答案；LLM 决定证据、公式和工具调用
 119 passed in 3.65s
 ```
 
-说明：这是结构正确性证据，不是金融 benchmark 能力证据。
+说明：这是结构正确性证据，不能用于证明金融 benchmark 做题能力。
 
 ### Replay failure recovery
 
-早期 replay failure offsets 经过通用 loop/tool/prompt 修复后，已有单题或稀疏 live pass 证据：
+早期回放失败题经过通用循环、工具和提示合同修复后，已有单题或稀疏在线通过证据：
 
 ```text
 53, 60, 62, 73, 75, 76, 77, 80, 94
 ```
 
-其中 offset `77` 的关键修复是：calculation checkpoint 不能过早关闭本地证据工具，必须保留 `artifact.search/read` 和 `document.text.extract`，否则模型在法律事项类问题上无法继续读取精确证据。
+其中 offset `77` 的关键修复是：计算检查点不能过早关闭本地证据工具，必须保留 `artifact.search/read` 和 `document.text.extract`，否则模型在法律事项类问题上无法继续读取精确证据。
 
 ### Strict remaining offsets 96-149
 
@@ -128,30 +137,30 @@ host 不预先计算 benchmark 答案；LLM 决定证据、公式和工具调用
 | max tool calls | `420` |
 | max tool result chars | `12000` |
 | per-item timeout | `1800s` |
-| gold/reference | scoring-only, not in model context |
+| gold/reference | 仅用于评分，不进入模型上下文 |
 
 结果：
 
 | 指标 | 数值 |
 | --- | ---: |
-| item count | 54 |
-| passed | 42 |
-| failed | 12 |
-| pass rate | 77.78% |
-| run failed | 1 |
-| numeric tolerance failures | 11 |
-| source-grounded qualitative failures | 1 |
-| aggregate cache hit rate | 89.06% |
-| estimated total cost | `$1.4435` |
-| total tokens | 74,549,175 |
-| mean turns | 31.80 |
-| median turns | 24.5 |
-| max turns | 136 |
-| mean tool calls | 34.06 |
-| median tool calls | 26 |
-| max tool calls | 135 |
-| mean duration | 139.45s |
-| max duration | 444.67s |
+| 题目数 | 54 |
+| 通过题数 | 42 |
+| 失败题数 | 12 |
+| 通过率 | 77.78% |
+| 运行级失败 | 1 |
+| 数值容差失败 | 11 |
+| 有证据但定性答案失败 | 1 |
+| 聚合缓存命中率 | 89.06% |
+| 估计总成本 | `$1.4435` |
+| 总 token 数 | 74,549,175 |
+| 平均循环轮数 | 31.80 |
+| 中位循环轮数 | 24.5 |
+| 最大循环轮数 | 136 |
+| 平均工具调用次数 | 34.06 |
+| 中位工具调用次数 | 26 |
+| 最大工具调用次数 | 135 |
+| 平均耗时 | 139.45s |
+| 最大耗时 | 444.67s |
 
 失败 offsets：
 
@@ -159,7 +168,7 @@ host 不预先计算 benchmark 答案；LLM 决定证据、公式和工具调用
 105, 106, 111, 118, 121, 122, 127, 133, 138, 139, 140, 141
 ```
 
-run-level failure：
+运行级失败：
 
 ```text
 121: empty_final_answer
@@ -168,9 +177,9 @@ run-level failure：
 高成本长题：
 
 ```text
-97, 143: >= 5M total tokens
-97: 96 turns / 112 tools
-143: 136 turns / 135 tools
+97, 143: 总 token 数超过 5M
+97: 96 轮，112 次工具调用
+143: 136 轮，135 次工具调用
 ```
 
 长循环样本：
@@ -183,87 +192,87 @@ run-level failure：
 
 ## 失败类型归因
 
-当前失败不是工具链完全断裂，而是更上层的金融推理和最终答案稳定性问题：
+当前失败主要来自更上层的金融推理和最终答案稳定性问题；基础工具链已经能够支撑多数题目的取证与计算：
 
-1. 数值 tolerance 失败：多数失败来自提取数值、选择公式口径、单位/符号/期间处理或 final answer completeness。
-2. 空最终答案：offset `121` 显示 loop 在长推理后仍可能进入 `empty_final_answer`，需要更强的 finalization recovery。
-3. 长题成本：offset `143` 虽然通过，但消耗 `11.1M` tokens，说明 artifact 搜索、重复取证和 endgame 收敛仍有优化空间。
-4. 工具调用冗余：部分题在已有证据足够后仍继续检索，说明“证据充分性判断”和“停止条件”仍依赖模型能力和 prompt contract。
-5. Numeric verifier 覆盖不足：验证工具能检查显式数字，但不能替代模型对所有 required facts 是否齐全的判断。
+1. 数值容差失败：多数失败来自提取数值、选择公式口径、单位、符号、期间处理或最终答案完整性。
+2. 空最终答案：offset `121` 显示循环在长推理后仍可能进入 `empty_final_answer`，需要更强的最终回答恢复机制。
+3. 长题成本：offset `143` 虽然通过，但消耗 `11.1M` tokens，说明证据对象搜索、重复取证和收尾阶段仍有优化空间。
+4. 工具调用冗余：部分题在已有证据足够后仍继续检索，说明证据充分性判断和停止条件仍依赖模型能力和系统提示合同。
+5. 数值核验覆盖不足：验证工具能检查显式数字，但不能替代模型判断 required facts 是否齐全。
 
-## Agent loop 和通用能力还能优化什么
+## 智能体循环和通用能力还能优化什么
 
 下面是下一阶段架构优化方向，均应保持 LLM 决策为核心，避免回到规则打表。
 
-### 1. Finalization reliability
+### 1. 最终回答可靠性
 
-目标：减少 `empty_final_answer`、工具 markup final answer、以及“证据已足够但答非所问”。
-
-可做：
-
-- final answer draft -> self-audit -> final answer 的两步模型内流程。
-- no-tools finalization turn 上保留更明确的 answer schema contract。
-- 对自指回答、过程性回答、空回答继续做通用 recovery。
-- 将 required facts checklist 作为模型可见任务合同，而不是 host 代填答案。
-
-### 2. Numeric precision and unit discipline
-
-目标：降低 numeric tolerance failure。
+目标：减少空最终答案、把工具标记误写成最终答案、以及证据已足够但答非所问的情况。
 
 可做：
 
-- 对所有 material numeric claims 强制使用 calculator/verifier。
-- final answer 必须同时写出 source line item、period、unit、formula、substitution。
-- ratios/margins/returns 同时给 decimal 和 percentage；change 同时给 absolute change 和 percentage-point change。
-- 对平均值、期末值、同比、财年天数、currency unit 做 explicit basis statement。
+- 让模型先写最终答案草稿，再自审覆盖项和数值，最后输出正式答案。
+- 在无工具收尾轮中保留更明确的答案格式要求。
+- 对自指回答、过程性回答和空回答继续做通用恢复。
+- 将必要事实清单作为模型可见任务合同，宿主程序不代填答案。
 
-### 3. Evidence sufficiency control
+### 2. 数值精度和单位纪律
+
+目标：降低数值容差失败。
+
+可做：
+
+- 对所有关键数值主张要求使用计算器或数值核验器。
+- 最终答案必须同时写出来源行项目、期间、单位、公式和代入过程。
+- 比率、利润率和回报率同时给出小数和百分比；变化量同时给出绝对变化和百分点变化。
+- 平均值、期末值、同比、财年天数和币种单位必须说明计算口径。
+
+### 3. 证据充分性控制
 
 目标：减少“证据不足时过早回答”和“证据足够后继续乱搜”。
 
 可做：
 
-- 让模型维护轻量 task checklist：facts acquired / formulas verified / answer coverage。
-- artifact search/read 工具返回更清晰的 section/title/page metadata，帮助模型定位证据。
-- source saturation checkpoint 继续只收窄工具面，不替模型判断答案。
+- 让模型维护轻量任务清单，记录已取得事实、已验证公式和答案覆盖情况。
+- 证据对象搜索和读取工具返回更清晰的章节、标题和页码信息，帮助模型定位证据。
+- 来源饱和检查点继续只收窄工具面，答案判断仍交给模型。
 
-### 4. Cost and cache optimization
+### 4. 成本和缓存优化
 
-目标：保持高 cache hit，同时降低长题 token 爆炸。
+目标：保持高缓存命中率，同时降低长题 token 爆炸。
 
 现状：
 
-- strict54 aggregate cache hit rate 已达 `89.06%`。
+- 剩余 54 题严格评测的聚合缓存命中率已达 `89.06%`。
 - 个别长题仍超 `5M` tokens。
 
 可做：
 
-- 稳定 system prompt 和 tool schema，避免高频变动破坏 cache。
-- 减少每轮 transient context，保持 `model_context_mode=off` 作为默认。
-- 将大 evidence 放在 artifact 中，通过窗口读取和 snippets 返回。
-- 做 run trace compaction：保留事实、来源、工具结果摘要，压缩重复工具调用历史。
+- 稳定系统提示和工具协议，避免高频变动破坏缓存。
+- 减少每轮临时上下文，保持 `model_context_mode=off` 作为默认。
+- 将大证据放在证据对象中，通过窗口读取和片段返回。
+- 做运行轨迹压缩，保留事实、来源和工具结果摘要，压缩重复工具调用历史。
 
-### 5. Tool discovery and workbench maturity
+### 5. 工具发现和金融工具台成熟度
 
-目标：让模型 one-shot 更好地知道可用工具和调用方式。
-
-可做：
-
-- `finance.workbench.open` 输出更短但更结构化的 task-family contract。
-- 工具 schema description 更贴近模型调用意图。
-- 对 high-value 工具提供 examples，但不包含 benchmark 答案。
-- deferred tools 根据 task family 动态展开，减少初始 tool surface 噪声。
-
-### 6. Reportable process observability
-
-目标：把 agent 工作流做成可展示、可复现实验材料。
+目标：让模型在第一次理解任务时更清楚可用工具和调用方式。
 
 可做：
 
-- 保存 workflow event timeline。
-- 为每题记录 `turns/tools/tokens/cache/cost/pass/fail reason`。
-- 生成图表：pass rate by segment、cost distribution、turn/tool scatter、cache hit distribution、failure taxonomy。
-- 用 2-3 个典型 case 展示 Agent 如何从题面到证据、工具、计算、核验、最终答案。
+- `finance.workbench.open` 输出更短、更结构化的题型合同。
+- 工具说明更贴近模型真实调用意图。
+- 对高价值工具提供示例，但不包含 benchmark 答案。
+- 延迟加载工具根据题型动态展开，减少初始工具面噪声。
+
+### 6. 可报告的过程可观察性
+
+目标：把智能体工作流做成可展示、可复现实验材料。
+
+可做：
+
+- 保存运行事件时间线。
+- 为每题记录循环轮数、工具调用次数、token、缓存、成本、通过情况和失败原因。
+- 生成图表：分段通过率、成本分布、循环轮数与工具调用散点图、缓存命中率分布和失败类型统计。
+- 用 2-3 个典型案例展示智能体如何从题面走到证据、工具、计算、核验和最终答案。
 
 ## 最终报告建议结构
 
@@ -272,47 +281,47 @@ run-level failure：
 建议章节：
 
 1. 摘要
-   - 金融研究 Agent 的问题定义。
+   - 金融研究智能体的问题定义。
    - Kernel v4 方法。
-   - 关键结果：debug50 best-recorded pass、strict54 `42/54` live pass、cache/cost/失败类型。
+   - 关键结果：开发集合最佳在线记录、剩余严格集合 `42/54` 在线通过、缓存、成本和失败类型。
 2. 引言
-   - 为什么金融财报问答需要 Agent 系统。
+   - 为什么金融财报问答需要智能体系统。
    - 一次 LLM 调用的不足：证据、工具、计算、核验、长上下文。
    - 本项目贡献。
 3. 相关工作
-   - Agent loop / tool calling / ReAct / function calling。
-   - Financial QA / FinanceBench / FinQA。
-   - RAG、artifact/document processing、numeric verification。
+   - 智能体循环、工具调用、ReAct 和函数调用。
+   - 金融问答评测，包括 FinanceBench 和 FinQA。
+   - 检索增强生成、证据对象管理、文档处理和数值核验。
 4. 数据与任务
    - FinanceBench public filings。
    - debug/test/replay split policy。
    - gold/reference 隔离原则。
 5. 方法
-   - Kernel v4 single-agent loop。
-   - 工具链和 artifact lifecycle。
-   - Finance workbench and no-gold task packet。
-   - Numeric verification and finalization checkpoints。
+   - Kernel v4 单智能体循环。
+   - 工具链和证据对象生命周期。
+   - 金融工具台和无答案泄露任务包。
+   - 数值核验和最终答案检查点。
 6. 实验设置
-   - 模型、thinking、max turns/tools、provider、cost estimation。
+   - 模型、思考模式、轮数和工具调用上限、模型服务、成本估计。
    - 结构测试和 live benchmark 的区别。
 7. 实验结果
-   - debug50 development result。
-   - replay recovery result。
-   - strict remaining 54 result。
-   - cache/cost/turn/tool statistics。
+   - 开发集合结果。
+   - 回放修复结果。
+   - 剩余 54 题严格结果。
+   - 缓存、成本、循环轮数和工具调用统计。
 8. 消融与分析
-   - model_context_mode/cache。
-   - thinking disabled/low/medium repeat probe。
-   - long-tail cases 97/143。
+   - 上下文模式和缓存。
+   - 不同思考强度的重复实验。
+   - offset `97` 和 `143` 等长尾案例。
 9. 失败分析
-   - numeric tolerance。
-   - empty final answer。
-   - over-search and high cost。
-   - remaining generality limits。
+   - 数值容差。
+   - 空最终答案。
+   - 过度检索和高成本。
+   - 剩余泛化边界。
 10. 总结与未来工作
    - 当前成熟度。
-   - 还需要 fresh held-out 100-question split。
-   - 通用 Agent harness 可迁移到数学、物理、科研文献等领域。
+   - 还需要全新的 100 题留出测试集合。
+   - 通用智能体运行框架可迁移到数学、物理、科研文献等领域。
 
 ## 建议图表
 
@@ -320,24 +329,24 @@ run-level failure：
 
 | 图表 | 数据来源 |
 | --- | --- |
-| Kernel v4 architecture diagram | 根据 `kernel_v4/loop.py`, `tooling.py`, `context.py`, `finance_runner.py` 绘制。 |
-| Agent workflow sequence | workflow events: model_start -> tool_call -> tool_result -> verify -> final. |
-| Strict54 pass/fail bar | aggregate summary。 |
-| Failure taxonomy pie/bar | `failure_reasons`。 |
-| Turns vs tool calls scatter | `items.jsonl`。 |
-| Total tokens distribution | `items.jsonl`。 |
-| Cache hit rate distribution | item usage summaries。 |
-| Cost by item | item cost estimates。 |
+| Kernel v4 架构图 | 根据 `kernel_v4/loop.py`, `tooling.py`, `context.py`, `finance_runner.py` 绘制。 |
+| 智能体工作流序列图 | 根据模型开始、工具调用、工具结果、核验和最终答案事件绘制。 |
+| 剩余 54 题通过/失败柱状图 | aggregate summary。 |
+| 失败类型饼图或柱状图 | `failure_reasons`。 |
+| 循环轮数与工具调用散点图 | `items.jsonl`。 |
+| 总 token 分布图 | `items.jsonl`。 |
+| 缓存命中率分布图 | item usage summaries。 |
+| 单题成本图 | item cost estimates。 |
 
 ## 报告写作口径
 
 可以说：
 
-- “Kernel v4 已经形成成熟单 Agent loop 和金融工具链。”
-- “FinanceBench debug50 是开发/调试集合，最佳记录为 50/50 live pass。”
-- “剩余未用于调试的 offsets 96-149 共 54 道，冻结配置 live strict 结果为 42/54，pass rate 77.78%。”
+- “Kernel v4 已经形成成熟单智能体循环和金融工具链。”
+- “FinanceBench debug50 是开发/调试集合，最佳记录为 50/50 在线通过。”
+- “剩余未用于调试的 offsets 96-149 共 54 道，冻结配置在线严格结果为 42/54，通过率 77.78%。”
 - “gold/reference 未进入模型上下文。”
-- “失败主要集中于数值精度和 finalization，而不是工具链完全不可用。”
+- “失败主要集中于数值精度和最终答案阶段，基础工具链已经能够支撑多数在线题目的取证和计算。”
 
 不能说：
 
@@ -350,9 +359,8 @@ run-level failure：
 
 当前版本应作为 `kernel-v4` mature checkpoint 保存。建议提交内容包括：
 
-- `kernel_v4/` 当前 loop、provider、finance runner、tools、score/eval/repeat/ablation 代码。
+- `kernel_v4/` 当前循环、模型服务适配、金融运行器、工具、评分、评测、重复实验和消融代码。
 - `tests/test_kernel_v4_*` 结构回归。
 - `README.md` 和本报告准备文档。
-- 不提交 `.state/` 大量 live run artifacts；只在文档中引用路径和关键统计。
-- 如需长期保存实验数据，可后续单独打包 summary-only artifacts 或放入外部补充材料。
-
+- 不提交 `.state/` 大量在线运行证据对象；只在文档中引用路径和关键统计。
+- 如需长期保存实验数据，可后续单独打包 summary-only 证据对象或放入外部补充材料。
