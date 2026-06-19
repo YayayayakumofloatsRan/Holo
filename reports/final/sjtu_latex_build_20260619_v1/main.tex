@@ -1,16 +1,43 @@
-# Holo Kernel v4：面向金融研究任务的通用单智能体工具调用与证据验证系统
+%!TeX program = xelatex
+\documentclass[12pt,a4paper,UTF8]{ctexart}
+\usepackage{SJTUReport}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usepackage{float}
+\usetikzlibrary{arrows.meta,positioning,calc,shapes.geometric}
 
-## 摘要
+\definecolor{HoloBg}{HTML}{10131A}
+\definecolor{HoloPanel}{HTML}{1B2230}
+\definecolor{HoloBlue}{HTML}{6EA8FE}
+\definecolor{HoloGold}{HTML}{F2C94C}
+\definecolor{HoloOrange}{HTML}{F2994A}
+\definecolor{HoloGreen}{HTML}{7FB069}
+\definecolor{HoloPink}{HTML}{D675A8}
 
+\newcommand{\toolname}[1]{\texttt{#1}}
+\newcommand{\metric}[2]{\begin{tabular}{@{}c@{}}\textbf{#1}\\{\small #2}\end{tabular}}
+
+%%-------------------------------正文开始---------------------------%%
+\begin{document}
+
+\cover
+
+\begin{abstract}
 在金融基本面研究中，系统需要围绕公开披露文件完成证据定位和财务口径理解，并在数值计算之后给出能够追溯来源的结论。单轮大模型回答在这类任务中容易出现来源混淆，计算口径不一致和数值幻觉。为提高复杂金融问答的可靠性，本研究构建了 Holo Kernel v4，一个由宿主程序掌握执行边界并由大模型负责行动决策的单智能体运行框架。
 
 Holo Kernel v4 由模型处理任务理解和工具选择，由宿主程序负责工具协议校验与执行记录。证据对象管理和数值核验也由宿主程序统一维护，从而使模型能够在较稳定的边界内完成多轮行动。系统采用流式工具执行机制，使模型可以沿着公开文件检索到长文档读取再到计算器核验的路径推进，并在最终回答前检查关键数值。该设计延续了 Kernel v3 在金融任务上的工程积累，同时减少了过重的语义闸门，使主循环更接近通用工具调用框架。
 
-实验采用 FinanceBench 公开文件任务作为主要经验检验对象。开发集合 debug50 的最佳在线记录为 50/50，该结果仅作为系统调试证据。对于剩余未用于调试的 offsets 96-149，冻结配置在 gold/reference 不进入模型上下文的在线严格设置下达到 42/54，通过率为 77.78%。该组实验的聚合缓存命中率为 89.06%，估计总成本约为 1.44 美元。失败分析显示，当前瓶颈主要来自财务数值口径不稳定，部分最终答案没有覆盖评分所需信息，以及少数长题成本偏高。结果表明，Holo Kernel v4 已形成可审计的金融研究运行框架，也暴露了进一步提升数值稳定性和推理效率的方向。
+实验采用 FinanceBench 公开文件任务作为主要经验检验对象。开发集合 debug50 的最佳在线记录为 50/50，该结果仅作为系统调试证据。对于剩余未用于调试的 offsets 96--149，冻结配置在 gold/reference 不进入模型上下文的在线严格设置下达到 42/54，通过率为 77.78\%。该组实验的聚合缓存命中率为 89.06\%，估计总成本约为 1.44 美元。失败分析显示，当前瓶颈主要来自财务数值口径不稳定，部分最终答案没有覆盖评分所需信息，以及少数长题成本偏高。结果表明，Holo Kernel v4 已形成可审计的金融研究运行框架，也暴露了进一步提升数值稳定性和推理效率的方向。
 
-关键词：金融智能体；工具调用；证据验证；FinanceBench；单智能体循环
+\noindent\textbf{关键词：}金融智能体；工具调用；证据验证；FinanceBench；单智能体循环
+\end{abstract}
 
-## 1 引言
+\thispagestyle{empty}
+\newpage
+\tableofcontents
+\newpage
+
+\section{引言}
 
 金融研究类问题具有明显的复合结构。系统通常需要先识别公司和期间，再从年报或季报中找到对应项目，随后判断财务指标的口径，完成公式代入，最后给出面向业务解释的结论。这一过程依赖公开文件检索和长文本阅读，也依赖表格理解和数值计算。若只依靠大模型的一次自然语言回答，模型容易把相近项目混在一起，也可能在单位和期间上产生偏差。
 
@@ -20,51 +47,112 @@ Kernel v4 的设计目标是在保留宿主程序安全边界的前提下，回�
 
 本研究的贡献主要体现在三个方面。首先，研究整理了 Holo 从早期记忆原型到 Kernel v4 的系统演化过程，说明金融任务如何成为检验框架能力的主要对象。其次，研究给出了 Kernel v4 的单智能体工具循环设计，说明模型发起工具调用之后，系统如何在流式输出过程中执行请求，并如何借助工具发现和证据对象处理长文档，最后再通过数值核验约束回答。最后，研究基于在线严格评测给出可复核的实验结果，并明确区分开发集合，回放集合和剩余严格集合的证据边界。
 
-## 2 相关工作
+\begin{figure}[H]
+\centering
+\resizebox{0.98\textwidth}{!}{
+\begin{tikzpicture}[
+    phase/.style={rectangle, rounded corners=3mm, draw=#1, very thick, fill=#1!10, minimum width=2.9cm, minimum height=1.05cm, align=center, font=\small},
+    arrow/.style={-{Latex[length=2.5mm]}, thick, draw=gray!70}
+]
+\node[phase=HoloBlue] (p1) {记忆与\\自迭代原型};
+\node[phase=HoloPink, right=0.35cm of p1] (p2) {状态观测\\与可视化};
+\node[phase=HoloGold, right=0.35cm of p2] (p3) {模型服务\\与工具循环};
+\node[phase=HoloOrange, right=0.35cm of p3] (p4) {Kernel v3\\金融特化};
+\node[phase=HoloGreen, right=0.35cm of p4] (p5) {框架审查\\与重写};
+\node[phase=HoloBlue, right=0.35cm of p5] (p6) {Kernel v4\\严格评测};
+\foreach \a/\b in {p1/p2,p2/p3,p3/p4,p4/p5,p5/p6}{\draw[arrow] (\a) -- (\b);}
+\node[below=0.45cm of p1, align=center, font=\footnotesize] {2026-04};
+\node[below=0.45cm of p3, align=center, font=\footnotesize] {2026-05};
+\node[below=0.45cm of p5, align=center, font=\footnotesize] {2026-06};
+\node[below=0.45cm of p6, align=center, font=\footnotesize] {2026-06-19};
+\end{tikzpicture}}
+\caption{Holo 系统从记忆原型到 Kernel v4 的演化路径。该图强调系统能力的连续积累：早期探索提供了状态观测和记忆基础，v3 将金融任务作为主要应用方向，v4 则把工具调用过程收敛为更通用的单智能体循环。}
+\label{fig:timeline}
+\end{figure}
 
-大模型智能体研究的一个重要方向是将语言模型的推理能力与外部行动结合。ReAct 通过交替生成推理和行动，使模型能够在环境反馈中逐步推进任务。Toolformer 等工作进一步说明，模型可以学习何时调用外部工具，从而弥补单纯文本生成在检索和计算方面的局限。函数调用接口在工程系统中提供了更稳定的工具协议，使模型输出能够被宿主程序解析并执行。
+\section{相关工作}
+
+大模型智能体研究的一个重要方向是将语言模型的推理能力与外部行动结合。ReAct 通过交替生成推理和行动，使模型能够在环境反馈中逐步推进任务\cite{yao2022react}。Toolformer 等工作进一步说明，模型可以学习何时调用外部工具，从而弥补单纯文本生成在检索和计算方面的局限\cite{schick2023toolformer}。函数调用接口在工程系统中提供了更稳定的工具协议，使模型输出能够被宿主程序解析并执行。
 
 开源智能体框架为 Holo 的重构提供了重要参照。LangGraph 使用状态图和检查点组织智能体过程，强调可恢复的执行状态。Semantic Kernel 通过插件和规划机制组织外部能力。Hermes 相关项目强调结构化工具调用和可观察的执行事件。这些思想共同指向一个工程原则：模型应承担语义判断，宿主程序应稳定执行外部动作并记录结果。
 
-金融问答评测能够集中检验智能体系统的检索能力和计算可靠性。FinanceBench 关注公开文件中的真实财务问题，要求系统从公司披露材料中取得证据并完成计算。FinQA 更强调给定上下文中的表格推理和公式执行。Finance Agent Benchmark 关注面向金融任务的智能体能力，其公开题集和评分口径需要与 FinanceBench 严格区分。Holo 当前以 FinanceBench 公开文件任务作为主要实验对象，FinQA 与其他金融题型则作为扩展工具设计的参考。
+金融问答评测能够集中检验智能体系统的检索能力和计算可靠性。FinanceBench 关注公开文件中的真实财务问题，要求系统从公司披露材料中取得证据并完成计算\cite{islam2023financebench}。FinQA 更强调给定上下文中的表格推理和公式执行\cite{chen2021finqa}。Finance Agent Benchmark 关注面向金融任务的智能体能力，其公开题集和评分口径需要与 FinanceBench 严格区分。Holo 当前以 FinanceBench 公开文件任务作为主要实验对象，FinQA 与其他金融题型则作为扩展工具设计的参考。
 
 检索增强生成和长期记忆研究也与本项目相关。传统 RAG 系统常将检索结果直接拼接进上下文，但金融文件往往篇幅很长，单次检索结果难以完整进入模型窗口。Holo 因此采用证据对象机制，把大型工具结果保存在宿主程序侧，再通过搜索和窗口读取方式回灌给模型。这一做法兼顾上下文长度控制和证据可追溯性。
 
-## 3 数据与任务
+\section{数据与任务}
 
 本研究的主要实验对象来自 FinanceBench public-filing 任务。该类任务通常给定公司，期间和财务研究目标，要求系统从公开披露文件中检索证据，识别相关财务项目，完成计算，并给出结论。题后评分所需的 gold/reference 材料只在模型完成答案后用于评价，不进入模型上下文。
 
-为了避免开发过程污染最终评测，本项目将题目划分为不同实验角色。debug50 用于系统调试和能力建设，其最佳在线记录为 50/50。部分回放题和 offsets 50-95 已经参与失败分析和系统修复，因此不再作为干净测试。剩余 offsets 96-149 共 54 道题未用于逐题调试，本研究将其作为冻结配置下的在线严格证据。
+为了避免开发过程污染最终评测，本项目将题目划分为不同实验角色。debug50 用于系统调试和能力建设，其最佳在线记录为 50/50。部分回放题和 offsets 50--95 已经参与失败分析和系统修复，因此不再作为干净测试。剩余 offsets 96--149 共 54 道题未用于逐题调试，本研究将其作为冻结配置下的在线严格证据。
 
 这一划分决定了实验结果的表述边界。debug50 可以证明系统在开发过程中已经形成较强做题能力，但不能代表泛化准确率。回放题可以证明修复是否恢复了已知失败路径，但不能当作未接触测试。剩余 54 题结果可以作为严格证据，但也不能被写成完整 test100 结果。
 
-## 4 方法
+\begin{table}[H]
+\centering
+\caption{实验集合的用途与证据边界}
+\label{tab:splits}
+\begin{tabular}{p{3.2cm}p{7.2cm}p{3.2cm}}
+\toprule
+集合 & 用途 & 证据边界 \\
+\midrule
+debug50 & 用于系统调试和能力建设，最佳在线记录为 50/50。 & 开发证据 \\
+回放与已检查题 & 用于验证修复是否覆盖已知失败路径，包括 offsets 50--95。 & 稳定性证据 \\
+剩余严格集合 & offsets 96--149，共 54 道，冻结配置在线运行。 & 严格证据 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-### 4.1 宿主程序控制的单智能体循环
+\section{方法}
+
+\subsection{宿主程序控制的单智能体循环}
 
 Kernel v4 的核心是单智能体工具循环。每一轮中，模型根据任务上下文和可用工具说明决定是否发起工具调用。宿主程序接收工具调用后，先检查工具名和参数是否符合协议，再执行对应工具，并把结果作为新的观察写回上下文；这一过程会持续到模型形成最终答案，或运行达到预算和安全边界。
 
 这种设计把语义判断和系统执行分开。模型判断任务是否还缺少证据，决定是否需要继续检索或计算。宿主程序不替模型选择金融事实，也不根据 benchmark 题目硬编码答案。宿主程序的职责在于保证每次工具调用都可追踪，保证大型结果不会直接压垮上下文，并在必要时提示模型检查数值和答案覆盖范围。
 
-### 4.2 流式工具执行和工具结果生命周期
+\begin{figure}[H]
+\centering
+\resizebox{0.96\textwidth}{!}{
+\begin{tikzpicture}[
+    box/.style={rectangle, rounded corners=2mm, draw=#1, very thick, fill=#1!8, minimum width=3.3cm, minimum height=1.05cm, align=center, font=\small},
+    wide/.style={rectangle, rounded corners=2mm, draw=#1, very thick, fill=#1!8, minimum width=11.8cm, minimum height=1.05cm, align=center, font=\small},
+    arrow/.style={-{Latex[length=2.5mm]}, thick, draw=gray!80}
+]
+\node[box=HoloBlue] (q) {用户问题\\公司与期间};
+\node[box=HoloGold, right=0.8cm of q] (packet) {无答案任务包\\gold 隔离};
+\node[box=HoloOrange, right=0.8cm of packet] (loop) {单智能体循环\\行动与观察};
+\node[box=HoloGreen, right=0.8cm of loop] (ans) {最终答案\\证据与公式};
+\node[wide=HoloBlue, below=1.0cm of packet] (tools) {工具层支撑公开文件检索和长文档读取，并提供计算与数值核验能力};
+\node[wide=HoloPink, below=0.65cm of tools] (events) {宿主程序在校验协议和权限后执行请求，并维护上下文与题后评分过程};
+\foreach \a/\b in {q/packet,packet/loop,loop/ans}{\draw[arrow] (\a) -- (\b);}
+\draw[arrow] (loop) -- (tools);
+\draw[arrow] (tools) -- (events);
+\draw[arrow] (events.east) .. controls +(1.2,0.9) and +(0,-1.1) .. (loop.south);
+\end{tikzpicture}}
+\caption{Holo Kernel v4 的宿主程序控制型单智能体架构。模型负责任务理解和工具选择；宿主程序在校验协议和权限后执行请求，并维护上下文与题后评分过程。}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{流式工具执行和工具结果生命周期}
 
 Kernel v4 参考成熟工具调用框架，采用流式工具执行机制。当模型输出工具调用时，宿主程序可以在模型输出过程尚未完全结束时启动工具执行。工具调用从入队，开始执行，返回结果到写入上下文，都会产生运行事件。这些事件既用于命令行监控，也用于事后复盘。
 
 工具结果生命周期是 v4 的重要改进。对于短结果，系统可以直接将结果写入模型上下文。对于长文件和大表格，系统会建立证据对象，并只返回摘要，标识符和可继续读取的窗口信息。模型可以随后调用搜索或读取工具，在证据对象内部定位所需片段。该机制降低了长上下文成本，也让模型不必反复从网络重新抓取同一文件。
 
-### 4.3 金融任务工具支持
+\subsection{金融任务工具支持}
 
 金融工具集合围绕公开文件研究的实际需求设计。系统支持 SEC/EDGAR 文件发现和文件展开，可以读取公司披露文件和网页文档，也可以将长文档转为证据对象后继续检索。对于题面已经提供上下文的 FinQA 或 FQA 风格任务，系统提供上下文解析工具，使模型能够读取题目自带表格和文本。对于派生指标，系统以计算器为核心，并辅以表格查询和日期计算，使关键数值能够在回答前得到核验。
 
 这些工具被暴露给模型，但答案判断仍由模型完成。宿主程序不会预先计算 FinanceBench 答案，也不会根据题号选择公式。工具说明和系统提示只定义可用能力以及可靠使用方式，例如关键数值应通过计算器或核验工具检查，最终答案应说明期间，单位和公式。这样可以提升数值可信度，同时避免把金融题做成规则表。
 
-### 4.4 证据隔离和评分流程
+\subsection{证据隔离和评分流程}
 
 实验入口采用无答案任务包。题面，必要的公司信息和可公开获得的上下文可以进入模型，但 reference answer，rubric，gold program 和评分材料被排除在模型可见内容之外。模型完成答案后，评分程序再读取 host-side 的参考材料进行评价。
 
 这一流程保证了能力数据来自在线做题过程。结构回归测试可以验证代码接口和安全边界，但不能作为金融做题能力证据。相关 benchmark 结论只来自 live model run，并且必须同时说明集合边界和 gold/reference 隔离口径。
 
-### 4.5 实现难点
+\subsection{实现难点}
 
 Kernel v4 的难点远超工具注册本身。真实运行中，模型可能在流式输出中先给出函数名，稍后才补齐参数；如果宿主程序过早执行工具，就会把空参数请求写入运行记录，并使模型在后续轮次中基于错误观察继续推理。因此，provider 适配层必须等待完整参数到达，并把完整工具请求转化为统一的内部事件。
 
@@ -72,37 +160,102 @@ Kernel v4 的难点远超工具注册本身。真实运行中，模型可能在�
 
 第三个难点来自评测纪律。系统既要让模型看到足够的题面和公开材料，又不能让 gold/reference 以任何形式进入模型上下文。Kernel v4 因此在任务入口处区分模型可见字段和评分字段，并在每次运行中记录排除字段的审计信息。这样得到的通过率才可以作为在线能力证据。
 
-## 5 实验设置
+\begin{figure}[H]
+\centering
+\resizebox{0.86\textwidth}{!}{
+\begin{tikzpicture}[
+    cell/.style={rectangle, rounded corners=2mm, draw=#1, very thick, fill=#1!8, minimum width=4.6cm, minimum height=1.0cm, align=center, font=\small},
+    arrow/.style={-{Latex[length=2.5mm]}, thick, draw=gray!80}
+]
+\node[cell=HoloOrange] (v3a) {Kernel v3\\事实账本与信息槽};
+\node[cell=HoloOrange, below=0.6cm of v3a] (v3b) {金融状态表达较丰富\\但语义闸门容易阻塞行动};
+\node[cell=HoloBlue, right=2.2cm of v3a] (v4a) {Kernel v4\\原生工具调用与证据对象};
+\node[cell=HoloBlue, below=0.6cm of v4a] (v4b) {循环边界更清楚\\工具结果生命周期更完整};
+\draw[arrow] (v3a) -- node[above, font=\small]{重写主循环} (v4a);
+\draw[arrow] (v3b) -- node[below, font=\small]{保留验证边界} (v4b);
+\end{tikzpicture}}
+\caption{Kernel v3 到 Kernel v4 的架构调整。v3 的中间状态设计提升了金融过程可观察性，也带来行动阻塞风险；v4 保留可审计的宿主程序边界，将主循环收敛到更通用的工具调用过程。}
+\label{fig:v3-v4}
+\end{figure}
 
-冻结严格评测使用 `deepseek-v4-flash`。模型开启 thinking，reasoning effort 设为 low，`model_context_mode` 设为 off。每题最多允许 160 轮循环和 420 次工具调用，单题超时时间为 1800 秒。工具结果最大返回字符数设置为 12000，以控制长文档进入上下文的规模。
+\section{实验设置}
 
-评测记录以单题为单位保存结果状态和失败原因，同时保存循环轮数，工具调用次数，token 用量，缓存命中率，估计成本和运行时间。对于失败题，系统记录失败类型和 offset，便于后续分析错误来源。图 4 至图 7 对应严格 54 题结果，失败类型，效率分布和缓存成本。
+冻结严格评测使用 \toolname{deepseek-v4-flash}。模型开启 thinking，reasoning effort 设为 low，\toolname{model\_context\_mode} 设为 off。每题最多允许 160 轮循环和 420 次工具调用，单题超时时间为 1800 秒。工具结果最大返回字符数设置为 12000，以控制长文档进入上下文的规模。
+
+评测记录以单题为单位保存结果状态和失败原因，同时保存循环轮数，工具调用次数，token 用量，缓存命中率，估计成本和运行时间。对于失败题，系统记录失败类型和 offset，便于后续分析错误来源。\autoref{fig:strict54} 至 \autoref{fig:failure-cost} 对应严格 54 题结果，失败类型，效率分布和缓存成本。
 
 结构测试与在线评测分开处理。结构测试覆盖任务入口，工具协议，评分器和单智能体循环，用于证明代码没有破坏基本接口。在线评测用于证明系统在真实模型调用和真实工具调用条件下解决金融题目的能力。
 
-## 6 实验结果
+\section{实验结果}
 
-表 1 给出了当前最重要的严格结果。剩余 offsets 96-149 共 54 道题中，系统通过 42 道，失败 12 道，通过率为 77.78%。聚合缓存命中率达到 89.06%，估计总成本约为 1.44 美元。该结果说明，在冻结配置下，Kernel v4 已经能够稳定完成多数公开财报问答任务。
+表 \ref{tab:strict54} 给出了当前最重要的严格结果。剩余 offsets 96--149 共 54 道题中，系统通过 42 道，失败 12 道，通过率为 77.78\%。聚合缓存命中率达到 89.06\%，估计总成本约为 1.44 美元。该结果说明，在冻结配置下，Kernel v4 已经能够稳定完成多数公开财报问答任务。
 
-| 指标 | 数值 |
-| --- | ---: |
-| 题目数 | 54 |
-| 通过题数 | 42 |
-| 失败题数 | 12 |
-| 通过率 | 77.78% |
-| 聚合缓存命中率 | 89.06% |
-| 估计总成本 | `$1.4435` |
-| 总 token 数 | 74,549,175 |
-| 平均循环轮数 | 31.80 |
-| 最大循环轮数 | 136 |
-| 平均工具调用次数 | 34.06 |
-| 最大工具调用次数 | 135 |
+\begin{table}[H]
+\centering
+\caption{FinanceBench 剩余 54 题在线严格评测结果}
+\label{tab:strict54}
+\begin{tabular}{lr}
+\toprule
+指标 & 数值 \\
+\midrule
+题目数 & 54 \\
+通过题数 & 42 \\
+失败题数 & 12 \\
+通过率 & 77.78\% \\
+聚合缓存命中率 & 89.06\% \\
+估计总成本 & \$1.4435 \\
+总 token 数 & 74,549,175 \\
+平均循环轮数 & 31.80 \\
+最大循环轮数 & 136 \\
+平均工具调用次数 & 34.06 \\
+最大工具调用次数 & 135 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\resizebox{0.82\textwidth}{!}{
+\begin{tikzpicture}[
+    every node/.style={font=\small}
+]
+\draw[fill=HoloBlue!75, draw=HoloBlue] (0,0) rectangle (8.4,0.75);
+\draw[fill=HoloOrange!85, draw=HoloOrange] (8.4,0) rectangle (10.8,0.75);
+\node[white, font=\bfseries] at (4.2,0.38) {通过 42};
+\node[white, font=\bfseries] at (9.6,0.38) {失败 12};
+\node[align=center, font=\Large\bfseries] at (5.4,1.65) {42/54，77.78\%};
+\node[draw=HoloBlue, rounded corners=2mm, fill=HoloBlue!8, minimum width=3cm, minimum height=0.9cm] at (1.6,-0.9) {\metric{89.06\%}{缓存命中率}};
+\node[draw=HoloGold, rounded corners=2mm, fill=HoloGold!12, minimum width=3cm, minimum height=0.9cm] at (5.4,-0.9) {\metric{\$1.4435}{估计成本}};
+\node[draw=HoloPink, rounded corners=2mm, fill=HoloPink!10, minimum width=3cm, minimum height=0.9cm] at (9.2,-0.9) {\metric{31.80}{平均轮数}};
+\end{tikzpicture}}
+\caption{FinanceBench 剩余 54 题在线严格评测结果。该图展示冻结配置下的通过率，缓存命中率和成本，gold/reference 只在题后评分阶段使用。}
+\label{fig:strict54}
+\end{figure}
 
 失败主要集中在数值容差问题。12 个失败中，11 个属于数值容差类失败，1 个属于有证据但最终答案阶段失败。offset 121 出现空答案，说明模型在长推理之后仍可能无法形成有效收尾。offset 97 和 offset 143 的 token 数超过 5M。offset 143 最终通过，但经历 136 轮循环和 135 次工具调用，显示复杂题的成本仍有明显长尾。
 
+\begin{figure}[H]
+\centering
+\resizebox{0.88\textwidth}{!}{
+\begin{tikzpicture}[
+    every node/.style={font=\small},
+    bar/.style={rounded corners=1mm}
+]
+\node[align=right] at (-0.2,1.2) {数值容差失败};
+\draw[bar, fill=HoloOrange!80, draw=HoloOrange] (0,0.95) rectangle (8.8,1.45);
+\node[white, font=\bfseries] at (8.35,1.2) {11};
+\node[align=right] at (-0.2,0.25) {定性或空答案失败};
+\draw[bar, fill=HoloPink!80, draw=HoloPink] (0,0.0) rectangle (0.8,0.5);
+\node[white, font=\bfseries] at (0.4,0.25) {1};
+\node[draw=HoloBlue, rounded corners=2mm, fill=HoloBlue!8, align=left, text width=8.6cm] at (4.4,-1.05) {主要改进方向是财务口径识别，单位换算，期间判断，最终答案恢复和长题轨迹压缩。};
+\end{tikzpicture}}
+\caption{失败类型和后续优化方向。严格 54 题中的失败主要集中在数值精度和最终回答阶段，说明基础工具过程已经具备可用性，难点开始转向更细的财务推理和答案收束。}
+\label{fig:failure-cost}
+\end{figure}
+
 开发集合 debug50 的最佳在线记录为 50/50。该结果对于系统迭代非常重要，因为它证明工具循环和提示合同在开发样本上可以形成完整解题过程。然而该集合已经用于调试，不能被解释为未接触测试准确率。回放题也具有类似性质，其价值在于证明修复是否覆盖了既有失败模式。
 
-## 7 讨论
+\section{讨论}
 
 实验结果表明，Kernel v4 已经具备相对完整的基础工具过程。多数通过样本显示，模型可以从题面出发完成公开文件检索，并在读取证据对象之后调用计算器，最终生成可以进入评分程序的答案。与 v3 相比，v4 减少了本地语义闸门对模型行动的阻塞，使工具调用过程更接近通用智能体框架。
 
@@ -110,7 +263,7 @@ Kernel v4 的难点远超工具注册本身。真实运行中，模型可能在�
 
 成本问题同样值得重视。高缓存命中率显著降低了长题测试的边际成本，但个别题仍会产生百万级 token 消耗。造成长尾成本的原因包括重复读取证据对象，重复检索相同文件，以及证据已经足够后仍继续寻找更多来源。后续系统需要在不替代模型判断的前提下提供更好的过程压缩，使模型能够看到已经完成的关键事实和计算结果。
 
-## 8 局限与未来工作
+\section{局限与未来工作}
 
 本研究的实验主要验证金融公开文件任务。虽然 Kernel v4 的主循环具有通用性，但数学，物理，代码和科研文献任务尚未经过系统评测。因此，跨领域泛化仍属于未来工作。当前结果只能说明系统在 FinanceBench 风格公开财报任务上已经形成较强能力。
 
@@ -118,8 +271,12 @@ Kernel v4 的难点远超工具注册本身。真实运行中，模型可能在�
 
 未来工作应优先围绕三项能力展开。第一，最终答案恢复机制需要增强，避免长循环后出现空答案或过程性回答。第二，数值计算需要形成更稳定的模型习惯，使关键指标都经过计算器或核验工具确认。第三，运行轨迹需要压缩和摘要，使模型在长任务中既能保留历史，又不破坏缓存命中率。
 
-## 9 结论
+\section{结论}
 
 Holo Kernel v4 将金融研究任务组织为由模型决策和宿主程序执行共同推进的单智能体过程。模型承担任务理解和工具选择，宿主程序则在执行工具请求的同时维护运行记录和证据状态，并对关键数值进行检查。与 v3 相比，v4 更强调通用工具循环和证据生命周期管理，减少了过度特化的本地语义闸门。
 
-在线严格评测显示，Kernel v4 在 FinanceBench 剩余 offsets 96-149 上达到 42/54，通过率为 77.78%。这一结果证明系统已经具备较强的公开财报问答能力。失败分析也表明，后续改进重点应从底层工具连通性转向数值口径，最终答案稳定性和长题效率。Holo 的长期目标是成为面向复杂研究任务的通用智能体运行框架，而金融任务提供了第一组较为严格的经验检验。
+在线严格评测显示，Kernel v4 在 FinanceBench 剩余 offsets 96--149 上达到 42/54，通过率为 77.78\%。这一结果证明系统已经具备较强的公开财报问答能力。失败分析也表明，后续改进重点应从底层工具连通性转向数值口径，最终答案稳定性和长题效率。Holo 的长期目标是成为面向复杂研究任务的通用智能体运行框架，而金融任务提供了第一组较为严格的经验检验。
+
+\reference
+
+\end{document}
