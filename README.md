@@ -9,7 +9,8 @@ shifted to final-report preparation. The report preparation record is
 PPT mapping, git-history timeline, and v3-to-v4 assessment are recorded in
 `docs/FINAL_REPORT_LAYOUT_AND_PROJECT_HISTORY_2026-06-19_ZH.md`. The generated
 dark-theme figure set and usage notes are indexed in
-`reports/final/FIGURE_INDEX_2026-06-19_ZH.md`.
+`reports/final/FIGURE_INDEX_2026-06-19_ZH.md`. The formal Chinese report draft
+is `reports/final/FINAL_REPORT_DRAFT_2026-06-19_ZH.md`.
 
 The current evidence should be reported with strict split language:
 
