@@ -1,5 +1,32 @@
 # Holo Kernel v4 / v3
 
+## 2026-06-19 mature checkpoint
+
+Kernel v4 is now saved as the current mature single-agent finance harness
+checkpoint on branch `kernel-v4`. Work is paused on additional testing and has
+shifted to final-report preparation. The report preparation record is
+`docs/FINAL_REPORT_PREP_2026-06-19_ZH.md`.
+
+The current evidence should be reported with strict split language:
+
+- FinanceBench `debug50` is a development/tuning stream. The best recorded live
+  result is `50/50`, but it is not held-out accuracy.
+- Replay/inspected rows are recovery and stability evidence, not clean test
+  evidence.
+- The remaining uninspected public FinanceBench offsets `96-149` were run as a
+  frozen live strict pool under `deepseek-v4-flash`, thinking `enabled`,
+  reasoning effort `low`, `model_context_mode=off`, `max_turns=160`, and
+  `max_tool_calls=420`. The aggregate result is `42/54` pass (`77.78%`), with
+  `gold_reference_material_in_model_context=false`, aggregate cache hit
+  `89.06%`, and estimated total DeepSeek cost about `$1.44`.
+- The strict aggregate is stored at
+  `.state/kernel_v4/bench/finance/fb_strict_o096_o149_aggregate_v39_20260619/summary.json`.
+
+Do not describe the above as a clean `test100` result. The observed failures are
+primarily numeric tolerance misses, plus one `empty_final_answer` loop failure;
+they are now report material and future optimization targets rather than
+test-time patches.
+
 Kernel v4 work has started on branch `kernel-v4`. It is a clean Python rewrite
 of the mature single-agent tool loop pattern from the user-provided reference
 framework: model emits tool calls, host executes tools, tool results are fed
@@ -35,9 +62,153 @@ SEC/EDGAR/document search for public filing evidence, `data.table.query` and
 `calculator.compute` for derived values, `calendar.days_between` for date
 counts, and `finance.verify_numeric` for final material numeric claims when
 available. `finance.toolchain.describe` now returns the same
-`one_shot_loop_contract` and `coverage_families`. The latest v4 structural
-checks pass `35` tests; this is architecture readiness, not a FinanceBench/FQA
+`one_shot_loop_contract` and `coverage_families`. The follow-up artifact and
+workbench checkpoint adds `artifact.inspect`, `artifact.search`,
+windowed `artifact.read(start,max_chars)`, generic `tool.workbench`, and
+`finance.workbench.open`. These tools expose lifecycle metadata, temporary tool
+families, and FB/FQA/FinQA task-family contracts while leaving semantic
+decisions to the model. Workbench schemas are provider-safe native function
+schemas, and the full finance workbench profile set is checked against the
+registered tool surface by the runtime `finance.toolchain.audit` tool.
+`finance.workbench.open` also returns a compact capability matrix for no-gold
+intake, source/context acquisition, document/artifact handling,
+table/transform compute, numeric verification, and answer synthesis.
+Representative natural-language queries now route to all 18 finance profiles,
+including a dedicated `cash_flow_conversion` profile for FCF conversion tasks
+that require operating cash flow, capex, net income, and calculator-backed
+percentage-point trend checks, plus `legal_proceedings_disclosure` and
+`shareholder_vote_results` profiles for Item 3/legal proceedings and Item
+5.07/board-nominee vote tables.
+The row-level `--closure-audit` path now checks a real FB/FQA-style row against
+the no-gold packet, toolchain audit, workbench profiles, and registered tools
+without calling a provider. The latest v4 structural checks pass `132` tests;
+this is architecture readiness, not a FinanceBench/FQA accuracy claim.
+The same no-provider closure audit has also been run over the local
+FinanceBench doc-retrieval export (`150/150` rows passed, full audit mode,
+no scoring-only markers in the emitted audit JSON). This is still a tool-loop
+and interface-coverage result, not live benchmark accuracy. No local FinQA/FQA
+dataset file is currently present under `data/`; FQA/FinQA coverage is therefore
+validated through the supplied-context interface contract and structural rows
+until a real dataset is added.
+
+The 2026-06-19 v17-v22 live iteration adds paper-relevant architecture repairs.
+First, `document.text.extract` is now part of the live finance tool surface: it
+uses the existing open-source PyMuPDF/pypdf/readable-HTML extraction path for
+static company filing PDFs, 8-Ks, and proxy/vote tables, then writes searchable
+artifacts for `artifact.search/read`. Second, source saturation no longer
+collapses directly to calculation-only tools; it blocks broad SEC/document/
+market expansion while preserving local artifact inspect/search/read and compute
+tools, so the model can still use evidence it already acquired. Third, v18
+hardens paper scoring and loop lifecycle: generic inability final answers such
+as "unable to compute" now veto numeric pass scoring, and a finance run that has
+already completed `finance.verify_numeric` cannot complete with a generic
+unable-to-compute final answer without a consistency-recovery turn. Future eval,
+repeat, and ablation runs can also persist bounded transcript previews and raw
+loop events for paper trace analysis. Fourth, v19 handles a mature-loop
+finalization artifact: if no tools are exposed and the model emits a DSML/text
+tool-call to `finance.verify_numeric` containing an `answer` parameter, the host
+extracts that answer text and runs the normal final-answer checks instead of
+failing on markup. Structural validation after these changes is
+`129 passed in 3.64s`. Fifth, v20 repairs large-document extraction:
+`document.text.extract` now builds searchable artifacts from the opening preview
+plus full-text focus windows before applying `max_chars`, so later SEC filing
+sections requested by model-supplied focus terms are no longer lost to front
+matter truncation. Structural validation after v20 is `130 passed in 3.54s`.
+Sixth, v21 fixes two generic lifecycle/tool robustness issues exposed by
+offset `88`: post-verify finalization now requires an applicable successful
+`finance.verify_numeric` result rather than a merely non-error verifier return,
+and `document.text.extract` retries explicit SSL unexpected-EOF failures with a
+bounded TLS fallback for fragile company static-file URLs. Structural validation
+after v21 is `132 passed in 3.92s`.
+Seventh, v22 adds a missing source-acquisition bridge for company static URL
+failures: `sec.edgar.company_filings` now accepts period hints and enriches
+records with official SEC archive URLs, and the new `sec.edgar.filing_documents`
+tool expands an accession into primary, exhibit, and complete-submission URLs
+from SEC `index.json`. Structural validation after v22 is `168 passed in
+6.81s`, including v3 open-component regressions.
+
+The latest held-out `test100` candidate trajectory remains versioned rather
+than a single frozen accuracy number. Candidate v17 passed offsets `82-83`, but
+offset `84` exposed a scorer false positive and a verified-numeric/final-answer
+contradiction: the model reached calculation and `finance.verify_numeric`, then
+finalized an unable-to-compute answer. After scorer hardening, offset `84` is
+recorded as `generic_failure_final_answer`, not a pass. Candidate v18 then
+failed offset `85` at no-tools finalization because the model repeatedly emitted
+DSML `finance.verify_numeric` calls whose `answer` parameter contained the
+actual prose answer. Candidate v19 then failed offset `86` because
+`document.text.extract` searched focus terms only after truncating a large J&J
+10-K, so income statement and MD&A windows were not written into the artifact.
+Candidate v20 is a post-hoc generic document-tool repair, so its clean held-out
+pool starts at offset `87`; offset `87` then passed with `numeric_within_tolerance`
+on J&J FY2022 inventory turnover (`3.16x` using average inventory, with an
+ending-inventory proxy also reported), after calculator and
+`finance.verify_numeric`. Offset `88` then failed because the target J&J
+earnings-release static URL hit SSL EOF in both text extraction and document
+conversion, and an inapplicable numeric verifier result was misclassified as a
+successful verification lifecycle state. Candidate v21 is the generic repair for
+that class. Offset `89` then exposed the broader source-acquisition gap:
+the static company earnings URL was unreachable, SEC filings were visible, but
+the loop lacked an accession-to-exhibit document tool. Candidate v22 fixed that
+generic path. A contaminated regression rerun of offset `89` passed after the
+model called `sec.edgar.filing_documents`, extracted official SEC evidence,
+used calculator/verification, and answered the J&J U.S. versus International
+sales-growth question. The first clean v22 held-out continuation, offset `90`,
+also passed, identifying J&J Consumer Health/Kenvue as the discontinued
+operation from August 30, 2023 onward.
+Gold/reference material stayed out of model context throughout. These are
+failure-taxonomy and architecture-evolution records, not a final `test100`
 accuracy claim.
+Strict paper protocol note: the original `test100` offsets `50-149` were meant
+to be held out, but offsets `50-95` have now been used for item-level failure
+analysis and generic system repairs. They are therefore a pilot/development
+stream, not publishable final-test accuracy. The remaining untouched public
+FinanceBench rows in this local split are offsets `96-149` (`54` items). A
+strict 100-question final test now requires a fresh untouched 100-question
+source/split; otherwise the paper should report a frozen-candidate result on
+the remaining 54 untouched rows.
+
+The 2026-06-19 v25 frozen/replay live runs are now recorded separately. The
+strict remaining candidate offsets `96-149` completed `40/54` live passes
+(`74.07%`) with gold/reference material kept out of model context; failures
+were dominated by numeric tolerance misses (`12` numeric, `2` qualitative).
+The previously inspected offsets `50-95` were rerun as a same-config live
+replay, not a true changed-seed run because DeepSeek Chat Completion exposes no
+`seed` parameter in the current provider/API surface. That replay produced
+`37/46` passes (`80.43%`) and is development-stream stability evidence, not
+strict held-out accuracy. The requested combined operational view over
+`50-149` is `77/100`; it is stored at
+`.state/kernel_v4/bench/finance/fb_test100_merged_replay50_95_plus_strict96_149_v25_20260619/summary.json`
+and must be reported as replay-plus-strict evidence rather than a single clean
+test100 score.
+
+The 2026-06-18 evening efficiency pass records the current live debug state,
+the cost-control fix, and the offset14/offset16 regression recoveries.
+FinanceBench `debug50` offsets `0-20` have a best recorded live pass segment of
+`21/21`, with
+gold/reference material used only after each run for scoring
+(`gold_reference_material_in_model_context=false`). Earlier cost-fixed offset
+runs reached DeepSeek prompt cache hit rates around `96-97%`, but still used too
+many turns (`financebench_id_00438`: `50` turns / `61` tools;
+`financebench_id_00591`: `53` turns / `63` tools). Aggressive endgame/
+calculation checkpoints then showed a real risk: narrowing tools too early can
+make a solvable task fail. Those checkpoints are now opt-in diagnostics, not the
+default live path. The default pass-first path keeps the full finance tool
+surface visible, uses `model_context_mode=off`, and relies on append-only
+conversation/tool-result history for same-task memory. A compact runtime-context
+rerun of `financebench_id_00591` passed in `23` turns / `32` tools but had only
+`8.68%` prompt cache hit; the cache-friendly `off` rerun also passed, in `27`
+turns / `38` tools, with `94.41%` cache hit. This establishes the current rule:
+do not use per-turn transient runtime context as the normal history mechanism;
+keep stable prefixes and put useful work history into real append-only messages
+or tool results. A same-task `deepseek-v4-flash` probe also passed
+`financebench_id_00591` with `35` turns / `40` tools, `96.19%` cache hit, and
+`3/3` numeric matches. It used more turns than `deepseek-v4-pro`, but under the
+current DeepSeek cache pricing its estimated cost was about `34.6%` of the pro
+rerun for this item. This is a single debug-row A/B result, not a debug50/test100
+model-selection conclusion. DeepSeek official pricing and context-cache docs show
+`deepseek-v4-pro` input cache-hit pricing at `$0.003625/1M tokens` versus
+cache-miss pricing at `$0.435/1M tokens`, so preserving stable request prefixes
+is now treated as a core benchmark-running constraint.
 
 Kernel v4 now also has a no-gold finance task entrypoint in
 `kernel_v4/finance_runner.py`. `FinanceQuestionSpec.from_mapping(...)` accepts
@@ -51,14 +222,392 @@ gates.
 
 The executable no-gold single-task runner is `python -m kernel_v4.finance_run`.
 It accepts `--row-json`, `--row-file`, or `--row-jsonl`, supports `--dry-run`
-packet checks, live DeepSeek/OpenAI-compatible execution, compact/JSONL workflow
-monitoring, and bounded `--include-transcript` diagnostics. The provider stream
+packet checks, `--closure-audit` no-provider row-to-workbench/toolchain checks,
+live DeepSeek/OpenAI-compatible execution, compact/JSONL workflow monitoring,
+and bounded `--include-transcript` diagnostics. The provider stream
 parser now waits for function-call argument deltas before emitting a v4
 `ToolCall`; it no longer executes a tool just because the function name arrived
 before arguments. A 2026-06-18 no-gold provided-context mini finance live smoke
 completed through `provided_context.parse`, three `calculator.compute` calls,
 `finance.verify_numeric`, and final answer (`76.34 days`). This is live tool
 loop evidence, not a FinanceBench/FQA benchmark score.
+
+The v4 batch live evaluation entrypoint is now `python -m kernel_v4.finance_eval`.
+It hard-codes the current FinanceBench split policy: `debug50` is offsets
+`0-49` for tuning and `test100` is offsets `50-149` for held-out evaluation.
+Rows are converted through the same no-gold `FinanceQuestionSpec`; the gold
+sidecar is loaded only after each live run for scoring. The default summary is
+gold-redacted and per-item run JSON records a compact tool-trace summary. Batch
+runs have a per-item hard timeout so one stuck provider/tool path cannot hang
+the whole debug queue, but the normal finance budget is intentionally ample:
+`max_turns=64`, `max_tool_calls=200`, and default per-item wall-clock timeout
+`1200s`. Current live v4 debug evidence is offsets `0-20`: `21/21` best
+recorded live passes with `gold_reference_material_in_model_context=false`.
+Early pre-cache runs had low aggregate hit rate; cache-friendly reruns now
+restore high cache hit without hiding same-task history. The batch runner now
+writes `summary.json`, `items.csv`, and `items.jsonl` with turn counts, tool
+calls, token usage, cache hit/miss tokens, score reasons, and per-item output
+paths for charts and experimental support. After the first high-cost traces, v4
+defaults `artifact.read` and delegated `document.search.hybrid` to compact
+8k-character windows while still allowing the model to request larger windows
+explicitly. The provider payload is now more cache-friendly: the first system
+message is static and model request context is off by default for finance live
+runs. Stage checkpoints are opt-in diagnostics; normal debug/test runs should
+first preserve pass-first full-tool behavior and cache-stable append-only
+history. This is debug-slice progress, not a completed debug50 or held-out
+test100 score.
+
+For paper-oriented experiments, v4 now has `python -m kernel_v4.finance_repeat`
+and `python -m kernel_v4.finance_ablation`. They repeat the same no-gold live
+task across model/thinking/context conditions and emit per-replicate JSON/CSV
+with pass/fail, numeric hit counts, turns, tool calls, token usage, cache
+hit/miss tokens, run/score output paths, and, for new runs, wall-clock duration
+plus DeepSeek cost estimates. The first formal repeat probes use FinanceBench
+debug offset `14` (`financebench_id_00591`) because it previously exposed a
+real formula-family regression around free-cash-flow conversion. Results so far:
+
+| Condition | Repeats | Passes | Mean turns | Mean tools | Mean tokens | Aggregate cache hit | Estimated total cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `deepseek-v4-flash`, thinking disabled, context off | 10 | 10 | 32.7 | 41.6 | 1,145,274 | 96.14% | ~$0.1115 |
+| `deepseek-v4-flash`, thinking enabled low, context off | 10 | 10 | 24.0 | 33.0 | 719,319 | 94.78% | ~$0.0921 |
+| `deepseek-v4-flash`, thinking enabled medium, context off | 10 | 9 | 21.7 | 29.4 | 626,912 | 94.50% | ~$0.0837 |
+
+Gold/reference material was used only after each live run for scoring.
+Low thinking currently dominates disabled thinking on this item: same `10/10`
+pass rate, fewer turns/tools, lower token usage, and lower estimated cost.
+Medium thinking used fewer mean tokens and lower estimated cost, but dropped to
+`9/10`; the failed replicate had the right evidence/formula shape but finalized
+dimensionless conversion values only as decimal ratios (`1.5551`, `1.4272`,
+`+0.1279`) instead of also giving percent/percentage-point values, producing
+`numeric_outside_tolerance`. The finance prompt now has a general finalization
+rule: unitless ratios/conversions/margins/returns must be reported in both
+decimal and percentage form, and changes must include both ratio points and
+percentage points. This is still a single debug item stability/efficiency study,
+not a debug50/test100 score. DeepSeek cost estimates use the official pricing
+table observed on `2026-06-18`; earlier repeat artifacts predate embedded
+cost/duration fields, so disabled/low cost figures are computed post hoc from
+recorded usage.
+
+Live debug then resumed with the current default candidate
+`deepseek-v4-flash + thinking low + model_context_mode=off`. Offsets `15-20`
+now have six latest passing live runs with mean `26.3` turns, mean `35.7` tools,
+`5.58M` total tokens, and estimated total cost `~$0.0672`. Offset `16`
+(`financebench_id_00540`) first failed with `numeric_outside_tolerance` because
+the model selected conventional average-inventory turnover while the scorer
+matched an ending-inventory proxy. The generic fix was not an answer table:
+inventory-turnover questions now require the model to state the denominator and,
+when average versus ending inventory is ambiguous and both balances are
+available, report both the conventional average-inventory ratio and the
+ending-inventory proxy. The live rerun passed in `32` turns / `48` tools with
+`95.08%` cache hit and estimated cost `~$0.0153`.
+
+On 2026-06-19 CST, live debug continued through offset `40` under the same
+default candidate (`deepseek-v4-flash`, thinking `low`, `model_context_mode=off`).
+Standard `items.jsonl` aggregation plus rescored false-negative runs show
+offsets `21-40` at `20/20` live pass, with gold/reference still held out of
+model context and used only after each item for scoring. Notable repair points
+were generic rather than answer-table patches:
+
+- Source-grounded qualitative scoring now handles no-expected-numeric
+  FinanceBench rows such as 8-K agenda and earnings press-release questions.
+- Restructuring/reserve/liability-nature questions must compute component
+  shares when the filing gives a rollforward/composition table; this recovered
+  offset `27` by preserving the `81 / 93 = 87%` employee-cost share.
+- Company-hosted earnings/press-release PDFs count as company primary sources
+  when the target URL is the required source, avoiding false SEC-family failures.
+- Product/service extraction and revenue/sales-driver prompts now stop once
+  Item 1 or MD&A already contains the requested list/driver sentence, reducing
+  unnecessary market/statement exploration.
+- `market.openbb.fetch` remains exposed, but v4 now soft-blocks unqualified
+  OpenBB calls on target-filing accounting tasks unless market-data intent or
+  an explicit period is present, preventing latest-period drift from AMD
+  2022 questions into 2026 amended filings.
+- Yes/no disclosure answers must carry material numeric disclosures from the
+  evidence sentence; this recovered offset `37`, where the correct evidence was
+  "one customer accounted for 16%" but the first final answer omitted `16%`.
+
+High-cost offsets `32-35` are retained as paper evidence of loop/tool
+efficiency limits even though the best recorded runs pass: product/service and
+MD&A driver tasks can still over-search artifacts before synthesizing. The
+latest v4 structure suite after these repairs is:
+
+```text
+.venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q
+110 passed in 3.76s
+```
+
+After that update, offsets `41-49` also completed live at `9/9` pass under the
+same candidate. This segment had mean `31.1` turns, mean `32.2` tools,
+`9.46M` total tokens, mean cache hit `94.20%`, and estimated cost `~$0.1011`.
+The standardized `items.jsonl` best-run aggregation now shows offsets `8-49` at
+`42/42` pass. Offsets `0-7` are earlier v4 live `summary.json` records, also
+completed/pass with gold/reference held out of model context, but without full
+cost/duration fields. The paper-facing debug statement is therefore
+best-recorded FinanceBench `debug50` live evidence of `50/50`, with `42/50`
+standard efficiency records and `8/50` legacy pass records. This is still
+debug tuning evidence, not held-out `test100` accuracy. The current candidate is
+frozen in `experiments/kernel_v4_finance_paper_protocol_20260619.json`; the next
+live step is to start `test100` from offset `50` without feeding item-level
+test failures back into this frozen score.
+
+The frozen candidate has now started held-out `test100`. Offset `50`
+(`financebench_id_00685`) passed live with `numeric_within_tolerance`,
+`17` turns, `18` tool calls, `319,154` total tokens, `94.70%` cache hit,
+`56.57s` wall-clock duration, and estimated cost `~$0.00443`.
+`held_out_test_score=true`, `debug_tuning_score=false`, and
+`gold_reference_material_in_model_context=false` in the recorded summary.
+Offset `51` (`financebench_id_01077`) then completed but failed with
+`numeric_outside_tolerance`: `48` turns, `48` tool calls, `1,590,876` total
+tokens, `95.38%` cache hit, `185.37s`, and estimated cost `~$0.01736`.
+The non-gold run trace shows a final-answer completeness failure: the answer
+identified the Best Buy FY2022 acquisitions but described consideration as
+"all outstanding shares" rather than carrying the disclosed cash consideration
+amounts into the final table. The current frozen held-out record is therefore
+`1/2`, and this failure is not fed back into the same candidate score.
+Offset `52` (`financebench_id_01275`) passed with `numeric_within_tolerance` in
+`7` turns / `8` tool calls, `120,922` total tokens, `86.47%` cache hit,
+`28.30s`, and estimated cost `~$0.00323`. The frozen held-out record after
+offsets `50-52` is `2/3`. Offset `53` (`financebench_id_00288`) also passed,
+with `2/2` numeric hits, `4` turns / `3` tool calls, `45,846` total tokens,
+`90.00%` cache hit, `15.06s`, and estimated cost `~$0.00107`. The frozen
+held-out record after offsets `50-53` is `3/4`.
+Offset `54` (`financebench_id_00460`) then exposed a severe held-out long-tail:
+it completed after `92` turns / `91` tool calls and failed with
+`numeric_outside_tolerance` (`2/4` numeric hits), using `6,800,783` total tokens
+with `97.96%` cache hit and estimated cost `~$0.04405`. The non-gold trace shows
+over-search on a Best Buy store-count change question: repeated document/artifact
+searches, three erroneous `market.openbb.fetch` calls, and a final answer that
+said the store-count change could not be confirmed. The frozen held-out record
+after offsets `50-54` is `3/5`; this is a real candidate weakness, not a
+provider outage.
+
+Candidate v2 is now separated from that v1 held-out smoke. It does not reuse
+offsets `50-54` as clean held-out evidence. The generic changes are: finance
+live metadata enables high-threshold endgame/calculation checkpoints
+(`32` successful evidence tools before endgame, then `6` local evidence tools
+before calculation/finalization pressure), acquisition/event contracts require
+disclosed cash consideration or purchase price instead of substituting ownership
+percentage, and store-count/footprint-change questions get an explicit
+store-data/count-change contract with no OpenBB drift. The structure suite after
+this v2 change is `111 passed in 3.62s`. The next live evaluation pool starts
+from untouched offset `55`. Candidate v2 offset `55`
+(`financebench_id_01902`) passed live with `2/2` numeric hits,
+`10` turns / `10` tool calls, `187,281` total tokens, `87.03%` cache hit,
+`25.21s`, and estimated cost `~$0.00444`; v2 clean-pool record starts at `1/1`.
+Offset `56` (`financebench_id_04660`) also passed, but exposed an efficiency
+gap: `65` turns / `64` tool calls, `2,851,074` total tokens, `93.67%` cache hit,
+`275.11s`, and estimated cost `~$0.03966`. The checkpoint sequence worked
+structurally by narrowing visible tools from `20` to `10` and then `6`, and the
+model eventually called calculator and `finance.verify_numeric`, but it kept
+calling discovery/table/calculator tools after verification. Candidate v2 is
+therefore `2/2` clean-pool pass so far, but still inefficient on long-tail rows.
+
+Candidate v3 separates the next efficiency fix from v2: calculation-stage tool
+surface no longer exposes `tool.discovery`, and a successful
+`finance.verify_numeric` observation inserts a post-verify finalization
+checkpoint that hides all tools on the next turn. This is lifecycle control
+after model-requested verification, not host-side answer computation. The
+structure suite after v3 is `112 passed in 3.77s`; v3 clean live starts from
+untouched offset `57`. Offset `57` (`financebench_id_03838`) passed with
+`1/1` numeric hit, `39` turns / `38` tool calls, `1,295,372` total tokens,
+`87.30%` cache hit, `114.95s`, and estimated cost `~$0.02839`. The workflow
+shows the intended v3 lifecycle: endgame narrowed visible tools to `10`, a
+successful `finance.verify_numeric` call then forced the next model turn to
+`0` visible tools, and the model finalized immediately.
+Offset `58` (`financebench_id_07661`) also passed with `1/1` numeric hit,
+`18` turns / `22` tool calls, `358,931` total tokens, `87.24%` cache hit,
+`52.41s`, and estimated cost `~$0.00833`. The same post-verify no-tools
+finalization path fired after `finance.verify_numeric`. Offset `59`
+(`financebench_id_10285`) then exposed a host lifecycle bug rather than a
+gold-informed finance patch opportunity: `finance.verify_numeric` succeeded and
+the next turn correctly had `0` visible tools, but the model emitted a text-form
+DSML tool-call block on that no-tools finalization turn. The host fallback
+stripped the block and returned `empty_final_answer`; the run failed as
+`run_not_completed` after `43` turns / `49` tool calls, `1,582,035` total
+tokens, `86.18%` cache hit, `154.60s`, and estimated cost `~$0.03767`.
+Candidate v3 is therefore `2/3` on its observed clean pool.
+
+Candidate v4 separates the lifecycle repair from v3 and starts its clean pool
+at untouched offset `60`. The generic changes are: text-form tool-call fallback
+only runs when tools are actually visible; unavailable DSML tool-call markup is
+preserved instead of silently deleting the assistant content; and if a no-tools
+finalization turn emits pure DSML/tool-call markup, the host appends a
+format-recovery system message and gives the model another no-tools turn to
+write the ordinary final answer from already observed evidence. This is tool
+lifecycle control, not host-side financial reasoning. The structure suite after
+v4 is `114 passed in 3.89s`. Offset `60` first had a zero-token DNS failure and
+was rerun as an infrastructure retry. The real retry completed, proving the v4
+no-tools finalization path no longer fails empty, but it missed the score:
+`numeric_outside_tolerance`, `2/4` numeric hits, `36` turns / `46` tool calls,
+`1,263,466` total tokens, `80.52%` cache hit, `196.92s`, and estimated cost
+`~$0.04161`. The non-gold trace shows a generic set-completeness failure on a
+revenue-threshold category question: the final answer gave one qualifying
+reportable segment instead of enumerating every product/service category or
+segment over the stated revenue threshold.
+
+Candidate v5 starts clean evaluation at untouched offset `61`. Its generic
+change is a revenue-threshold category contract: when a question asks whether
+any product categories, service categories, reportable segments, businesses, or
+similar categories exceed a stated revenue/sales share, the model must retrieve
+the complete category table, compute each category's share of total revenue, and
+list every category meeting the threshold. The host still does not compute the
+answer. The structure suite after v5 is `115 passed in 3.65s`.
+Offset `61` (`financebench_id_01091`) passed as a source-grounded qualitative
+task, but remained expensive: `48` turns / `47` tool calls, `1,864,847` total
+tokens, `85.45%` cache hit, `163.93s`, and estimated cost `~$0.04497`. The
+workflow still showed long front-half source searching and hidden sanitized
+tool-alias attempts before verification/finalization, so v5 is a correctness
+recovery point but not an efficiency endpoint.
+Offset `62` (`financebench_id_00678`) then failed with
+`numeric_outside_tolerance` despite `3/4` numeric hits: `21` turns / `29` tool
+calls, `518,625` total tokens, `81.58%` cache hit, `90.11s`, and estimated cost
+`~$0.01651`. The non-gold answer shows a gross-margin/profile sign-convention
+risk: cost rows were displayed with parentheses while the formula text also used
+subtraction. Candidate v6 therefore starts from untouched offset `63` with a
+generic gross-margin contract: normalize cost-of-sales signs explicitly, compute
+latest/prior gross margins and percentage-point change, and explain metric
+usefulness or limitations from business/source context. The structure suite
+after v6 is `115 passed in 3.61s`.
+Offset `63` (`financebench_id_01290`) then failed with
+`numeric_outside_tolerance`, `0/1` numeric hit, `29` turns / `29` tool calls,
+`720,810` total tokens, `90.69%` cache hit, `90.15s`, and estimated cost
+`~$0.01283`. The final answer named Boeing's customer groups but omitted
+material customer-concentration or revenue-share numbers. Candidate v7 starts
+from untouched offset `64` with a generic primary-customer/customer-concentration
+contract: retrieve Item 1 and customer-concentration disclosures, and include
+customer groups plus any disclosed revenue share, concentration percentage,
+customer count, or named government/customer group. The structure suite after
+v7 is `115 passed in 3.25s`.
+Offset `64` (`financebench_id_00464`) passed under v7 as a source-grounded
+qualitative task, with `18` turns / `20` tool calls, `403,092` total tokens,
+`92.28%` cache hit, `64.58s`, and estimated cost `~$0.00651`. This is the first
+post-v7 clean positive sample and is materially cheaper than the recent
+long-tail failures.
+Offset `65` (`financebench_id_00494`) also passed under v7 with
+`numeric_within_tolerance` and `3/3` numeric hits: `26` turns / `25` tool calls,
+`569,354` total tokens, `90.88%` cache hit, `84.93s`, and estimated cost
+`~$0.01030`. It still showed an artifact-search loop before converging, so it is
+a correctness-positive but efficiency-imperfect sample.
+Offset `66` (`financebench_id_00585`) passed under the same v7 candidate with
+`numeric_within_tolerance` and `2/2` numeric hits: `30` turns / `30` tool calls,
+`732,697` total tokens, `86.57%` cache hit, `92.00s`, and estimated cost
+`~$0.01733`. The live workflow included recoverable `document.search.hybrid`
+errors, followed by successful calculator, SymPy, and `finance.verify_numeric`
+verification. This is a useful paper-trace sample because it separates
+recoverable tool-interface failures from final task correctness.
+Offset `67` (`financebench_id_03473`) also passed with
+`numeric_within_tolerance` and `1/1` numeric hit: `23` turns / `32` tool calls,
+`700,879` total tokens, `79.41%` cache hit, `102.31s`, and estimated cost
+`~$0.02386`. The item converged after workbench/docling/artifact/SEC/document
+search acquisition plus three calculator calls and `finance.verify_numeric`.
+It is a correctness-positive sample but a cache-efficiency warning: heavier
+new evidence context and repeated acquisition lowered the hit rate relative to
+offset64-66.
+Offset `68` (`financebench_id_09724`) passed with `numeric_within_tolerance`
+and `1/1` numeric hit, but is a long-tail efficiency sample: `43` turns / `43`
+tool calls, `1,534,734` total tokens, `89.48%` cache hit, `150.99s`, and
+estimated cost `~$0.02960`. The loop recovered from one `sec.edgar.financials`
+error, one `artifact.read` error, and a rejected sanitized tool alias during
+endgame before completing calculator and `finance.verify_numeric`. This supports
+the paper claim that the lifecycle is robust, while also showing that repeated
+evidence acquisition remains the main cost driver.
+Offset `69` (`financebench_id_06272`) passed with `numeric_within_tolerance`
+and `1/1` numeric hit: `31` turns / `43` tool calls, `1,214,700` total tokens,
+`78.77%` cache hit, `106.79s`, and estimated cost `~$0.04096`. It is another
+document-first long-tail sample: many artifact searches preceded SEC financials,
+the endgame tool surface shrank, a sanitized `artifact_search_*` alias was
+rejected, and the model then completed calculator plus `finance.verify_numeric`.
+Candidate v7 has therefore produced six consecutive clean held-out passes from
+offsets `64-69`, while also exposing repeated alias/tool-surface efficiency
+issues that should be treated as a new generic candidate if repaired.
+Candidate v8 starts at untouched offset `70` with a generic tool-lifecycle
+repair, not a finance answer rule. Provider reverse mapping now includes native
+names from historical assistant tool calls so reused provider-safe aliases such
+as `artifact_search_9308f523` and `sec_edgar_financials_0fff6646` resolve back
+to canonical tool names. The executor now enforces the active tool-surface
+allowlist before running a canonical tool, so historical aliases cannot bypass
+endgame narrowing; they instead produce a structured
+`tool_not_in_active_surface` observation. Structural validation after v8 is
+`116 passed in 3.38s`; this is not a finance capability score.
+Offset `70` (`financebench_id_10130`) was the first v8 clean live sample and
+failed with `numeric_outside_tolerance`, `0/1` numeric hit: `38` turns / `51`
+tool calls, `1,653,588` total tokens, `79.14%` cache hit, `197.44s`, and
+estimated cost `~$0.05613`. The non-gold failure trace shows a finalization
+lifecycle bug: after successful `finance.verify_numeric`, the no-tools final
+answer was pure DSML calculator markup rather than prose. Candidate v9 therefore
+starts at untouched offset `71` with a generic finalization hardening: the loop
+now gives more no-tools DSML recovery budget and never accepts pure tool-call
+markup as a completed final answer. If recovery space is exhausted, the run
+fails as `final_answer_is_tool_call_markup` instead of submitting malformed
+output. Structural validation after v9 is `117 passed in 3.66s`.
+Offset `71` (`financebench_id_02981`) is the first v9 clean live sample and
+passed with `numeric_within_tolerance` and `1/1` numeric hit: `29` turns / `37`
+tool calls, `846,719` total tokens, `88.33%` cache hit, `168.41s`, and
+estimated cost `~$0.01801`. The path still had long evidence acquisition,
+including Docling, SEC, document search, artifact tools, OpenBB, calculator,
+and `finance.verify_numeric`, but finalization produced normal prose rather
+than DSML markup.
+Offset `72` (`financebench_id_01346`) also passed and is the current v9
+efficiency-positive sample: `numeric_within_tolerance`, `2/2` numeric hits,
+`6` turns / `6` tool calls, `77,801` total tokens, `83.43%` cache hit, `24.39s`,
+and estimated cost `~$0.00254`. The agent used provided-context parsing,
+Docling, one SEC financials attempt, artifact read, calculator, and
+`finance.verify_numeric`, then finalized normally.
+Offset `73` (`financebench_id_00005`) then failed under v9:
+`numeric_outside_tolerance`, `0/1` numeric hit, `12` turns / `11` tool calls,
+`191,995` total tokens, `92.32%` cache hit, `39.77s`, and estimated cost
+`~$0.00322`. The non-gold trace shows premature numeric finalization: the model
+answered that Corning had positive working capital at `$2,278 million`, but it
+never called calculator or `finance.verify_numeric`. Candidate v10 starts at
+untouched offset `74` with a generic finance-mode process guard: if a draft
+final answer contains material numeric claims such as currency, percentages,
+ratios, or day counts and `finance.verify_numeric` has not succeeded, the loop
+inserts a numeric verification checkpoint and continues instead of completing.
+Structural validation after v10 is `118 passed in 3.34s`.
+Offset `74` (`financebench_id_04209`) is the first v10 clean live sample and
+passed with `numeric_within_tolerance` and `1/1` numeric hit: `12` turns / `11`
+tool calls, `267,454` total tokens, `74.15%` cache hit, `45.91s`, and estimated
+cost `~$0.01113`. The agent used workbench/document/artifact search, then
+calculator and `finance.verify_numeric`, and finalized normally.
+Offset `75` (`financebench_id_05915`) failed under v10 and is a high-cost
+long-tail diagnostic: `numeric_outside_tolerance`, `0/1` numeric hit, `48`
+turns / `54` tool calls, `2,637,977` total tokens, `81.85%` cache hit,
+`333.19s`, and estimated cost `~$0.07965`. The question asked for CVS FY2018
+fixed asset turnover using revenue and average PP&E. The final answer admitted
+that PP&E values came from "my recall" and were not directly observed in the
+filing evidence, even though `finance.verify_numeric` had run. Candidate v11
+starts at untouched offset `76` with a generic unsupported-source recovery:
+finance-mode final answers with material numeric claims plus caveats such as
+`my recall`, `not directly observed`, or `partially accessible` reopen the tool
+surface and require source-backed line items before finalization. Structural
+validation after v11 is `119 passed in 3.27s`.
+Offset `76` (`financebench_id_00790`) is the first v11 clean live sample and
+passed with `numeric_within_tolerance` and `3/3` numeric hits: `29` turns / `53`
+tool calls, `1,213,346` total tokens, `80.68%` cache hit, `173.69s`, and
+estimated cost `~$0.03855`. This is a correctness-positive but efficiency-long
+sample: the model eventually used calculator and `finance.verify_numeric`, but
+the trace still showed repeated artifact/SEC/market exploration before
+convergence.
+Candidate v12 starts at untouched offset `77` with a generic source-saturation
+convergence repair. Previously, source saturation only appended guidance; the
+provider could still expose retrieval/artifact/market tools unless endgame had
+already narrowed the surface. v12 applies any active `tool_surface_allowlist` to
+the provider-visible tool surface, and source saturation now narrows directly to
+the calculation/date/table/symbolic/verification tool set. This is intended to
+reduce the offset75/76 pattern where the model kept searching after enough
+evidence had already succeeded. Structural validation after v12 is
+`119 passed in 3.13s`.
+Offset `77` (`financebench_id_01107`) failed under v12:
+`numeric_outside_tolerance`, `3/5` numeric hits, `23` turns / `26` tool calls,
+`624,823` total tokens, `85.86%` cache hit, `130.35s`, and estimated cost
+`~$0.01637`. v12 did reduce the long-tail cost relative to offset75/76, but the
+non-gold answer relied on the table of contents and generic risk-factor
+language rather than the concrete Item 3 Legal Proceedings details. Candidate
+v13 starts at untouched offset `78` with a generic legal-proceedings evidence
+contract: legal battle / legal proceedings questions must retrieve the actual
+Item 3 / proceedings section, enumerate named proceedings or categories, and
+tie them to the requested fiscal years rather than relying only on a TOC entry
+or forward-looking risk caveat.
 
 Holo Kernel v3 remains in the repository as the prior harness line: a
 host-owned agent harness where models propose structured decisions and the host
@@ -2380,11 +2929,15 @@ debug50 slice is the only FinanceBench public slice used to inspect traces,
 build failure taxonomy, and improve generic workflow mechanisms. The test100
 slice is reserved for held-out accuracy after the system configuration is
 frozen. Do not tune against item-level failures from test100 and then reuse that
-same run as the held-out score. This keeps the project narrative honest: Holo
+same run as the held-out score. As of 2026-06-19, offsets `50-95` have in fact
+been consumed by failure-driven development, so they must be reported only as a
+pilot/development stream. This keeps the project narrative honest: Holo
 uses a bounded public debugging slice to improve source acquisition, document
 reading, fact binding, toolchain use, and synthesis gates, then checks those
-mechanisms on unseen FinanceBench rows with a separate 100-question accuracy
-report.
+mechanisms on unseen FinanceBench rows with a separate final-test report. In
+the current public 150-row local split, only offsets `96-149` remain untouched
+for that strict final-test purpose; a strict 100-row final score needs a fresh
+unseen 100-row source/split.
 
 The `live10` development slice also exposed a source-acquisition boundary that
 looked like an agent-loop failure but was actually a missing host handoff. In
@@ -3087,6 +3640,23 @@ ratio or complete numerator/denominator facts, then computes rebate as the
 positive shortfall versus the required standard times adjusted premium revenue.
 It does not default the standard unless the question or evidence states the
 standard or a clear individual/small-group/large-group market segment.
+
+Kernel v4 finance live work now records a paper-oriented protocol at
+`experiments/kernel_v4_finance_paper_protocol_20260619.json`. The protocol keeps
+debug50/test100 split boundaries, marks gold/reference material as scoring-only,
+separates development-stream runs from contaminated regressions, and reports
+turn/tool/token/cache/cost fields for live runs. The current v23 finance
+candidate hardens the public `finance.verify_numeric` tool path: model-supplied
+facts must bind their numeric values to observed evidence/citation text, and
+formula traces must have source-bound inputs rather than a constant expression
+that restates the answer. Structural tests for this verifier trust boundary and
+the v4 finance loop are offline contract checks only; live benchmark capability
+claims still require online model runs with gold/reference kept out of model
+context.
+The protocol also records the stricter publication boundary: test100 offsets
+`50-95` are no longer final-test evidence because their failures informed
+subsequent repairs; offsets `96-149` are the remaining untouched final-test
+candidate rows unless a fresh 100-question test source is introduced.
 
 ## Validation
 

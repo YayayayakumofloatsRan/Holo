@@ -89,6 +89,94 @@ def test_finance_run_main_writes_dry_run_output_without_gold(tmp_path) -> None:
     assert "rubric" not in dumped
 
 
+def test_finance_run_closure_audit_is_no_provider_no_gold(tmp_path) -> None:
+    output = tmp_path / "closure-audit.json"
+    row = {
+        "id": "finqa-closure-cli",
+        "dataset": "finqa",
+        "question": "What is the average payment volume per transaction?",
+        "oracle_context": "Payment volume was 637 and total transactions were 5.0.",
+        "answer": "127.40",
+        "gold_program": "divide(637,5.0)",
+    }
+
+    code = main(
+        [
+            "--row-json",
+            json.dumps(row),
+            "--benchmark-family",
+            "finqa",
+            "--closure-audit",
+            "--output",
+            str(output),
+        ]
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    dumped = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    assert code == 0
+    assert payload["schema"] == "holo.kernel_v4.finance_question_closure_audit.v1"
+    assert payload["status"] == "ok"
+    assert payload["audit_mode"] == "no_network_fqa"
+    assert "provided_context_fqa_finqa" in payload["workbench"]["selected_profile_families"]
+    assert "127.40" not in dumped
+    assert "divide(637" not in dumped
+    assert "gold_program" not in dumped
+
+
+def test_finance_run_closure_audit_batch_covers_rows_without_gold(tmp_path) -> None:
+    rows = [
+        {
+            "id": "finqa-batch",
+            "dataset": "finqa",
+            "question": "What is the average payment volume per transaction?",
+            "oracle_context": "Payment volume was 637 and total transactions were 5.0.",
+            "answer": "127.40",
+            "gold_program": "divide(637,5.0)",
+        },
+        {
+            "id": "fb-batch",
+            "dataset": "financebench",
+            "question": "Is 3M capital intensive based on FY2022 capex PP&E assets revenue ROA?",
+            "gold_answer": "No.",
+            "ticker": "MMM",
+            "fiscal_year": 2022,
+        },
+    ]
+    path = tmp_path / "rows.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    args = build_parser().parse_args(
+        [
+            "--row-jsonl",
+            str(path),
+            "--closure-audit",
+            "--allow-network",
+            "--limit",
+            "2",
+        ]
+    )
+
+    payload = asyncio.run(run_finance_cli(args))
+    dumped = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    assert payload["schema"] == "holo.kernel_v4.finance_closure_audit_batch.v1"
+    assert payload["status"] == "ok"
+    assert payload["item_count"] == 2
+    assert payload["ok_count"] == 2
+    assert payload["failed_count"] == 0
+    assert payload["benchmark_progress_claim"] is False
+    assert payload["capability_claim"] is False
+    assert payload["gold_reference_material_included"] is False
+    assert payload["items"][0]["audit_mode"] == "no_network_fqa"
+    assert "provided_context_fqa_finqa" in payload["items"][0]["selected_profile_families"]
+    assert payload["items"][1]["audit_mode"] == "full"
+    assert "capital_intensity_asset_intensity" in payload["items"][1]["selected_profile_families"]
+    assert "127.40" not in dumped
+    assert "divide(637" not in dumped
+    assert "gold_answer" not in dumped
+
+
 def test_finance_run_requires_exactly_one_input_source() -> None:
     args = build_parser().parse_args(["--row-json", "{}", "--row-file", "rows.json", "--dry-run"])
 

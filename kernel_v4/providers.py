@@ -65,6 +65,9 @@ class OpenAICompatibleChatProvider:
         parallel_tool_calls: bool | None = True,
         force_tool_name: str | None = None,
         force_tool_turns: int | None = 1,
+        include_usage: bool = True,
+        thinking: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self.enabled = enabled
         self.base_url = (base_url or os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "")).strip().rstrip("/")
@@ -78,6 +81,9 @@ class OpenAICompatibleChatProvider:
         self.parallel_tool_calls = None if parallel_tool_calls is None else bool(parallel_tool_calls)
         self.force_tool_name = (force_tool_name or "").strip() or None
         self.force_tool_turns = None if force_tool_turns is None else max(1, int(force_tool_turns))
+        self.include_usage = bool(include_usage)
+        self.thinking = _normalize_thinking(thinking)
+        self.reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
 
     def availability(self) -> ProviderAvailability:
         if not self.enabled:
@@ -119,7 +125,9 @@ class OpenAICompatibleChatProvider:
             stream=True,
         )
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_deltas: dict[int, _StreamingToolCallBuilder] = {}
+        usage_chunks: list[JsonObject] = []
         chunk_queue: queue.Queue[object] = queue.Queue()
         sentinel = object()
         producer_thread = threading.Thread(
@@ -150,12 +158,18 @@ class OpenAICompatibleChatProvider:
             if isinstance(queued, BaseException):
                 raise queued
             chunk = queued if isinstance(queued, dict) else {}
+            usage = _normalize_usage(chunk.get("usage"))
+            if usage:
+                usage_chunks.append(usage)
             for choice in _choices(chunk):
                 delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
                 content = delta.get("content")
                 if isinstance(content, str) and content:
                     text_parts.append(content)
                     yield ModelEvent(event_type="text_delta", text=content)
+                reasoning_content = delta.get("reasoning_content")
+                if isinstance(reasoning_content, str) and reasoning_content:
+                    reasoning_parts.append(reasoning_content)
                 for raw_tool in _tool_call_deltas(delta.get("tool_calls")):
                     index = _tool_delta_index(raw_tool)
                     builder = tool_deltas.setdefault(index, _StreamingToolCallBuilder(index=index))
@@ -179,7 +193,10 @@ class OpenAICompatibleChatProvider:
                 "provider": self.name,
                 "model": payload["model"],
                 "text_chars": sum(len(part) for part in text_parts),
+                "reasoning_content_chars": sum(len(part) for part in reasoning_parts),
                 "tool_call_count": len(tool_deltas),
+                **({"reasoning_content": "".join(reasoning_parts)} if reasoning_parts else {}),
+                **({"usage": _merge_usage_chunks(usage_chunks)} if usage_chunks else {}),
             },
         )
 
@@ -193,6 +210,10 @@ class OpenAICompatibleChatProvider:
         stream: bool,
     ) -> tuple[JsonObject, dict[str, str]]:
         native_surface = openai_native_tool_surface_v4(tools)
+        resolve_name_map = {
+            **_historical_native_tool_name_map(messages),
+            **native_surface.name_map,
+        }
         provider_messages = _provider_messages(
             messages,
             system_prompt=system_prompt,
@@ -205,6 +226,12 @@ class OpenAICompatibleChatProvider:
             "stream": bool(stream),
             "temperature": self.temperature,
         }
+        if self.thinking:
+            payload["thinking"] = {"type": self.thinking}
+            if self.thinking == "enabled" and self.reasoning_effort:
+                payload["reasoning_effort"] = self.reasoning_effort
+        if stream and self.include_usage:
+            payload["stream_options"] = {"include_usage": True}
         if self.max_tokens is not None:
             payload["max_tokens"] = max(1, int(self.max_tokens))
         if native_surface.tools:
@@ -219,7 +246,7 @@ class OpenAICompatibleChatProvider:
                 payload["parallel_tool_calls"] = self.parallel_tool_calls
         elif self.force_tool_name:
             raise ValueError(f"forced tool is not visible to provider: {self.force_tool_name}")
-        return payload, native_surface.name_map
+        return payload, resolve_name_map
 
     def _should_force_tool(self, context: JsonObject) -> bool:
         if not self.force_tool_name:
@@ -326,6 +353,9 @@ class DeepSeekChatProvider(OpenAICompatibleChatProvider):
         tool_choice: str | JsonObject = "auto",
         force_tool_name: str | None = None,
         force_tool_turns: int | None = 1,
+        include_usage: bool = True,
+        thinking: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         super().__init__(
             base_url=os.environ.get("DEEPSEEK_BASE_URL", "") or "https://api.deepseek.com",
@@ -333,7 +363,7 @@ class DeepSeekChatProvider(OpenAICompatibleChatProvider):
             model=model
             or os.environ.get("HOLO_V4_MODEL", "")
             or os.environ.get("DEEPSEEK_MODEL", "")
-            or "deepseek-chat",
+            or "deepseek-v4-pro",
             enabled=enabled,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
@@ -341,6 +371,21 @@ class DeepSeekChatProvider(OpenAICompatibleChatProvider):
             parallel_tool_calls=None,
             force_tool_name=force_tool_name,
             force_tool_turns=force_tool_turns,
+            include_usage=include_usage,
+            thinking=(
+                thinking
+                if thinking is not None
+                else os.environ.get("HOLO_V4_DEEPSEEK_THINKING")
+                or os.environ.get("DEEPSEEK_THINKING")
+                or "disabled"
+            ),
+            reasoning_effort=(
+                reasoning_effort
+                if reasoning_effort is not None
+                else os.environ.get("HOLO_V4_DEEPSEEK_REASONING_EFFORT")
+                or os.environ.get("DEEPSEEK_REASONING_EFFORT")
+                or None
+            ),
         )
 
 
@@ -366,7 +411,7 @@ class _StreamingToolCallBuilder:
                 self.arguments += arguments
 
     def to_tool_call(self, *, name_map: dict[str, str]) -> ToolCall | None:
-        real_name = name_map.get(self.name, self.name)
+        real_name = _resolve_provider_tool_name(self.name, name_map)
         if not real_name:
             return None
         try:
@@ -392,7 +437,7 @@ class _StreamingToolCallBuilder:
             return None
         if not isinstance(parsed, dict):
             parsed = {"value": parsed}
-        real_name = name_map.get(self.name, self.name)
+        real_name = _resolve_provider_tool_name(self.name, name_map)
         if not real_name:
             return None
         self.emitted = True
@@ -441,7 +486,7 @@ def _provider_messages(
     result: list[JsonObject] = [
         {
             "role": "system",
-            "content": system_prompt.rstrip() + "\n\nRuntime context:\n" + context_text,
+            "content": system_prompt.rstrip(),
         }
     ]
     for message in messages:
@@ -451,6 +496,11 @@ def _provider_messages(
             result.append({"role": "user", "content": message.content})
         elif message.role == "assistant":
             payload: JsonObject = {"role": "assistant", "content": message.content or None}
+            reasoning_content = message.metadata.get("_private_reasoning_content") or message.metadata.get(
+                "reasoning_content"
+            )
+            if isinstance(reasoning_content, str) and reasoning_content:
+                payload["reasoning_content"] = reasoning_content
             if message.tool_calls:
                 payload["tool_calls"] = [
                     {
@@ -472,19 +522,111 @@ def _provider_messages(
                     "content": message.content,
                 }
             )
+    if context:
+        result.append(
+            {
+                "role": "system",
+                "content": (
+                    "Runtime context for this assistant turn. This is host metadata, not a new user task. "
+                    "Use it to choose tools, respect budgets, avoid repeated tool calls, and decide whether to finalize.\n"
+                    + context_text
+                ),
+            }
+        )
     return result
 
 
 def _native_tool_name(tool_name: str, *, force_hash: bool = False) -> str:
     digest = hashlib.sha256(tool_name.encode("utf-8")).hexdigest()[:8]
-    slug = _NATIVE_TOOL_NAME_RE.sub("_", tool_name).strip("_")
-    slug = re.sub(r"_+", "_", slug) or "tool"
+    slug = _native_tool_alias(tool_name)
     needs_hash = force_hash or slug != tool_name or len(slug) > _MAX_NATIVE_TOOL_NAME_CHARS
     if not needs_hash:
         return slug
     suffix = "_" + digest
     max_base = max(1, _MAX_NATIVE_TOOL_NAME_CHARS - len(suffix))
     return (slug[:max_base].rstrip("_") or "tool") + suffix
+
+
+def _native_tool_alias(tool_name: str) -> str:
+    slug = _NATIVE_TOOL_NAME_RE.sub("_", str(tool_name or "")).strip("_")
+    return re.sub(r"_+", "_", slug) or "tool"
+
+
+def _historical_native_tool_name_map(messages: list[ChatMessage]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for message in messages:
+        for call in message.tool_calls:
+            real_name = str(call.name or "").strip()
+            if not real_name:
+                continue
+            _add_unique_native_name(mapping, ambiguous, _native_tool_name(real_name), real_name)
+            _add_unique_native_name(mapping, ambiguous, _native_tool_alias(real_name), real_name)
+    return mapping
+
+
+def _add_unique_native_name(mapping: dict[str, str], ambiguous: set[str], native_name: str, real_name: str) -> None:
+    native = str(native_name or "").strip()
+    real = str(real_name or "").strip()
+    if not native or not real or native in ambiguous:
+        return
+    existing = mapping.get(native)
+    if existing is None:
+        mapping[native] = real
+        return
+    if existing != real:
+        mapping.pop(native, None)
+        ambiguous.add(native)
+
+
+def _resolve_provider_tool_name(raw_name: str, name_map: dict[str, str]) -> str:
+    """Resolve provider-emitted function names to Kernel v4 tool names.
+
+    Some OpenAI-compatible providers expose the hashed native name in the
+    schema but stream back the unsuffixed sanitized alias, e.g.
+    ``sec_edgar_financials`` for ``sec.edgar.financials``. Treat those aliases
+    as valid only when they map to one registered tool.
+    """
+
+    name = str(raw_name or "").strip()
+    if not name:
+        return ""
+    mapped = name_map.get(name)
+    if mapped:
+        return mapped
+    if name in set(name_map.values()):
+        return name
+    aliases: dict[str, str | None] = {}
+    for real_name in name_map.values():
+        alias = _native_tool_alias(real_name)
+        if alias in aliases and aliases[alias] != real_name:
+            aliases[alias] = None
+        else:
+            aliases[alias] = real_name
+    alias_match = aliases.get(name)
+    return alias_match or name
+
+
+def _normalize_thinking(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().casefold()
+    if not normalized or normalized in {"auto", "provider-default", "default", "none"}:
+        return None
+    if normalized not in {"enabled", "disabled"}:
+        raise ValueError(f"thinking must be enabled, disabled, or omitted; got {value!r}")
+    return normalized
+
+
+def _normalize_reasoning_effort(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().casefold()
+    if not normalized or normalized in {"auto", "provider-default", "default", "none"}:
+        return None
+    if normalized not in {"low", "medium", "high", "max"}:
+        raise ValueError(f"reasoning_effort must be low, medium, high, max, or omitted; got {value!r}")
+    return normalized
 
 
 def _native_name_for_tool(tool_name: str, name_map: dict[str, str]) -> str:
@@ -634,6 +776,102 @@ def _choices(chunk: JsonObject) -> list[JsonObject]:
     if not isinstance(choices, list):
         return []
     return [choice for choice in choices if isinstance(choice, dict)]
+
+
+def _normalize_usage(value: object) -> JsonObject:
+    if not isinstance(value, dict):
+        return {}
+    usage = json.loads(json.dumps(value, ensure_ascii=False))
+    cache = _cache_summary_from_usage(usage)
+    if cache:
+        usage["cache"] = cache
+    return usage
+
+
+def _merge_usage_chunks(chunks: list[JsonObject]) -> JsonObject:
+    if not chunks:
+        return {}
+    # Streaming APIs generally send one final usage object. If a provider sends
+    # more than one, keep the last raw object and include aggregate cache totals
+    # for monitoring.
+    merged = dict(chunks[-1])
+    aggregate_cache = _aggregate_cache_summaries(chunk.get("cache") for chunk in chunks)
+    if aggregate_cache:
+        merged["cache"] = aggregate_cache
+    return merged
+
+
+def _cache_summary_from_usage(usage: JsonObject) -> JsonObject:
+    prompt_tokens = _optional_int(usage.get("prompt_tokens") or usage.get("input_tokens"))
+    hit_tokens = _optional_int(
+        usage.get("prompt_cache_hit_tokens")
+        or usage.get("cache_hit_tokens")
+        or usage.get("cached_prompt_tokens")
+    )
+    miss_tokens = _optional_int(usage.get("prompt_cache_miss_tokens") or usage.get("cache_miss_tokens"))
+    prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
+    cached_tokens = _optional_int(
+        usage.get("cached_tokens")
+        or prompt_details.get("cached_tokens")
+        or input_details.get("cached_tokens")
+    )
+    if hit_tokens is None and cached_tokens is not None:
+        hit_tokens = cached_tokens
+    cache: JsonObject = {}
+    if prompt_tokens is not None:
+        cache["prompt_tokens"] = prompt_tokens
+    if hit_tokens is not None:
+        cache["prompt_cache_hit_tokens"] = hit_tokens
+    if miss_tokens is not None:
+        cache["prompt_cache_miss_tokens"] = miss_tokens
+    if cached_tokens is not None:
+        cache["cached_tokens"] = cached_tokens
+    denominator = None
+    if hit_tokens is not None and miss_tokens is not None and hit_tokens + miss_tokens > 0:
+        denominator = hit_tokens + miss_tokens
+    elif hit_tokens is not None and prompt_tokens is not None and prompt_tokens > 0:
+        denominator = prompt_tokens
+    if denominator:
+        cache["cache_hit_rate"] = hit_tokens / denominator if hit_tokens is not None else 0.0
+    return cache
+
+
+def _aggregate_cache_summaries(values: Iterable[object]) -> JsonObject:
+    hit = miss = prompt = cached = 0
+    saw_hit = saw_miss = saw_prompt = saw_cached = False
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        if (parsed := _optional_int(value.get("prompt_cache_hit_tokens"))) is not None:
+            hit += parsed
+            saw_hit = True
+        if (parsed := _optional_int(value.get("prompt_cache_miss_tokens"))) is not None:
+            miss += parsed
+            saw_miss = True
+        if (parsed := _optional_int(value.get("prompt_tokens"))) is not None:
+            prompt += parsed
+            saw_prompt = True
+        if (parsed := _optional_int(value.get("cached_tokens"))) is not None:
+            cached += parsed
+            saw_cached = True
+    result: JsonObject = {}
+    if saw_prompt:
+        result["prompt_tokens"] = prompt
+    if saw_hit:
+        result["prompt_cache_hit_tokens"] = hit
+    if saw_miss:
+        result["prompt_cache_miss_tokens"] = miss
+    if saw_cached:
+        result["cached_tokens"] = cached
+    denominator = None
+    if saw_hit and saw_miss and hit + miss > 0:
+        denominator = hit + miss
+    elif saw_hit and saw_prompt and prompt > 0:
+        denominator = prompt
+    if denominator:
+        result["cache_hit_rate"] = hit / denominator
+    return result
 
 
 def _tool_call_deltas(value: object) -> list[JsonObject]:

@@ -721,6 +721,14 @@ def test_finance_numeric_verifier_is_registered_as_read_only_tool() -> None:
         payload={
             "answer": "Example Co FY2024 revenue was $10 million.",
             "facts": [fact.to_dict()],
+            "citations": [
+                {
+                    "citation_id": "cite-1",
+                    "evidence_id": "ev-1",
+                    "quote": "Example Co FY2024 revenue was $10 million.",
+                }
+            ],
+            "evidence": [{"evidence_id": "ev-1", "text": "Example Co FY2024 revenue was $10 million."}],
             "question": "What was Example Co FY2024 revenue?",
         },
         reasons=["the answer has a material numeric finance claim"],
@@ -775,6 +783,14 @@ def test_finance_numeric_verifier_tool_observation_exposes_repair_guidance() -> 
         payload={
             "answer": "Example Co FY2024 revenue was $12 million.",
             "facts": [fact.to_dict()],
+            "citations": [
+                {
+                    "citation_id": "cite-1",
+                    "evidence_id": "ev-1",
+                    "quote": "Example Co FY2024 revenue was $10 million.",
+                }
+            ],
+            "evidence": [{"evidence_id": "ev-1", "text": "Example Co FY2024 revenue was $10 million."}],
             "question": "What was Example Co FY2024 revenue?",
         },
         reasons=["the answer has a material numeric finance claim"],
@@ -830,6 +846,14 @@ def test_finance_numeric_verifier_tool_observation_exposes_unit_mismatch_example
         payload={
             "answer": "Example Co FY2024 revenue was 10%.",
             "facts": [fact.to_dict()],
+            "citations": [
+                {
+                    "citation_id": "cite-1",
+                    "evidence_id": "ev-1",
+                    "quote": "Example Co FY2024 revenue was $10.",
+                }
+            ],
+            "evidence": [{"evidence_id": "ev-1", "text": "Example Co FY2024 revenue was $10."}],
             "question": "What was Example Co FY2024 revenue?",
         },
         reasons=["the answer has a material numeric finance claim"],
@@ -853,8 +877,8 @@ def test_finance_numeric_verifier_tool_observation_exposes_unit_mismatch_example
             "value": "10",
             "unit": "percent",
             "support_units": ["usd"],
-            "support_kinds": ["finance_fact"],
-            "support_refs": ["fact-revenue"],
+            "support_kinds": ["cited_evidence", "finance_fact"],
+            "support_refs": ["fact-revenue", "ev-1"],
         }
     ]
     repair_options = " ".join(observation.content["repair_options"])
@@ -7085,8 +7109,14 @@ def test_finance_fast_model_planner_can_select_verify_numeric_tool() -> None:
             "answer": "Example Co FY2024 revenue was $10 million.",
             "facts": [fact.to_dict()],
             "formula_traces": [],
-            "citations": [],
-            "evidence": [],
+            "citations": [
+                {
+                    "citation_id": "cite-1",
+                    "evidence_id": "ev-1",
+                    "quote": "Example Co FY2024 revenue was $10 million.",
+                }
+            ],
+            "evidence": [{"evidence_id": "ev-1", "text": "Example Co FY2024 revenue was $10 million."}],
             "question": "What was Example Co FY2024 revenue?",
         },
         "score": 0.92,
@@ -10293,6 +10323,201 @@ def test_numeric_verifier_fails_unsupported_answer_values() -> None:
     assert verification.status == "failed"
     assert verification.missing_values[0]["raw"] == "$999 billion"
     assert "unsupported_answer_number" in [issue["code"] for issue in verification.issues]
+
+
+def test_finance_verify_numeric_tool_rejects_self_certified_model_payload_support() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-verify-self-certified",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify unsupported model-supplied number",
+        score=1.0,
+        payload={
+            "answer": "The separation gain was $21.4 billion.",
+            "question": "What is the amount of the gain accruing to JnJ as of August 30, 2023?",
+            "facts": [
+                {
+                    "entity": "Johnson & Johnson",
+                    "metric": "Gain on separation",
+                    "period": "2023-08-30",
+                    "source": "SEC 8-K filings August 2023",
+                    "unit": "USD",
+                    "value": 21400000000,
+                }
+            ],
+            "formula_traces": [
+                {
+                    "formula_name": "gain_on_separation",
+                    "expression": "21400000000",
+                    "result_value": "21400000000",
+                    "unit": "USD",
+                }
+            ],
+            "citations": [
+                {
+                    "citation_id": "cite-8k",
+                    "evidence_id": "ev-8k",
+                    "quote": "The filing discusses completion of the exchange offer and post-split guidance.",
+                }
+            ],
+            "evidence": [
+                {
+                    "evidence_id": "ev-8k",
+                    "text": "SEC 8-K Item 2.01 discusses completion of the exchange offer for Kenvue.",
+                }
+            ],
+        },
+        reasons=["final material numeric claim needs verification"],
+        side_effect_class="read",
+    )
+
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-verify-self-certified",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+    verification = observation.content["verification"]
+    issue_codes = [issue["code"] for issue in verification["issues"]]
+
+    assert observation.status == "ok"
+    assert verification["status"] == "failed"
+    assert "unsupported_answer_number" in issue_codes
+    assert "untrusted_model_supplied_support" in issue_codes
+    assert verification["diagnostics"]["trusted_fact_count"] == 0
+    assert verification["diagnostics"]["trusted_formula_trace_count"] == 0
+
+
+def test_finance_verify_numeric_tool_accepts_cited_evidence_numeric_support() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-verify-cited-number",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify direct cited number",
+        score=1.0,
+        payload={
+            "answer": "The separation gain was $20.0 billion.",
+            "question": "What is the amount of the gain accruing to JnJ as of August 30, 2023?",
+            "citations": [
+                {
+                    "citation_id": "cite-note",
+                    "evidence_id": "ev-note",
+                    "quote": "The gain accruing to Johnson & Johnson as a result of the separation was approximately $20.0 billion.",
+                }
+            ],
+            "evidence": [
+                {
+                    "evidence_id": "ev-note",
+                    "text": "The gain accruing to Johnson & Johnson as a result of the separation was approximately $20.0 billion.",
+                }
+            ],
+        },
+        reasons=["final material numeric claim needs verification"],
+        side_effect_class="read",
+    )
+
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-verify-cited-number",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+    verification = observation.content["verification"]
+
+    assert observation.status == "ok"
+    assert verification["status"] == "passed"
+    assert verification["matched_values"][0]["support"]["kind"] == "cited_evidence"
+    assert verification["diagnostics"]["cited_evidence_numeric_support_count"] >= 1
+
+
+def test_finance_verify_numeric_tool_accepts_formula_trace_with_source_bound_inputs() -> None:
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-verify-source-bound-formula",
+        kind="tool",
+        name=FINANCE_VERIFY_NUMERIC_TOOL_NAME,
+        description="verify source-bound formula result",
+        score=1.0,
+        payload={
+            "answer": "Home Depot FY2024 DIO was 76.34 days.",
+            "question": "Calculate FY2024 days inventory outstanding using average inventory / COGS * 365.",
+            "facts": [
+                {
+                    "fact_id": "fact-inventory-begin",
+                    "metric": "beginning inventory",
+                    "value": "20976000000",
+                    "unit": "USD",
+                    "evidence_ref": "ev-dio",
+                    "citation_ref": "cite-dio",
+                },
+                {
+                    "fact_id": "fact-inventory-end",
+                    "metric": "ending inventory",
+                    "value": "23451000000",
+                    "unit": "USD",
+                    "evidence_ref": "ev-dio",
+                    "citation_ref": "cite-dio",
+                },
+                {
+                    "fact_id": "fact-cogs",
+                    "metric": "cost of sales",
+                    "value": "106206000000",
+                    "unit": "USD",
+                    "evidence_ref": "ev-dio",
+                    "citation_ref": "cite-dio",
+                },
+            ],
+            "formula_traces": [
+                {
+                    "formula_id": "formula-dio-hd",
+                    "formula_name": "days_inventory_outstanding",
+                    "expression": "((inventory_begin + inventory_end) / 2) / cogs * fiscal_days",
+                    "input_fact_ids": ["fact-inventory-begin", "fact-inventory-end", "fact-cogs"],
+                    "result_value": "76.34",
+                    "unit": "days",
+                    "diagnostics": {
+                        "variables": {
+                            "inventory_begin": "20976000000",
+                            "inventory_end": "23451000000",
+                            "cogs": "106206000000",
+                            "fiscal_days": "365",
+                        }
+                    },
+                }
+            ],
+            "citations": [
+                {
+                    "citation_id": "cite-dio",
+                    "evidence_id": "ev-dio",
+                    "quote": "Inventory was $20.976 billion at the beginning and $23.451 billion at year end; cost of sales was $106.206 billion.",
+                }
+            ],
+            "evidence": [
+                {
+                    "evidence_id": "ev-dio",
+                    "text": "Inventory was $20.976 billion at the beginning and $23.451 billion at year end; cost of sales was $106.206 billion.",
+                }
+            ],
+        },
+        reasons=["final material numeric claim needs verification"],
+        side_effect_class="read",
+    )
+
+    decision = PolicyGate(permission="read_write").validate(
+        run_id="run-verify-source-bound-formula",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+    verification = observation.content["verification"]
+
+    assert observation.status == "ok"
+    assert verification["status"] == "passed"
+    assert verification["matched_values"][0]["support"]["kind"] == "formula_trace"
+    assert verification["diagnostics"]["trusted_fact_count"] == 3
+    assert verification["diagnostics"]["trusted_formula_trace_count"] == 1
 
 
 def test_numeric_verifier_accepts_comparison_difference_between_formula_traces() -> None:

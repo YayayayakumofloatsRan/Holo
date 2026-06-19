@@ -22,3 +22,7 @@ holo_memory_library/subject_seed.md
 holo_memory_library/voice_profile.md
 holo_memory_library/memories/*.jsonl
 !holo_memory_library/memories/README.md
+.holo_toolchain/
+fb_debug_*.jsonl
+fb_debug_*.summary.json
+typescript

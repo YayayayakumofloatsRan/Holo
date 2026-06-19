@@ -78,8 +78,11 @@ def verify_finance_answer(
     evidence: list[EvidenceItem] | None = None,
     question: str = "",
     target_binding: JsonObject | None = None,
+    strict_tool_payload_provenance: bool = False,
 ) -> NumericVerification:
     traces = list(formula_traces or [])
+    evidence_items = list(evidence or [])
+    citation_items = list(citations or [])
     candidates = _answer_numeric_candidates(answer)
     if not candidates:
         return NumericVerification(
@@ -91,12 +94,29 @@ def verify_finance_answer(
         )
     binding_resolution = primary_source_numeric_binding_resolution(facts, target_binding, question=question) if target_binding else {}
     supported_facts = filter_facts_for_target_binding(facts, target_binding, question=question) if target_binding else facts
-    support_values = _support_values(supported_facts, traces)
-    evidence_support_values = (
-        _cited_evidence_support_values(evidence or [], citations or [])
-        if _source_grounded_evidence_numeric_support_allowed(question)
-        else []
-    )
+    trusted_facts = supported_facts
+    trusted_traces = traces
+    untrusted_facts: list[FinanceFact] = []
+    untrusted_traces: list[FormulaTrace] = []
+    if strict_tool_payload_provenance:
+        trusted_facts, untrusted_facts = _split_source_bound_facts(
+            supported_facts,
+            evidence_items,
+            citation_items,
+        )
+        trusted_traces, untrusted_traces = _split_source_bound_formula_traces(
+            traces,
+            trusted_facts=trusted_facts,
+            evidence=evidence_items,
+            citations=citation_items,
+            question=question,
+        )
+    support_values = _support_values(trusted_facts, trusted_traces)
+    evidence_support_values = []
+    if strict_tool_payload_provenance:
+        evidence_support_values = _cited_evidence_support_values(evidence_items, citation_items)
+    elif _source_grounded_evidence_numeric_support_allowed(question):
+        evidence_support_values = _cited_evidence_support_values(evidence_items, citation_items)
     support_values.extend(evidence_support_values)
     matched: list[JsonObject] = []
     missing: list[JsonObject] = []
@@ -130,6 +150,20 @@ def verify_finance_answer(
                 {
                     "code": "missing_formula_trace",
                     "message": "question or answer appears to require calculation but no calculator formula trace is available",
+                }
+            )
+        if strict_tool_payload_provenance and (untrusted_facts or untrusted_traces):
+            issues.append(
+                {
+                    "code": "untrusted_model_supplied_support",
+                    "message": (
+                        "model-supplied facts or formula traces were ignored because their numeric values "
+                        "were not bound to cited evidence, linked facts, or user-provided assumptions"
+                    ),
+                    "untrusted_fact_count": len(untrusted_facts),
+                    "untrusted_formula_trace_count": len(untrusted_traces),
+                    "untrusted_fact_refs": [fact.fact_id for fact in untrusted_facts[:8]],
+                    "untrusted_formula_trace_refs": [trace.formula_id for trace in untrusted_traces[:8]],
                 }
             )
     unit_mismatches = _unit_mismatches(candidates, support_values)
@@ -166,10 +200,15 @@ def verify_finance_answer(
             "answer_numeric_count": len(candidates),
             "fact_count": len(facts),
             "target_bound_fact_count": len(supported_facts),
+            "trusted_fact_count": len(trusted_facts),
+            "untrusted_fact_count": len(untrusted_facts),
             "formula_trace_count": len(traces),
+            "trusted_formula_trace_count": len(trusted_traces),
+            "untrusted_formula_trace_count": len(untrusted_traces),
             "cited_evidence_numeric_support_count": len(evidence_support_values),
             "citation_count": len(citations or []),
             "evidence_count": len(evidence or []),
+            "strict_tool_payload_provenance": strict_tool_payload_provenance,
             "target_document_binding": target_binding or {},
             "primary_source_numeric_binding": binding_resolution,
         },
@@ -274,6 +313,10 @@ def _verification_repair_options(issue_codes: list[str], *, missing_values: obje
         options.append("if the question requires a calculation, propose calculator.compute with model-selected fact ids and formula intent")
     if "missing_fact_ledger" in codes or "ledger_extraction_gap" in codes:
         options.append("retrieve or parse authoritative finance evidence to produce FinanceFact records before finalizing numeric claims")
+    if "untrusted_model_supplied_support" in codes:
+        options.append(
+            "bind model-supplied facts to cited evidence text or use calculator traces whose input facts are source-bound before verifying again"
+        )
     if "primary_source_numeric_binding_failed" in codes:
         options.append("inspect target document, period, source, and unit binding; retrieve the intended filing/source if existing facts bind to the wrong target")
     if any(code.endswith("_unit_mismatch") or code == "unit_mismatch" for code in codes):
@@ -354,6 +397,230 @@ def _answer_numeric_candidates(answer: str) -> list[JsonObject]:
             }
         )
     return result
+
+
+def _split_source_bound_facts(
+    facts: list[FinanceFact],
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+) -> tuple[list[FinanceFact], list[FinanceFact]]:
+    trusted: list[FinanceFact] = []
+    untrusted: list[FinanceFact] = []
+    for fact in facts:
+        if _fact_has_source_numeric_support(fact, evidence=evidence, citations=citations):
+            trusted.append(fact)
+        else:
+            untrusted.append(fact)
+    return trusted, untrusted
+
+
+def _split_source_bound_formula_traces(
+    traces: list[FormulaTrace],
+    *,
+    trusted_facts: list[FinanceFact],
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+    question: str,
+) -> tuple[list[FormulaTrace], list[FormulaTrace]]:
+    trusted: list[FormulaTrace] = []
+    untrusted: list[FormulaTrace] = []
+    trusted_fact_ids = {fact.fact_id for fact in trusted_facts if fact.fact_id}
+    trusted_fact_values = _trusted_fact_numeric_values(trusted_facts)
+    source_texts = _trusted_numeric_source_texts(evidence, citations)
+    if question:
+        source_texts.append(question)
+    for trace in traces:
+        if _formula_trace_has_source_bound_inputs(
+            trace,
+            trusted_fact_ids=trusted_fact_ids,
+            trusted_fact_values=trusted_fact_values,
+            source_texts=source_texts,
+        ):
+            trusted.append(trace)
+        else:
+            untrusted.append(trace)
+    return trusted, untrusted
+
+
+def _fact_has_source_numeric_support(
+    fact: FinanceFact,
+    *,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+) -> bool:
+    values = _finance_fact_numeric_values(fact)
+    if not values:
+        return False
+    linked_texts = _fact_linked_source_texts(fact, evidence=evidence, citations=citations)
+    if any(_text_contains_any_numeric_value(text, values) for text in linked_texts):
+        return True
+    # Minimal tool payloads often omit explicit evidence_ref/citation_ref. In
+    # strict mode, still allow the fact when the cited evidence packet itself
+    # contains the same number; do not trust the fact's own prose metadata.
+    return any(_text_contains_any_numeric_value(text, values) for text in _trusted_numeric_source_texts(evidence, citations))
+
+
+def _fact_linked_source_texts(
+    fact: FinanceFact,
+    *,
+    evidence: list[EvidenceItem],
+    citations: list[CitationItem],
+) -> list[str]:
+    evidence_by_id = {item.evidence_id: item for item in evidence if item.evidence_id}
+    citation_by_id = {item.citation_id: item for item in citations if item.citation_id}
+    texts: list[str] = []
+    ref_candidates = [
+        fact.evidence_ref,
+        fact.citation_ref,
+        fact.source_ref,
+        fact.metadata.get("evidence_id") if isinstance(fact.metadata, dict) else None,
+        fact.metadata.get("citation_id") if isinstance(fact.metadata, dict) else None,
+        fact.metadata.get("evidence_ref") if isinstance(fact.metadata, dict) else None,
+        fact.metadata.get("citation_ref") if isinstance(fact.metadata, dict) else None,
+    ]
+    for raw_ref in ref_candidates:
+        ref = str(raw_ref or "").strip()
+        if not ref:
+            continue
+        evidence_item = evidence_by_id.get(ref)
+        if evidence_item is not None:
+            texts.append(evidence_item.text)
+        citation = citation_by_id.get(ref)
+        if citation is not None:
+            texts.append(citation.quote)
+            linked_evidence = evidence_by_id.get(citation.evidence_id)
+            if linked_evidence is not None:
+                texts.append(linked_evidence.text)
+    return [text for text in texts if str(text or "").strip()]
+
+
+def _trusted_numeric_source_texts(evidence: list[EvidenceItem], citations: list[CitationItem]) -> list[str]:
+    evidence_by_id = {item.evidence_id: item for item in evidence if item.evidence_id}
+    texts: list[str] = []
+    for citation in citations:
+        if citation.quote:
+            texts.append(citation.quote)
+        linked_evidence = evidence_by_id.get(citation.evidence_id)
+        if linked_evidence is not None and linked_evidence.text:
+            texts.append(linked_evidence.text)
+    return [text for text in texts if str(text or "").strip()]
+
+
+def _formula_trace_has_source_bound_inputs(
+    trace: FormulaTrace,
+    *,
+    trusted_fact_ids: set[str],
+    trusted_fact_values: list[Decimal],
+    source_texts: list[str],
+) -> bool:
+    if _decimal_or_none(trace.result_value) is None:
+        return False
+    if _numeric_constant_expression_only(trace.expression):
+        return False
+    input_fact_ids = [str(item or "").strip() for item in trace.input_fact_ids if str(item or "").strip()]
+    if input_fact_ids and all(fact_id in trusted_fact_ids for fact_id in input_fact_ids):
+        return True
+    diagnostics = trace.diagnostics if isinstance(trace.diagnostics, dict) else {}
+    variables = diagnostics.get("variables")
+    if not isinstance(variables, dict) or not variables:
+        return False
+    numeric_variables = [
+        (str(name), value)
+        for name, raw_value in variables.items()
+        if (value := _decimal_or_none(raw_value)) is not None
+    ]
+    if not numeric_variables:
+        return False
+    return all(
+        _formula_variable_has_source_support(
+            name,
+            value,
+            trusted_fact_values=trusted_fact_values,
+            source_texts=source_texts,
+        )
+        for name, value in numeric_variables
+    )
+
+
+def _formula_variable_has_source_support(
+    name: str,
+    value: Decimal,
+    *,
+    trusted_fact_values: list[Decimal],
+    source_texts: list[str],
+) -> bool:
+    if any(_within_tolerance(value, fact_value) for fact_value in trusted_fact_values):
+        return True
+    if _text_contains_any_numeric_value("\n".join(source_texts), [value]):
+        return True
+    normalized = str(name or "").strip().lower()
+    if normalized in {"fiscal_days", "days", "day_count"} and value in {Decimal(365), Decimal(366), Decimal(371)}:
+        return True
+    return False
+
+
+def _trusted_fact_numeric_values(facts: list[FinanceFact]) -> list[Decimal]:
+    result: list[Decimal] = []
+    for fact in facts:
+        result.extend(_finance_fact_numeric_values(fact))
+    return result
+
+
+def _finance_fact_numeric_values(fact: FinanceFact) -> list[Decimal]:
+    value = _decimal_or_none(fact.value)
+    if value is None:
+        return []
+    values = [value]
+    normalized_scale = _normalize_unit(fact.scale or "")
+    normalized_unit = _normalize_unit(fact.unit or "")
+    for scale in (normalized_scale, normalized_unit):
+        divisor = _scale_divisor(scale)
+        if divisor is not None:
+            values.append(value * divisor)
+    return _unique_decimal_values(values)
+
+
+def _scale_divisor(scale: str) -> Decimal | None:
+    if scale == "thousand":
+        return Decimal(1_000)
+    if scale == "million":
+        return Decimal(1_000_000)
+    if scale == "billion":
+        return Decimal(1_000_000_000)
+    if scale == "trillion":
+        return Decimal(1_000_000_000_000)
+    if scale == "hundred_million":
+        return Decimal(100_000_000)
+    if scale == "ten_thousand":
+        return Decimal(10_000)
+    return None
+
+
+def _unique_decimal_values(values: list[Decimal]) -> list[Decimal]:
+    result: list[Decimal] = []
+    seen: set[str] = set()
+    for value in values:
+        key = _decimal_string(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
+
+
+def _text_contains_any_numeric_value(text: str, values: list[Decimal]) -> bool:
+    if not str(text or "").strip() or not values:
+        return False
+    text_values = [_decimal_or_none(item.get("value")) for item in _numeric_values_from_cited_text(text)]
+    numeric_text_values = [value for value in text_values if value is not None]
+    for source_value in values:
+        if any(_within_tolerance(source_value, text_value) for text_value in numeric_text_values):
+            return True
+    return False
+
+
+def _numeric_constant_expression_only(expression: str) -> bool:
+    return bool(re.fullmatch(r"\s*[-+]?\d+(?:,\d{3})*(?:\.\d+)?\s*", str(expression or "")))
 
 
 def _support_values(facts: list[FinanceFact], traces: list[FormulaTrace]) -> list[JsonObject]:

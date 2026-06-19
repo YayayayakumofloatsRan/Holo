@@ -37,6 +37,26 @@ from kernel_v3.tool_use import ARTIFACT_QUERY_NAME
 from kernel_v3.tools import ToolRegistry
 
 
+def test_sec_filing_period_filter_prioritizes_following_q4_results_season() -> None:
+    records = [
+        {"filing_date": "2023-04-18", "accession_number": "q1", "items": "2.02,9.01"},
+        {"filing_date": "2023-01-24", "accession_number": "q4", "items": "2.02,9.01"},
+        {"filing_date": "2022-10-18", "accession_number": "q3", "items": "2.02,9.01"},
+        {"filing_date": "2023-12-05", "accession_number": "late", "items": "8.01"},
+    ]
+
+    selected, period_filter = open_components._filter_sec_filing_records_by_period(
+        records,
+        fiscal_year=2022,
+        period="FY2022",
+        limit=3,
+    )
+
+    assert period_filter["filter_applied"] is True
+    assert period_filter["matched_record_count"] == 3
+    assert [record["accession_number"] for record in selected] == ["q4", "q1", "q3"]
+
+
 def test_finance_register_exposes_mature_component_tools_with_host_boundaries() -> None:
     registry = register_finance_tools(ToolRegistry.with_builtin_respond())
     manifests = {manifest.name: manifest for manifest in registry.manifests()}
@@ -714,6 +734,151 @@ def test_docling_tool_prefers_light_pdf_reader_before_heavy_docling(monkeypatch)
     assert observation.content["source_materialization"]["sha256"] == "hash-pdf"
     assert observation.content["focus_snippets"][0]["term"] == "purchases of property, plant and equipment"
     assert "Purchases of property" in observation.content["text"]
+
+
+def test_docling_tool_prefers_sec_archive_text_when_accession_is_derivable(monkeypatch) -> None:
+    source_url = (
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf"
+    )
+    expected_sec_text = (
+        "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/"
+        "0000066740-23-000014.txt"
+    )
+
+    def fake_download(source: str, *, byte_limit: int):
+        assert source == expected_sec_text
+        assert byte_limit > 0
+        gap = (" filler" * 240).encode("utf-8")
+        return (
+            b"Consolidated Statement of Income\n"
+            b"Net sales 34,229 35,355 32,184\n"
+            + gap
+            + b"\n"
+            b"Net income attributable to 3M 5,777 5,921 5,384\n",
+            {"sha256": "hash-sec-text", "mime_type": "text/plain"},
+        )
+
+    def fake_readable_text(body: str, *, document, goal=None):
+        del goal
+        assert document.uri == expected_sec_text
+        return body, "sec_text_fixture", {"parser_used": "sec_text_fixture"}
+
+    monkeypatch.setattr(open_components, "_download_document_bytes", fake_download)
+    monkeypatch.setattr(open_components, "readable_document_text_with_diagnostics", fake_readable_text)
+    registry = register_finance_tools(ToolRegistry.with_builtin_respond())
+    action = CandidateAction(
+        action_id="act-docling-sec-text",
+        kind="tool",
+        name=DOCUMENT_DOCLING_CONVERT_TOOL_NAME,
+        description="convert filing pdf",
+        score=0.9,
+        payload={"source": source_url, "focus_terms": ["net sales", "net income"], "max_chars": 2000},
+        reasons=["need filing table text"],
+        side_effect_class="network",
+    )
+    decision = PolicyGate(permission="read_write", allowed_permissions={"network:fetch"}).validate(
+        run_id="run-docling-sec-text",
+        action=action,
+        manifest=registry.manifest_for_action(action),
+    )
+
+    observation = registry.execute_with_artifacts(action, policy_decision=decision).observation
+
+    assert decision.allowed
+    assert observation.status == "ok"
+    assert observation.content["component_execution"] == "sec_archive_text_before_pdf"
+    assert observation.content["source_materialization"]["alternate_source_url"] == expected_sec_text
+    assert "Net sales 34,229" in observation.content["text"]
+    terms = {str(item["term"]).casefold() for item in observation.content["focus_snippets"]}
+    assert {"net sales", "net income"}.issubset(terms)
+
+
+def test_sec_archive_text_url_from_source_derives_official_submission_text_url() -> None:
+    source_url = (
+        "https://investors.3m.com/financials/sec-filings/content/0000066740-23-000014/"
+        "0000066740-23-000014.pdf"
+    )
+
+    assert open_components._sec_archive_text_url_from_source(source_url) == (
+        "https://www.sec.gov/Archives/edgar/data/66740/000006674023000014/"
+        "0000066740-23-000014.txt"
+    )
+
+
+def test_document_focus_snippets_keep_default_revenue_terms_after_model_focus_terms() -> None:
+    gap = " ".join(["filler"] * 240)
+    text = (
+        "Capital expenditures were discussed. "
+        + gap
+        + " Purchases of property, plant and equipment were 1,749. "
+        + gap
+        + " Additions to property were noted. "
+        + gap
+        + " Cash flows from investing activities included capital projects. "
+        + gap
+        + " Operating activities were also discussed. "
+        + gap
+        + " Property, plant and equipment net was 9,178. "
+        + gap
+        + " Total assets were 46,455. "
+        + gap
+        + " Net sales were 34,229. "
+        + gap
+        + " Net income attributable to 3M was 5,777."
+    )
+
+    snippets = open_components._document_focus_snippets(
+        text,
+        action_payload={
+            "focus_terms": [
+                "capital expenditures",
+                "purchases of property",
+                "capex",
+                "additions to property",
+                "investing activities",
+                "cash flow",
+            ]
+        },
+    )
+
+    terms = {str(item["term"]).casefold() for item in snippets}
+    assert "net sales" in terms
+    assert "total assets" in terms
+    assert "net income attributable" in terms
+
+
+def test_document_hybrid_search_prefers_exact_income_statement_fact_over_revenue_noise() -> None:
+    text = "\n".join(
+        [
+            "html_table_38_row_1: Disaggregated revenue information Year ended December 31, 2022 2021 2020",
+            "html_table_38_row_2: Net Sales (Millions) 2022 2021 2020",
+            "html_table_38_row_3: Abrasives $ 1,343 $ 1,296 $ 1,077",
+            "html_table_fact_30_10_2022: metric=Operating income fy=2022 value=6,539 scale=millions",
+            "html_table_fact_30_11_2022: metric=Other expense (income), net fy=2022 value=147 scale=millions",
+            "html_table_fact_30_14_2022: metric=Net income attributable to 3M fy=2022 value=5,777 scale=millions",
+        ]
+    )
+    query_tokens, query_aliases = open_components._document_search_query_tokens(
+        {
+            "query": "html_table_fact_30_2022 net income attributable",
+            "focus_terms": ["Net income", "Net income attributable to 3M", "Statement of Income", "2022"],
+        }
+    )
+    matches = open_components._rank_document_search_chunks(
+        open_components._document_search_chunks(text, chunk_lines=2),
+        query_tokens=query_tokens,
+        query_aliases=query_aliases,
+        rank_bm25=None,
+        max_matches=3,
+        max_chars=5000,
+        fiscal_year=None,
+        period="",
+    )
+
+    assert matches
+    assert "Net income attributable to 3M" in matches[0]["text"]
+    assert "5,777" in matches[0]["text"]
 
 
 def test_openbb_tool_blocks_unallowlisted_routes_before_component_import(monkeypatch) -> None:

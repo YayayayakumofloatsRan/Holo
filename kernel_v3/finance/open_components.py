@@ -187,6 +187,12 @@ try:
         "inventories",
         "inventory",
         "total assets",
+        "consolidated statement of income",
+        "statement of income",
+        "net income attributable",
+        "net income attributable to",
+        "net income including noncontrolling interest",
+        "noncontrolling interest",
         "net income",
     )
 
@@ -212,7 +218,7 @@ try:
                 terms.append(term)
         return terms
 
-    def focus_snippets(text, payload, limit=12):
+    def focus_snippets(text, payload, limit=20):
         source_text = str(text or "")
         lowered = source_text.casefold()
         snippets = []
@@ -240,7 +246,7 @@ try:
 
     source = str(payload.get("source") or "")
     output_format = str(payload.get("output_format") or "markdown").lower()
-    max_chars = max(1, min(int(payload.get("max_chars") or 8000), 20000))
+    max_chars = max(1, min(int(payload.get("max_chars") or 8000), 50000))
     byte_limit = max(1_000_000, min(int(payload.get("download_byte_limit") or 200_000_000), 500_000_000))
     converted_source, cleanup, materialization = materialize_source(source, byte_limit)
     try:
@@ -429,7 +435,21 @@ def register_finance_open_component_tools(
             input_schema={
                 "identifier": {"type": "str", "required": True, "min_length": 1},
                 "form": {"type": "str", "required": False, "min_length": 1},
-                "limit": {"type": "int", "required": False, "min": 1, "max": 25},
+                "fiscal_year": {
+                    "type": "int",
+                    "required": False,
+                    "min": 1900,
+                    "max": 2100,
+                    "description": "Optional requested fiscal year, e.g. 2022 for FY2022 target documents.",
+                },
+                "period": {
+                    "type": "str",
+                    "required": False,
+                    "min_length": 1,
+                    "aliases": ["target_period"],
+                    "description": "Optional requested period label such as FY2022 or fiscal 2024.",
+                },
+                "limit": {"type": "int", "required": False, "min": 1, "max": 200},
             },
             runtime={
                 "concurrency_safe": True,
@@ -508,7 +528,7 @@ def register_finance_open_component_tools(
             input_schema={
                 "source": {"type": "str", "required": True, "min_length": 1, "aliases": ["url", "source_url"]},
                 "output_format": {"type": "str", "required": False, "min_length": 1},
-                "max_chars": {"type": "int", "required": False, "min": 500, "max": 20000},
+                "max_chars": {"type": "int", "required": False, "min": 500, "max": 50000},
                 "focus_terms": {
                     "type": "list[str]",
                     "required": False,
@@ -522,7 +542,7 @@ def register_finance_open_component_tools(
                 "always_load": True,
                 "interrupt_behavior": "cancel",
                 "timeout_seconds": 120,
-                "max_result_size_chars": 30000,
+                "max_result_size_chars": 70000,
                 "result_persistence_policy": "auto",
                 "idempotent": False,
             },
@@ -889,12 +909,23 @@ def _execute_sec_company_filings(
         return _observation(action, "failed", identity_error, kind="sec_edgar_result")
     identifier = str(action.payload.get("identifier") or "").strip()
     form = str(action.payload.get("form") or "10-K").strip() or "10-K"
-    limit = _positive_int(action.payload.get("limit"), default=10, maximum=25)
+    fiscal_year = _optional_int(action.payload.get("fiscal_year"))
+    period = str(action.payload.get("period") or action.payload.get("target_period") or "").strip()
+    limit = _positive_int(action.payload.get("limit"), default=10, maximum=200)
+    fetch_limit = max(limit, 200) if fiscal_year is not None or period else limit
     try:
         company = edgar.Company(identifier)
         filings = company.get_filings(form=form) if form else company.get_filings()
-        limited = filings.head(limit) if hasattr(filings, "head") else filings
-        records = _records_from_object(limited, limit=limit)
+        limited = filings.head(fetch_limit) if hasattr(filings, "head") else filings
+        raw_records = _records_from_object(limited, limit=fetch_limit)
+        records, period_filter = _filter_sec_filing_records_by_period(
+            raw_records,
+            fiscal_year=fiscal_year,
+            period=period,
+            limit=limit,
+        )
+        cik = _sec_cik_from_identifier(identifier)
+        records = [_with_sec_archive_urls(record, cik=cik) for record in records]
     except Exception as exc:
         return _observation(action, "failed", _component_exception("edgartools", exc), kind="sec_edgar_result")
     return _artifact_tool_result(
@@ -904,6 +935,9 @@ def _execute_sec_company_filings(
             "component": "edgartools",
             "identifier": identifier,
             "form": form,
+            "requested_fiscal_year": fiscal_year,
+            "requested_period": period or None,
+            "period_filter": period_filter,
             "limit": limit,
             "records": records,
             "semantic_decision_owner": "model",
@@ -912,6 +946,148 @@ def _execute_sec_company_filings(
         artifact_store=artifact_store,
         artifact_kind="sec_edgar_company_filings_payload",
     )
+
+
+def _filter_sec_filing_records_by_period(
+    records: list[JsonObject],
+    *,
+    fiscal_year: int | None,
+    period: str,
+    limit: int,
+) -> tuple[list[JsonObject], JsonObject]:
+    target_year = fiscal_year
+    if target_year is None:
+        years = [int(match.group(1)) for match in re.finditer(r"\b((?:19|20)\d{2})\b", str(period or ""))]
+        target_year = years[-1] if years else None
+    if target_year is None:
+        return records[:limit], {
+            "filter_applied": False,
+            "input_record_count": len(records),
+            "output_record_count": min(len(records), limit),
+            "host_boundary": "no period was provided; recent filings are returned without period inference",
+        }
+    filtered: list[JsonObject] = []
+    for record in records:
+        filing_in_window = _sec_record_date_within_target_window(
+            record,
+            keys=("filing_date", "filingDate", "acceptanceDateTime"),
+            target_year=target_year,
+        )
+        report_in_window = _sec_record_date_within_target_window(
+            record,
+            keys=("reportDate", "report_date"),
+            target_year=target_year,
+        )
+        if filing_in_window or report_in_window:
+            filtered.append(record)
+    if filtered:
+        filtered = sorted(filtered, key=lambda record: _sec_filing_period_sort_key(record, target_year=target_year))
+    selected = filtered[:limit] if filtered else records[:limit]
+    return selected, {
+        "filter_applied": True,
+        "requested_fiscal_year": target_year,
+        "input_record_count": len(records),
+        "matched_record_count": len(filtered),
+        "output_record_count": len(selected),
+        "filing_window": {
+            "start": f"{target_year}-01-01",
+            "end": f"{target_year + 1}-04-30",
+            "reason": "FY target documents are usually filed during the target year or the following annual-report/Q4-results season",
+        },
+        "fallback_to_recent": not bool(filtered),
+        "host_boundary": (
+            "period filtering only narrows filing candidates; the model still chooses the relevant accession, "
+            "document, exhibit, and source evidence"
+        ),
+    }
+
+
+def _sec_record_date_within_target_window(
+    record: Mapping[str, Any],
+    *,
+    keys: Sequence[str],
+    target_year: int,
+) -> bool:
+    for key in keys:
+        parsed = _sec_record_date_parts(str(record.get(key) or ""))
+        if parsed is None:
+            continue
+        year, month = parsed
+        if year == target_year:
+            return True
+        if year == target_year + 1 and month <= 4:
+            return True
+    return False
+
+
+def _sec_record_date_parts(value: str) -> tuple[int, int] | None:
+    match = re.search(r"\b((?:19|20)\d{2})(?:-(\d{1,2}))?", str(value or ""))
+    if not match:
+        return None
+    try:
+        year = int(match.group(1))
+        month = int(match.group(2) or 1)
+    except ValueError:
+        return None
+    return year, month
+
+
+def _sec_filing_period_sort_key(record: Mapping[str, Any], *, target_year: int) -> tuple[int, str]:
+    parsed = _sec_record_date_parts(
+        str(
+            record.get("filing_date")
+            or record.get("filingDate")
+            or record.get("acceptanceDateTime")
+            or record.get("reportDate")
+            or ""
+        )
+    )
+    if parsed is None:
+        return (9, "")
+    year, month = parsed
+    date_text = str(record.get("filing_date") or record.get("filingDate") or record.get("acceptanceDateTime") or "")
+    if year == target_year + 1 and month <= 2:
+        priority = 0
+    elif year == target_year + 1 and month <= 4:
+        priority = 1
+    elif year == target_year:
+        priority = 2
+    else:
+        priority = 3
+    return (priority, date_text)
+
+
+def _with_sec_archive_urls(record: JsonObject, *, cik: str | None) -> JsonObject:
+    enriched = dict(record)
+    accession = str(
+        enriched.get("accession_number")
+        or enriched.get("accessionNumber")
+        or enriched.get("accession")
+        or ""
+    ).strip()
+    cik_value = str(enriched.get("cik") or enriched.get("CIK") or cik or "").strip()
+    archive_base = _sec_archive_base_url(cik_value, accession)
+    if not archive_base:
+        return enriched
+    primary_document = str(enriched.get("primaryDocument") or enriched.get("primary_document") or "").strip()
+    enriched.setdefault("sec_archive_base_url", archive_base)
+    enriched.setdefault("filing_index_url", f"{archive_base}/index.json")
+    enriched.setdefault("complete_submission_text_url", f"{archive_base}/{accession}.txt")
+    if primary_document:
+        enriched.setdefault("primary_document_url", f"{archive_base}/{primary_document}")
+    return enriched
+
+
+def _sec_archive_base_url(cik: str, accession: str) -> str | None:
+    digits = "".join(ch for ch in str(cik or "") if ch.isdigit())
+    compact_accession = re.sub(r"[^0-9]", "", str(accession or ""))
+    if not digits or not compact_accession:
+        return None
+    try:
+        cik_path = str(int(digits))
+    except ValueError:
+        return None
+    return f"https://www.sec.gov/Archives/edgar/data/{cik_path}/{compact_accession}"
 
 
 def _execute_sec_financials(
@@ -1081,7 +1257,16 @@ def _execute_docling_convert(
             kind="docling_conversion",
         )
     output_format = str(action.payload.get("output_format") or "markdown").strip().lower()
-    max_chars = _positive_int(action.payload.get("max_chars"), default=8000, maximum=20000)
+    max_chars = _positive_int(action.payload.get("max_chars"), default=8000, maximum=50000)
+    sec_text = _try_sec_archive_text_document_convert(
+        action,
+        source=source,
+        output_format=output_format,
+        max_chars=max_chars,
+        artifact_store=artifact_store,
+    )
+    if sec_text is not None:
+        return sec_text
     light_pdf = _try_light_pdf_document_convert(
         action,
         source=source,
@@ -1126,6 +1311,69 @@ def _execute_docling_convert(
             "text_chars": len(exported),
             "truncated": len(exported) > max_chars,
             "semantic_decision_owner": "model",
+        },
+        kind="docling_conversion",
+        artifact_store=artifact_store,
+        artifact_kind="docling_conversion_payload",
+    )
+
+
+def _try_sec_archive_text_document_convert(
+    action: CandidateAction,
+    *,
+    source: str,
+    output_format: str,
+    max_chars: int,
+    artifact_store: ArtifactStore | None,
+) -> Observation | ToolResult | None:
+    sec_text_url = _sec_archive_text_url_from_source(source)
+    if not sec_text_url:
+        return None
+    try:
+        data, metadata = _download_document_bytes(sec_text_url, byte_limit=_DOCUMENT_DOWNLOAD_BYTE_LIMIT)
+        body = data.decode("utf-8", errors="replace")
+        document = FetchedDocument(
+            document_id=f"doc-{action.action_id}-sec-text",
+            goal_id=f"goal-{action.action_id}",
+            source_id=f"source-{action.action_id}-sec-text",
+            uri=sec_text_url,
+            title=Path(urllib.parse.urlparse(sec_text_url).path).name or sec_text_url,
+            artifact_id=f"artifact-{action.action_id}-sec-text",
+            payload_hash=str(metadata.get("sha256") or ""),
+            preview=body[:500],
+            size_bytes=len(data),
+            metadata={"mime_type": metadata.get("mime_type") or "text/plain", "source_url": sec_text_url},
+        )
+        text, mode, diagnostics = readable_document_text_with_diagnostics(body, document=document)
+    except Exception:
+        return None
+    text = str(text or body or "")
+    if not text.strip():
+        return None
+    return _artifact_tool_result(
+        action,
+        "ok",
+        {
+            "component": "docling",
+            "component_execution": "sec_archive_text_before_pdf",
+            "source": source,
+            "source_materialization": {
+                "downloaded": True,
+                "bytes": len(data),
+                "mime_type": metadata.get("mime_type"),
+                "sha256": metadata.get("sha256"),
+                "alternate_source_url": sec_text_url,
+                "alternate_source_reason": "source URL contains an SEC accession; official SEC complete submission text is better for filing table retrieval",
+            },
+            "output_format": output_format,
+            "focus_snippets": _document_focus_snippets(text, action_payload=action.payload),
+            "text": _truncate(text, max_chars),
+            "text_chars": len(text),
+            "truncated": len(text) > max_chars,
+            "reader_mode": mode,
+            "reader_diagnostics": diagnostics,
+            "semantic_decision_owner": "model",
+            "host_boundary": "SEC complete-submission text supplies source text candidates; finance interpretation remains model-owned",
         },
         kind="docling_conversion",
         artifact_store=artifact_store,
@@ -1570,18 +1818,24 @@ def _rank_document_search_chunks(
     else:
         scores = _lexical_document_search_scores(tokenized, query_tokens)
     target_tokens = _period_target_tokens(fiscal_year=fiscal_year, period=period)
+    query_context = _document_search_query_context(query_tokens=query_tokens, query_aliases=query_aliases)
     scored: list[tuple[float, JsonObject]] = []
     for index, chunk in enumerate(chunks):
         text = str(chunk.get("text") or "")
         score = scores[index] if index < len(scores) else 0.0
         matched_aliases = [alias for alias in query_aliases if alias and alias.casefold() in text.casefold()]
         if matched_aliases:
-            score += min(5.0, 0.75 * len(matched_aliases))
+            score += _document_search_alias_bonus(matched_aliases)
+        score += _document_search_exact_signal_bonus(text, query_aliases=query_aliases, query_context=query_context)
         if target_tokens and _text_matches_period_target(text, target_tokens):
             score += 2.0
         noise_flags = _document_search_noise_flags(text)
         if "table_of_contents_like" in noise_flags:
             score -= 1.5
+        if "delta_or_variance_language" in noise_flags:
+            score -= 0.75
+        if "disaggregated_revenue_detail" in noise_flags and query_context.get("asks_net_income"):
+            score -= 1.25
         if score > 0:
             enriched = dict(chunk)
             enriched["score"] = round(score, 6)
@@ -1611,6 +1865,82 @@ def _rank_document_search_chunks(
     return matches
 
 
+def _document_search_query_context(*, query_tokens: list[str], query_aliases: list[str]) -> JsonObject:
+    token_set = set(query_tokens)
+    aliases_text = " ".join(query_aliases).casefold()
+    requested_table_ids = [
+        match.group(1)
+        for alias in query_aliases
+        for match in re.finditer(r"\bhtml\s+table(?:\s+fact)?\s+(\d{1,3})\b", alias.casefold())
+    ]
+    return {
+        "asks_net_income": "net" in token_set and "income" in token_set,
+        "asks_income_statement": "income" in token_set and "statement" in token_set,
+        "aliases_text": aliases_text,
+        "requested_html_table_ids": _ordered_unique_strings(requested_table_ids),
+    }
+
+
+def _document_search_alias_bonus(matched_aliases: list[str]) -> float:
+    score = 0.0
+    for alias in matched_aliases[:40]:
+        token_count = len(_document_search_tokenize(alias))
+        if token_count >= 5:
+            score += 1.75
+        elif token_count >= 3:
+            score += 1.1
+        elif token_count == 2:
+            score += 0.65
+        else:
+            score += 0.15
+    return min(7.0, score)
+
+
+def _document_search_exact_signal_bonus(
+    text: str,
+    *,
+    query_aliases: list[str],
+    query_context: JsonObject,
+) -> float:
+    text_tokens = _document_search_tokenize(text)
+    if not text_tokens:
+        return 0.0
+    text_token_set = set(text_tokens)
+    normalized_text = " ".join(text_tokens)
+    score = 0.0
+    for alias in query_aliases[:60]:
+        alias_tokens = _document_search_tokenize(alias)
+        if len(alias_tokens) < 2:
+            continue
+        phrase = " ".join(alias_tokens)
+        if phrase and phrase in normalized_text:
+            score += min(3.0, 0.35 * len(alias_tokens))
+        elif len(alias_tokens) >= 4 and all(token in text_token_set for token in alias_tokens):
+            score += min(1.5, 0.15 * len(alias_tokens))
+    requested_table_ids = [str(item) for item in query_context.get("requested_html_table_ids", [])]
+    if requested_table_ids:
+        table_ids = _document_search_html_table_ids(text)
+        if any(table_id in table_ids for table_id in requested_table_ids):
+            score += 3.0
+        elif table_ids:
+            score -= 1.0
+    if query_context.get("asks_income_statement") and "statement of income" in str(text).casefold():
+        score += 2.0
+    if query_context.get("asks_net_income") and "net income attributable" in str(text).casefold():
+        score += 2.0
+    return score
+
+
+def _document_search_html_table_ids(text: str) -> set[str]:
+    return {
+        match.group(1)
+        for match in re.finditer(
+            r"\bhtml_table(?:_fact)?_(\d{1,3})(?:_|\b)",
+            str(text or "").casefold(),
+        )
+    }
+
+
 def _lexical_document_search_scores(tokenized: list[list[str]], query_tokens: list[str]) -> list[float]:
     query_set = set(query_tokens)
     return [float(sum(1 for token in tokens if token in query_set)) for tokens in tokenized]
@@ -1634,6 +1964,8 @@ def _document_search_noise_flags(text: str) -> list[str]:
         flags.append("delta_or_variance_language")
     if re.search(r"\baccession|cik|commission file number\b", lowered):
         flags.append("identifier_noise_possible")
+    if "disaggregated revenue" in lowered or "disaggregated disclosures" in lowered:
+        flags.append("disaggregated_revenue_detail")
     return flags
 
 
@@ -2430,11 +2762,17 @@ _DEFAULT_DOCUMENT_FOCUS_TERMS = (
     "inventories",
     "inventory",
     "total assets",
+    "consolidated statement of income",
+    "statement of income",
+    "net income attributable",
+    "net income attributable to",
+    "net income including noncontrolling interest",
+    "noncontrolling interest",
     "net income",
 )
 
 
-def _document_focus_snippets(text: str, *, action_payload: JsonObject, limit: int = 12) -> list[JsonObject]:
+def _document_focus_snippets(text: str, *, action_payload: JsonObject, limit: int = 20) -> list[JsonObject]:
     source_text = str(text or "")
     if not source_text:
         return []
@@ -2493,6 +2831,23 @@ def _looks_like_pdf_url(source: str) -> bool:
     parsed = urllib.parse.urlparse(str(source or ""))
     path = urllib.parse.unquote(parsed.path or "").lower()
     return path.endswith(".pdf")
+
+
+def _sec_archive_text_url_from_source(source: str) -> str | None:
+    text = urllib.parse.unquote(str(source or ""))
+    if not text:
+        return None
+    match = re.search(r"(?P<cik>\d{10})-(?P<year>\d{2})-(?P<seq>\d{6})", text)
+    if not match:
+        return None
+    cik_padded = match.group("cik")
+    try:
+        cik_path = str(int(cik_padded))
+    except ValueError:
+        return None
+    accession = f"{cik_padded}-{match.group('year')}-{match.group('seq')}"
+    compact = accession.replace("-", "")
+    return f"https://www.sec.gov/Archives/edgar/data/{cik_path}/{compact}/{accession}.txt"
 
 
 def _download_document_bytes(source: str, *, byte_limit: int) -> tuple[bytes, JsonObject]:

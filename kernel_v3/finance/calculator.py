@@ -74,7 +74,11 @@ def register_finance_tools(registry: ToolRegistry) -> ToolRegistry:
                 "facts": {
                     "type": "list[FinanceFact]",
                     "required": False,
-                    "description": "FinanceFact rows or minimal fact objects with at least metric and value.",
+                    "description": (
+                        "FinanceFact rows or minimal fact objects with at least metric and value. "
+                        "For model-supplied tool payloads, facts are trusted only when their numeric "
+                        "values bind to cited evidence/citation text or source-bound formula inputs."
+                    ),
                 },
                 "formula_traces": {
                     "type": "list[FormulaTrace]",
@@ -215,6 +219,7 @@ def _execute_finance_verify_numeric(action: CandidateAction) -> Observation:
             evidence=_contract_list(action.payload.get("evidence"), EvidenceItem, "evidence"),
             question=str(action.payload.get("question") or ""),
             target_binding=action.payload.get("target_binding") if isinstance(action.payload.get("target_binding"), dict) else None,
+            strict_tool_payload_provenance=True,
         )
     except Exception as exc:
         return Observation(

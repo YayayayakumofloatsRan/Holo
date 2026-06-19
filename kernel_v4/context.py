@@ -10,6 +10,7 @@ from kernel_v4.runtime import AbortController, ContextEdit, ToolLifecycleRecord,
 
 DEFAULT_TOOL_RESULT_INLINE_CHARS = 50_000
 TOOL_RESULT_PREVIEW_CHARS = 2_000
+ARTIFACT_PREVIEW_CHARS = 500
 
 
 @dataclass
@@ -28,22 +29,61 @@ class ToolUseContext:
     workflow: WorkflowObserver = field(default_factory=WorkflowObserver)
     in_progress_tool_use_ids: set[str] = field(default_factory=set)
     artifacts: dict[str, str] = field(default_factory=dict)
+    artifact_records: dict[str, JsonObject] = field(default_factory=dict)
+    artifact_sequence: int = 0
     tool_result_replacements: dict[str, str] = field(default_factory=dict)
     context_edits: list[ContextEdit] = field(default_factory=list)
     tool_lifecycle: dict[str, ToolLifecycleRecord] = field(default_factory=dict)
     metadata: JsonObject = field(default_factory=dict)
 
-    def store_artifact(self, *, kind: str, content: str) -> str:
+    def store_artifact(self, *, kind: str, content: str, metadata: JsonObject | None = None) -> str:
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         artifact_id = f"v4-{kind}-{digest[:16]}"
+        if artifact_id in self.artifacts:
+            record = self.artifact_records.get(artifact_id)
+            if record is not None:
+                record["store_hits"] = int(record.get("store_hits") or 1) + 1
+            self.apply_edit(
+                ContextEdit(
+                    operation="artifact.cache_hit",
+                    key=artifact_id,
+                    value={"kind": kind, "chars": len(content), "sha256": digest},
+                )
+            )
+            return artifact_id
         self.artifacts[artifact_id] = content
-        self.apply_edit(ContextEdit(operation="artifact.store", key=artifact_id, value={"kind": kind, "chars": len(content)}))
+        self.artifact_sequence += 1
+        record: JsonObject = {
+            "artifact_id": artifact_id,
+            "source": "kernel_v4_context",
+            "kind": kind,
+            "chars": len(content),
+            "sha256": digest,
+            "created_order": self.artifact_sequence,
+            "store_hits": 1,
+            "read_hits": 0,
+            "preview": _artifact_preview(content),
+        }
+        if metadata:
+            record["metadata"] = dict(metadata)
+        self.artifact_records[artifact_id] = record
+        self.apply_edit(ContextEdit(operation="artifact.store", key=artifact_id, value=record))
         return artifact_id
 
     def read_artifact(self, artifact_id: str) -> str:
         if artifact_id not in self.artifacts:
             raise KeyError(f"unknown v4 artifact: {artifact_id}")
+        record = self.artifact_records.get(artifact_id)
+        if record is not None:
+            record["read_hits"] = int(record.get("read_hits") or 0) + 1
         return self.artifacts[artifact_id]
+
+    def artifact_summary(self, *, artifact_id: str | None = None, recent_limit: int = 20) -> list[JsonObject]:
+        records = list(self.artifact_records.values())
+        if artifact_id:
+            records = [record for record in records if record.get("artifact_id") == artifact_id]
+        records.sort(key=lambda item: int(item.get("created_order") or 0), reverse=True)
+        return [dict(record) for record in records[: max(1, recent_limit)]]
 
     @property
     def abort_signal(self):
@@ -68,6 +108,7 @@ class ToolUseContext:
             if not edit.key:
                 raise ValueError("artifact.delete requires key")
             self.artifacts.pop(edit.key, None)
+            self.artifact_records.pop(edit.key, None)
             result["artifact_id"] = edit.key
         elif edit.operation == "message.append":
             if not isinstance(edit.value, ChatMessage):
@@ -75,6 +116,8 @@ class ToolUseContext:
             self.messages.append(edit.value)
             result["message_role"] = edit.value.role
         elif edit.operation == "artifact.store":
+            result["artifact_id"] = edit.key or ""
+        elif edit.operation == "artifact.cache_hit":
             result["artifact_id"] = edit.key or ""
         else:
             raise ValueError(f"unsupported context edit operation: {edit.operation}")
@@ -109,6 +152,8 @@ class ToolUseContext:
         recent_lifecycle = list(self.tool_lifecycle.values())[-recent_limit:]
         return {
             "abort": self.abort_signal.to_dict(),
+            "artifact_count": len(self.artifacts),
+            "artifacts_recent": self.artifact_summary(recent_limit=min(10, recent_limit)),
             "context_edit_count": len(self.context_edits),
             "context_edits_recent": [edit.to_dict() for edit in recent_edits],
             "context_metadata_keys": sorted(self.metadata.keys()),
@@ -208,3 +253,8 @@ def _large_tool_result_replacement(*, artifact_id: str, original_chars: int, pre
         ensure_ascii=False,
         sort_keys=True,
     )
+
+
+def _artifact_preview(content: str) -> str:
+    compact = " ".join(content[:ARTIFACT_PREVIEW_CHARS].split())
+    return compact[:ARTIFACT_PREVIEW_CHARS]

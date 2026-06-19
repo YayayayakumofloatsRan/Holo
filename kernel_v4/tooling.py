@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -12,6 +14,8 @@ from kernel_v4.contracts import JsonObject, LoopEvent, ToolCall, ToolManifest, T
 from kernel_v4.runtime import ContextEdit
 
 ToolExecutorFn = Callable[[JsonObject, ToolUseContext], Any | Awaitable[Any]]
+_NATIVE_TOOL_NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
+_MAX_NATIVE_TOOL_NAME_CHARS = 64
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,29 @@ class ToolRegistry:
                 ),
                 self._execute_tool_discovery,
             )
+        if self.get("tool.workbench") is None:
+            self.register(
+                ToolManifest(
+                    name="tool.workbench",
+                    description=(
+                        "Open a temporary task workbench: discover relevant registered tools, group them by capability, "
+                        "and return tool contracts plus current artifact context. This plans tool access only; it does not answer."
+                    ),
+                    input_schema={
+                        "query": {"type": "string", "required": False},
+                        "families": {
+                            "type": "string",
+                            "required": False,
+                            "description": "Optional comma-separated tool families to emphasize.",
+                        },
+                        "max_tools": {"type": "integer", "required": False},
+                    },
+                    concurrency_safe=True,
+                    always_load=True,
+                    max_result_chars=30_000,
+                ),
+                self._execute_tool_workbench,
+            )
         if self.get("artifact.read") is None:
             self.register(
                 ToolManifest(
@@ -70,6 +97,7 @@ class ToolRegistry:
                     description="Read a v4 artifact created from a large tool result.",
                     input_schema={
                         "artifact_id": {"type": "string", "required": True},
+                        "start": {"type": "integer", "required": False},
                         "max_chars": {"type": "integer", "required": False},
                     },
                     concurrency_safe=True,
@@ -78,10 +106,67 @@ class ToolRegistry:
                 ),
                 self._execute_artifact_read,
             )
+        if self.get("artifact.inspect") is None:
+            self.register(
+                ToolManifest(
+                    name="artifact.inspect",
+                    description="Inspect v4 artifact metadata, previews, sizes, lifecycle counters, and recent artifacts.",
+                    input_schema={
+                        "artifact_id": {"type": "string", "required": False},
+                        "max_items": {"type": "integer", "required": False},
+                    },
+                    concurrency_safe=True,
+                    always_load=True,
+                    max_result_chars=20_000,
+                ),
+                self._execute_artifact_inspect,
+            )
+        if self.get("artifact.search") is None:
+            self.register(
+                ToolManifest(
+                    name="artifact.search",
+                    description="Search v4 artifacts by text query and return compact snippets before deciding whether to read.",
+                    input_schema={
+                        "query": {"type": "string", "required": True},
+                        "artifact_id": {"type": "string", "required": False},
+                        "max_matches": {"type": "integer", "required": False},
+                        "window_chars": {"type": "integer", "required": False},
+                    },
+                    concurrency_safe=True,
+                    always_load=True,
+                    max_result_chars=30_000,
+                ),
+                self._execute_artifact_search,
+            )
 
     async def execute(self, call: ToolCall, context: ToolUseContext) -> ToolMessage:
         if context.abort_signal.aborted:
             return _cancelled_tool_message(call, context, reason=context.abort_signal.reason or "cancelled")
+        requested_tool_name = call.name
+        canonical_tool_name = _canonical_registered_tool_name(call.name, self._tools.keys())
+        if canonical_tool_name != call.name:
+            call = ToolCall(tool_call_id=call.tool_call_id, name=canonical_tool_name, input=call.input)
+        active_allowlist = _active_tool_surface_allowlist(context)
+        if active_allowlist is not None and call.name not in active_allowlist:
+            return tool_message_from_result(
+                tool_call_id=call.tool_call_id,
+                name=call.name,
+                content={
+                    "error": "tool_not_in_active_surface",
+                    "tool": call.name,
+                    **({"requested_tool": requested_tool_name} if requested_tool_name != call.name else {}),
+                    "active_tool_surface_allowlist": sorted(active_allowlist),
+                    "instruction": (
+                        "This tool is registered or historically visible, but it is not executable in the current "
+                        "tool surface. Use only one of the exact active tool names, use existing observations, "
+                        "or finalize if the evidence and calculations are sufficient. Do not call hidden, "
+                        "sanitized, or previously visible source-tool aliases."
+                    ),
+                },
+                context=context,
+                is_error=True,
+                metadata={"tool_not_in_active_surface": True},
+            )
         duplicate = _find_previous_successful_tool_call(call, context)
         if duplicate is not None:
             return tool_message_from_result(
@@ -104,10 +189,21 @@ class ToolRegistry:
             )
         definition = self.get(call.name)
         if definition is None:
+            active_allowlist = _active_tool_surface_allowlist(context)
             return tool_message_from_result(
                 tool_call_id=call.tool_call_id,
                 name=call.name,
-                content={"error": "tool_not_found", "tool": call.name},
+                content={
+                    "error": "tool_not_found",
+                    "tool": call.name,
+                    **({"requested_tool": requested_tool_name} if requested_tool_name != call.name else {}),
+                    "active_tool_surface_allowlist": sorted(active_allowlist) if active_allowlist is not None else None,
+                    "instruction": (
+                        "This tool is not currently executable. If active_tool_surface_allowlist is present, use only "
+                        "one of those exact tool names, or finalize from existing observations. Do not call hidden, "
+                        "sanitized, or previously visible source-tool aliases."
+                    ),
+                },
                 context=context,
                 is_error=True,
             )
@@ -151,7 +247,10 @@ class ToolRegistry:
         query = str(payload.get("query") or "").casefold().strip()
         max_results = _positive_int(payload.get("max_results"), default=12, upper=50)
         rows: list[JsonObject] = []
+        active_allowlist = _active_tool_surface_allowlist(context)
         for manifest in self.all_manifests():
+            if active_allowlist is not None and manifest.name not in active_allowlist:
+                continue
             haystack = " ".join(
                 [
                     manifest.name,
@@ -179,19 +278,145 @@ class ToolRegistry:
             "schema": "holo.kernel_v4.tool_discovery_result.v1",
             "query": query,
             "tools": selected,
+            "active_tool_surface_allowlist": sorted(active_allowlist) if active_allowlist is not None else None,
             "host_boundary": "tool discovery returns contracts only; the model chooses the next concrete tool call",
         }
 
     def _execute_artifact_read(self, payload: JsonObject, context: ToolUseContext) -> JsonObject:
         artifact_id = str(payload.get("artifact_id") or "")
-        max_chars = _positive_int(payload.get("max_chars"), default=20_000, upper=200_000)
+        max_chars = _positive_int(payload.get("max_chars"), default=8_000, upper=200_000)
+        start = _non_negative_int(payload.get("start"), default=0, upper=10**9)
         content = context.read_artifact(artifact_id)
+        end = min(len(content), start + max_chars)
         return {
             "schema": "holo.kernel_v4.artifact_read_result.v1",
             "artifact_id": artifact_id,
             "chars": len(content),
-            "text": content[:max_chars],
-            "truncated": len(content) > max_chars,
+            "start": start,
+            "end": end,
+            "text": content[start:end],
+            "truncated": end < len(content),
+            "instruction": (
+                "This is a bounded window. Use artifact.search for targeted snippets, or call artifact.read "
+                "again with start/end-focused max_chars if broader context is necessary."
+            ),
+        }
+
+    def _execute_artifact_inspect(self, payload: JsonObject, context: ToolUseContext) -> JsonObject:
+        artifact_id = str(payload.get("artifact_id") or "").strip() or None
+        max_items = _positive_int(payload.get("max_items"), default=20, upper=100)
+        artifacts = context.artifact_summary(artifact_id=artifact_id, recent_limit=max_items)
+        v3_artifacts = _v3_artifact_summaries(context, artifact_id=artifact_id, max_items=max_items)
+        if artifact_id and not artifacts and not v3_artifacts:
+            return {"error": "artifact_not_found", "artifact_id": artifact_id}
+        return {
+            "schema": "holo.kernel_v4.artifact_inspect_result.v1",
+            "artifact_id": artifact_id,
+            "kernel_v4_artifacts": artifacts,
+            "delegated_artifacts": v3_artifacts,
+            "artifact_count": len(context.artifacts) + len(_v3_artifact_summaries(context, max_items=10_000)),
+            "host_boundary": "artifact inspection returns lifecycle metadata only; the model chooses search/read/next tool calls.",
+        }
+
+    def _execute_artifact_search(self, payload: JsonObject, context: ToolUseContext) -> JsonObject:
+        query = str(payload.get("query") or "").strip()
+        artifact_id = str(payload.get("artifact_id") or "").strip() or None
+        max_matches = _positive_int(payload.get("max_matches"), default=8, upper=50)
+        window_chars = _positive_int(payload.get("window_chars"), default=240, upper=2_000)
+        if not query:
+            return {"error": "missing_query", "required": "query"}
+        candidates = _v4_artifact_candidates(context, artifact_id=artifact_id)
+        matches: list[JsonObject] = []
+        for candidate_id, content in candidates:
+            matches.extend(
+                _search_text(
+                    artifact_id=candidate_id,
+                    source="kernel_v4_context",
+                    text=content,
+                    query=query,
+                    max_matches=max_matches,
+                    window_chars=window_chars,
+                )
+            )
+        matches.sort(key=lambda item: (str(item["artifact_id"]), int(item["offset"])))
+        return {
+            "schema": "holo.kernel_v4.artifact_search_result.v1",
+            "query": query,
+            "artifact_id": artifact_id,
+            "matches": matches[:max_matches],
+            "searched_artifacts": len(candidates),
+            "host_boundary": "artifact search returns snippets only; call artifact.read for broader context if needed.",
+        }
+
+    def _execute_tool_workbench(self, payload: JsonObject, context: ToolUseContext) -> JsonObject:
+        query = str(payload.get("query") or "").casefold().strip()
+        requested_families = set(_payload_string_list(payload.get("families")))
+        max_tools = _positive_int(payload.get("max_tools"), default=24, upper=80)
+        rows: list[JsonObject] = []
+        families: dict[str, JsonObject] = {}
+        active_allowlist = _active_tool_surface_allowlist(context)
+        for manifest in self.all_manifests():
+            if active_allowlist is not None and manifest.name not in active_allowlist:
+                continue
+            family = _tool_family(manifest)
+            haystack = " ".join(
+                [
+                    family,
+                    manifest.name,
+                    manifest.description,
+                    json.dumps(manifest.input_schema, ensure_ascii=False, sort_keys=True),
+                ]
+            ).casefold()
+            score = 1.0 if not query else _score_manifest(query, haystack, manifest.name)
+            if requested_families and family not in requested_families:
+                score *= 0.25
+            if score <= 0 and requested_families and family in requested_families:
+                score = 0.5
+            if score <= 0:
+                continue
+            summary = manifest.summary()
+            summary["family"] = family
+            summary["score"] = score
+            rows.append(summary)
+            families.setdefault(
+                family,
+                {
+                    "family": family,
+                    "purpose": _tool_family_purpose(family),
+                    "workflow_hint": _tool_family_workflow_hint(family),
+                    "tools": [],
+                },
+            )
+        rows.sort(key=lambda item: (-float(item["score"]), str(item["family"]), str(item["name"])))
+        selected = rows[:max_tools]
+        selected_names = {str(item["name"]) for item in selected if isinstance(item.get("name"), str)}
+        for item in selected:
+            families[str(item["family"])]["tools"].append(item)
+        discovered = set(_string_list(context.metadata.get("discovered_tool_names")))
+        discovered.update(selected_names)
+        context.apply_edit(
+            ContextEdit(
+                operation="metadata.set",
+                key="discovered_tool_names",
+                value=sorted(discovered),
+                source="tool.workbench",
+            )
+        )
+        selected_families = [
+            value for value in families.values() if any(tool["name"] in selected_names for tool in value["tools"])
+        ]
+        return {
+            "schema": "holo.kernel_v4.tool_workbench.v1",
+            "query": query,
+            "requested_families": sorted(requested_families),
+            "selected_tools": selected,
+            "selected_families": selected_families,
+            "current_artifacts": context.artifact_summary(recent_limit=10),
+            "active_tool_surface_allowlist": sorted(active_allowlist) if active_allowlist is not None else None,
+            "host_boundary": (
+                "Workbench assembly exposes tool contracts and context only. The model still decides which tools to call, "
+                "what evidence is sufficient, and when to finalize."
+            ),
         }
 
 
@@ -204,22 +429,32 @@ class StreamingToolExecutor:
         self.turn_index = turn_index
         self._items: list[_TrackedTool] = []
         self._events: list[LoopEvent] = []
+        self._in_turn_fingerprints: dict[str, str] = {}
 
     def add_tool_call(self, call: ToolCall) -> None:
         definition = self.registry.get(call.name)
         concurrency_safe = True if definition is None else bool(definition.manifest.concurrency_safe)
-        item = _TrackedTool(call=call, concurrency_safe=concurrency_safe)
+        fingerprint = _tool_call_fingerprint(call)
+        duplicate_of = self._in_turn_fingerprints.get(fingerprint)
+        if duplicate_of is None:
+            self._in_turn_fingerprints[fingerprint] = call.tool_call_id
+        item = _TrackedTool(call=call, concurrency_safe=concurrency_safe, duplicate_of=duplicate_of)
         self._items.append(item)
         self.context.record_tool_lifecycle(
             tool_call_id=call.tool_call_id,
             tool=call.name,
             status="queued",
             turn_index=self.turn_index,
-            metadata={"concurrency_safe": concurrency_safe},
+            metadata={"concurrency_safe": concurrency_safe, **({"duplicate_of": duplicate_of} if duplicate_of else {})},
         )
         self._emit(
             event_type="tool_queued",
-            data={"tool_call_id": call.tool_call_id, "tool": call.name, "concurrency_safe": concurrency_safe},
+            data={
+                "tool_call_id": call.tool_call_id,
+                "tool": call.name,
+                "concurrency_safe": concurrency_safe,
+                **({"duplicate_of": duplicate_of} if duplicate_of else {}),
+            },
         )
 
     async def drain_completed(self) -> list[ToolMessage]:
@@ -309,6 +544,8 @@ class StreamingToolExecutor:
                 if not item.concurrency_safe:
                     break
                 continue
+            if await self._complete_in_turn_duplicate(item):
+                continue
             item.status = "executing"
             self.context.in_progress_tool_use_ids.add(item.call.tool_call_id)
             self.context.record_tool_lifecycle(
@@ -364,14 +601,84 @@ class StreamingToolExecutor:
             },
         )
 
+    async def _complete_in_turn_duplicate(self, item: "_TrackedTool") -> bool:
+        if not item.duplicate_of:
+            return False
+        previous = self._find_item(item.duplicate_of)
+        if previous is None:
+            return False
+        if previous.status in {"queued", "executing"}:
+            return True
+        if previous.result is None:
+            return False
+        item.result = tool_message_from_result(
+            tool_call_id=item.call.tool_call_id,
+            name=item.call.name,
+            content={
+                "schema": "holo.kernel_v4.in_turn_duplicate_tool_call.v1",
+                "tool": item.call.name,
+                "status": "skipped_in_turn_duplicate_tool_call",
+                "previous_tool_call_id": previous.call.tool_call_id,
+                "previous_result_was_error": previous.result.is_error,
+                "previous_result_preview": _preview_tool_result(previous.result),
+                "instruction": (
+                    "This same tool input was already requested earlier in this assistant turn. "
+                    "Use the earlier tool result and continue to the next evidence, transform, verification, or final answer step."
+                ),
+            },
+            context=self.context,
+            is_error=True,
+            metadata={
+                "in_turn_duplicate_tool_call": True,
+                "previous_tool_call_id": previous.call.tool_call_id,
+                "previous_result_was_error": previous.result.is_error,
+            },
+        )
+        item.status = "failed"
+        self.context.record_tool_lifecycle(
+            tool_call_id=item.call.tool_call_id,
+            tool=item.call.name,
+            status="failed",
+            turn_index=self.turn_index,
+            metadata={
+                "is_error": True,
+                "in_turn_duplicate_tool_call": True,
+                "previous_tool_call_id": previous.call.tool_call_id,
+            },
+        )
+        self._emit(
+            event_type="tool_duplicate_skipped",
+            data={
+                "tool_call_id": item.call.tool_call_id,
+                "tool": item.call.name,
+                "previous_tool_call_id": previous.call.tool_call_id,
+            },
+        )
+        return True
+
+    def _find_item(self, tool_call_id: str) -> "_TrackedTool | None":
+        for item in self._items:
+            if item.call.tool_call_id == tool_call_id:
+                return item
+        return None
+
 
 @dataclass
 class _TrackedTool:
     call: ToolCall
     concurrency_safe: bool
+    duplicate_of: str | None = None
     status: str = "queued"
     task: asyncio.Task[None] | None = None
     result: ToolMessage | None = None
+
+
+def _non_negative_int(value: object, *, default: int, upper: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(parsed, upper))
 
 
 def _positive_int(value: object, *, default: int, upper: int) -> int:
@@ -382,10 +689,189 @@ def _positive_int(value: object, *, default: int, upper: int) -> int:
     return max(1, min(parsed, upper))
 
 
+def _payload_string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [item.casefold().strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item).casefold().strip() for item in value if str(item).strip()]
+    return []
+
+
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if isinstance(item, str) and item]
+
+
+def _active_tool_surface_allowlist(context: ToolUseContext) -> set[str] | None:
+    raw = context.metadata.get("tool_surface_allowlist")
+    if not isinstance(raw, list):
+        return None
+    names = {str(item) for item in raw if isinstance(item, str) and item}
+    return names or None
+
+
+def _canonical_registered_tool_name(tool_name: str, registered_names: Any) -> str:
+    requested = str(tool_name or "").strip()
+    if not requested:
+        return requested
+    registered = {str(name) for name in registered_names}
+    if requested in registered:
+        return requested
+    alias_map: dict[str, str | None] = {}
+    for real_name in registered:
+        for alias in {_native_tool_alias(real_name), _native_tool_name(real_name)}:
+            existing = alias_map.get(alias)
+            if existing is None and alias not in alias_map:
+                alias_map[alias] = real_name
+            elif existing != real_name:
+                alias_map[alias] = None
+    mapped = alias_map.get(requested)
+    return mapped or requested
+
+
+def _native_tool_name(tool_name: str) -> str:
+    digest = hashlib.sha256(str(tool_name or "").encode("utf-8")).hexdigest()[:8]
+    slug = _native_tool_alias(tool_name)
+    needs_hash = slug != tool_name or len(slug) > _MAX_NATIVE_TOOL_NAME_CHARS
+    if not needs_hash:
+        return slug
+    suffix = "_" + digest
+    max_base = max(1, _MAX_NATIVE_TOOL_NAME_CHARS - len(suffix))
+    return (slug[:max_base].rstrip("_") or "tool") + suffix
+
+
+def _native_tool_alias(tool_name: str) -> str:
+    slug = _NATIVE_TOOL_NAME_RE.sub("_", str(tool_name or "")).strip("_")
+    return re.sub(r"_+", "_", slug) or "tool"
+
+
+def _v4_artifact_candidates(context: ToolUseContext, *, artifact_id: str | None) -> list[tuple[str, str]]:
+    if artifact_id:
+        if artifact_id not in context.artifacts:
+            return []
+        return [(artifact_id, context.read_artifact(artifact_id))]
+    return [(candidate_id, context.read_artifact(candidate_id)) for candidate_id in sorted(context.artifacts)]
+
+
+def _v3_artifact_summaries(
+    context: ToolUseContext,
+    *,
+    artifact_id: str | None = None,
+    max_items: int = 20,
+) -> list[JsonObject]:
+    raw = context.metadata.get("v3_artifacts")
+    if not isinstance(raw, dict):
+        return []
+    rows: list[JsonObject] = []
+    for key, value in raw.items():
+        if artifact_id and str(key) != artifact_id:
+            continue
+        if isinstance(value, dict):
+            row = dict(value)
+        else:
+            row = {"artifact_id": str(key), "metadata": value}
+        row.setdefault("artifact_id", str(key))
+        row.setdefault("source", "delegated_finance_artifact_store")
+        rows.append(row)
+    rows.sort(key=lambda item: str(item.get("artifact_id")))
+    return rows[: max(1, max_items)]
+
+
+def _search_text(
+    *,
+    artifact_id: str,
+    source: str,
+    text: str,
+    query: str,
+    max_matches: int,
+    window_chars: int,
+) -> list[JsonObject]:
+    haystack = text.casefold()
+    terms = _query_terms(query)
+    if not terms:
+        return []
+    offsets: list[int] = []
+    for term in terms:
+        start = 0
+        while len(offsets) < max_matches:
+            index = haystack.find(term, start)
+            if index < 0:
+                break
+            offsets.append(index)
+            start = index + max(1, len(term))
+    offsets = sorted(set(offsets))[:max_matches]
+    matches: list[JsonObject] = []
+    for offset in offsets:
+        start = max(0, offset - window_chars // 2)
+        end = min(len(text), offset + window_chars // 2)
+        matches.append(
+            {
+                "artifact_id": artifact_id,
+                "source": source,
+                "offset": offset,
+                "start": start,
+                "end": end,
+                "snippet": " ".join(text[start:end].split()),
+            }
+        )
+    return matches
+
+
+def _query_terms(query: str) -> list[str]:
+    return [term for term in query.casefold().replace("/", " ").replace("_", " ").split() if len(term) >= 2]
+
+
+def _tool_family(manifest: ToolManifest) -> str:
+    name = manifest.name.casefold()
+    description = manifest.description.casefold()
+    if name.startswith("artifact."):
+        return "artifact_context"
+    if name.startswith("tool."):
+        return "tool_discovery"
+    if name.startswith("sec.edgar") or name.startswith("document.") or name.startswith("provided_context."):
+        return "evidence_retrieval"
+    if name.startswith("market."):
+        return "market_data"
+    if name.startswith("calculator.") or name.startswith("math.") or name.startswith("data.table") or name.startswith("calendar."):
+        return "transform_compute"
+    if name.startswith("finance.verify"):
+        return "numeric_verification"
+    if name.startswith("finance."):
+        return "finance_contracts"
+    if any(token in name for token in (".read", ".search", ".fetch", ".parse", ".extract")):
+        return "generic_evidence"
+    if "compute" in name or "calculate" in description:
+        return "transform_compute"
+    return "general_tools"
+
+
+def _tool_family_purpose(family: str) -> str:
+    return {
+        "artifact_context": "Inspect, search, and read durable context artifacts from prior large results.",
+        "tool_discovery": "Discover registered tools and assemble a temporary workbench for the current task.",
+        "evidence_retrieval": "Retrieve or parse source evidence from filings, documents, or supplied context.",
+        "market_data": "Fetch market or price data when the task requires it.",
+        "transform_compute": "Compute deterministic arithmetic, table transforms, date differences, and symbolic math.",
+        "numeric_verification": "Verify material numeric claims before final answer.",
+        "finance_contracts": "Expose finance task contracts without taking over semantic decisions.",
+        "generic_evidence": "General read/search/fetch/parse tools outside finance-specific naming.",
+        "general_tools": "Other registered tools available to the model.",
+    }.get(family, "Registered tools available to the model.")
+
+
+def _tool_family_workflow_hint(family: str) -> str:
+    return {
+        "artifact_context": "Use inspect/search first for orientation; use read with offsets for broader context.",
+        "tool_discovery": "Use when the visible provider tool list is partial or a new task needs a tool bench.",
+        "evidence_retrieval": "Retrieve authoritative evidence before selecting inputs or formulas.",
+        "market_data": "Use only when filings/supplied context are not the requested data source.",
+        "transform_compute": "Use after evidence inputs are observed; avoid mental arithmetic for material numbers.",
+        "numeric_verification": "Use after computing final material numbers and before finalizing.",
+        "finance_contracts": "Use to identify evidence and transform contracts, then call concrete tools yourself.",
+        "generic_evidence": "Use for task-specific source inspection when no stronger domain tool exists.",
+        "general_tools": "Inspect the manifest schema and call only with valid inputs.",
+    }.get(family, "Inspect the manifest schema and call only with valid inputs.")
 
 
 def _find_previous_successful_tool_call(call: ToolCall, context: ToolUseContext) -> JsonObject | None:
@@ -410,6 +896,25 @@ def _find_previous_successful_tool_call(call: ToolCall, context: ToolUseContext)
             "previous_result_preview": message.content[:2000],
         }
     return None
+
+
+def _tool_call_fingerprint(call: ToolCall) -> str:
+    return f"{call.name}:{_stable_json(call.input)}"
+
+
+def _preview_tool_result(result: ToolMessage, *, max_chars: int = 2_000) -> str:
+    text = json.dumps(
+        {
+            "name": result.name,
+            "is_error": result.is_error,
+            "artifact_id": result.artifact_id,
+            "content": result.content,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return text[:max_chars]
 
 
 def _result_indicates_tool_error(result: object) -> bool:

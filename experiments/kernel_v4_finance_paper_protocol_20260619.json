@@ -1,0 +1,1805 @@
+{
+  "schema": "holo.kernel_v4.finance_paper_protocol.v1",
+  "recorded_at": "2026-06-19T00:00:00+08:00",
+  "benchmark": {
+    "name": "FinanceBench public 150",
+    "debug_split": {
+      "name": "debug50",
+      "offsets": "0-49",
+      "purpose": "workflow, tool, prompt-contract, scoring-sidecar, and efficiency tuning"
+    },
+    "held_out_split": {
+      "name": "test100",
+      "offsets": "50-149",
+      "purpose": "original planned held-out evaluation after candidate freeze; offsets consumed by failure-driven development are not publishable as final test accuracy"
+    },
+    "strict_publication_split_status": {
+      "debug_development_slice": {
+        "name": "debug50",
+        "offsets": "0-49",
+        "status": "development/tuning only"
+      },
+      "test100_pilot_development_stream": {
+        "name": "test100 offsets 50-95",
+        "status": "not final test",
+        "reason": "item-level failures and score sidecars from this range were inspected and used to improve generic system behavior; these records are useful for failure taxonomy and engineering evidence only"
+      },
+      "remaining_untouched_final_test_candidate": {
+        "name": "test100 offsets 96-149",
+        "offset_count": 54,
+        "status": "eligible strict final test if candidate is frozen before running and no item-level failure is used for further tuning",
+        "limitation": "public FinanceBench has only 150 rows in this local split, so after consuming offsets 50-95 there are 54 untouched public rows left, not a fresh 100-row strict test"
+      },
+      "requirement_for_100_question_final_test": "use a new untouched 100-question split/source, or report the remaining 54-row strict final test separately from the original 100-row plan"
+    }
+  },
+  "evidence_policy": {
+    "live_model_required_for_capability_claims": true,
+    "fake_or_offline_tests_allowed_only_for": [
+      "schema checks",
+      "compile checks",
+      "unit regression checks",
+      "safety boundary checks"
+    ],
+    "gold_reference_material_in_model_context": false,
+    "gold_reference_material_used_for_scoring_only_after_each_item": true,
+    "no_answer_table_or_gold_pattern_tuning": true
+  },
+  "frozen_candidate": {
+    "id": "kernel_v4_flash_low_context_off_20260619",
+    "model": "deepseek-v4-flash",
+    "thinking": "enabled",
+    "reasoning_effort": "low",
+    "model_context_mode": "off",
+    "max_turns": 96,
+    "max_tool_calls": 260,
+    "max_tool_result_chars": 12000,
+    "item_timeout_seconds": 1800,
+    "tool_choice": "auto",
+    "allow_network": true
+  },
+  "debug50_best_recorded_live_evidence": {
+    "offsets_0_7": {
+      "status": "8/8 passed",
+      "format": "legacy summary.json",
+      "notes": "completed live runs with gold/reference held out of model context; incomplete cost and duration fields"
+    },
+    "offsets_8_49": {
+      "status": "42/42 passed",
+      "format": "standard items.jsonl/items.csv",
+      "metrics_available": [
+        "turn_count",
+        "tool_call_count",
+        "duration_seconds",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "cache_hit_rate",
+        "estimated_cost_usd"
+      ]
+    },
+    "combined_debug_evidence": "50/50 best-recorded live debug evidence",
+    "capability_boundary": "debug tuning evidence only; not held-out test100 accuracy"
+  },
+  "paper_metrics_to_report": [
+    "pass_rate",
+    "turn_count mean/median/p90",
+    "tool_call_count mean/median/p90",
+    "total_tokens sum/mean/median/p90",
+    "cache_hit_rate mean/median/p90",
+    "estimated_cost_usd sum/mean/median/p90",
+    "failure taxonomy before generic repairs",
+    "repeatability on selected debug items",
+    "model/thinking ablation on selected debug items"
+  ],
+    "next_live_run": {
+        "split": "test100",
+        "start_index": 96,
+        "limit": 1,
+        "run_id_prefix": "fb_test100_o096_l001_v25_liquidation_concept_binding_20260619",
+        "rule": "offset50-95 are now pilot/dev-stream records, not final test accuracy; next eligible strict final-test candidate begins at untouched offset96 only if the candidate is frozen and failures are not used for further tuning"
+  },
+  "v25_live_results_20260619": {
+    "methodology_warning": "Offsets 50-95 were previously inspected during candidate evolution and are not strict untouched test evidence. DeepSeek Chat Completion/provider surface exposes no seed parameter, so the rerun is a same-config live replay rather than true changed-seed replication. Gold/reference material stayed out of model context and was used only after each item for scoring.",
+    "frozen_candidate_config": {
+      "model": "deepseek-v4-flash",
+      "thinking": "enabled",
+      "reasoning_effort": "low",
+      "model_context_mode": "off",
+      "max_turns": 96,
+      "max_tool_calls": 260,
+      "max_tool_result_chars": 12000,
+      "item_timeout_seconds": 1800
+    },
+    "strict_remaining_96_149": {
+      "run_dirs": [
+        ".state/kernel_v4/bench/finance/fb_test100_o096_l054_v25_frozen_remaining54_20260619",
+        ".state/kernel_v4/bench/finance/fb_test100_o122_l028_v25_frozen_remaining28_20260619"
+      ],
+      "item_count": 54,
+      "passed_count": 40,
+      "failed_count": 14,
+      "pass_rate": 0.7407407407407407,
+      "failure_reasons": {
+        "numeric_outside_tolerance": 12,
+        "source_grounded_qualitative_failed": 2
+      },
+      "usage": {
+        "turn_sum": 1328,
+        "tool_call_sum": 1410,
+        "duration_seconds_sum": 6213.603255283036,
+        "cache_hit_rate_mean": 0.86366438244597
+      },
+      "capability_boundary": "strict remaining public FinanceBench evidence only; not a 100-question clean test"
+    },
+    "replay_seen_50_95": {
+      "run_dir": ".state/kernel_v4/bench/finance/fb_replay_o050_l046_v25_samecfg_no_seed_20260619",
+      "item_count": 46,
+      "passed_count": 37,
+      "failed_count": 9,
+      "pass_rate": 0.8043478260869565,
+      "failure_reasons": {
+        "numeric_outside_tolerance": 8,
+        "source_grounded_qualitative_failed": 1
+      },
+      "usage": {
+        "turn_sum": 1255,
+        "tool_call_sum": 1347,
+        "duration_seconds_sum": 6294.293632263003,
+        "cache_hit_rate": 0.8838870787916185,
+        "estimated_cost_usd": 0.91733166
+      },
+      "capability_boundary": "same-config live replay of previously inspected rows; development-stream stability evidence only"
+    },
+    "combined_seen_plus_remaining_50_149": {
+      "summary_path": ".state/kernel_v4/bench/finance/fb_test100_merged_replay50_95_plus_strict96_149_v25_20260619/summary.json",
+      "item_count": 100,
+      "passed_count": 77,
+      "failed_count": 23,
+      "pass_rate": 0.77,
+      "failure_reasons": {
+        "numeric_outside_tolerance": 20,
+        "source_grounded_qualitative_failed": 3
+      },
+      "usage": {
+        "cache_hit_rate": 0.8765784123941105,
+        "estimated_cost_usd": 1.9321728272000003
+      },
+      "capability_boundary": "operational combined view requested by user; not publishable as a single clean held-out test100 score"
+    },
+    "primary_failure_diagnosis": "The dominant bottleneck is numeric finalization / numeric basis tolerance: 20 of 23 combined failures are numeric_outside_tolerance."
+  },
+  "candidate_v2": {
+    "id": "kernel_v4_flash_low_context_off_high_threshold_checkpoints_20260619",
+    "model": "deepseek-v4-flash",
+    "thinking": "enabled",
+    "reasoning_effort": "low",
+    "model_context_mode": "off",
+    "max_turns": 96,
+    "max_tool_calls": 260,
+    "max_tool_result_chars": 12000,
+    "item_timeout_seconds": 1800,
+    "changes_from_v1": [
+      "finance live metadata enables endgame checkpoint after 32 successful evidence tools",
+      "finance live metadata enables calculation checkpoint after 6 additional local evidence tools",
+      "source saturation threshold is 20 successful evidence tools",
+      "acquisition/event final contract preserves disclosed cash consideration or purchase price instead of substituting ownership percentage",
+      "store-count/location-count/branch-count/square-footage change contract retrieves comparable period counts, computes latest-minus-prior change, and avoids OpenBB drift"
+    ],
+    "structural_tests": {
+      "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+      "result": "111 passed in 3.62s",
+      "capability_claim": false
+    },
+    "clean_evaluation_pool": "test100 offsets 55-149"
+  },
+  "candidate_v3": {
+    "id": "kernel_v4_flash_low_context_off_post_verify_finalization_20260619",
+    "model": "deepseek-v4-flash",
+    "thinking": "enabled",
+    "reasoning_effort": "low",
+    "model_context_mode": "off",
+    "max_turns": 96,
+    "max_tool_calls": 260,
+    "max_tool_result_chars": 12000,
+    "item_timeout_seconds": 1800,
+    "changes_from_v2": [
+      "calculation checkpoint tool surface removes tool.discovery",
+      "successful finance.verify_numeric inserts a post-verify finalization checkpoint",
+      "post-verify checkpoint forces the next model turn to no-tools finalization"
+    ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "112 passed in 3.77s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 57-59 observed before candidate-v4 lifecycle repair"
+    },
+    "candidate_v4": {
+        "id": "kernel_v4_flash_low_context_off_no_tool_finalization_recovery_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v3": [
+            "text-form tool-call fallback runs only when visible tools are available",
+            "DSML tool-call markup for unavailable tools is preserved instead of silently deleting assistant content",
+            "pure DSML/text-tool-call output on a no-tools finalization turn triggers a no-tools format-recovery system message instead of empty_final_answer"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "114 passed in 3.89s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offset 60 observed before candidate-v5 category-completeness repair"
+    },
+    "candidate_v5": {
+        "id": "kernel_v4_flash_low_context_off_revenue_threshold_category_completeness_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v4": [
+            "revenue-threshold category questions require the complete comparable category or segment revenue table",
+            "the model must compute each category's share of total revenue with calculator.compute",
+            "final answers must list every category meeting the stated threshold rather than only one qualifying example"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "115 passed in 3.65s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 61-149"
+    },
+    "candidate_v6": {
+        "id": "kernel_v4_flash_low_context_off_gross_margin_sign_normalization_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v5": [
+            "gross-margin profile questions require revenue and all relevant cost-of-sales rows",
+            "the model must normalize whether cost rows are positive cost magnitudes or signed negative expenses before computing gross profit",
+            "final answers must not mix parenthesized negative cost display with a subtraction formula",
+            "gross-margin profile answers must report latest/prior margins, percentage-point change, and source-grounded metric usefulness or limitations"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "115 passed in 3.61s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 63-149"
+    },
+    "candidate_v7": {
+        "id": "kernel_v4_flash_low_context_off_primary_customer_concentration_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v6": [
+            "primary-customer, customer-concentration, major-customer, and who-are-the-customers questions require Item 1 Business plus customer-concentration disclosure search",
+            "final answers must include customer groups plus disclosed revenue share, concentration percentage, customer count, or named government/customer group when present"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "115 passed in 3.25s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 64-149"
+    },
+    "candidate_v7_results": {
+        "offset_64": {
+            "run_id": "fb_test100_o064_l001_v7_primary_customer_concentration_20260619",
+            "item_id": "financebench_id_00464",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "source_grounded_qualitative_pass",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 0,
+            "turn_count": 18,
+            "tool_call_count": 20,
+            "duration_seconds": 64.57785665300617,
+            "total_tokens": 403092,
+            "cache_hit_rate": 0.9227607020569406,
+            "estimated_cost_usd": 0.0065067184,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed with materially lower turns/tools/cost than recent long-tail failures"
+        },
+        "offset_65": {
+            "run_id": "fb_test100_o065_l001_v7_primary_customer_concentration_20260619",
+            "item_id": "financebench_id_00494",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 3,
+            "numeric_scored_count": 3,
+            "turn_count": 26,
+            "tool_call_count": 25,
+            "duration_seconds": 84.93334343998868,
+            "total_tokens": 569354,
+            "cache_hit_rate": 0.9088327179778471,
+            "estimated_cost_usd": 0.01030232,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed with full numeric hits but still showed repeated artifact.search before convergence"
+        },
+        "offset_66": {
+            "run_id": "fb_test100_o066_l001_v7_primary_customer_concentration_20260619",
+            "item_id": "financebench_id_00585",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 2,
+            "numeric_scored_count": 2,
+            "turn_count": 30,
+            "tool_call_count": 30,
+            "duration_seconds": 92.00289478299965,
+            "total_tokens": 732697,
+            "cache_hit_rate": 0.8656977569220468,
+            "estimated_cost_usd": 0.0173286456,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed after recoverable document.search.hybrid errors; final path used calculator, SymPy, and finance.verify_numeric"
+        },
+        "offset_67": {
+            "run_id": "fb_test100_o067_l001_v7_primary_customer_concentration_20260619",
+            "item_id": "financebench_id_03473",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 23,
+            "tool_call_count": 32,
+            "duration_seconds": 102.30694084599963,
+            "total_tokens": 700879,
+            "cache_hit_rate": 0.7941331931523111,
+            "estimated_cost_usd": 0.023860166400000004,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed but cache-hit rate fell after heavier evidence acquisition and repeated SEC/document/artifact retrieval"
+        },
+        "offset_68": {
+            "run_id": "fb_test100_o068_l001_v7_primary_customer_concentration_20260619",
+            "item_id": "financebench_id_09724",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 43,
+            "tool_call_count": 43,
+            "duration_seconds": 150.9906288080092,
+            "total_tokens": 1534734,
+            "cache_hit_rate": 0.8948333122085352,
+            "estimated_cost_usd": 0.029604708000000004,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed long-tail sample; recovered from sec.edgar.financials error, artifact.read error, and rejected sanitized tool alias before calculator and finance.verify_numeric"
+        },
+        "offset_69": {
+            "run_id": "fb_test100_o069_l001_v7_primary_customer_concentration_20260619",
+            "item_id": "financebench_id_06272",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 31,
+            "tool_call_count": 43,
+            "duration_seconds": 106.7874369850033,
+            "total_tokens": 1214700,
+            "cache_hit_rate": 0.7876828365232721,
+            "estimated_cost_usd": 0.04096158640000001,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed document-first long-tail sample; dense artifact.search, later SEC financials, rejected artifact_search sanitized alias, then calculator and finance.verify_numeric"
+        }
+    },
+    "candidate_v8": {
+        "id": "kernel_v4_flash_low_context_off_historical_native_alias_guard_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v7": [
+            "provider reverse mapping includes historical assistant tool-call native names for parsing only",
+            "executor enforces active tool-surface allowlist before running canonical tools, so old provider-safe aliases cannot bypass endgame narrowing",
+            "blocked historical aliases return structured tool_not_in_active_surface observations with active allowlist guidance"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "116 passed in 3.38s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 70-149"
+    },
+    "candidate_v8_results": {
+        "offset_70": {
+            "run_id": "fb_test100_o070_l001_v8_historical_native_alias_guard_20260619",
+            "item_id": "financebench_id_10130",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 38,
+            "tool_call_count": 51,
+            "duration_seconds": 197.4381978020101,
+            "total_tokens": 1653588,
+            "cache_hit_rate": 0.7913963989557693,
+            "estimated_cost_usd": 0.056128828000000006,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "no-tools finalization accepted pure DSML calculator markup as completed final answer after successful finance.verify_numeric"
+        }
+    },
+    "candidate_v9": {
+        "id": "kernel_v4_flash_low_context_off_no_tool_finalization_hardening_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v8": [
+            "no-tools DSML finalization recovery limit increased from 2 to 4",
+            "finalization no-tools turns can no longer complete with pure DSML/tool-call markup",
+            "when recovery is unavailable or exhausted, the run fails as final_answer_is_tool_call_markup instead of submitting malformed output"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "117 passed in 3.66s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 71-149"
+    },
+    "candidate_v9_results": {
+        "offset_71": {
+            "run_id": "fb_test100_o071_l001_v9_no_tool_finalization_hardening_20260619",
+            "item_id": "financebench_id_02981",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 29,
+            "tool_call_count": 37,
+            "duration_seconds": 168.4091370189999,
+            "total_tokens": 846719,
+            "cache_hit_rate": 0.8833238148947865,
+            "estimated_cost_usd": 0.0180135592,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed with normal prose finalization after long evidence acquisition and market/OpenBB plus calculator/finance.verify_numeric path"
+        },
+        "offset_72": {
+            "run_id": "fb_test100_o072_l001_v9_no_tool_finalization_hardening_20260619",
+            "item_id": "financebench_id_01346",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 2,
+            "numeric_scored_count": 2,
+            "turn_count": 6,
+            "tool_call_count": 6,
+            "duration_seconds": 24.390882371008047,
+            "total_tokens": 77801,
+            "cache_hit_rate": 0.8343447965835019,
+            "estimated_cost_usd": 0.0025377912000000002,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed efficiency-positive sample; provided context plus calculator and finance.verify_numeric converged in six turns"
+        },
+        "offset_73": {
+            "run_id": "fb_test100_o073_l001_v9_no_tool_finalization_hardening_20260619",
+            "item_id": "financebench_id_00005",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 12,
+            "tool_call_count": 11,
+            "duration_seconds": 39.774236280005425,
+            "total_tokens": 191995,
+            "cache_hit_rate": 0.9232100459030232,
+            "estimated_cost_usd": 0.0032176928000000006,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "premature numeric finalization; material working-capital numeric claim was submitted without calculator or finance.verify_numeric"
+        }
+    },
+    "candidate_v10": {
+        "id": "kernel_v4_flash_low_context_off_numeric_verification_checkpoint_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v9": [
+            "finance-mode draft final answers with material numeric claims cannot complete before successful finance.verify_numeric",
+            "the loop inserts a numeric verification checkpoint and continues instead of accepting premature numeric prose",
+            "material numeric claim detection covers currency, percentages, ratios, day counts, and common magnitude units"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "118 passed in 3.34s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 74-149"
+    },
+    "candidate_v10_results": {
+        "offset_74": {
+            "run_id": "fb_test100_o074_l001_v10_numeric_verification_checkpoint_20260619",
+            "item_id": "financebench_id_04209",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 12,
+            "tool_call_count": 11,
+            "duration_seconds": 45.911956145006116,
+            "total_tokens": 267454,
+            "cache_hit_rate": 0.7415450878097607,
+            "estimated_cost_usd": 0.0111277152,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed first v10 clean sample; calculator plus finance.verify_numeric before normal finalization"
+        },
+        "offset_75": {
+            "run_id": "fb_test100_o075_l001_v10_numeric_verification_checkpoint_20260619",
+            "item_id": "financebench_id_05915",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 48,
+            "tool_call_count": 54,
+            "duration_seconds": 333.19092292300775,
+            "total_tokens": 2637977,
+            "cache_hit_rate": 0.8184979206914744,
+            "estimated_cost_usd": 0.07965007680000001,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "source-backed slot binding failure; final answer used recalled PP&E values and admitted balance-sheet rows were not directly observed"
+        }
+    },
+    "candidate_v11": {
+        "id": "kernel_v4_flash_low_context_off_unsupported_numeric_source_recovery_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v10": [
+            "finance-mode material numeric final answers with unsupported-source caveats do not complete",
+            "unsupported numeric source recovery reopens evidence tools by clearing force_finalization_no_tools and tool_surface_allowlist",
+            "if recovery is unavailable or exhausted, the run fails as unsupported_numeric_source_final_answer instead of submitting recalled values"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "119 passed in 3.27s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 76-149"
+    },
+    "candidate_v11_results": {
+        "offset_76": {
+            "run_id": "fb_test100_o076_l001_v11_unsupported_numeric_source_recovery_20260619",
+            "item_id": "financebench_id_00790",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 3,
+            "numeric_scored_count": 3,
+            "turn_count": 29,
+            "tool_call_count": 53,
+            "duration_seconds": 173.6913506520068,
+            "total_tokens": 1213346,
+            "cache_hit_rate": 0.8068440039220843,
+            "estimated_cost_usd": 0.0385466032,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed but long-tail; repeated artifact/SEC/market exploration before calculator and finance.verify_numeric"
+        }
+    },
+    "candidate_v12": {
+        "id": "kernel_v4_flash_low_context_off_source_saturation_convergence_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v11": [
+            "any active tool_surface_allowlist now narrows the provider-visible tool surface, not only endgame checkpoints",
+            "source saturation now sets the calculation/date/table/symbolic/verification tool allowlist",
+            "source saturation guidance instructs the model to compute/verify from observed facts or state the exact missing source-backed fact instead of continuing retrieval"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "119 passed in 3.13s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 77-149"
+    },
+    "candidate_v12_results": {
+        "offset_77": {
+            "run_id": "fb_test100_o077_l001_v12_source_saturation_convergence_20260619",
+            "item_id": "financebench_id_01107",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 3,
+            "numeric_scored_count": 5,
+            "turn_count": 23,
+            "tool_call_count": 26,
+            "duration_seconds": 130.3522133689985,
+            "total_tokens": 624823,
+            "cache_hit_rate": 0.8585604390602343,
+            "estimated_cost_usd": 0.016372798400000003,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "legal proceedings evidence under-specified; answer relied on TOC and generic risk-factor language instead of concrete Item 3 proceedings and fiscal-year binding"
+        }
+    },
+    "candidate_v13": {
+        "id": "kernel_v4_flash_low_context_off_legal_proceedings_evidence_contract_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v12": [
+            "legal battle/proceedings/litigation questions require the actual Item 3 or proceedings/contingencies disclosure, not just TOC or risk-factor references",
+            "final answers must enumerate named proceedings or proceeding categories and tie them to requested fiscal years or periods",
+            "yes/no legal proceedings answers must preserve concrete lawsuits, investigations, settlements, or regulatory categories when disclosed",
+            "finance.workbench.open exposes a legal_proceedings_disclosure profile with Item 3, litigation, settlement, regulatory, contingency, opioid, PFAS, and qui tam search terms"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "120 passed in 3.68s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 78-149"
+    },
+    "candidate_v13_results": {
+        "offset_78": {
+            "run_id": "fb_test100_o078_l001_v13_legal_proceedings_evidence_contract_20260619",
+            "item_id": "financebench_id_01244",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 23,
+            "tool_call_count": 25,
+            "duration_seconds": 133.29790823400253,
+            "total_tokens": 659477,
+            "cache_hit_rate": 0.783049334418568,
+            "estimated_cost_usd": 0.024445002400000006,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "dividend/common-shareholder evidence under-specified; answer found Item 5 TOC and subsidiary dividend context but not the Item 5 Dividends statement for quarterly cash dividends to common shareholders",
+            "tool_lifecycle_observation": "after tool-surface narrowing, the model emitted a provider-native hashed sec.edgar.company_filings alias that was treated as tool_not_found instead of a canonical registered tool blocked by active surface"
+        }
+    },
+    "candidate_v14": {
+        "id": "kernel_v4_flash_low_context_off_dividend_common_shareholder_alias_contract_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v13": [
+            "dividend profile now covers common-shareholder payment, quarterly cash dividend, Item 5 Dividends, common stock, dividends per share, declared, and paid disclosures",
+            "final dividend/common-shareholder answers must state yes/no, per-share dividend amount, period, shareholder class, and source section when observed",
+            "prompt and workbench warn not to confuse regulated subsidiary dividends to the parent with dividends paid to common shareholders",
+            "ToolRegistry canonicalizes unique provider-native hashed/sanitized tool aliases before active-surface enforcement, so registered aliases execute when visible and return tool_not_in_active_surface when hidden",
+            "finance.toolchain.describe inline result budget increased so the complete expanded workbench coverage matrix remains directly readable"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "121 passed in 3.30s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 79-149"
+    },
+    "candidate_v14_results": {
+        "offset_79": {
+            "run_id": "fb_test100_o079_l001_v14_dividend_common_shareholder_alias_contract_20260619",
+            "item_id": "financebench_id_00839",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "source_grounded_qualitative_pass",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 0,
+            "turn_count": 26,
+            "tool_call_count": 26,
+            "duration_seconds": 286.9854085410043,
+            "total_tokens": 774353,
+            "cache_hit_rate": 0.9482891549290262,
+            "estimated_cost_usd": 0.0097693736,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed but inefficient; document.docling.convert had two long errors, sec.edgar.company_filings errored four times, and document.trafilatura.extract succeeded ten times before final synthesis",
+            "final_answer_quality_observation": "answer passed scoring but included process narration in the first sentence, so final-answer cleanliness still needs generic hardening"
+        }
+    },
+    "candidate_v15": {
+        "id": "kernel_v4_flash_low_context_off_source_repetition_final_cleanliness_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v14": [
+            "detect repeated successful same-family source extraction loops after enough successful document/extract/read observations and insert a synthesis-or-narrow-missing-fact checkpoint",
+            "tighten final-answer cleanliness so final text cannot begin with process narration such as 'I now have all the evidence' or 'Let me provide the final answer'",
+            "keep the change generic and non-semantic: the model still decides answer content; the host only enforces loop lifecycle and output-shape discipline"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "123 passed in 3.53s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 80-149"
+    },
+    "candidate_v15_results": {
+        "offset_80": {
+            "run_id": "fb_test100_o080_l001_v15_source_repetition_final_cleanliness_20260619",
+            "item_id": "financebench_id_00822",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "source_grounded_qualitative_failed",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 0,
+            "turn_count": 22,
+            "tool_call_count": 21,
+            "duration_seconds": 131.04666691299644,
+            "total_tokens": 560727,
+            "cache_hit_rate": 0.8369709286913493,
+            "estimated_cost_usd": 0.0156905784,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "8-K Item 5.07 shareholder-vote table extraction failure; model did not obtain the nominee vote table and finalized an unable-to-answer response",
+            "lifecycle_observation": "v15 repeated-source checkpoint narrowed tools and reduced broad source loops, but it could not compensate for missing fast static-document text extraction for target company filing URLs"
+        }
+    },
+    "candidate_v16": {
+        "id": "kernel_v4_flash_low_context_off_document_text_extract_vote_results_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v15": [
+            "adds document.text.extract, a fast open-source URL/PDF/HTML text extractor using existing PyMuPDF/pypdf/readable-HTML retrieval components and writing searchable artifacts",
+            "public filing prompt and finance runner now recommend document.text.extract for static company filing PDFs, 8-Ks, proxy/vote tables, and Docling slow/failure cases",
+            "finance.workbench.open exposes a shareholder_vote_results profile for Item 5.07, Proposal 1, board nominees, Votes For, Votes Against, Abstentions, and Broker Non-Votes",
+            "shareholder vote final-answer contract requires yes/no, nominee name, Votes Against comparison values, and Item 5.07/Proposal/source citation"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "125 passed in 3.81s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 81-149"
+    },
+    "candidate_v16_results": {
+        "offset_81": {
+            "run_id": "fb_test100_o081_l001_v16_document_text_extract_vote_results_20260619",
+            "item_id": "financebench_id_04103",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 25,
+            "tool_call_count": 32,
+            "duration_seconds": 123.55962624899985,
+            "total_tokens": 620427,
+            "cache_hit_rate": 0.908135147599205,
+            "estimated_cost_usd": 0.012496103200000002,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "numeric filing-line extraction failure after source saturation; document.text.extract and docling produced artifacts but the loop narrowed to calculation-only tools before the model could read/search Item 8 statement line items",
+            "positive_observation": "document.text.extract was selected on turn 1 and returned successfully in about two seconds, proving the new open-source text path is visible and callable"
+        }
+    },
+    "candidate_v17": {
+        "id": "kernel_v4_flash_low_context_off_source_saturation_keeps_artifacts_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v16": [
+            "source saturation now blocks broad external SEC/document/market retrieval but keeps local artifact.inspect/search/read, provided_context.parse, compute, table/date/symbolic, verification, and endgame discovery tools",
+            "calculation checkpoint remains the second-stage mechanism that narrows from local-artifact endgame to pure calculation after additional local evidence loops",
+            "the change preserves access to already-created document.text.extract/docling artifacts for long 10-K Item 8 line-item retrieval"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "125 passed in 3.67s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 82-149"
+    },
+    "candidate_v17_results": {
+        "offset_82": {
+            "run_id": "fb_test100_o082_l001_v17_source_saturation_keeps_artifacts_20260619",
+            "item_id": "financebench_id_03471",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 32,
+            "tool_call_count": 31,
+            "duration_seconds": 72.00729174500157,
+            "total_tokens": 732542,
+            "cache_hit_rate": 0.8984320658075975,
+            "estimated_cost_usd": 0.0135986704,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "positive_observation": "document.text.extract was selected on turn 1, source saturation retained artifact read/search, the model computed with calculator.compute, verified with finance.verify_numeric, and passed numeric scoring",
+            "efficiency_taxonomy": "passed but still high-turn; artifact.search/read repeated before calculation, so future work should improve local-artifact evidence summarization and post-evidence convergence"
+        },
+        "offset_83": {
+            "run_id": "fb_test100_o083_l001_v17_source_saturation_keeps_artifacts_20260619",
+            "item_id": "financebench_id_04854",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 45,
+            "tool_call_count": 45,
+            "duration_seconds": 113.05140869200113,
+            "total_tokens": 1484425,
+            "cache_hit_rate": 0.8805523506133729,
+            "estimated_cost_usd": 0.030675853600000004,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "positive_observation": "document.text.extract was selected on turn 1, local artifact search/read remained available after source saturation, calculator.compute verified free-cash-flow subtraction, and finance.verify_numeric ran before final answer",
+            "efficiency_taxonomy": "passed but expensive; 22 artifact.search calls and 11 artifact.read calls show the remaining bottleneck is local-artifact convergence rather than external source access"
+        },
+        "offset_84": {
+            "run_id": "fb_test100_o084_l001_v17_source_saturation_keeps_artifacts_20260619",
+            "item_id": "financebench_id_10136",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "generic_failure_final_answer",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 42,
+            "tool_call_count": 58,
+            "duration_seconds": 189.8022781549953,
+            "total_tokens": 1829409,
+            "cache_hit_rate": 0.8454318981797793,
+            "estimated_cost_usd": 0.048380371199999994,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "verified-numeric/final-answer contradiction; the loop reached calculator.compute and finance.verify_numeric, but the final answer still said the required income-statement and cash-flow values were unavailable and the ratio could not be computed",
+            "scorer_repair_observation": "the first scorer pass was a false positive caused by a broad numeric tolerance matching list numbering in an unable-to-compute answer; scorer now treats generic inability final answers as a numeric-pass veto",
+            "trace_observation": "run JSON did not preserve full message/events, only answer and tool_trace_summary, motivating paper-trace retention flags for future runs"
+        }
+    },
+    "candidate_v18": {
+        "id": "kernel_v4_flash_low_context_off_verified_numeric_generic_failure_recovery_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v17": [
+            "finance_score now treats generic inability final answers such as unable to compute, cannot calculate, cannot determine, or unable to retrieve as a numeric-pass veto, preventing broad-tolerance false positives",
+            "finance-mode loop now inserts a verified-numeric finalization consistency recovery when finance.verify_numeric succeeded but the no-tool final answer still says the answer cannot be computed or determined",
+            "if the model repeats a generic inability answer after that recovery, the run fails as generic_failure_after_verified_numeric_final_answer instead of completing",
+            "finance_eval, finance_repeat, and finance_ablation now support optional --include-transcript and --include-events flags for bounded paper trace retention"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "128 passed in 3.85s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 85-149"
+    },
+    "candidate_v18_results": {
+        "offset_85": {
+            "run_id": "fb_test100_o085_l001_v18_verified_numeric_generic_failure_recovery_20260619",
+            "item_id": "financebench_id_00956",
+            "split": "test100",
+            "passed": false,
+            "run_status": "failed",
+            "run_reason": "final_answer_is_tool_call_markup",
+            "score_reason": "run_not_completed",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 29,
+            "tool_call_count": 32,
+            "duration_seconds": 172.2334525460028,
+            "total_tokens": 1004032,
+            "cache_hit_rate": 0.6403143996749263,
+            "estimated_cost_usd": 0.0557126416,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "no-tools finalization failed because the model repeatedly emitted DSML text-form calls to finance.verify_numeric even though tools were hidden; the actual prose answer was embedded in the answer parameter",
+            "trace_positive_observation": "v18 preserved bounded transcript and raw events, enabling exact diagnosis of the DSML finalization loop"
+        }
+    },
+    "candidate_v19": {
+        "id": "kernel_v4_flash_low_context_off_text_tool_call_final_answer_extraction_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v18": [
+            "no-tools finalization now extracts a final answer from DSML/text-form finance.verify_numeric calls when an answer parameter is present",
+            "calculator or other non-answer DSML tool-call markup in no-tools finalization still goes through format recovery and fails after the bounded recovery limit",
+            "the extraction is source-agnostic and uses only the model's own emitted final-answer text, then runs the normal finance final-answer checks"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "129 passed in 3.64s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 86-149"
+    },
+    "candidate_v19_results": {
+        "offset_86": {
+            "run_id": "fb_test100_o086_l001_v19_text_tool_call_final_answer_extraction_20260619",
+            "item_id": "financebench_id_00669",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "generic_failure_final_answer",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 30,
+            "tool_call_count": 30,
+            "duration_seconds": 161.16571565100458,
+            "total_tokens": 896591,
+            "cache_hit_rate": 0.8994061446403876,
+            "estimated_cost_usd": 0.017920929600000003,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "large-document focused extraction failure; the model supplied relevant focus_terms for gross margin and cost-of-products line items, but document.text.extract truncated the 5.3MB filing before searching focus terms, so the income statement and MD&A windows were not placed in the artifact",
+            "trace_positive_observation": "transcript showed exact tool inputs and confirmed the model requested focus_terms such as gross margin, Cost of products, Sales to customers, and Results of Operations"
+        }
+    },
+    "candidate_v20": {
+        "id": "kernel_v4_flash_low_context_off_document_text_focus_windows_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v19": [
+            "document.text.extract now generates focus windows from the full extracted text before applying max_chars, so later SEC filing sections can be placed into searchable artifacts",
+            "the selected artifact text combines an opening preview with bounded focus windows around model-supplied focus_terms",
+            "focus-window headers no longer include the query terms, preventing artifact.search from matching synthetic headers instead of filing text"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "130 passed in 3.54s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 87-149"
+    },
+    "candidate_v20_results": {
+        "offset_87": {
+            "run_id": "fb_test100_o087_l001_v20_document_text_focus_windows_20260619",
+            "item_id": "financebench_id_00711",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 20,
+            "tool_call_count": 26,
+            "duration_seconds": 151.67826040000364,
+            "total_tokens": 472084,
+            "cache_hit_rate": 0.8264967378442633,
+            "estimated_cost_usd": 0.015473421600000002,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "positive_observation": "model computed FY2022 JNJ inventory turnover using cost of products sold, beginning/ending inventory, average inventory denominator, calculator.compute, and finance.verify_numeric; final also stated conventional inventory management remains meaningful",
+            "efficiency_taxonomy": "passed with moderate cost, but calculation-stage historical alias calls to SEC/artifact/provided_context were still blocked before calculator convergence"
+        }
+        ,
+        "offset_88": {
+            "run_id": "fb_test100_o088_l001_v20_document_text_focus_windows_20260619",
+            "item_id": "financebench_id_00651",
+            "split": "test100",
+            "passed": false,
+            "run_status": "failed",
+            "run_reason": "generic_failure_after_verified_numeric_final_answer",
+            "score_reason": "run_not_completed",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 2,
+            "turn_count": 24,
+            "tool_call_count": 21,
+            "duration_seconds": 147.00728407599672,
+            "total_tokens": 685771,
+            "cache_hit_rate": 0.7388770898001416,
+            "estimated_cost_usd": 0.028018944800000004,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "target Johnson & Johnson earnings-release static URL failed in document.text.extract and document.docling.convert with SSL UNEXPECTED_EOF_WHILE_READING; the model lacked FY2023 adjusted EPS guidance evidence and later triggered a misleading generic-failure-after-verified-numeric state because finance.verify_numeric returned not_applicable",
+            "trace_positive_observation": "bounded transcript/events captured the exact target URL, repeated SSL EOF source failures, and verifier_status=not_applicable after answer_contains_no_material_numeric_values"
+        }
+    },
+    "candidate_v21": {
+        "id": "kernel_v4_flash_low_context_off_applicable_verifier_static_url_tls_fallback_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v20": [
+            "post-verify finalization now requires an applicable successful finance.verify_numeric result, not merely a non-error tool return",
+            "finance.verify_numeric results with verifier_status or verification.status equal to not_applicable no longer force a no-tools finalization turn or verified-numeric generic-failure recovery",
+            "document.text.extract retries only SSL unexpected-EOF failures with an unverified TLS fallback, improving static company IR/GCS URL robustness while keeping normal certificate validation first"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py -q",
+            "result": "132 passed in 3.92s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 89-149"
+    },
+    "candidate_v21_results": {
+        "offset_89": {
+            "run_id": "fb_test100_o089_l001_v21_applicable_verifier_static_url_tls_fallback_20260619",
+            "item_id": "financebench_id_01484",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "generic_failure_final_answer",
+            "numeric_hit_count": 2,
+            "numeric_scored_count": 2,
+            "turn_count": 21,
+            "tool_call_count": 22,
+            "duration_seconds": 142.98901448700053,
+            "total_tokens": 522701,
+            "cache_hit_rate": 0.8615558492881071,
+            "estimated_cost_usd": 0.012936095199999999,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "company static earnings URL was unreachable; model found SEC filing metadata but company_filings returned recent 8-Ks rather than FY2022 Q4/FY accession, no tool exposed accession exhibit documents, and final answer became a generic source-acquisition blocker",
+            "trace_positive_observation": "bounded transcript showed the missing generic tool capability: SEC accession to official exhibit/complete-submission URL expansion"
+        }
+    },
+    "candidate_v22": {
+        "id": "kernel_v4_flash_low_context_off_sec_accession_documents_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v21": [
+            "sec.edgar.company_filings now accepts fiscal_year/period and retrieves a wider filing set before target-period filtering",
+            "FY filing period filtering prioritizes target-year filings and the following annual-report/Q4-results season instead of returning only latest recent filings",
+            "SEC filing records are enriched with official archive, filing index, primary document, and complete-submission text URLs",
+            "new sec.edgar.filing_documents expands a SEC accession into official primary/exhibit URLs from SEC index.json, enabling earnings-release Exhibit 99.1 acquisition when company static URLs fail",
+            "finance prompt and workbench now tell the model to use SEC accession/exhibit expansion after static company source failures"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py tests/test_kernel_v3_finance_open_components.py -q",
+            "result": "168 passed in 6.81s",
+            "capability_claim": false
+        },
+        "tool_live_probe_no_gold": {
+            "status": "ok",
+            "summary": "JNJ FY2022 8-K filings returned 2023-01-24 accession 0000200406-23-000005; sec.edgar.filing_documents returned a2022q4exhibit991.htm; document.text.extract on complete-submission text exposed regional sales rows including U.S. 48,580 / 3.0 and International 46,363 / (0.6).",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 90-149"
+    },
+    "candidate_v22_regression_results": {
+        "offset_89_contaminated_regression": {
+            "run_id": "fb_test100_o089_l001_v22_sec_accession_documents_regression_20260619",
+            "item_id": "financebench_id_01484",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 2,
+            "numeric_scored_count": 2,
+            "turn_count": 19,
+            "tool_call_count": 18,
+            "duration_seconds": 74.48287323200202,
+            "total_tokens": 447223,
+            "cache_hit_rate": 0.84343250473169,
+            "estimated_cost_usd": 0.0121355976,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": false,
+            "debug_tuning_score": false,
+            "regression_only_reason": "offset89 had already been inspected after v21 failure; this rerun demonstrates generic SEC accession/exhibit repair but is not a clean held-out record",
+            "trace_positive_observation": "model one-shot adopted sec.edgar.filing_documents, then document.text.extract, artifact search/read, calculator.compute, finance.verify_numeric, and final answer"
+        }
+    },
+    "candidate_v22_results": {
+        "offset_90": {
+            "run_id": "fb_test100_o090_l001_v22_sec_accession_documents_20260619",
+            "item_id": "financebench_id_01488",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 17,
+            "tool_call_count": 15,
+            "duration_seconds": 76.0657330200047,
+            "total_tokens": 402971,
+            "cache_hit_rate": 0.8611848099238093,
+            "estimated_cost_usd": 0.0096929392,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "positive_observation": "clean v22 held-out run recovered from static URL failure, used SEC filings/artifacts and sec.edgar.filing_documents, and correctly identified J&J Consumer Health/Kenvue as the discontinued operation from August 30, 2023 onward",
+            "efficiency_taxonomy": "passed at lower cost than recent long-tail failures; one sec.edgar.filing_documents call had bad parameters, but the model corrected it on the next turn"
+        },
+        "offset_91": {
+            "run_id": "fb_test100_o091_l001_v22_sec_accession_documents_20260619",
+            "item_id": "financebench_id_01490",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 55,
+            "tool_call_count": 55,
+            "duration_seconds": 227.63695065998763,
+            "total_tokens": 2544639,
+            "cache_hit_rate": 0.8908150915357295,
+            "estimated_cost_usd": 0.049742756000000006,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "source acquisition reached SEC accession/documents, but finance.verify_numeric accepted a model-authored unsupported $21.4B fact/formula after an earlier verifier failure; scoring sidecar expected a $20.0B value after the run",
+            "trace_positive_observation": "bounded transcript captured the first verifier failure on unsupported $21.4B and a later verifier pass only after the model supplied its own facts/formula_traces, exposing a verifier trust-boundary weakness"
+        }
+    },
+    "candidate_v23": {
+        "id": "kernel_v4_flash_low_context_off_verify_provenance_trust_boundary_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v22": [
+            "finance.verify_numeric public tool path now runs with strict tool-payload provenance",
+            "model-supplied facts are trusted only when their numeric values bind to evidence/citation text or source-bound inputs",
+            "formula traces are trusted only when non-constant expressions have source-bound input facts or input values from evidence/citations/user-provided assumptions",
+            "self-certified verification where the answer number is also the only model-supplied fact or constant formula is rejected with untrusted_model_supplied_support",
+            "finance system prompt, task packet, and workbench/describe protocol now tell the model to include source-bound facts or calculator traces when calling finance.verify_numeric"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_engine.py -q",
+            "result": "483 passed in 20.19s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 92-149",
+        "contaminated_regression_pool": "offset91 may be rerun only as v23 verifier-regression evidence because the gold sidecar and failure trace were inspected after v22"
+    },
+    "candidate_v23_regression_results": {
+        "offset_91_contaminated_regression": {
+            "run_id": "fb_test100_o091_l001_v23_verify_provenance_regression_20260619",
+            "item_id": "financebench_id_01490",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 22,
+            "tool_call_count": 21,
+            "duration_seconds": 63.83047703400371,
+            "total_tokens": 554113,
+            "cache_hit_rate": 0.8647846926478687,
+            "estimated_cost_usd": 0.012851792800000003,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": false,
+            "debug_tuning_score": false,
+            "regression_only_reason": "offset91 had already been inspected after v22 failure; this rerun demonstrates generic verifier provenance repair but is not a clean held-out record",
+            "trace_positive_observation": "finance.verify_numeric ran with strict_tool_payload_provenance=true; cited evidence text contained 'gain of approximately $20 billion', trusted_fact_count=1, untrusted_formula_trace_count=1, and the unsupported constant formula was not used as the verifier support"
+        }
+    },
+    "candidate_v23_results": {
+        "offset_92": {
+            "run_id": "fb_test100_o092_l001_v23_verify_provenance_20260619",
+            "item_id": "financebench_id_01491",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 39,
+            "tool_call_count": 41,
+            "duration_seconds": 187.22474368099938,
+            "total_tokens": 1492526,
+            "cache_hit_rate": 0.9307670661626349,
+            "estimated_cost_usd": 0.023108181600000003,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "static company URL failed, SEC accession/documents were acquired, but source saturation and calculation checkpoint removed document.text.extract before the model extracted the exact August 30 Exhibit 99.1 text; final answer became a source blocker with no $13.2B cash-proceeds value",
+            "trace_positive_observation": "bounded transcript showed the model had official SEC filing_documents for accession 0000200406-23-000091 and attempted the correct post-split guidance exhibit, but exact-document extraction was blocked after endgame narrowing"
+        }
+    },
+    "candidate_v24": {
+        "id": "kernel_v4_flash_low_context_off_endgame_exact_text_extract_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v23": [
+            "endgame/repeated-source/source-saturation tool surface now preserves document.text.extract for exact already observed official filing or exhibit URLs",
+            "checkpoint instructions distinguish exact observed-document extraction from broad SEC/company-filings retrieval and document conversion",
+            "generic final answers saying the answer cannot be determined, retrieved, extracted, or computed now trigger one recovery that reopens the tool surface instead of being submitted to scoring",
+            "if generic failure repeats after recovery, the run fails as generic_failure_final_answer rather than a misleading completed answer"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_engine.py -q",
+            "result": "484 passed in 18.90s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 93-149",
+        "contaminated_regression_pool": "offset92 may be rerun only as v24 exact-document-extraction regression evidence because the gold sidecar and failure trace were inspected after v23"
+    },
+    "candidate_v24_regression_results": {
+        "offset_92_contaminated_regression": {
+            "run_id": "fb_test100_o092_l001_v24_endgame_exact_text_extract_regression_20260619",
+            "item_id": "financebench_id_01491",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 24,
+            "tool_call_count": 23,
+            "duration_seconds": 74.73303542200301,
+            "total_tokens": 607727,
+            "cache_hit_rate": 0.8620279068533315,
+            "estimated_cost_usd": 0.0144250624,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": false,
+            "debug_tuning_score": false,
+            "regression_only_reason": "offset92 had already been inspected after v23 failure; this rerun demonstrates generic endgame exact-document extraction repair but is not a clean held-out record",
+            "trace_positive_observation": "after source saturation the model still used document.text.extract on an already observed SEC Exhibit 99.1 URL, read the artifact text containing '$13.2 billion in cash proceeds', and finance.verify_numeric passed with strict_tool_payload_provenance=true and trusted_fact_count=1"
+        }
+    },
+    "candidate_v24_results": {
+        "offset_93": {
+            "run_id": "fb_test100_o093_l001_v24_endgame_exact_text_extract_20260619",
+            "item_id": "financebench_id_01487",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 3,
+            "numeric_scored_count": 3,
+            "turn_count": 22,
+            "tool_call_count": 22,
+            "duration_seconds": 64.1321823640028,
+            "total_tokens": 621744,
+            "cache_hit_rate": 0.8838112025195463,
+            "estimated_cost_usd": 0.0128252208,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "positive_observation": "clean v24 held-out run used SEC accession/exhibit expansion, document.text.extract/docling artifacts, calculator.compute, and finance.verify_numeric to answer that J&J net earnings as percent of sales increased from 20.0% to 20.1%",
+            "efficiency_taxonomy": "passed in 22 turns with 88.38% cache hit; still used both document.text.extract and docling, but converged without source-saturation failure"
+        },
+        "offset_94": {
+            "run_id": "fb_test100_o094_l001_v24_endgame_exact_text_extract_20260619",
+            "item_id": "financebench_id_00299",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 35,
+            "tool_call_count": 33,
+            "duration_seconds": 74.59245599299902,
+            "total_tokens": 990368,
+            "cache_hit_rate": 0.8220586830558113,
+            "estimated_cost_usd": 0.028544488,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "positive_observation": "clean v24 held-out run answered JPMorgan Q1 2021 lowest segment net revenue as Corporate at $(473) million from 10-Q segment results evidence",
+            "efficiency_taxonomy": "passed but artifact-search heavy; source saturation narrowed tools at turn 21 and numeric verification forced finalization after 35 turns"
+        },
+        "offset_95": {
+            "run_id": "fb_test100_o095_l001_v24_endgame_exact_text_extract_20260619",
+            "item_id": "financebench_id_02119",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 21,
+            "tool_call_count": 25,
+            "duration_seconds": 128.10485887299,
+            "total_tokens": 652062,
+            "cache_hit_rate": 0.8867060001119076,
+            "estimated_cost_usd": 0.014230988800000002,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "failure_taxonomy_no_gold": "concept_binding_error: the model retrieved JPMorgan Q1 2021 10-Q evidence and used calculator/finance.verify_numeric, but selected common stockholders' equity divided by shares outstanding as book value per common share ($82.31) while the liquidation/shareholder-recovery wording required considering tangible common equity/tangible book value and intangible exclusions",
+            "trace_positive_observation": "source acquisition, artifact search/read, arithmetic, and numeric verifier lifecycle all worked; failure was semantic metric-basis selection rather than retrieval or arithmetic execution"
+        }
+    },
+    "candidate_v25": {
+        "id": "kernel_v4_flash_low_context_off_liquidation_concept_binding_20260619",
+        "model": "deepseek-v4-flash",
+        "thinking": "enabled",
+        "reasoning_effort": "low",
+        "model_context_mode": "off",
+        "max_turns": 96,
+        "max_tool_calls": 260,
+        "max_tool_result_chars": 12000,
+        "item_timeout_seconds": 1800,
+        "changes_from_v24": [
+            "system prompt now treats liquidation, bankruptcy-recovery, book-value-per-share, tangible-book-value, and shareholder residual questions as metric-definition ambiguity tasks",
+            "the model is instructed to compare total equity, common stockholders' equity, tangible common equity, preferred-stock priority, goodwill/intangible exclusions, and shares outstanding when those concepts may change the answer",
+            "finance task packets include the same liquidation/recovery basis-resolution contract",
+            "finance.workbench.open exposes a liquidation_per_share_recovery task-family profile with required evidence, workflow, candidate formulas, and search terms",
+            "structural tests assert prompt exposure, workbench routing, registered-tool coverage, and describe/audit consistency"
+        ],
+        "structural_tests": {
+            "command": ".venv/bin/python -m pytest tests/test_kernel_v4_finance_runner.py tests/test_kernel_v4_single_agent_loop.py tests/test_kernel_v4_finance_run.py tests/test_kernel_v4_finance_eval.py tests/test_kernel_v4_live_provider.py tests/test_kernel_v4_finance_score.py tests/test_kernel_v3_finance_open_components.py tests/test_kernel_v3_finance_engine.py -q",
+            "result": "485 passed in 25.42s",
+            "capability_claim": false
+        },
+        "clean_evaluation_pool": "test100 offsets 96-149",
+        "contaminated_regression_pool": "offset95 may be rerun only as v25 liquidation concept-binding regression evidence because the gold sidecar and failure trace were inspected after v24"
+    },
+    "candidate_v25_regression_results": {
+        "offset_95_contaminated_regression": {
+            "run_id": "fb_test100_o095_l001_v25_liquidation_concept_binding_regression_20260619",
+            "item_id": "financebench_id_02119",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "numeric_within_tolerance",
+            "numeric_hit_count": 1,
+            "numeric_scored_count": 1,
+            "turn_count": 31,
+            "tool_call_count": 44,
+            "duration_seconds": 106.54644155300048,
+            "total_tokens": 1289122,
+            "cache_hit_rate": 0.8074446314919927,
+            "estimated_cost_usd": 0.04036925760000001,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": false,
+            "debug_tuning_score": false,
+            "regression_only_reason": "offset95 had already been inspected after v24 failure; this rerun demonstrates generic liquidation/recovery concept-binding repair but is not a clean held-out record",
+            "trace_positive_observation": "v25 searched and compared tangible book value, goodwill/MSRs/intangibles, common equity, total liabilities/equity, and shares outstanding; final answer preserved book value per common share ($82.31) as an alternative but selected tangible book value per common share ($66.56) as the more liquidation-like recovery estimate; finance.verify_numeric completed with issue_count=0, strict_tool_payload_provenance=true, trusted_fact_count=8"
+        }
+    },
+    "candidate_v6_results": {
+        "offset_63": {
+            "run_id": "fb_test100_o063_l001_v6_gross_margin_sign_normalization_20260619",
+            "item_id": "financebench_id_01290",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 29,
+            "tool_call_count": 29,
+            "duration_seconds": 90.15499357299996,
+            "total_tokens": 720810,
+            "cache_hit_rate": 0.9068805972446271,
+            "estimated_cost_usd": 0.012829997600000002,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "non_gold_failure_taxonomy": "primary-customer/customer-concentration numeric-disclosure omission: final answer named customer groups but omitted material disclosed revenue-share or concentration percentage",
+            "lifecycle_observation": "workbench was used early; failure was final evidence completeness rather than loop termination"
+        }
+    },
+    "candidate_v5_results": {
+        "offset_61": {
+            "run_id": "fb_test100_o061_l001_v5_revenue_threshold_category_completeness_20260619",
+            "item_id": "financebench_id_01091",
+            "split": "test100",
+            "passed": true,
+            "run_status": "completed",
+            "score_reason": "source_grounded_qualitative_pass",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 0,
+            "turn_count": 48,
+            "tool_call_count": 47,
+            "duration_seconds": 163.9260490989982,
+            "total_tokens": 1864847,
+            "cache_hit_rate": 0.8545063475378022,
+            "estimated_cost_usd": 0.0449673056,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "efficiency_taxonomy": "passed but expensive; long front-half document/artifact/SEC search and hidden provider-sanitized alias attempts remained before finalization"
+        },
+        "offset_62": {
+            "run_id": "fb_test100_o062_l001_v5_revenue_threshold_category_completeness_20260619",
+            "item_id": "financebench_id_00678",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 3,
+            "numeric_scored_count": 4,
+            "turn_count": 21,
+            "tool_call_count": 29,
+            "duration_seconds": 90.10626121099631,
+            "total_tokens": 518625,
+            "cache_hit_rate": 0.8157765446235454,
+            "estimated_cost_usd": 0.0165105304,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "non_gold_failure_taxonomy": "gross-margin sign-normalization and formula-presentation risk: final answer displayed cost rows with parentheses while also using a subtraction formula",
+            "lifecycle_observation": "workbench was used early and no-tools finalization completed; failure was numeric/final-expression rather than loop termination"
+        }
+    },
+    "candidate_v4_results": {
+        "offset_60_retry0_infra": {
+            "run_id": "fb_test100_o060_l001_v4_no_tool_finalization_recovery_20260619",
+            "item_id": "financebench_id_00517",
+            "split": "test100",
+            "passed": false,
+            "run_status": "failed",
+            "score_reason": "run_not_completed",
+            "turn_count": 1,
+            "tool_call_count": 0,
+            "duration_seconds": 0.05236299701209646,
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": false,
+            "debug_tuning_score": false,
+            "non_capability_infra_failure": "deepseek DNS Temporary failure in name resolution before any model usage"
+        },
+        "offset_60_retry1": {
+            "run_id": "fb_test100_o060_l001_v4_no_tool_finalization_recovery_retry1_20260619",
+            "item_id": "financebench_id_00517",
+            "split": "test100",
+            "passed": false,
+            "run_status": "completed",
+            "score_reason": "numeric_outside_tolerance",
+            "numeric_hit_count": 2,
+            "numeric_scored_count": 4,
+            "turn_count": 36,
+            "tool_call_count": 46,
+            "duration_seconds": 196.92128535400843,
+            "total_tokens": 1263466,
+            "cache_hit_rate": 0.8052329873347841,
+            "estimated_cost_usd": 0.041612816000000004,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "non_gold_failure_taxonomy": "revenue-threshold category set-completeness failure: final answer gave one qualifying segment instead of enumerating all categories over the stated revenue threshold",
+            "lifecycle_observation": "no-tools finalization completed instead of failing empty_final_answer"
+        }
+    },
+    "candidate_v3_results": {
+    "offset_57": {
+      "run_id": "fb_test100_o057_l001_v3_post_verify_finalization_20260619",
+      "item_id": "financebench_id_03838",
+      "split": "test100",
+      "passed": true,
+      "score_reason": "numeric_within_tolerance",
+      "numeric_hit_count": 1,
+      "numeric_scored_count": 1,
+      "turn_count": 39,
+      "tool_call_count": 38,
+      "duration_seconds": 114.94925116100057,
+      "total_tokens": 1295372,
+      "cache_hit_rate": 0.8729553512665924,
+      "estimated_cost_usd": 0.028392016800000003,
+      "gold_reference_material_in_model_context": false,
+      "held_out_test_score": true,
+      "debug_tuning_score": false,
+      "lifecycle_observation": "endgame narrowed tools to 10, successful finance.verify_numeric forced next turn to 0 visible tools, and final answer followed immediately"
+    },
+    "offset_58": {
+      "run_id": "fb_test100_o058_l001_v3_post_verify_finalization_20260619",
+      "item_id": "financebench_id_07661",
+      "split": "test100",
+      "passed": true,
+      "score_reason": "numeric_within_tolerance",
+      "numeric_hit_count": 1,
+      "numeric_scored_count": 1,
+      "turn_count": 18,
+      "tool_call_count": 22,
+      "duration_seconds": 52.40684211799817,
+      "total_tokens": 358931,
+      "cache_hit_rate": 0.8724067880659422,
+            "estimated_cost_usd": 0.008330789600000001,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "lifecycle_observation": "successful finance.verify_numeric forced next turn to 0 visible tools, and final answer followed immediately"
+        },
+        "offset_59": {
+            "run_id": "fb_test100_o059_l001_v3_post_verify_finalization_20260619",
+            "item_id": "financebench_id_10285",
+            "split": "test100",
+            "passed": false,
+            "run_status": "failed",
+            "run_reason": "empty_final_answer",
+            "score_reason": "run_not_completed",
+            "numeric_hit_count": 0,
+            "numeric_scored_count": 1,
+            "turn_count": 43,
+            "tool_call_count": 49,
+            "duration_seconds": 154.6028655370028,
+            "total_tokens": 1582035,
+            "cache_hit_rate": 0.8618064997903746,
+            "estimated_cost_usd": 0.0376711328,
+            "gold_reference_material_in_model_context": false,
+            "held_out_test_score": true,
+            "debug_tuning_score": false,
+            "non_gold_failure_taxonomy": "post-verify no-tools finalization received pure text-form DSML tool-call markup; host fallback stripped the content and failed empty_final_answer",
+            "lifecycle_observation": "finance.verify_numeric succeeded, next turn had 0 visible tools, but no-tools finalization lacked format recovery in candidate v3"
+        }
+    },
+  "candidate_v2_results": {
+    "offset_55": {
+      "run_id": "fb_test100_o055_l001_v2_high_threshold_checkpoints_20260619",
+      "item_id": "financebench_id_01902",
+      "split": "test100",
+      "passed": true,
+      "score_reason": "numeric_within_tolerance",
+      "numeric_hit_count": 2,
+      "numeric_scored_count": 2,
+      "turn_count": 10,
+      "tool_call_count": 10,
+      "duration_seconds": 25.21334759599995,
+      "total_tokens": 187281,
+      "cache_hit_rate": 0.8702823942710445,
+      "estimated_cost_usd": 0.0044426872,
+      "gold_reference_material_in_model_context": false,
+      "held_out_test_score": true,
+      "debug_tuning_score": false
+    },
+    "offset_56": {
+      "run_id": "fb_test100_o056_l001_v2_high_threshold_checkpoints_20260619",
+      "item_id": "financebench_id_04660",
+      "split": "test100",
+      "passed": true,
+      "score_reason": "numeric_within_tolerance",
+      "numeric_hit_count": 1,
+      "numeric_scored_count": 1,
+      "turn_count": 65,
+      "tool_call_count": 64,
+      "duration_seconds": 275.1080903450056,
+      "total_tokens": 2851074,
+      "cache_hit_rate": 0.9367345421853487,
+      "estimated_cost_usd": 0.039659278400000005,
+      "gold_reference_material_in_model_context": false,
+      "held_out_test_score": true,
+      "debug_tuning_score": false,
+      "non_gold_efficiency_taxonomy": "checkpoint narrowed broad tools and reached calculator/verify, but model continued discovery/table/calculator calls after verification"
+    }
+  },
+  "held_out_results_started": {
+    "offset_50": {
+      "run_id": "fb_test100_o050_l001_flash_low_frozen_candidate_20260619",
+      "item_id": "financebench_id_00685",
+      "split": "test100",
+      "passed": true,
+      "score_reason": "numeric_within_tolerance",
+      "turn_count": 17,
+      "tool_call_count": 18,
+      "duration_seconds": 56.566759838002326,
+      "total_tokens": 319154,
+      "cache_hit_rate": 0.9470241821943538,
+      "estimated_cost_usd": 0.0044282952000000006,
+      "gold_reference_material_in_model_context": false,
+      "held_out_test_score": true,
+      "debug_tuning_score": false
+    },
+    "offset_51": {
+      "run_id": "fb_test100_o051_l001_flash_low_frozen_candidate_20260619",
+      "item_id": "financebench_id_01077",
+      "split": "test100",
+      "passed": false,
+      "score_reason": "numeric_outside_tolerance",
+      "turn_count": 48,
+      "tool_call_count": 48,
+      "duration_seconds": 185.36918781799613,
+      "total_tokens": 1590876,
+      "cache_hit_rate": 0.9538210585792934,
+      "estimated_cost_usd": 0.0173608568,
+      "gold_reference_material_in_model_context": false,
+      "held_out_test_score": true,
+      "debug_tuning_score": false,
+      "non_gold_failure_taxonomy": "final answer omitted disclosed numeric acquisition consideration amounts"
+    },
+    "offset_52": {
+      "run_id": "fb_test100_o052_l001_flash_low_frozen_candidate_20260619",
+      "item_id": "financebench_id_01275",
+      "split": "test100",
+      "passed": true,
+      "score_reason": "numeric_within_tolerance",
+      "turn_count": 7,
+      "tool_call_count": 8,
+      "duration_seconds": 28.299181890994078,
+      "total_tokens": 120922,
+      "cache_hit_rate": 0.8647260996968392,
+      "estimated_cost_usd": 0.0032302200000000002,
+      "gold_reference_material_in_model_context": false,
+      "held_out_test_score": true,
+      "debug_tuning_score": false
+    },
+    "offset_53": {
+      "run_id": "fb_test100_o053_l001_flash_low_frozen_candidate_20260619",
+      "item_id": "financebench_id_00288",
+      "split": "test100",
+      "passed": true,
+      "score_reason": "numeric_within_tolerance",
+      "turn_count": 4,
+      "tool_call_count": 3,
+      "duration_seconds": 15.05909597799473,
+      "total_tokens": 45846,
+      "cache_hit_rate": 0.9000156750341491,
+      "estimated_cost_usd": 0.0010705576,
+      "gold_reference_material_in_model_context": false,
+      "held_out_test_score": true,
+      "debug_tuning_score": false
+    },
+    "offset_54": {
+      "run_id": "fb_test100_o054_l001_flash_low_frozen_candidate_20260619",
+      "item_id": "financebench_id_00460",
+      "split": "test100",
+      "passed": false,
+      "score_reason": "numeric_outside_tolerance",
+      "numeric_hit_count": 2,
+      "numeric_scored_count": 4,
+      "turn_count": 92,
+      "tool_call_count": 91,
+      "duration_seconds": 385.38581188899116,
+      "total_tokens": 6800783,
+      "cache_hit_rate": 0.979616306246928,
+      "estimated_cost_usd": 0.044053150400000005,
+      "gold_reference_material_in_model_context": false,
+      "held_out_test_score": true,
+      "debug_tuning_score": false,
+      "non_gold_failure_taxonomy": "store-count change question over-searched filings/artifacts, drifted into OpenBB errors, and finalized unable-to-confirm despite partial numeric hits"
+    }
+  }
+}

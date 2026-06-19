@@ -1,0 +1,32 @@
+[
+  {
+    "id": "v4_pro_disabled_off",
+    "model": "deepseek-v4-pro",
+    "thinking": "disabled",
+    "model_context_mode": "off",
+    "repeats": 10
+  },
+  {
+    "id": "v4_flash_disabled_off",
+    "model": "deepseek-v4-flash",
+    "thinking": "disabled",
+    "model_context_mode": "off",
+    "repeats": 10
+  },
+  {
+    "id": "v4_flash_thinking_low_off",
+    "model": "deepseek-v4-flash",
+    "thinking": "enabled",
+    "reasoning_effort": "low",
+    "model_context_mode": "off",
+    "repeats": 10
+  },
+  {
+    "id": "v4_flash_thinking_medium_off",
+    "model": "deepseek-v4-flash",
+    "thinking": "enabled",
+    "reasoning_effort": "medium",
+    "model_context_mode": "off",
+    "repeats": 10
+  }
+]
